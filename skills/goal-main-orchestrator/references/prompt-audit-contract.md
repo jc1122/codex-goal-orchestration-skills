@@ -19,7 +19,7 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 - parallelism is the default and single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level DoD;
 - every branch prompt defines a bounded branch scope and falsifiable DoD;
-- prompts require branch status and main status validator scripts before pass;
+- prompts require branch status validation and manifest-bound main status validation before pass;
 - branch prompts are actionable without chat history;
 - prompt files do not require branch creation before audit;
 - merge/cleanup behavior is explicit when expected;
@@ -28,7 +28,7 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 
 ## Audit Status
 
-`pass` means orchestration may start. Any missing, ambiguous, or non-actionable contract is `failed` or `blocked`, and main must not create branches.
+`pass` means orchestration may start. A pass audit must have `can_start=true`, no critical or major defects, and no missing DoD items. Any missing, ambiguous, or non-actionable contract is `failed` or `blocked`, and main must not create branches.
 
 The auditor returns only JSON matching `prompt-audit.schema.json`. The schema pins the exact absolute `manifest` and `repo_root` values, and downstream branch worktree rendering must reject an audit artifact whose identity does not match the current command inputs.
 

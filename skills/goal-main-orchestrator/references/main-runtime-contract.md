@@ -94,14 +94,14 @@ Return/write status with these fields:
       "review_status": "mergeable|mergeable_after_fixes|blocked|reject|missing"
     }
   ],
-  "commands_run": ["python3 scripts/check_goal_skill_availability.py ...", "python3 scripts/validate_main_status.py ..."],
+  "commands_run": ["python3 scripts/check_goal_skill_availability.py ...", "python3 scripts/validate_main_status.py --manifest ..."],
   "dod_checklist": ["prompt audit passed", "all branch statuses validated"],
   "blockers": [],
   "summary": "concise main handoff"
 }
 ```
 
-Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py` before accepting it. Validate the final main status with `scripts/validate_main_status.py` before reporting `pass`. Main `pass` requires `audit_status: "pass"`, every branch summary status `pass`, every passing branch summary review status `mergeable`, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
+Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
 
 ## Context Conservation
 

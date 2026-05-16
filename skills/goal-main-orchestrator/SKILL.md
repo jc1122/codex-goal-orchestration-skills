@@ -117,10 +117,11 @@ Before final return, write `main.status.json` and validate it:
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py" \
   --status /absolute/path/to/main.status.json \
+  --manifest /absolute/path/to/job.manifest.json \
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, a non-empty command list, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 
@@ -140,7 +141,7 @@ Before returning `pass`, verify:
 - main did not poll active branch agents' worker packets, reviewer packets, worktrees, or process tables while waiting;
 - finished branch orchestrators were closed before replacements launched;
 - required commands and validators are recorded;
-- `validate_main_status.py` passed for the final main status file;
+- manifest-bound `validate_main_status.py` passed for the final main status file;
 - unresolved, unsupported, negative, or probe-only labels are preserved;
 - final git state matches the main prompt's merge/cleanup policy.
 

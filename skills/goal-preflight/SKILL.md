@@ -75,11 +75,11 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
   --repo-root /absolute/path/to/repo
 ```
 
-`--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir` must be absolute paths with no `..` traversal. The scripts reject cwd-relative entry paths.
+`--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir`/`--repo-root` must be absolute paths with no `..` traversal. The scripts reject cwd-relative entry paths.
 
-Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, and worktree paths are relative to the repository root. Do not use absolute paths, backslashes, or `..` in the brief.
+Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, worktree paths are relative to the repository root, and work item `owned_paths`/`context_files` are repo-relative. Do not use absolute paths, backslashes, or `..` in the brief.
 
-Generated `goal-bootloader.md` is location-bound: it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, rerun this skill or `render_goal_bootloader.py`; do not hand-edit bootloader paths.
+Generated `goal-bootloader.md` is location-bound: it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, rerun this skill or run `render_goal_bootloader.py --repo-root /absolute/path/to/repo --write`; do not hand-edit bootloader paths.
 
 If the source brief does not define artifact or cleanup handling, generated prompts use deterministic defaults: preserve the orchestration bundle; do not commit preflight/runtime artifacts unless explicitly requested by the user or main prompt; preserve branches, worktrees, packets, and logs after partial/blocked/failed runs.
 

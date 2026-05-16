@@ -101,7 +101,63 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
         defect(defects, f"{path}.review_status", "must be mergeable when branch status is pass")
 
 
-def validate_main_status(data: object, *, job_id: str | None) -> list[str]:
+def expected_branches_from_manifest(defects: list[str], manifest: object) -> dict[str, dict[str, str]]:
+    data = require_object(defects, manifest, "manifest")
+    branches = data.get("branches")
+    expected: dict[str, dict[str, str]] = {}
+    if not isinstance(branches, list) or not branches:
+        defect(defects, "manifest.branches", "must be a non-empty array")
+        return expected
+    for index, branch in enumerate(branches):
+        branch_data = require_object(defects, branch, f"manifest.branches[{index}]")
+        branch_id = require_string(defects, branch_data.get("id"), f"manifest.branches[{index}].id")
+        status_path = require_string(defects, branch_data.get("status_path"), f"manifest.branches[{index}].status_path")
+        review_path = require_string(defects, branch_data.get("review_path"), f"manifest.branches[{index}].review_path")
+        if branch_id in expected:
+            defect(defects, f"manifest.branches[{index}].id", f"duplicates branch id {branch_id!r}")
+        if status_path and not is_repo_relative_path(status_path):
+            defect(defects, f"manifest.branches[{index}].status_path", "must be a repo-relative path without traversal")
+        if review_path and not is_repo_relative_path(review_path):
+            defect(defects, f"manifest.branches[{index}].review_path", "must be a repo-relative path without traversal")
+        if branch_id and status_path and review_path:
+            expected[branch_id] = {"status_path": status_path, "review_path": review_path}
+    return expected
+
+
+def validate_manifest_branch_coverage(defects: list[str], root: dict, manifest: object) -> None:
+    expected = expected_branches_from_manifest(defects, manifest)
+    branch_statuses = root.get("branch_statuses")
+    if not isinstance(branch_statuses, list):
+        return
+    seen: dict[str, int] = {}
+    for index, item in enumerate(branch_statuses):
+        if not isinstance(item, dict):
+            continue
+        branch_id = item.get("branch_id")
+        if not isinstance(branch_id, str) or not branch_id.strip():
+            continue
+        if branch_id in seen:
+            defect(defects, f"$.branch_statuses[{index}].branch_id", f"duplicates branch summary for {branch_id!r}")
+            continue
+        seen[branch_id] = index
+        expected_entry = expected.get(branch_id)
+        if expected_entry is None:
+            defect(defects, f"$.branch_statuses[{index}].branch_id", "is not declared in manifest")
+            continue
+        if item.get("status_path") != expected_entry["status_path"]:
+            defect(defects, f"$.branch_statuses[{index}].status_path", "must match manifest branch status_path")
+        if item.get("review_path") != expected_entry["review_path"]:
+            defect(defects, f"$.branch_statuses[{index}].review_path", "must match manifest branch review_path")
+    if root.get("status") in {"pass", "partial"}:
+        missing = sorted(set(expected) - set(seen))
+        extra = sorted(set(seen) - set(expected))
+        if missing:
+            defect(defects, "$.branch_statuses", f"missing manifest branch summaries: {', '.join(missing)}")
+        if extra:
+            defect(defects, "$.branch_statuses", f"contains branch summaries not declared in manifest: {', '.join(extra)}")
+
+
+def validate_main_status(data: object, *, job_id: str | None, manifest: object) -> list[str]:
     defects: list[str] = []
     root = require_object(defects, data, "$")
     required = [
@@ -119,6 +175,10 @@ def validate_main_status(data: object, *, job_id: str | None) -> list[str]:
             defect(defects, "$", f"missing key: {key}")
     if job_id and root.get("job_id") != job_id:
         defect(defects, "$.job_id", f"must be {job_id!r}")
+    manifest_root = require_object(defects, manifest, "manifest")
+    manifest_job_id = manifest_root.get("job_id")
+    if isinstance(manifest_job_id, str) and manifest_job_id.strip() and root.get("job_id") != manifest_job_id:
+        defect(defects, "$.job_id", f"must match manifest job_id {manifest_job_id!r}")
     require_string(defects, root.get("job_id"), "$.job_id")
     status = root.get("status")
     if status not in STATUSES:
@@ -139,6 +199,7 @@ def validate_main_status(data: object, *, job_id: str | None) -> list[str]:
             for index, item in enumerate(branch_statuses):
                 if isinstance(item, dict) and item.get("status") != "pass":
                     defect(defects, f"$.branch_statuses[{index}].status", "must be pass when main status is pass")
+    validate_manifest_branch_coverage(defects, root, manifest)
     require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     require_string_list(defects, root.get("dod_checklist"), "$.dod_checklist", min_items=1)
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")
@@ -153,12 +214,14 @@ def validate_main_status(data: object, *, job_id: str | None) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--status", required=True)
+    parser.add_argument("--manifest", required=True)
     parser.add_argument("--job-id")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     status_path = resolve_absolute_path(args.status, "--status", must_exist=True)
-    defects = validate_main_status(load_json(status_path), job_id=args.job_id)
+    manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+    defects = validate_main_status(load_json(status_path), job_id=args.job_id, manifest=load_json(manifest_path))
     result = {"status": "pass" if not defects else "failed", "status_path": status_path.as_posix(), "defects": defects}
     if args.json:
         print(json.dumps(result, indent=2))

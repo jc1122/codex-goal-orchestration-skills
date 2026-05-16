@@ -301,7 +301,7 @@ def lint(bundle_dir: Path) -> dict:
                     for value_index, value in enumerate(values):
                         if not isinstance(value, str) or not value.strip():
                             defect("job.manifest.json", "critical", f"{item_path}.{key}[{value_index}] must be a non-empty string")
-                        elif key == "owned_paths":
+                        elif key in {"owned_paths", "context_files"}:
                             message = relative_path_defect(value, f"{item_path}.{key}[{value_index}]")
                             if message:
                                 defect("job.manifest.json", "critical", message)

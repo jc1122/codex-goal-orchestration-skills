@@ -174,12 +174,13 @@ Required checks:
 - single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level Definition of Done;
 - every branch prompt defines bounded branch scope and falsifiable Definition of Done;
-- prompts require `validate_branch_status.py` and `validate_main_status.py` before pass;
+- prompts require `validate_branch_status.py` and manifest-bound `validate_main_status.py` before pass;
 - branch prompts are actionable without chat history;
 - prompt files do not require branch creation before audit;
 - merge/cleanup behavior is explicit when expected;
 - `main.prompt.md` requires closing finished branch orchestrator agents before launching replacements;
 - unsupported, unresolved, negative, or probe-only claim labels are preserved.
+- a `pass` audit must have `can_start=true`, no `critical` or `major` defects, and no missing DoD items.
 
 Return only JSON matching `prompt-audit.schema.json`. The JSON must include `manifest` and `repo_root`
 exactly as specified by the schema.
@@ -249,6 +250,14 @@ for key in ["checked_files", "defects", "missing_dod_items", "commands_run"]:
 for key in ["actionability_verdict", "summary"]:
     if not isinstance(data[key], str):
         raise SystemExit(1)
+if data["status"] == "pass":
+    if data["can_start"] is not True or data["missing_dod_items"]:
+        raise SystemExit(1)
+    for item in data["defects"]:
+        if not isinstance(item, dict):
+            raise SystemExit(1)
+        if item.get("severity") in {"critical", "major"}:
+            raise SystemExit(1)
 PY
 }}
 

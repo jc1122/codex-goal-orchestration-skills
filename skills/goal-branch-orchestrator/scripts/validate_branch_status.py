@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 
 STATUSES = {"pass", "partial", "blocked", "failed"}
 REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
 MAX_WORKER_PACKETS_PER_BRANCH = 4
+PORCELAIN_PREFIX_RE = re.compile(r"^[ MADRCU?!]{2} ")
 
 
 def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
@@ -75,7 +77,7 @@ def is_repo_relative_path(value: str) -> bool:
         or value.endswith("/.")
         or "//" in value
         or any(part in {"", ".", ".."} for part in path.parts)
-        or value[:3] in {"?? ", " M ", "M  ", "A  ", " A ", "D  ", " D ", "R  ", " R ", "C  ", " C ", "UU "}
+        or PORCELAIN_PREFIX_RE.match(value) is not None
     )
 
 
@@ -134,7 +136,7 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
     require_string(defects, data.get("handoff"), f"{path}.handoff")
 
 
-def validate_worker_parallelism(defects: list[str], value: object, path: str) -> None:
+def validate_worker_parallelism(defects: list[str], value: object, path: str, *, worker_count: int) -> None:
     data = require_object(defects, value, path)
     required = [
         "max_worker_packets_per_branch",
@@ -165,6 +167,14 @@ def validate_worker_parallelism(defects: list[str], value: object, path: str) ->
         defect(defects, f"{path}.serial_reasons", "must justify serialized workers")
     if isinstance(max_active, int) and max_active < MAX_WORKER_PACKETS_PER_BRANCH and not serial_reasons:
         defect(defects, f"{path}.serial_reasons", "must justify max_active_worker_packets below 4")
+    if (
+        worker_count > 1
+        and isinstance(max_active, int)
+        and isinstance(observed, int)
+        and observed < min(max_active, worker_count)
+        and not serial_reasons
+    ):
+        defect(defects, f"{path}.serial_reasons", "must justify observed worker parallelism below available worker concurrency")
 
 
 def validate_branch_status(data: object, *, branch_id: str | None, branch: str | None, worktree: str | None) -> list[str]:
@@ -209,7 +219,8 @@ def validate_branch_status(data: object, *, branch_id: str | None, branch: str |
     else:
         for index, item in enumerate(worker_statuses):
             validate_worker_status(defects, item, f"$.worker_statuses[{index}]")
-    validate_worker_parallelism(defects, root.get("worker_parallelism"), "$.worker_parallelism")
+    worker_count = len(worker_statuses) if isinstance(worker_statuses, list) else 0
+    validate_worker_parallelism(defects, root.get("worker_parallelism"), "$.worker_parallelism", worker_count=worker_count)
     review_status = root.get("review_status")
     if review_status not in REVIEW_STATUSES:
         defect(defects, "$.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")

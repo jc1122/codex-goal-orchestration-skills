@@ -118,9 +118,9 @@ def validate_branch_worker_contract(branch: dict) -> None:
             raise SystemExit(f"branch {bid} work_items[{index}].objective must be non-empty")
         for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
             values = require_string_list(item.get(key, []), f"branch {bid} work_items[{index}].{key}", min_items=min_items)
-            if key == "owned_paths":
+            if key in {"owned_paths", "context_files"}:
                 for value in values:
-                    require_relative_path(value, f"branch {bid} work_items[{index}].owned_paths")
+                    require_relative_path(value, f"branch {bid} work_items[{index}].{key}")
     for index, item in enumerate(work_items):
         for dep in item.get("depends_on", []):
             if dep not in seen_work_item_ids:
@@ -167,6 +167,24 @@ def main() -> int:
 
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")
+    audit_defects = audit.get("defects", [])
+    if not isinstance(audit_defects, list):
+        raise SystemExit("prompt audit defects must be an array")
+    blocking_audit_defects = []
+    for item in audit_defects:
+        if not isinstance(item, dict):
+            blocking_audit_defects.append("non-object audit defect")
+            continue
+        severity = item.get("severity")
+        if severity in {"critical", "major"}:
+            blocking_audit_defects.append(str(item.get("message", "audit defect")))
+    if blocking_audit_defects:
+        raise SystemExit("prompt audit passed with blocking defects; refusing branch creation")
+    missing_dod_items = audit.get("missing_dod_items", [])
+    if not isinstance(missing_dod_items, list):
+        raise SystemExit("prompt audit missing_dod_items must be an array")
+    if missing_dod_items:
+        raise SystemExit("prompt audit passed with missing DoD items; refusing branch creation")
     for key in ["artifact_policy", "cleanup_policy"]:
         if not isinstance(manifest.get(key), str) or not manifest.get(key, "").strip():
             raise SystemExit(f"manifest {key} must be present and non-empty")
