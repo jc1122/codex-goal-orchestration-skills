@@ -19,6 +19,7 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 - parallelism is the default and single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level DoD;
 - every branch prompt defines a bounded branch scope and falsifiable DoD;
+- prompts require branch status and main status validator scripts before pass;
 - branch prompts are actionable without chat history;
 - prompt files do not require branch creation before audit;
 - merge/cleanup behavior is explicit when expected;

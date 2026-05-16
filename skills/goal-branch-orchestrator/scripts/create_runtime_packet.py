@@ -100,6 +100,8 @@ def exact_string_schema(value: str) -> dict:
 
 
 def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
+    repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
+    nonempty_string = {"type": "string", "minLength": 1}
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -122,11 +124,11 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "status": {"type": "string", "enum": ["pass", "partial", "blocked", "failed"]},
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
-            "changed_files": {"type": "array", "items": {"type": "string"}},
-            "commands_run": {"type": "array", "items": {"type": "string"}},
-            "tests": {"type": "array", "items": {"type": "string"}},
-            "blockers": {"type": "array", "items": {"type": "string"}},
-            "handoff": {"type": "string"},
+            "changed_files": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path}},
+            "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
+            "tests": {"type": "array", "items": nonempty_string},
+            "blockers": {"type": "array", "items": nonempty_string},
+            "handoff": nonempty_string,
         },
     }
 
@@ -274,7 +276,7 @@ Task:
 
 {task_text}
 
-Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`.
+Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`. `changed_files` must contain repo-relative file paths only, without git porcelain prefixes such as `M ` or `?? `. `commands_run` and `tests` must contain exact command strings that were actually run.
 
 If you are running under Gemini CLI or GitHub Copilot CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
@@ -426,11 +428,17 @@ status = sys.argv[5]
 message = sys.argv[6]
 
 try:
-    changed_files = subprocess.check_output(
+    changed_files = []
+    for line in subprocess.check_output(
         ["git", "-C", worktree, "status", "--short"],
         text=True,
         stderr=subprocess.DEVNULL,
-    ).splitlines()
+    ).splitlines():
+        path = line[3:] if len(line) > 3 and line[2] == " " else line.strip()
+        if " -> " in path:
+            path = path.split(" -> ", 1)[1]
+        if path:
+            changed_files.append(path)
 except Exception:
     changed_files = []
 
@@ -444,6 +452,7 @@ data = {{
     "commands_run": [
         "gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
         "gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
+        "gh copilot -- --model {COPILOT_PROBE_MODEL} --effort {COPILOT_PROBE_REASONING_EFFORT}",
         "gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
         "codex exec --ephemeral -m {SPARK_MODEL} -s workspace-write",
         "codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
@@ -460,6 +469,7 @@ extract_status_json() {{
   local raw_path="$1"
   python3 - "$raw_path" "$schema_path" "$output_path" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -502,13 +512,25 @@ def validate(instance, schema):
             raise ValueError(f"{{field}} must be one of {{field_schema['enum']!r}}")
         if "type" in field_schema and not validate_type(value, field_schema["type"]):
             raise ValueError(f"{{field}} has wrong type")
+        if isinstance(value, str):
+            if "minLength" in field_schema and len(value) < field_schema["minLength"]:
+                raise ValueError(f"{{field}} is too short")
+            if "pattern" in field_schema and re.fullmatch(field_schema["pattern"], value) is None:
+                raise ValueError(f"{{field}} does not match required pattern")
         if field_schema.get("type") == "array":
+            if "minItems" in field_schema and len(value) < field_schema["minItems"]:
+                raise ValueError(f"{{field}} contains too few items")
             item_schema = field_schema.get("items", {{}})
             item_type = item_schema.get("type")
-            if item_type:
-                for item in value:
+            for item in value:
+                if item_type:
                     if not validate_type(item, item_type):
                         raise ValueError(f"{{field}} contains item with wrong type")
+                if isinstance(item, str):
+                    if "minLength" in item_schema and len(item) < item_schema["minLength"]:
+                        raise ValueError(f"{{field}} contains item that is too short")
+                    if "pattern" in item_schema and re.fullmatch(item_schema["pattern"], item) is None:
+                        raise ValueError(f"{{field}} contains item that does not match required pattern")
 
 
 schema = json.loads(schema_path.read_text(encoding="utf-8"))
@@ -583,6 +605,7 @@ import subprocess
 import sys
 
 command, model, approval_mode, timeout_seconds, prompt = sys.argv[1:6]
+expected = prompt.rsplit(":", 1)[-1].strip()
 try:
     result = subprocess.run(
         [
@@ -612,6 +635,11 @@ except subprocess.TimeoutExpired as exc:
 
 if result.stdout:
     sys.stdout.write(result.stdout)
+if result.returncode != 0:
+    raise SystemExit(result.returncode)
+if expected not in (result.stdout or ""):
+    print(f"Gemini model probe did not return expected token: {{expected}}", file=sys.stderr)
+    raise SystemExit(1)
 raise SystemExit(result.returncode)
 PY
   ) > "$probe_path" 2>&1
@@ -648,6 +676,7 @@ import subprocess
 import sys
 
 command, model, effort, timeout_seconds, prompt, share_path = sys.argv[1:7]
+expected = prompt.rsplit(":", 1)[-1].strip()
 try:
     result = subprocess.run(
         [
@@ -694,6 +723,11 @@ except subprocess.TimeoutExpired as exc:
 
 if result.stdout:
     sys.stdout.write(result.stdout)
+if result.returncode != 0:
+    raise SystemExit(result.returncode)
+if expected not in (result.stdout or ""):
+    print(f"Copilot model probe did not return expected token: {{expected}}", file=sys.stderr)
+    raise SystemExit(1)
 raise SystemExit(result.returncode)
 PY
   ) > "$probe_path" 2>&1

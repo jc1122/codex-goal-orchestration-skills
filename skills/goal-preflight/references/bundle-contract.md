@@ -88,8 +88,10 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` says no more than 4 branch orchestrator agents may be active.
 - `main.prompt.md` says parallelism is the default and branches in a wave should launch concurrently.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
+- `main.prompt.md` requires `validate_branch_status.py` for branch outputs and `validate_main_status.py` for final output.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
+- Branch prompts require final branch status validation with `validate_branch_status.py`.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch concurrently up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.

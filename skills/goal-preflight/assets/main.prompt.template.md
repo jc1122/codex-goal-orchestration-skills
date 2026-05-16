@@ -27,6 +27,9 @@ Base ref: {base_ref}
 - Do not exceed 4 active branch orchestrator agents.
 - Do not read `goal-branch-orchestrator/SKILL.md` in main context; dispatch branch sessions that use that skill.
 - Require each branch to record `git diff --check {base_ref}...HEAD` before merge readiness.
+- Require every branch status to pass `validate_branch_status.py` before accepting it.
+- Require final `main.status.json` to pass `validate_main_status.py`.
+- Main `pass` requires `audit_status: "pass"`, every branch summary `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, command evidence, DoD evidence, and no blockers.
 - Preserve unsupported, unresolved, negative, and probe-only labels.
 
 ## Parallelization Rationale
@@ -56,4 +59,6 @@ Base ref: {base_ref}
 ## Definition of Done
 
 - Skill availability bootstrap passed for runtime skills before prompt audit.
+- Every branch status passed `validate_branch_status.py`.
+- Final `main.status.json` passed `validate_main_status.py`.
 {final_dod}

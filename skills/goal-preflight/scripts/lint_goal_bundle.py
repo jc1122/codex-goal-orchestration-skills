@@ -220,6 +220,8 @@ def lint(bundle_dir: Path) -> dict:
             "Cleanup Policy",
             "Artifact Policy",
             "close finished branch orchestrator agents",
+            "validate_branch_status.py",
+            "validate_main_status.py",
         ]:
             if phrase.lower() not in main_text.lower():
                 defect(str(main_path), "critical", f"main prompt missing required phrase: {phrase}")
@@ -275,6 +277,43 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets")
         elif any(not isinstance(item, dict) for item in work_items):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items entries must be objects")
+        else:
+            seen_work_item_ids = set()
+            for index, item in enumerate(work_items):
+                item_path = f"branch {branch.get('id')} work_items[{index}]"
+                item_id = item.get("id")
+                if not isinstance(item_id, str) or not SAFE_LABEL_RE.fullmatch(item_id):
+                    defect("job.manifest.json", "critical", f"{item_path}.id must match {SAFE_LABEL_RE.pattern}")
+                elif item_id in seen_work_item_ids:
+                    defect("job.manifest.json", "critical", f"{item_path}.id duplicates {item_id}")
+                else:
+                    seen_work_item_ids.add(item_id)
+                if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
+                    defect("job.manifest.json", "critical", f"{item_path}.objective must be non-empty")
+                for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
+                    values = item.get(key, [])
+                    if key in {"owned_paths", "verification", "dod"} and key not in item:
+                        defect("job.manifest.json", "critical", f"{item_path}.{key} is required")
+                        continue
+                    if not isinstance(values, list) or len(values) < min_items:
+                        defect("job.manifest.json", "critical", f"{item_path}.{key} must contain at least {min_items} item(s)")
+                        continue
+                    for value_index, value in enumerate(values):
+                        if not isinstance(value, str) or not value.strip():
+                            defect("job.manifest.json", "critical", f"{item_path}.{key}[{value_index}] must be a non-empty string")
+                        elif key == "owned_paths":
+                            message = relative_path_defect(value, f"{item_path}.{key}[{value_index}]")
+                            if message:
+                                defect("job.manifest.json", "critical", message)
+            known_work_item_ids = {item.get("id") for item in work_items if isinstance(item, dict)}
+            for index, item in enumerate(work_items):
+                if not isinstance(item, dict):
+                    continue
+                for dep in item.get("depends_on", []):
+                    if dep not in known_work_item_ids:
+                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] depends on unknown work item: {dep}")
+                    if dep == item.get("id"):
+                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] cannot depend on itself")
         worker_parallelism = branch.get("worker_parallelism", {})
         if not isinstance(worker_parallelism, dict):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism must be an object")
@@ -314,6 +353,7 @@ def lint(bundle_dir: Path) -> dict:
             "Never exceed",
             "active worker packets",
             "Worker parallelization rationale",
+            "validate_branch_status.py",
             "Stop Conditions",
             "git diff --check",
             "do not poll active",

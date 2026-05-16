@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 from pathlib import Path, PurePosixPath
 
@@ -13,6 +14,7 @@ INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
+SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 
 
 def shell_quote(value: str) -> str:
@@ -84,6 +86,17 @@ def load_json(path: Path) -> dict:
         return json.load(handle)
 
 
+def require_string_list(value: object, field: str, *, min_items: int = 0) -> list[str]:
+    if not isinstance(value, list) or len(value) < min_items:
+        raise SystemExit(f"{field} must contain at least {min_items} item(s)")
+    result = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise SystemExit(f"{field}[{index}] must be a non-empty string")
+        result.append(item.strip())
+    return result
+
+
 def validate_branch_worker_contract(branch: dict) -> None:
     bid = branch.get("id")
     if "work_items" not in branch:
@@ -93,6 +106,27 @@ def validate_branch_worker_contract(branch: dict) -> None:
         raise SystemExit(f"branch {bid} work_items must contain 1 to 4 worker packets")
     if any(not isinstance(item, dict) for item in work_items):
         raise SystemExit(f"branch {bid} work_items entries must be objects")
+    seen_work_item_ids = set()
+    for index, item in enumerate(work_items):
+        item_id = item.get("id")
+        if not isinstance(item_id, str) or not SAFE_LABEL_RE.fullmatch(item_id):
+            raise SystemExit(f"branch {bid} work_items[{index}].id must match {SAFE_LABEL_RE.pattern}")
+        if item_id in seen_work_item_ids:
+            raise SystemExit(f"branch {bid} duplicate work item id: {item_id}")
+        seen_work_item_ids.add(item_id)
+        if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
+            raise SystemExit(f"branch {bid} work_items[{index}].objective must be non-empty")
+        for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
+            values = require_string_list(item.get(key, []), f"branch {bid} work_items[{index}].{key}", min_items=min_items)
+            if key == "owned_paths":
+                for value in values:
+                    require_relative_path(value, f"branch {bid} work_items[{index}].owned_paths")
+    for index, item in enumerate(work_items):
+        for dep in item.get("depends_on", []):
+            if dep not in seen_work_item_ids:
+                raise SystemExit(f"branch {bid} work_items[{index}] depends on unknown work item: {dep}")
+            if dep == item.get("id"):
+                raise SystemExit(f"branch {bid} work_items[{index}] cannot depend on itself")
     max_workers = branch.get("max_active_worker_packets")
     if not isinstance(max_workers, int) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} max_active_worker_packets must be an integer from 1 to 4")

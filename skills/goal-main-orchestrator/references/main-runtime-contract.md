@@ -85,13 +85,23 @@ Return/write status with these fields:
   "job_id": "phaseX",
   "status": "pass|partial|blocked|failed",
   "audit_status": "pass|failed|blocked|missing",
-  "branch_statuses": [],
-  "commands_run": [],
-  "dod_checklist": [],
+  "branch_statuses": [
+    {
+      "branch_id": "B01",
+      "status": "pass|partial|blocked|failed",
+      "status_path": "branches/B01.status.json",
+      "review_path": "branches/B01.review.json",
+      "review_status": "mergeable|mergeable_after_fixes|blocked|reject|missing"
+    }
+  ],
+  "commands_run": ["python3 scripts/check_goal_skill_availability.py ...", "python3 scripts/validate_main_status.py ..."],
+  "dod_checklist": ["prompt audit passed", "all branch statuses validated"],
   "blockers": [],
-  "summary": ""
+  "summary": "concise main handoff"
 }
 ```
+
+Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py` before accepting it. Validate the final main status with `scripts/validate_main_status.py` before reporting `pass`. Main `pass` requires `audit_status: "pass"`, every branch summary status `pass`, every passing branch summary review status `mergeable`, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
 
 ## Context Conservation
 
@@ -139,6 +149,7 @@ Return `blocked` if:
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;
+- branch status or main status validation fails;
 - merge-ready branch status/review artifacts do not record base-range whitespace validation;
 - main polled active branch agents' worker packets, reviewer packets, worktrees, process tables, or status files instead of waiting;
 - DoD evidence is ambiguous or not falsifiable;

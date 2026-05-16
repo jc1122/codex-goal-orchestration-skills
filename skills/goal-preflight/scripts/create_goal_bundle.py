@@ -106,6 +106,19 @@ def nonempty_text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def require_string_list(value: object, field: str, *, min_items: int = 0) -> list[str]:
+    if not isinstance(value, list):
+        raise SystemExit(f"{field} must be a list")
+    result = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise SystemExit(f"{field}[{index}] must be a non-empty string")
+        result.append(item.strip())
+    if len(result) < min_items:
+        raise SystemExit(f"{field} must contain at least {min_items} item(s)")
+    return result
+
+
 def branch_id(index: int) -> str:
     return f"B{index:02d}"
 
@@ -158,6 +171,44 @@ def format_work_items(items: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
+def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
+    if not isinstance(items, list):
+        raise SystemExit(f"branch {branch_id_value} work_items must be a list")
+    if len(items) < 1 or len(items) > MAX_WORKER_PACKETS_PER_BRANCH:
+        raise SystemExit(f"branch {branch_id_value} must have 1 to {MAX_WORKER_PACKETS_PER_BRANCH} worker packets; split or synthesize work items")
+    normalized = []
+    seen_ids = set()
+    for index, item in enumerate(items, start=1):
+        if not isinstance(item, dict):
+            raise SystemExit(f"branch {branch_id_value} work_items entries must be objects")
+        item_id = require_safe_label(str(item.get("id") or f"W{index:02d}"), f"branch {branch_id_value} work item id")
+        if item_id in seen_ids:
+            raise SystemExit(f"branch {branch_id_value} duplicate work item id: {item_id}")
+        seen_ids.add(item_id)
+        objective = nonempty_text(item.get("objective"))
+        if not objective:
+            raise SystemExit(f"branch {branch_id_value} work item {item_id} requires objective")
+        normalized_item = {
+            **item,
+            "id": item_id,
+            "objective": objective,
+            "owned_paths": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} owned_paths") for value in require_string_list(item.get("owned_paths"), f"branch {branch_id_value} work item {item_id} owned_paths", min_items=1)],
+            "context_files": require_string_list(item.get("context_files", []), f"branch {branch_id_value} work item {item_id} context_files"),
+            "depends_on": require_string_list(item.get("depends_on", []), f"branch {branch_id_value} work item {item_id} depends_on"),
+            "verification": require_string_list(item.get("verification"), f"branch {branch_id_value} work item {item_id} verification", min_items=1),
+            "dod": require_string_list(item.get("dod"), f"branch {branch_id_value} work item {item_id} dod", min_items=1),
+        }
+        normalized.append(normalized_item)
+    known_ids = {item["id"] for item in normalized}
+    for item in normalized:
+        for dep in item["depends_on"]:
+            if dep not in known_ids:
+                raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends on unknown work item: {dep}")
+            if dep == item["id"]:
+                raise SystemExit(f"branch {branch_id_value} work item {item['id']} cannot depend on itself")
+    return normalized
+
+
 def chunk_waves(branches: list[dict], wave_size: int) -> list[dict]:
     waves = []
     for offset in range(0, len(branches), wave_size):
@@ -191,13 +242,7 @@ def normalize_brief(brief: dict) -> dict:
         max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
         worker_serial_reason = nonempty_text(original.get("worker_serial_reason"))
         worker_parallelization_rationale = nonempty_text(original.get("worker_parallelization_rationale"))
-        work_items = original.get("work_items", [])
-        if not isinstance(work_items, list):
-            raise SystemExit(f"branch {bid} work_items must be a list")
-        if len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
-            raise SystemExit(f"branch {bid} must have 1 to {MAX_WORKER_PACKETS_PER_BRANCH} worker packets; split or synthesize work items")
-        if any(not isinstance(item, dict) for item in work_items):
-            raise SystemExit(f"branch {bid} work_items entries must be objects")
+        work_items = normalize_work_items(original.get("work_items", []), bid)
         branch = {
             **original,
             "work_items": work_items,

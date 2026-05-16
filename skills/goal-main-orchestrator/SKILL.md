@@ -100,6 +100,28 @@ After dispatch, use the native agent wait mechanism with the longest practical t
 
 Track active branch orchestrator agent ids/processes. As each branch in a wave finishes, collect its status/review artifacts, then close or turn off the finished branch orchestrator. Launch the next wave only after the current wave is collected and capacity is freed. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
 
+## Status Validation
+
+Validate every finished branch status before accepting it:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py" \
+  --status /absolute/path/to/branches/B01.status.json \
+  --branch-id B01 \
+  --branch <branch-name> \
+  --worktree /absolute/path/to/.worktrees/<branch-name>
+```
+
+Before final return, write `main.status.json` and validate it:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py" \
+  --status /absolute/path/to/main.status.json \
+  --job-id <job-id>
+```
+
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, a non-empty command list, a non-empty DoD checklist, and no blockers.
+
 ## Completion Gate
 
 Before returning `pass`, verify:
@@ -109,6 +131,8 @@ Before returning `pass`, verify:
 - manifest cleanup and artifact policies are present and are not contradicted by `main.prompt.md`;
 - every branch listed in the manifest has a status file;
 - every branch requiring review has a review file;
+- every branch status passed `validate_branch_status.py`;
+- every branch summary in `main.status.json` is `pass` with `review_status: "mergeable"`;
 - branch statuses satisfy the main prompt DoD;
 - branch statuses/reviews record base-range whitespace validation before merge readiness;
 - branch statuses record the branch worker-packet cap and concurrent worker launch evidence or a serial/under-capacity reason;
@@ -116,6 +140,7 @@ Before returning `pass`, verify:
 - main did not poll active branch agents' worker packets, reviewer packets, worktrees, or process tables while waiting;
 - finished branch orchestrators were closed before replacements launched;
 - required commands and validators are recorded;
+- `validate_main_status.py` passed for the final main status file;
 - unresolved, unsupported, negative, or probe-only labels are preserved;
 - final git state matches the main prompt's merge/cleanup policy.
 

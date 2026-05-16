@@ -174,6 +174,7 @@ Required checks:
 - single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level Definition of Done;
 - every branch prompt defines bounded branch scope and falsifiable Definition of Done;
+- prompts require `validate_branch_status.py` and `validate_main_status.py` before pass;
 - branch prompts are actionable without chat history;
 - prompt files do not require branch creation before audit;
 - merge/cleanup behavior is explicit when expected;
