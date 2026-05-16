@@ -24,6 +24,7 @@ REVIEWER_MODEL = "gpt-5.5"
 REVIEWER_FALLBACK_MODEL = "gpt-5.4"
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
+MAX_EMBEDDED_CONTEXT_CHARS = 120000
 
 
 def shell_quote(value: str) -> str:
@@ -157,6 +158,50 @@ def optional_list(title: str, values: list[str]) -> str:
     return title + ":\n" + "\n".join(f"- {value}" for value in values)
 
 
+def context_section(worktree: str, context_files: list[str]) -> str:
+    if not context_files:
+        return "Context files to read first: none"
+    worktree_path = Path(worktree).resolve()
+    lines = ["Context files to read first:"]
+    embedded = []
+    embedded_chars = 0
+    for index, value in enumerate(context_files, start=1):
+        path = Path(value).resolve()
+        try:
+            relative = path.relative_to(worktree_path)
+        except ValueError:
+            text = path.read_text(encoding="utf-8")
+            embedded_chars += len(text)
+            if embedded_chars > MAX_EMBEDDED_CONTEXT_CHARS:
+                raise SystemExit(
+                    "external context files exceed embedded Gemini prompt limit; "
+                    "split the packet or use worktree-local context files"
+                )
+            label = f"external-context-{index}: {path.name}"
+            lines.append(f"- {label} is embedded below; do not read the original absolute path.")
+            embedded.append((label, text))
+        else:
+            lines.append(f"- {relative.as_posix()}")
+    if embedded:
+        lines.extend(
+            [
+                "",
+                "External context snapshots embedded below for workspace-restricted CLIs.",
+                "Use these snapshots instead of trying to read their original absolute paths.",
+            ]
+        )
+        for label, text in embedded:
+            lines.extend(
+                [
+                    "",
+                    f"BEGIN_EMBEDDED_CONTEXT {label}",
+                    text.rstrip(),
+                    f"END_EMBEDDED_CONTEXT {label}",
+                ]
+            )
+    return "\n".join(lines)
+
+
 def load_task(path: Path | None) -> str:
     if not path:
         return "- Replace this section with the bounded task objective before launch."
@@ -181,7 +226,7 @@ You are Reviewer {packet_id}. Do not edit files.
 Worktree: {worktree}
 Branch: {branch}
 
-{optional_list("Context files to read first", context_files)}
+{context_section(worktree, context_files)}
 
 Before reviewing, run:
 
@@ -209,7 +254,7 @@ You are not alone in the codebase. Do not revert edits made by others. Own only 
 
 {optional_list("Owned files/modules", owned_files)}
 
-{optional_list("Context files to read first", context_files)}
+{context_section(worktree, context_files)}
 
 Before editing, run:
 
@@ -222,7 +267,7 @@ Task:
 
 {task_text}
 
-Return a worker status object matching `{schema_name}`.
+Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`.
 
 If you are running under Gemini CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
@@ -470,6 +515,10 @@ if finish <= start:
 candidate = text[start:finish].strip()
 try:
     data = json.loads(candidate)
+    if data.get("status") == "success":
+        data["status"] = "pass"
+        if isinstance(data.get("commands_run"), list):
+            data["commands_run"].append("launcher normalized Gemini status alias success->pass")
     validate(data, schema)
 except Exception as exc:
     print("Invalid marked worker status JSON: " + str(exc), file=sys.stderr)
