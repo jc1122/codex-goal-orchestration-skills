@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, create path-safe worker/reviewer packets, dispatch granular Gemini Pro/Flash-first workers with Codex Spark and 5.4-mini fallback, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
+description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, create path-safe worker/reviewer packets, dispatch granular Gemini Pro/Flash-first workers with GitHub Copilot gpt-5.4 high-effort and Codex Spark/5.4-mini fallbacks, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
 # Goal Branch Orchestrator
@@ -15,7 +15,7 @@ Your job is:
 2. Read the assigned branch prompt file.
 3. Verify the global prompt audit passed.
 4. Create granular worker packets and worker child worktrees as needed.
-5. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using Gemini Pro/Flash-first workers with Codex Spark and mini fallback.
+5. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using Gemini Pro/Flash-first workers with GitHub Copilot `gpt-5.4` high-effort and Codex Spark/mini fallbacks.
 6. Inspect worker status, diffs, and focused verification evidence.
 7. Dispatch a read-only heavy-model reviewer.
 8. Return branch status only when the branch prompt DoD is satisfied or explicitly blocked.
@@ -58,7 +58,7 @@ If any check fails, do not launch workers. Return `blocked`.
 
 ## Worker Packets
 
-Workers must fit the smallest intended worker context. Spark fallback has a local context window of about 128k tokens, so keep packets below roughly 80k-100k total input context by using:
+Workers must fit the smallest intended worker context across the fixed fallback chain, so keep packets below roughly 80k-100k total input context by using:
 
 - one objective;
 - narrow owned files/modules;
@@ -82,7 +82,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
-The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so Gemini does not try to read paths outside its allowed workspace. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model or approval-mode overrides are accepted. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same model so renamed, retired, unauthorized, or quota-blocked model IDs fail while the worktree is still clean. Gemini is best-effort: if the Gemini command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next worker. If Gemini returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation. If Gemini Pro, Gemini Flash, or Spark leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
+The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs do not need to read bundle paths outside the worker worktree. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, GitHub Copilot CLI with `gpt-5.4` and `--effort high`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model, effort, approval-mode, or permission overrides are accepted. Before each full Gemini or Copilot worker attempt, the launcher runs a 20-second headless probe with the same model so renamed, retired, unauthorized, or quota-blocked model IDs fail while the worktree is still clean. Gemini and Copilot are best-effort: if the command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next worker. Copilot runs in programmatic mode with minimal tool permissions, JSONL events, and a Markdown session share; because Copilot has no local `--output-schema` equivalent, the launcher accepts only the marked final worker JSON and still requires orchestrator diff/test verification. If Gemini or Copilot returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation. If Gemini Pro, Gemini Flash, Copilot, Spark, or mini leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
 
 After launching worker packets, wait for the launcher processes to finish. If a worker launcher is still active, do not poll its worktree, event logs, process table, or `status.json`, and do not send status nudges. Inspect worker status files and diffs only after the launcher exits, a worker reports `blocked`/`failed`/`partial`, or the user explicitly enters debug mode.
 

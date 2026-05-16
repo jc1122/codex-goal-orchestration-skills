@@ -25,15 +25,16 @@ Use this exact worker preference:
 
 1. Gemini CLI with `gemini-3.1-pro-preview`
 2. Gemini CLI with `gemini-3-flash-preview`
-3. `gpt-5.3-codex-spark`
-4. `gpt-5.4-mini`
+3. GitHub Copilot CLI with `gpt-5.4` and `--effort high`
+4. `gpt-5.3-codex-spark`
+5. `gpt-5.4-mini`
 
 Fallback is allowed only when:
 
 - the current worker attempt did not produce a valid status file;
 - the worker worktree is clean.
 
-No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview` may be used. Runtime packet generation must not accept model or approval-mode overrides. Worker prompts must render worktree-local context files as relative paths and embed out-of-worktree context snapshots so Gemini never needs to read bundle paths outside the worker worktree. Before each full Gemini worker attempt, run a 20-second headless Gemini probe with the same model to catch renamed, retired, unauthorized, or quota-blocked model IDs before the worktree can be dirtied. Gemini is best-effort because quota limits may be tight: missing Gemini CLI, quota errors, invalid JSON, unavailable models, or other clean failures should fall through to the next worker attempt. If Gemini returns marked worker JSON with `status: "success"`, normalize it to canonical `pass` before schema validation. If Gemini Pro, Gemini Flash, Spark, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every attempt fails cleanly, write a terminal blocked worker `status.json`.
+No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview` may be used. Runtime packet generation must not accept model, effort, approval-mode, or permission overrides. Worker prompts must render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs never need to read bundle paths outside the worker worktree. Before each full Gemini or Copilot worker attempt, run a 20-second headless probe with the same model to catch renamed, retired, unauthorized, or quota-blocked model IDs before the worktree can be dirtied. Gemini and Copilot are best-effort because quota limits may be tight: missing CLIs, quota errors, invalid JSON, unavailable models, or other clean failures should fall through to the next worker attempt. Copilot must run in programmatic mode with `--model gpt-5.4`, `--effort high`, `--no-ask-user`, minimal tool permissions, JSONL output, and a Markdown session share. Do not use `/fleet` for packet execution; the branch orchestrator owns worker parallelism externally. If Gemini or Copilot returns marked worker JSON with `status: "success"`, normalize it to canonical `pass` before schema validation. If Gemini Pro, Gemini Flash, Copilot, Spark, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every attempt fails cleanly, write a terminal blocked worker `status.json`.
 
 ## Reviewer Model Policy
 

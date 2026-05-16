@@ -1,6 +1,6 @@
 # Worker Prompt Sizing
 
-Worker packets must fit the smallest intended worker context. Spark fallback has a local context window of about 128k tokens, so keep packets below roughly 80k-100k total input context.
+Worker packets must fit the smallest intended worker context across the fallback chain. Keep packets below roughly 80k-100k total input context.
 
 ## Good Worker Packet
 

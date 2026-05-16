@@ -33,7 +33,7 @@ Single-branch bundles are serialized and must include `serial_reason`. Underfill
 
 ## Work Items
 
-Work items are inputs for Spark workers. Keep them small:
+Work items are inputs for worker packet launchers. Keep them small:
 
 - one objective;
 - owned files/modules;

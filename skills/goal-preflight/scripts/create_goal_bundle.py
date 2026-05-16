@@ -127,7 +127,7 @@ def bullets(values: list[str], fallback: str = "- none") -> str:
 
 def format_work_items(items: list[dict]) -> str:
     if not items:
-        return "- No work items supplied; preflight should ask for or synthesize Spark-sized items."
+        return "- No work items supplied; preflight should ask for or synthesize worker-sized items."
     chunks = []
     for idx, item in enumerate(items, start=1):
         item_id = item.get("id") or f"W{idx:02d}"

@@ -18,6 +18,11 @@ GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 GEMINI_FLASH_MODEL = "gemini-3-flash-preview"
 GEMINI_PROBE_TIMEOUT_SECONDS = 20
 GEMINI_PROBE_PROMPT = "Return exactly: GEMINI_MODEL_PROBE_OK"
+COPILOT_COMMAND = "gh"
+COPILOT_MODEL = "gpt-5.4"
+COPILOT_REASONING_EFFORT = "high"
+COPILOT_PROBE_TIMEOUT_SECONDS = 20
+COPILOT_PROBE_PROMPT = "Return exactly: COPILOT_MODEL_PROBE_OK"
 SPARK_MODEL = "gpt-5.3-codex-spark"
 MINI_MODEL = "gpt-5.4-mini"
 REVIEWER_MODEL = "gpt-5.5"
@@ -174,7 +179,7 @@ def context_section(worktree: str, context_files: list[str]) -> str:
             embedded_chars += len(text)
             if embedded_chars > MAX_EMBEDDED_CONTEXT_CHARS:
                 raise SystemExit(
-                    "external context files exceed embedded Gemini prompt limit; "
+                    "external context files exceed embedded worker prompt limit; "
                     "split the packet or use worktree-local context files"
                 )
             label = f"external-context-{index}: {path.name}"
@@ -269,7 +274,7 @@ Task:
 
 Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`.
 
-If you are running under Gemini CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
+If you are running under Gemini CLI or GitHub Copilot CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
 {GEMINI_STATUS_BEGIN}
 {{"packet_id":"{packet_id}","role":"worker","status":"blocked","branch":"{branch}","worktree":"{worktree}","changed_files":[],"commands_run":[],"tests":[],"blockers":[],"handoff":"replace with concise handoff"}}
@@ -377,6 +382,11 @@ gemini_command={shell_quote(GEMINI_COMMAND)}
 gemini_approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
 gemini_probe_timeout_seconds={GEMINI_PROBE_TIMEOUT_SECONDS}
 gemini_probe_prompt={shell_quote(GEMINI_PROBE_PROMPT)}
+copilot_command={shell_quote(COPILOT_COMMAND)}
+copilot_model={shell_quote(COPILOT_MODEL)}
+copilot_reasoning_effort={shell_quote(COPILOT_REASONING_EFFORT)}
+copilot_probe_timeout_seconds={COPILOT_PROBE_TIMEOUT_SECONDS}
+copilot_probe_prompt={shell_quote(COPILOT_PROBE_PROMPT)}
 rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt
 
 worktree_dirty() {{
@@ -430,6 +440,7 @@ data = {{
     "commands_run": [
         "gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
         "gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
+        "gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
         "codex exec --ephemeral -m {SPARK_MODEL} -s workspace-write",
         "codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
     ],
@@ -496,34 +507,64 @@ def validate(instance, schema):
                         raise ValueError(f"{{field}} contains item with wrong type")
 
 
-text = raw_path.read_text(encoding="utf-8", errors="replace")
 schema = json.loads(schema_path.read_text(encoding="utf-8"))
-begin_count = text.count(begin)
-end_count = text.count(end)
-if begin_count != 1 or end_count != 1:
-    print(
-        f"Expected exactly one {{begin}} and one {{end}} marker; "
-        f"found {{begin_count}} begin marker(s) and {{end_count}} end marker(s).",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-start = text.index(begin) + len(begin)
-finish = text.index(end)
-if finish <= start:
-    print("Worker status end marker appears before begin marker.", file=sys.stderr)
-    raise SystemExit(1)
-candidate = text[start:finish].strip()
-try:
-    data = json.loads(candidate)
-    if data.get("status") == "success":
-        data["status"] = "pass"
-        if isinstance(data.get("commands_run"), list):
-            data["commands_run"].append("launcher normalized Gemini status alias success->pass")
-    validate(data, schema)
-except Exception as exc:
-    print("Invalid marked worker status JSON: " + str(exc), file=sys.stderr)
-    raise SystemExit(1)
-output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+
+
+def collect_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from collect_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from collect_strings(item)
+
+
+text = raw_path.read_text(encoding="utf-8", errors="replace")
+sources = [("raw output", text)]
+jsonl_parts = []
+for line in text.splitlines():
+    try:
+        data = json.loads(line)
+    except Exception:
+        continue
+    jsonl_parts.extend(collect_strings(data))
+if jsonl_parts:
+    sources.append(("decoded JSONL strings", "\\n".join(jsonl_parts)))
+
+source_errors = []
+for source_name, source_text in sources:
+    begin_count = source_text.count(begin)
+    end_count = source_text.count(end)
+    if begin_count != 1 or end_count != 1:
+        source_errors.append(
+            f"{{source_name}}: expected exactly one {{begin}} and one {{end}} marker; "
+            f"found {{begin_count}} begin marker(s) and {{end_count}} end marker(s)."
+        )
+        continue
+    start = source_text.index(begin) + len(begin)
+    finish = source_text.index(end)
+    if finish <= start:
+        source_errors.append(f"{{source_name}}: worker status end marker appears before begin marker.")
+        continue
+    candidate = source_text[start:finish].strip()
+    try:
+        data = json.loads(candidate)
+        if data.get("status") == "success":
+            data["status"] = "pass"
+            if isinstance(data.get("commands_run"), list):
+                data["commands_run"].append("launcher normalized provider status alias success->pass")
+        validate(data, schema)
+    except Exception as exc:
+        source_errors.append(f"{{source_name}}: invalid marked worker status JSON: {{exc}}")
+        continue
+    output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+    raise SystemExit(0)
+
+for message in source_errors:
+    print(message, file=sys.stderr)
+raise SystemExit(1)
 PY
 }}
 
@@ -592,6 +633,99 @@ run_gemini() {{
   extract_status_json "$raw_path"
 }}
 
+probe_copilot_model() {{
+  local label="$1"
+  local probe_path="$packet_dir/events-${{label}}-probe.jsonl"
+  local probe_share="$packet_dir/session-${{label}}-probe.md"
+  (
+    cd {shell_quote(worktree)}
+    python3 - "$copilot_command" "$copilot_model" "$copilot_reasoning_effort" "$copilot_probe_timeout_seconds" "$copilot_probe_prompt" "$probe_share" <<'PY'
+import subprocess
+import sys
+
+command, model, effort, timeout_seconds, prompt, share_path = sys.argv[1:7]
+try:
+    result = subprocess.run(
+        [
+            command,
+            "copilot",
+            "--",
+            "-C",
+            "{worktree}",
+            "--model",
+            model,
+            "--effort",
+            effort,
+            "--no-ask-user",
+            "--no-custom-instructions",
+            "--no-remote",
+            "--disable-builtin-mcps",
+            "--log-level",
+            "error",
+            "--output-format",
+            "json",
+            "--stream",
+            "off",
+            "--share",
+            share_path,
+            "-p",
+            prompt,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=int(timeout_seconds),
+        check=False,
+    )
+except subprocess.TimeoutExpired as exc:
+    output = exc.stdout or ""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    if output:
+        sys.stdout.write(output)
+    print(f"Copilot model probe timed out after {{timeout_seconds}} seconds.", file=sys.stderr)
+    raise SystemExit(124)
+
+if result.stdout:
+    sys.stdout.write(result.stdout)
+raise SystemExit(result.returncode)
+PY
+  ) > "$probe_path" 2>&1
+}}
+
+run_copilot() {{
+  local label="$1"
+  local raw_path="$packet_dir/events-${{label}}.jsonl"
+  local session_path="$packet_dir/session-${{label}}.md"
+  if ! command -v "$copilot_command" >/dev/null 2>&1; then
+    echo "GitHub Copilot CLI command not found: $copilot_command" > "$raw_path"
+    return 127
+  fi
+  if ! "$copilot_command" copilot -- --version > "$packet_dir/events-${{label}}-version.log" 2>&1; then
+    return 127
+  fi
+  probe_copilot_model "$label" || return $?
+  (
+    cd {shell_quote(worktree)}
+    "$copilot_command" copilot -- \\
+      -C {shell_quote(worktree)} \\
+      --model "$copilot_model" \\
+      --effort "$copilot_reasoning_effort" \\
+      --no-ask-user \\
+      --no-custom-instructions \\
+      --no-remote \\
+      --disable-builtin-mcps \\
+      --log-level error \\
+      --output-format json \\
+      --stream off \\
+      --allow-tool='read,write,shell(pwd),shell(git:*),shell(python3:*),shell(pytest:*),shell(uv:*),shell(rg:*),shell(sed:*),shell(cat:*),shell(ls:*)' \\
+      --deny-tool='shell(git push),shell(git reset),shell(rm),memory,url' \\
+      --share="$session_path" \\
+      -p "$(cat "$prompt_path")"
+  ) > "$raw_path" 2>&1
+  extract_status_json "$raw_path"
+}}
+
 run_codex() {{
   local label="$1"
   local model="$2"
@@ -615,6 +749,11 @@ if run_gemini gemini-flash {shell_quote(GEMINI_FLASH_MODEL)}; then
   exit 0
 fi
 guard_clean_for_fallback "Gemini Flash"
+
+if run_copilot copilot; then
+  exit 0
+fi
+guard_clean_for_fallback "GitHub Copilot"
 
 if run_codex spark {shell_quote(SPARK_MODEL)}; then
   exit 0
