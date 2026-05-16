@@ -67,6 +67,10 @@ def load_manifest(path: Path) -> dict:
         return json.load(handle)
 
 
+def exact_string_schema(value: str) -> dict:
+    return {"type": "string", "const": value}
+
+
 def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -85,9 +89,9 @@ def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
             "summary",
         ],
         "properties": {
-            "manifest": {"const": manifest_path.as_posix()},
-            "repo_root": {"const": repo_root.as_posix()},
-            "status": {"enum": ["pass", "failed", "blocked"]},
+            "manifest": exact_string_schema(manifest_path.as_posix()),
+            "repo_root": exact_string_schema(repo_root.as_posix()),
+            "status": {"type": "string", "enum": ["pass", "failed", "blocked"]},
             "can_start": {"type": "boolean"},
             "checked_files": {"type": "array", "items": {"type": "string"}},
             "defects": {
@@ -98,7 +102,7 @@ def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
                     "required": ["file", "severity", "message"],
                     "properties": {
                         "file": {"type": "string"},
-                        "severity": {"enum": ["critical", "major", "minor"]},
+                        "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
                         "message": {"type": "string"},
                     },
                 },
@@ -161,6 +165,7 @@ Required checks:
 - manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
 - `max_active_branch_agents` is present and <= 4;
 - parallelism is the default and the manifest contains parallelization metadata;
+- manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;
 - waves, when present, cover every branch exactly once, no wave exceeds `max_active_branch_agents`, no wave has more than 4 branches, and there are no more than 5 waves;
 - single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level Definition of Done;
@@ -262,13 +267,16 @@ data = {{
             "message": message,
         }}
     ],
-    "missing_dod_items": ["prompt audit did not produce a valid audit artifact"],
+    "missing_dod_items": [
+        "prompt audit did not produce a valid audit artifact",
+        "Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
+    ],
     "actionability_verdict": "blocked",
     "commands_run": [
         "codex exec --ephemeral -m {AUDIT_MODEL} -C {repo_root.as_posix()} -s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json",
         "codex exec --ephemeral -m {AUDIT_FALLBACK_MODEL} -C {repo_root.as_posix()} -s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json",
     ],
-    "summary": message,
+    "summary": message + " Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
 }}
 with open(output_path, "w", encoding="utf-8") as handle:
     json.dump(data, handle, indent=2)

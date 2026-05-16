@@ -24,6 +24,7 @@ Base ref: {base_ref}
 - Launch all branches in each wave concurrently up to max_active_branch_agents, then run waves sequentially.
 - Close finished branch orchestrator agents before launching replacements.
 - Do not exceed 4 active branch orchestrator agents.
+- Require each branch to record `git diff --check {base_ref}...HEAD` before merge readiness.
 - Preserve unsupported, unresolved, negative, and probe-only labels.
 
 ## Parallelization Rationale
@@ -41,6 +42,10 @@ Base ref: {base_ref}
 ## Cleanup Policy
 
 {cleanup_policy}
+
+## Artifact Policy
+
+{artifact_policy}
 
 ## Required Evidence
 

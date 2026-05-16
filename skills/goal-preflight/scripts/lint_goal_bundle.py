@@ -98,9 +98,24 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
         return result(defects)
 
-    for key in ["job_id", "main_prompt", "base_ref", "branches", "waves", "max_active_branch_agents", "parallelization"]:
+    for key in [
+        "job_id",
+        "main_prompt",
+        "base_ref",
+        "artifact_policy",
+        "cleanup_policy",
+        "branches",
+        "waves",
+        "max_active_branch_agents",
+        "parallelization",
+    ]:
         if key not in manifest:
             defect("job.manifest.json", "critical", f"missing key: {key}")
+    if not safe_branch_name(manifest.get("base_ref")):
+        defect("job.manifest.json", "critical", f"base_ref is not safe: {manifest.get('base_ref')!r}")
+    for key in ["artifact_policy", "cleanup_policy"]:
+        if not isinstance(manifest.get(key), str) or not manifest.get(key, "").strip():
+            defect("job.manifest.json", "critical", f"{key} must be non-empty")
 
     max_active = manifest.get("max_active_branch_agents")
     if not isinstance(max_active, int) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
@@ -199,6 +214,9 @@ def lint(bundle_dir: Path) -> dict:
             "Parallelism is the default",
             "never exceed 4",
             "Launch all branches in each wave concurrently",
+            "git diff --check",
+            "Cleanup Policy",
+            "Artifact Policy",
             "close finished branch orchestrator agents",
         ]:
             if phrase.lower() not in main_text.lower():
@@ -258,6 +276,7 @@ def lint(bundle_dir: Path) -> dict:
             "Bootstrap Requirement",
             "Worker Parallelism",
             "Stop Conditions",
+            "git diff --check",
         ]:
             if phrase.lower() not in text.lower():
                 defect(str(prompt_path), "major", f"branch prompt missing section: {phrase}")
@@ -276,10 +295,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle-dir", required=True)
     parser.add_argument("--output")
+    parser.add_argument("--no-write", action="store_true", help="Print lint JSON to stdout without mutating preflight.lint.json.")
     args = parser.parse_args()
 
     bundle_dir = resolve_absolute_path(args.bundle_dir, "--bundle-dir", must_exist=True)
     data = lint(bundle_dir)
+    if args.no_write:
+        if args.output:
+            raise SystemExit("--no-write cannot be combined with --output")
+        print(json.dumps(data, indent=2))
+        return 0 if data["status"] == "pass" else 1
     output_path = (
         resolve_absolute_path(args.output, "--output", must_exist=False)
         if args.output

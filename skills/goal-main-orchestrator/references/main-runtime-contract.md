@@ -26,6 +26,8 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
   "job_id": "phaseX",
   "main_prompt": "main.prompt.md",
   "base_ref": "main",
+  "artifact_policy": "Preserve the full orchestration bundle under plans/orchestration/<job-id>; commit generated preflight prompts only when the user explicitly asks, and commit runtime status/review/audit artifacts only when the main prompt or user explicitly requires them.",
+  "cleanup_policy": "On pass, report mergeability and leave branch/worktree removal to explicit user authorization. On partial, blocked, or failed runs, preserve branch worktrees, branches, packets, and logs for inspection unless the user explicitly authorizes cleanup.",
   "max_active_branch_agents": 4,
   "parallelization": {
     "parallelism_default": true,
@@ -106,11 +108,13 @@ Return `blocked` if:
 - audit did not pass;
 - `prompt-audit.json` does not pin the exact manifest and repo root for this run;
 - manifest branch metadata is missing;
+- manifest cleanup or artifact policy is missing or contradicted by `main.prompt.md`;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 4;
 - a wave contains more branches than `max_active_branch_agents`;
 - a manifest contains more than 5 waves or more than 4 branches in any wave;
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;
+- merge-ready branch status/review artifacts do not record base-range whitespace validation;
 - DoD evidence is ambiguous or not falsifiable;
 - the main prompt does not authorize a requested merge/cleanup operation.

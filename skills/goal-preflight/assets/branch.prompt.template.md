@@ -1,6 +1,7 @@
 # {branch_id}: {title}
 
 Branch id: {branch_id}
+Base ref: {base_ref}
 Branch name: {branch_name}
 Worktree path: {worktree_path}
 Wave: {wave}
@@ -23,7 +24,7 @@ Wave: {wave}
 
 ## Worker Parallelism
 
-Parallel worker packets are the default for independent work items. Launch independent workers in separate child worktrees whenever their owned paths and verification commands do not conflict. If this branch is executed serially, record the reason in the branch status blockers or summary.
+Parallel worker packets are the default for independent work items. Launch independent workers in separate child worktrees whenever their owned paths and verification commands do not conflict. If a work item has a `Depends on` entry, do not launch it until the dependency's output is integrated and available as context. If this branch is executed serially, record the reason in the branch status blockers or summary.
 
 ## Tests And Validators
 
@@ -44,4 +45,5 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 ## Definition of Done
 
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
+- `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
 {dod}

@@ -108,6 +108,7 @@ Before returning `pass`, verify:
 - every worker needed by the branch DoD has status `pass` or an explicitly acceptable `partial`;
 - accepted worker branches have clean `git diff --check`;
 - focused tests and validators named in the branch prompt ran and are recorded;
+- base-range whitespace validation such as `git diff --check <base-ref>...HEAD` ran and is recorded before review or merge readiness;
 - reviewer verdict is `mergeable` or the branch prompt defines an acceptable weaker state;
 - unsupported, unresolved, negative, or probe-only labels are preserved;
 - branch status file records changed files, commands, tests, blockers, and final DoD checklist.

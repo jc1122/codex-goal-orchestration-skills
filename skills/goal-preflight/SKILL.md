@@ -20,6 +20,7 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - top-level goal;
    - base ref;
    - merge and cleanup policy;
+   - artifact preservation policy;
    - branch list or independent branch decomposition that maximizes safe parallelism;
    - `serial_reason` when the job cannot be split into at least two branches;
    - Spark-sized work items per branch;
@@ -79,6 +80,8 @@ Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/re
 
 Generated `goal-bootloader.md` is location-bound: it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, rerun this skill or `render_goal_bootloader.py`; do not hand-edit bootloader paths.
 
+If the source brief does not define artifact or cleanup handling, generated prompts use deterministic defaults: preserve the orchestration bundle; do not commit preflight/runtime artifacts unless explicitly requested by the user or main prompt; preserve branches, worktrees, packets, and logs after partial/blocked/failed runs.
+
 By default, output goes to:
 
 ```text
@@ -90,6 +93,14 @@ Run lint:
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py" \
   --bundle-dir /absolute/path/to/plans/orchestration/<job-id>
+```
+
+When checking an existing bundle only for compatibility, avoid rewriting prior evidence:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py" \
+  --bundle-dir /absolute/path/to/plans/orchestration/<job-id> \
+  --no-write
 ```
 
 Print the bootloader:

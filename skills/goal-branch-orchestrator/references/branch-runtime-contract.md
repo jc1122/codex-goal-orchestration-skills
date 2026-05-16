@@ -85,6 +85,7 @@ Do not read full worker event logs unless a worker status is missing, failed, or
 - Launch independent worker packets concurrently when owned files and verification commands do not conflict.
 - Record the reason in branch status if worker execution is serialized.
 - Inspect diffs before accepting worker summaries.
+- Run both working-tree whitespace checks and base-range whitespace checks, for example `git diff --check <base-ref>...HEAD`, before review or merge readiness.
 - Run branch-level validators after integrating workers.
 - Preserve negative and unresolved scientific labels.
 - Return blocked rather than guessing when prompt DoD is ambiguous.

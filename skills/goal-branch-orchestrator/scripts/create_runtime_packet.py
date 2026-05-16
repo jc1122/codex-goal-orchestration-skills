@@ -193,7 +193,9 @@ git diff --check HEAD
 
 Review the branch against its prompt, worker status files, diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible.
 
-Return only JSON matching `{schema_name}`.
+Determine the branch base ref from the branch prompt or manifest context. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
+
+Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished.
 """
 
     return f"""# Worker Packet {packet_id}
@@ -269,7 +271,7 @@ data = {{
         "codex exec --ephemeral -m {REVIEWER_MODEL} -s read-only",
         "codex exec --ephemeral -m {REVIEWER_FALLBACK_MODEL} -s read-only",
     ],
-    "verification_gaps": [message],
+    "verification_gaps": [message, "Inspect reviewer event logs in this packet directory for the underlying CLI or schema error."],
     "residual_risks": [],
     "summary": message,
 }}
@@ -385,8 +387,8 @@ data = {{
         "codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
     ],
     "tests": [],
-    "blockers": [message],
-    "handoff": message,
+    "blockers": [message, "Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error."],
+    "handoff": message + " Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error.",
 }}
 output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
 PY

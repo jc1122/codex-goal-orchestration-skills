@@ -100,9 +100,11 @@ Before returning `pass`, verify:
 
 - skill availability bootstrap passed for `goal-main-orchestrator` and `goal-branch-orchestrator`;
 - prompt audit passed;
+- manifest cleanup and artifact policies are present and are not contradicted by `main.prompt.md`;
 - every branch listed in the manifest has a status file;
 - every branch requiring review has a review file;
 - branch statuses satisfy the main prompt DoD;
+- branch statuses/reviews record base-range whitespace validation before merge readiness;
 - no branch wave exceeded `max_active_branch_agents`;
 - finished branch orchestrators were closed before replacements launched;
 - required commands and validators are recorded;

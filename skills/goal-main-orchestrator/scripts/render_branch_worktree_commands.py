@@ -107,6 +107,9 @@ def main() -> int:
 
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")
+    for key in ["artifact_policy", "cleanup_policy"]:
+        if not isinstance(manifest.get(key), str) or not manifest.get(key, "").strip():
+            raise SystemExit(f"manifest {key} must be present and non-empty")
 
     max_active = manifest.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)
     if not isinstance(max_active, int) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
@@ -172,6 +175,8 @@ def main() -> int:
         selected_ids = set(matches[0].get("branches", []))
 
     base_ref = manifest.get("base_ref", "main")
+    if not safe_branch_name(base_ref):
+        raise SystemExit(f"base_ref is not safe: {base_ref!r}")
     if not git_ok(repo_root, "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}"):
         raise SystemExit(f"base_ref does not resolve to a commit: {base_ref}")
     seen_names = set()

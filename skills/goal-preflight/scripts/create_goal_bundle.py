@@ -133,6 +133,9 @@ def format_work_items(items: list[dict]) -> str:
                     "Context files:",
                     bullets(item.get("context_files", [])),
                     "",
+                    "Depends on:",
+                    bullets(item.get("depends_on", [])),
+                    "",
                     "Verification commands:",
                     bullets(item.get("verification", [])),
                     "",
@@ -164,6 +167,7 @@ def normalize_brief(brief: dict) -> dict:
         raise SystemExit("brief must include synthesized branches before bundle generation")
 
     job_id = slug(brief["job_id"])
+    base_ref = require_branch_name(str(brief.get("base_ref", "main")), "base_ref")
     max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
     serial_reason = nonempty_text(brief.get("serial_reason"))
     parallelization_rationale = nonempty_text(brief.get("parallelization_rationale"))
@@ -226,7 +230,11 @@ def normalize_brief(brief: dict) -> dict:
     return {
         **brief,
         "job_id": job_id,
-        "base_ref": brief.get("base_ref", "main"),
+        "base_ref": base_ref,
+        "artifact_policy": nonempty_text(brief.get("artifact_policy"))
+        or "Preserve the full orchestration bundle under plans/orchestration/<job-id>; commit generated preflight prompts only when the user explicitly asks, and commit runtime status/review/audit artifacts only when the main prompt or user explicitly requires them.",
+        "cleanup_policy": nonempty_text(brief.get("cleanup_policy"))
+        or "On pass, report mergeability and leave branch/worktree removal to explicit user authorization. On partial, blocked, or failed runs, preserve branch worktrees, branches, packets, and logs for inspection unless the user explicitly authorizes cleanup.",
         "max_active_branch_agents": max_active,
         "parallelization": {
             "parallelism_default": True,
@@ -294,6 +302,8 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         "job_id": brief["job_id"],
         "main_prompt": "main.prompt.md",
         "base_ref": brief["base_ref"],
+        "artifact_policy": brief["artifact_policy"],
+        "cleanup_policy": brief["cleanup_policy"],
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
         "branches": [
@@ -325,7 +335,8 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             max_active_branch_agents=brief["max_active_branch_agents"],
             parallelization_rationale=brief["parallelization"]["parallelization_rationale"],
             merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
-            cleanup_policy=brief.get("cleanup_policy", "Do not remove branches or worktrees unless explicitly authorized."),
+            cleanup_policy=brief["cleanup_policy"],
+            artifact_policy=brief["artifact_policy"],
             required_evidence=bullets(brief.get("required_evidence", [])),
             final_dod=bullets(brief.get("final_dod", [])),
         ),
@@ -338,6 +349,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             branch_template.format(
                 branch_id=branch["id"],
                 title=branch.get("title", branch.get("objective", branch["id"])),
+                base_ref=brief["base_ref"],
                 branch_name=branch["branch_name"],
                 worktree_path=branch["worktree_path"],
                 wave=branch["wave"],
@@ -362,6 +374,8 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Waves: {len(brief['waves'])}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
+            f"Artifact policy: {brief['artifact_policy']}",
+            f"Cleanup policy: {brief['cleanup_policy']}",
             "",
             "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
             "Run `lint_goal_bundle.py` before launching `/goal`.",

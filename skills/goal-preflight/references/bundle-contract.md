@@ -29,6 +29,8 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
   "job_id": "phaseX",
   "main_prompt": "main.prompt.md",
   "base_ref": "main",
+  "artifact_policy": "Preserve the full orchestration bundle under plans/orchestration/<job-id>; commit generated preflight prompts only when the user explicitly asks, and commit runtime status/review/audit artifacts only when the main prompt or user explicitly requires them.",
+  "cleanup_policy": "On pass, report mergeability and leave branch/worktree removal to explicit user authorization. On partial, blocked, or failed runs, preserve branch worktrees, branches, packets, and logs for inspection unless the user explicitly authorizes cleanup.",
   "max_active_branch_agents": 4,
   "parallelization": {
     "parallelism_default": true,
@@ -68,5 +70,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` says no more than 4 branch orchestrator agents may be active.
 - `main.prompt.md` says parallelism is the default and branches in a wave should launch concurrently.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
+- `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
+- Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
 - Single-branch bundles include `parallelization.serial_reason`.
