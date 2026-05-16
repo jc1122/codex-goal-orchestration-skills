@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Preflight"
-  short_description: "Prepare /goal orchestration bundles."
-  default_prompt: "Use $goal-preflight to turn a roadmap or diagnosis into a linted /goal bundle and bootloader."
+  short_description: "Build linted, path-safe /goal bundles."
+  default_prompt: "Use $goal-preflight to turn source material into a linted /goal bundle with branch prompts and a location-bound bootloader."

@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Branch Orchestrator"
-  short_description: "Dispatch Spark workers and branch reviewers."
-  default_prompt: "Use $goal-branch-orchestrator to execute one audited branch prompt with CLI workers and reviewers."
+  short_description: "Dispatch Spark-first branch workers."
+  default_prompt: "Use $goal-branch-orchestrator to execute one audited branch prompt with path-safe Codex CLI workers and read-only reviewers."

@@ -1,6 +1,6 @@
 ---
 name: goal-main-orchestrator
-description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from an already-created bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompt files; first dispatch a fail-closed prompt auditor, then create branch worktrees, launch branch orchestrators, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
+description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
 ---
 
 # Goal Main Orchestrator

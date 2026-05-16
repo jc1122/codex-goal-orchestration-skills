@@ -1,6 +1,6 @@
 ---
 name: goal-preflight
-description: "Prepare runtime-compatible /goal orchestration bundles from a report, diagnosis, roadmap, or rough goal brief. Use when the user needs actionable prompt infrastructure for goal-main-orchestrator: synthesize independent branch waves and Spark-sized work items when missing, write job.manifest.json/main.prompt.md/branch prompts/goal-bootloader.md, run deterministic lint, and present the exact bootloader text for the user to launch manually."
+description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: synthesize independent branch waves and Spark-sized work items when missing, enforce reproducible manifest paths, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
 # Goal Preflight

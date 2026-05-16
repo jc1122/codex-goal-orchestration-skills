@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when a main orchestrator has already passed prompt audit, created a branch integration worktree, and launched a branch session that must dispatch granular Spark-first CLI workers, integrate their results, dispatch a read-only reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
+description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, create path-safe worker/reviewer packets, dispatch granular Spark-first Codex CLI workers with 5.4-mini fallback, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
 # Goal Branch Orchestrator

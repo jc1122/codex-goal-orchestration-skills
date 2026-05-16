@@ -8,9 +8,9 @@ Install three Codex skills for file-backed `/goal` orchestration:
 
 These are packaged in one repository and reference each other by skill name, not by separate repository URLs:
 
-- `goal-preflight` generates bootloaders for `$goal-main-orchestrator`.
-- `goal-main-orchestrator` dispatches `$goal-branch-orchestrator`.
-- `goal-branch-orchestrator` creates focused CLI worker/reviewer packets.
+- `goal-preflight` creates linted, path-safe job bundles and a location-bound `/goal` bootloader for `$goal-main-orchestrator`.
+- `goal-main-orchestrator` runs bootstrap and prompt audit, creates validated branch worktrees, and dispatches `$goal-branch-orchestrator` sessions within the hard active-agent limit.
+- `goal-branch-orchestrator` creates path-safe worker/reviewer packets, dispatches Spark-first Codex CLI workers, integrates results, and sends read-only reviewer packets.
 
 ## Install
 

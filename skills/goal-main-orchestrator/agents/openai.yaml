@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Main Orchestrator"
-  short_description: "Run audited branch orchestration from /goal."
-  default_prompt: "Use $goal-main-orchestrator to run a prepared job bundle after the user starts /goal."
+  short_description: "Run audited /goal branch waves."
+  default_prompt: "Use $goal-main-orchestrator to run a prepared /goal bundle: bootstrap skills, audit prompts, create branch worktrees, and dispatch branch orchestrators."
