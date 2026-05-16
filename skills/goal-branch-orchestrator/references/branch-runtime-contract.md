@@ -15,7 +15,7 @@ The branch runtime receives:
 
 The main orchestrator already created the integration worktree. The branch orchestrator may create worker child worktrees from that branch.
 
-Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer packet scripts. Worker/reviewer packet directories must be absolute paths under the prepared bundle's `workers/` or `reviewers/` directory. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
+Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer packet scripts. Worker/reviewer packet directories, worktrees, task files, and context files must be absolute paths; the packet generator rejects relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
 
 ## Worker Model Policy
 
@@ -29,10 +29,9 @@ Use this exact worker preference:
 Fallback is allowed only when:
 
 - the current worker attempt did not produce a valid status file;
-- the worker worktree is clean; or
-- the fallback is launched from a fresh child worktree created from the same baseline.
+- the worker worktree is clean.
 
-No Gemini model other than `gemini-3.1-pro` and `gemini-3.1-flash` may be used. Gemini is best-effort because quota limits may be tight: missing Gemini CLI, quota errors, invalid JSON, or other clean failures should fall through to the next worker attempt. If Gemini Pro, Gemini Flash, or Spark fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree.
+No Gemini model other than `gemini-3.1-pro` and `gemini-3.1-flash` may be used. Runtime packet generation must not accept model or approval-mode overrides. Gemini is best-effort because quota limits may be tight: missing Gemini CLI, quota errors, invalid JSON, or other clean failures should fall through to the next worker attempt. If Gemini Pro, Gemini Flash, Spark, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every attempt fails cleanly, write a terminal blocked worker `status.json`.
 
 ## Reviewer Model Policy
 

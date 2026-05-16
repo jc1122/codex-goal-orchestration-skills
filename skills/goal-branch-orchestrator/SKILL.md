@@ -58,7 +58,7 @@ If any check fails, do not launch workers. Return `blocked`.
 
 ## Worker Packets
 
-Workers must be granular enough for Spark's 128k context window. Keep each packet below roughly 80k-100k total input context by using:
+Workers must fit the smallest intended worker context. Spark fallback has a local context window of about 128k tokens, so keep packets below roughly 80k-100k total input context by using:
 
 - one objective;
 - narrow owned files/modules;
@@ -80,7 +80,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
-The generated worker launcher uses Gemini CLI first with `gemini-3.1-pro`, then `gemini-3.1-flash`, then `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No other Gemini model is allowed. Gemini is best-effort: if the Gemini command is unavailable, quota-limited, or fails without dirtying the worker worktree, the launcher continues to the next worker. If Gemini Pro, Gemini Flash, or Spark leaves dirty partial work without a valid `status.json`, the launcher refuses fallback and writes `fallback.blocked.txt`.
+The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro`, Gemini CLI with `gemini-3.1-flash`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model or approval-mode overrides are accepted. Gemini is best-effort: if the Gemini command is unavailable, quota-limited, or fails without dirtying the worker worktree, the launcher continues to the next worker. If Gemini Pro, Gemini Flash, or Spark leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
 
 ## Reviewer Packet
 
