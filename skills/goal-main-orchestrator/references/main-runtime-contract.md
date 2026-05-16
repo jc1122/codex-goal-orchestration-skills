@@ -88,6 +88,8 @@ Read high-signal artifacts first:
 
 Do not read full worker logs unless a branch status is missing, failed, or inconsistent with its diff.
 
+Do not read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Main verifies branch-skill availability, creates branch worktrees, and dispatches branch sessions; the branch session is responsible for loading and following the branch skill.
+
 ## Active Agent Limit
 
 `max_active_branch_agents` is a hard runtime limit and must be <= 4. Launch branches by wave when `waves` is present. Parallelism is the default: launch every branch in the current wave concurrently up to the limit, then wait for the wave to finish before launching the next wave. Keep at most that many branch orchestrator agents active at once.

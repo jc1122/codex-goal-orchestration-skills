@@ -24,6 +24,7 @@ Base ref: {base_ref}
 - Launch all branches in each wave concurrently up to max_active_branch_agents, then run waves sequentially.
 - Close finished branch orchestrator agents before launching replacements.
 - Do not exceed 4 active branch orchestrator agents.
+- Do not read `goal-branch-orchestrator/SKILL.md` in main context; dispatch branch sessions that use that skill.
 - Require each branch to record `git diff --check {base_ref}...HEAD` before merge readiness.
 - Preserve unsupported, unresolved, negative, and probe-only labels.
 

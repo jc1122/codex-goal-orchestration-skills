@@ -92,6 +92,8 @@ Launch branch orchestrators according to manifest waves. Parallelism is the defa
 
 The main orchestrator should not implement branch work itself and should not inspect worker event logs unless a branch status is missing, inconsistent, or blocked.
 
+Do not open or read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Treat that skill as a branch-session launch target: verify it exists during bootstrap, then dispatch a branch orchestrator session that loads and follows it with the inputs above. If branch-session launch is impossible, return `blocked` instead of absorbing the branch runtime instructions into main.
+
 Track active branch orchestrator agent ids/processes. As each branch in a wave finishes, collect its status/review artifacts, then close or turn off the finished branch orchestrator. Launch the next wave only after the current wave is collected and capacity is freed. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
 
 ## Completion Gate
