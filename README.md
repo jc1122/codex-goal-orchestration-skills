@@ -47,3 +47,5 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 5. The main orchestrator launches branch sessions that use `goal-branch-orchestrator`.
 
 The runtime enforces skill availability bootstrap, reproducible manifest paths, prompt audit before branch work, branch waves, and a hard limit of 5 active branch orchestrator agents. Bundle prompt/status/review paths are relative to the bundle root; worktree paths are relative to the repository root.
+
+Generated `goal-bootloader.md` files are location-bound because they embed absolute bundle and repository roots. If a bundle or repository checkout is moved, rerun `goal-preflight` or `render_goal_bootloader.py`; do not hand-edit the bootloader paths.

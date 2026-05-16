@@ -72,6 +72,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
 
 Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, and worktree paths are relative to the repository root. Do not use absolute paths, backslashes, or `..` in the brief.
 
+Generated `goal-bootloader.md` is location-bound: it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, rerun this skill or `render_goal_bootloader.py`; do not hand-edit bootloader paths.
+
 By default, output goes to:
 
 ```text
