@@ -22,6 +22,7 @@ Base ref: {base_ref}
 - Parallelism is the default; serialization must be justified in `job.manifest.json`.
 - Respect max_active_branch_agents={max_active_branch_agents}; it must never exceed 4.
 - Launch all branches in each wave concurrently up to max_active_branch_agents, then run waves sequentially.
+- After branch dispatch, wait for branch agents; do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files.
 - Close finished branch orchestrator agents before launching replacements.
 - Do not exceed 4 active branch orchestrator agents.
 - Do not read `goal-branch-orchestrator/SKILL.md` in main context; dispatch branch sessions that use that skill.

@@ -90,6 +90,8 @@ Do not read full worker logs unless a branch status is missing, failed, or incon
 
 Do not read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Main verifies branch-skill availability, creates branch worktrees, and dispatches branch sessions; the branch session is responsible for loading and following the branch skill.
 
+While branch orchestrator agents are active, main must wait rather than poll. Use the native agent wait mechanism with the longest practical timeout. A no-completion wait result is not evidence that a branch is stalled. Main must not inspect worker packets, reviewer packets, branch worktrees, process tables, or branch status files during active-branch waiting, and must not send status-check nudges. Inspect branch artifacts only after a branch agent completes, explicitly reports `blocked`/`failed`/`partial`, or the user explicitly switches to debug mode.
+
 ## Active Agent Limit
 
 `max_active_branch_agents` is a hard runtime limit and must be <= 4. Launch branches by wave when `waves` is present. Parallelism is the default: launch every branch in the current wave concurrently up to the limit, then wait for the wave to finish before launching the next wave. Keep at most that many branch orchestrator agents active at once.
@@ -118,5 +120,6 @@ Return `blocked` if:
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;
 - merge-ready branch status/review artifacts do not record base-range whitespace validation;
+- main polled active branch agents' worker packets, reviewer packets, worktrees, process tables, or status files instead of waiting;
 - DoD evidence is ambiguous or not falsifiable;
 - the main prompt does not authorize a requested merge/cleanup operation.

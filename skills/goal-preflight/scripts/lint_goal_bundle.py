@@ -214,6 +214,7 @@ def lint(bundle_dir: Path) -> dict:
             "Parallelism is the default",
             "never exceed 4",
             "Launch all branches in each wave concurrently",
+            "do not poll active branch",
             "git diff --check",
             "Cleanup Policy",
             "Artifact Policy",
