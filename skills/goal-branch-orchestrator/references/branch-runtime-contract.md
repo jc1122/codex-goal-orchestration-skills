@@ -77,6 +77,8 @@ Read high-signal artifacts first:
 
 Do not read full worker event logs unless a worker status is missing, failed, or inconsistent with the worktree diff.
 
+While worker or reviewer launchers are active, wait rather than poll. A quiet launcher is not evidence of a stall. Do not inspect active launcher event logs, process tables, worker worktrees, status files, or review files while waiting. Inspect those artifacts only after the launcher exits, the generated status/review artifact is missing or failed, or the user explicitly switches to debug mode.
+
 ## Integration Rules
 
 - Verify the active checkout with `pwd` and `git status --short --branch` before edits or merges.
@@ -84,6 +86,7 @@ Do not read full worker event logs unless a worker status is missing, failed, or
 - Prefer one child worktree per worker when workers write.
 - Launch independent worker packets concurrently when owned files and verification commands do not conflict.
 - Record the reason in branch status if worker execution is serialized.
+- Wait for active worker/reviewer launchers instead of polling their event logs, process tables, worktrees, status files, or review files.
 - Inspect diffs before accepting worker summaries.
 - Run both working-tree whitespace checks and base-range whitespace checks, for example `git diff --check <base-ref>...HEAD`, before review or merge readiness.
 - Run branch-level validators after integrating workers.

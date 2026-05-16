@@ -10,7 +10,7 @@ These are packaged in one repository and reference each other by skill name, not
 
 - `goal-preflight` creates linted, path-safe job bundles and a location-bound `/goal` bootloader for `$goal-main-orchestrator`.
 - `goal-main-orchestrator` runs bootstrap and prompt audit, creates validated branch worktrees, and dispatches `$goal-branch-orchestrator` sessions within the hard active-agent limit without loading the branch skill body into main context.
-- `goal-branch-orchestrator` creates path-safe worker/reviewer packets, dispatches Gemini Pro/Flash-first workers with Codex Spark and mini fallbacks, integrates results, and sends read-only reviewer packets.
+- `goal-branch-orchestrator` creates path-safe worker/reviewer packets, dispatches Gemini Pro/Flash-first workers with Codex Spark and mini fallbacks, waits on active packet launchers without polling their logs, integrates results, and sends read-only reviewer packets.
 
 ## Install
 

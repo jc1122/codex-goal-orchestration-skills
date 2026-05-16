@@ -84,6 +84,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
 
 The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so Gemini does not try to read paths outside its allowed workspace. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model or approval-mode overrides are accepted. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same model so renamed, retired, unauthorized, or quota-blocked model IDs fail while the worktree is still clean. Gemini is best-effort: if the Gemini command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next worker. If Gemini returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation. If Gemini Pro, Gemini Flash, or Spark leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
 
+After launching worker packets, wait for the launcher processes to finish. If a worker launcher is still active, do not poll its worktree, event logs, process table, or `status.json`, and do not send status nudges. Inspect worker status files and diffs only after the launcher exits, a worker reports `blocked`/`failed`/`partial`, or the user explicitly enters debug mode.
+
 ## Reviewer Packet
 
 After integrating worker results and running branch-level checks, dispatch a read-only reviewer:
@@ -100,6 +102,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
 
 Reviewer launchers use `gpt-5.5` first and fall back to `gpt-5.4`, read-only.
 
+After launching a reviewer packet, wait for the reviewer launcher to finish. If it is still active, do not poll `events-*.jsonl`, process tables, or `review.json`; a quiet read-only reviewer is not evidence of a stall. Inspect reviewer artifacts only after the launcher exits, returns nonzero, or the user explicitly enters debug mode.
+
 ## Completion Gate
 
 Before returning `pass`, verify:
@@ -110,6 +114,7 @@ Before returning `pass`, verify:
 - focused tests and validators named in the branch prompt ran and are recorded;
 - base-range whitespace validation such as `git diff --check <base-ref>...HEAD` ran and is recorded before review or merge readiness;
 - reviewer verdict is `mergeable` or the branch prompt defines an acceptable weaker state;
+- branch orchestration did not poll active worker/reviewer launchers' event logs, process tables, status files, review files, or worktrees while waiting;
 - unsupported, unresolved, negative, or probe-only labels are preserved;
 - branch status file records changed files, commands, tests, blockers, and final DoD checklist.
 

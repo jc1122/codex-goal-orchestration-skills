@@ -278,6 +278,7 @@ def lint(bundle_dir: Path) -> dict:
             "Worker Parallelism",
             "Stop Conditions",
             "git diff --check",
+            "do not poll active",
         ]:
             if phrase.lower() not in text.lower():
                 defect(str(prompt_path), "major", f"branch prompt missing section: {phrase}")
