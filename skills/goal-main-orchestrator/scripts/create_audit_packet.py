@@ -159,8 +159,10 @@ Required checks:
 
 - every listed file exists and is readable;
 - manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
-- `max_active_branch_agents` is present and <= 5;
-- waves, when present, cover every branch exactly once and no wave exceeds `max_active_branch_agents`;
+- `max_active_branch_agents` is present and <= 4;
+- parallelism is the default and the manifest contains parallelization metadata;
+- waves, when present, cover every branch exactly once, no wave exceeds `max_active_branch_agents`, no wave has more than 4 branches, and there are no more than 5 waves;
+- single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level Definition of Done;
 - every branch prompt defines bounded branch scope and falsifiable Definition of Done;
 - branch prompts are actionable without chat history;

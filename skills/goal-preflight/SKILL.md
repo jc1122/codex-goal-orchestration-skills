@@ -20,7 +20,8 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - top-level goal;
    - base ref;
    - merge and cleanup policy;
-   - branch list or independent branch decomposition;
+   - branch list or independent branch decomposition that maximizes safe parallelism;
+   - `serial_reason` when the job cannot be split into at least two branches;
    - Spark-sized work items per branch;
    - falsifiable DoD and evidence requirements.
 4. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
@@ -49,14 +50,16 @@ If this fails, stop before writing prompt files and tell the user to install or 
 
 ## Parallelization Rules
 
-When the source material does not define branches/work items, divide work for maximum viable parallelism:
+Parallelism is the default. When the source material does not define branches/work items, divide work for maximum viable parallelism:
 
 - split branches by independent outcomes;
-- prefer 3-5 branches for normal jobs;
-- allow up to 25 branches as 5 waves of up to 5 branches;
+- prefer 3-4 branches for normal jobs;
+- allow up to 20 branches as 5 waves of up to 4 branches;
 - minimize shared-file overlap within a wave;
 - make every work item Spark-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
-- include the hard runtime rule that at most 5 branch orchestrator agents may be active and finished agents must be closed before launching replacements.
+- include the hard runtime rule that at most 4 branch orchestrator agents may be active and finished agents must be closed before launching replacements;
+- require `serial_reason` for a single-branch bundle;
+- require `parallelization_rationale` or `serial_reason` for underfilled non-final waves or any `max_active_branch_agents` below 4.
 
 Read `references/parallelization-rules.md` for branch decomposition guidance.
 

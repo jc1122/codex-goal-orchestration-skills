@@ -19,11 +19,16 @@ Base ref: {base_ref}
 - Run skill availability bootstrap before prompt audit.
 - Run prompt audit before branch work.
 - Do not create branch worktrees until prompt audit passes and `prompt-audit.json` pins this manifest and repository root.
-- Respect max_active_branch_agents={max_active_branch_agents}; it must never exceed 5.
-- Run branch waves sequentially.
+- Parallelism is the default; serialization must be justified in `job.manifest.json`.
+- Respect max_active_branch_agents={max_active_branch_agents}; it must never exceed 4.
+- Launch all branches in each wave concurrently up to max_active_branch_agents, then run waves sequentially.
 - Close finished branch orchestrator agents before launching replacements.
-- Do not exceed 5 active branch orchestrator agents.
+- Do not exceed 4 active branch orchestrator agents.
 - Preserve unsupported, unresolved, negative, and probe-only labels.
+
+## Parallelization Rationale
+
+{parallelization_rationale}
 
 ## Branch Waves
 

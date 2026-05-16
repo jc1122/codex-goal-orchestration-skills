@@ -9,8 +9,9 @@ import re
 from pathlib import Path, PurePosixPath
 
 
-MAX_ACTIVE_BRANCH_AGENTS = 5
-DEFAULT_TOTAL_BRANCH_CAP = 25
+MAX_ACTIVE_BRANCH_AGENTS = 4
+MAX_WAVES = 5
+DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
 SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
@@ -97,19 +98,43 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
         return result(defects)
 
-    for key in ["job_id", "main_prompt", "base_ref", "branches", "waves", "max_active_branch_agents"]:
+    for key in ["job_id", "main_prompt", "base_ref", "branches", "waves", "max_active_branch_agents", "parallelization"]:
         if key not in manifest:
             defect("job.manifest.json", "critical", f"missing key: {key}")
 
     max_active = manifest.get("max_active_branch_agents")
     if not isinstance(max_active, int) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
-        defect("job.manifest.json", "critical", "max_active_branch_agents must be an integer from 1 to 5")
+        defect("job.manifest.json", "critical", "max_active_branch_agents must be an integer from 1 to 4")
+
+    parallelization = manifest.get("parallelization", {})
+    if not isinstance(parallelization, dict):
+        defect("job.manifest.json", "critical", "parallelization must be an object")
+        parallelization = {}
+    if parallelization.get("parallelism_default") is not True:
+        defect("job.manifest.json", "critical", "parallelization.parallelism_default must be true")
+    if parallelization.get("max_branches_per_wave") != MAX_ACTIVE_BRANCH_AGENTS:
+        defect("job.manifest.json", "critical", "parallelization.max_branches_per_wave must be 4")
+    if parallelization.get("max_waves") != MAX_WAVES:
+        defect("job.manifest.json", "critical", "parallelization.max_waves must be 5")
+    serial_reason = parallelization.get("serial_reason", "")
+    parallelization_rationale = parallelization.get("parallelization_rationale", "")
+    has_parallelization_reason = (
+        isinstance(serial_reason, str)
+        and bool(serial_reason.strip())
+    ) or (
+        isinstance(parallelization_rationale, str)
+        and bool(parallelization_rationale.strip())
+    )
 
     branches = manifest.get("branches", [])
     if not branches:
         defect("job.manifest.json", "critical", "branches must be non-empty")
-    if len(branches) > DEFAULT_TOTAL_BRANCH_CAP and not manifest.get("allow_more_than_25_branches"):
-        defect("job.manifest.json", "critical", "more than 25 branches requires explicit override")
+    if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
+        defect("job.manifest.json", "critical", "more than 20 branches exceeds 5 waves of 4")
+    if len(branches) == 1 and not (isinstance(serial_reason, str) and serial_reason.strip()):
+        defect("job.manifest.json", "critical", "single-branch bundles require parallelization.serial_reason")
+    if isinstance(max_active, int) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
+        defect("job.manifest.json", "critical", "max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
 
     ids = [branch.get("id") for branch in branches]
     names = [branch.get("branch_name") for branch in branches]
@@ -127,14 +152,23 @@ def lint(bundle_dir: Path) -> dict:
     waves = manifest.get("waves", [])
     wave_branch_ids = []
     wave_ids = []
-    for wave in waves:
+    if len(waves) > MAX_WAVES:
+        defect("job.manifest.json", "critical", "more than 5 waves is not allowed")
+    for idx, wave in enumerate(waves):
         wid = wave.get("id")
         wave_ids.append(wid)
         if not isinstance(wid, str) or not SAFE_LABEL_RE.fullmatch(wid):
             defect("job.manifest.json", "critical", f"wave id is not safe: {wid!r}")
         branch_ids = wave.get("branches", [])
+        if not isinstance(branch_ids, list) or not branch_ids:
+            defect("job.manifest.json", "critical", f"wave {wave.get('id')} must list at least one branch")
+            branch_ids = []
         if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
-            defect("job.manifest.json", "critical", f"wave {wave.get('id')} has more than 5 branches")
+            defect("job.manifest.json", "critical", f"wave {wave.get('id')} has more than 4 branches")
+        if isinstance(max_active, int) and len(branch_ids) > max_active:
+            defect("job.manifest.json", "critical", f"wave {wave.get('id')} exceeds max_active_branch_agents")
+        if idx < len(waves) - 1 and isinstance(max_active, int) and len(branch_ids) < max_active and not has_parallelization_reason:
+            defect("job.manifest.json", "critical", f"underfilled non-final wave {wave.get('id')} requires serial_reason or parallelization_rationale")
         wave_branch_ids.extend(branch_ids)
     if len(wave_ids) != len(set(wave_ids)):
         defect("job.manifest.json", "critical", "wave ids must be unique")
@@ -162,7 +196,9 @@ def lint(bundle_dir: Path) -> dict:
             "prompt-audit.json",
             "pins this manifest",
             "max_active_branch_agents",
-            "never exceed 5",
+            "Parallelism is the default",
+            "never exceed 4",
+            "Launch all branches in each wave concurrently",
             "close finished branch orchestrator agents",
         ]:
             if phrase.lower() not in main_text.lower():
@@ -187,6 +223,9 @@ def lint(bundle_dir: Path) -> dict:
             "check_goal_skill_availability.py",
             "absolute paths",
             "pins the manifest",
+            "Parallelism is the default",
+            "never exceed 4",
+            "Launch every branch in the current wave concurrently",
         ]:
             if phrase not in bootloader:
                 defect("goal-bootloader.md", "critical", f"bootloader missing phrase: {phrase}")
@@ -217,6 +256,7 @@ def lint(bundle_dir: Path) -> dict:
             "Work Items",
             "Reviewer Requirement",
             "Bootstrap Requirement",
+            "Worker Parallelism",
             "Stop Conditions",
         ]:
             if phrase.lower() not in text.lower():

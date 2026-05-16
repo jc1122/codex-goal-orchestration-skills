@@ -15,7 +15,7 @@ Your job is:
 2. Read the prepared `job.manifest.json` and `main.prompt.md`.
 3. Dispatch a read-only heavy-model prompt auditor before any branch work starts.
 4. Create branch integration worktrees only after the audit passes, one wave at a time when waves are present.
-5. Launch branch orchestrators for the audited branch prompt files without exceeding the hard active-agent limit.
+5. Launch all branch orchestrators in the current wave concurrently without exceeding the hard active-agent limit.
 6. Review branch status/review artifacts against `main.prompt.md` DoD.
 7. Return `pass` only when the DoD is falsifiably satisfied.
 
@@ -79,7 +79,7 @@ If any target branch or worktree already exists, stop and report `blocked` unles
 
 ## Branch Orchestrator Dispatch
 
-Launch branch orchestrators according to manifest waves. Respect `max_active_branch_agents`; it must be treated as a hard limit and must not exceed 5. Each branch orchestrator must use the `goal-branch-orchestrator` skill and receive:
+Launch branch orchestrators according to manifest waves. Parallelism is the default: launch every branch in the current wave concurrently up to `max_active_branch_agents`, then wait for that wave to finish before launching the next wave. Respect `max_active_branch_agents`; it must be treated as a hard limit and must not exceed 4. Each branch orchestrator must use the `goal-branch-orchestrator` skill and receive:
 
 - the branch id;
 - branch prompt path;
@@ -92,7 +92,7 @@ Launch branch orchestrators according to manifest waves. Respect `max_active_bra
 
 The main orchestrator should not implement branch work itself and should not inspect worker event logs unless a branch status is missing, inconsistent, or blocked.
 
-Track active branch orchestrator agent ids/processes. As each branch finishes, collect its status/review artifacts, then close or turn off the finished branch orchestrator before launching a replacement. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
+Track active branch orchestrator agent ids/processes. As each branch in a wave finishes, collect its status/review artifacts, then close or turn off the finished branch orchestrator. Launch the next wave only after the current wave is collected and capacity is freed. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
 
 ## Completion Gate
 

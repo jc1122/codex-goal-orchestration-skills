@@ -82,6 +82,8 @@ Do not read full worker event logs unless a worker status is missing, failed, or
 - Verify the active checkout with `pwd` and `git status --short --branch` before edits or merges.
 - Keep worker ownership disjoint.
 - Prefer one child worktree per worker when workers write.
+- Launch independent worker packets concurrently when owned files and verification commands do not conflict.
+- Record the reason in branch status if worker execution is serialized.
 - Inspect diffs before accepting worker summaries.
 - Run branch-level validators after integrating workers.
 - Preserve negative and unresolved scientific labels.

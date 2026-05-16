@@ -9,8 +9,9 @@ import re
 from pathlib import Path, PurePosixPath
 
 
-MAX_ACTIVE_BRANCH_AGENTS = 5
-DEFAULT_TOTAL_BRANCH_CAP = 25
+MAX_ACTIVE_BRANCH_AGENTS = 4
+MAX_WAVES = 5
+DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
 SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
@@ -84,10 +85,14 @@ def require_agent_limit(value: object) -> int:
     try:
         limit = int(value)
     except (TypeError, ValueError) as exc:
-        raise SystemExit("max_active_branch_agents must be an integer from 1 to 5") from exc
+        raise SystemExit("max_active_branch_agents must be an integer from 1 to 4") from exc
     if limit < 1 or limit > MAX_ACTIVE_BRANCH_AGENTS:
-        raise SystemExit("max_active_branch_agents must be an integer from 1 to 5")
+        raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
     return limit
+
+
+def nonempty_text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
 
 
 def branch_id(index: int) -> str:
@@ -139,10 +144,10 @@ def format_work_items(items: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
-def chunk_waves(branches: list[dict]) -> list[dict]:
+def chunk_waves(branches: list[dict], wave_size: int) -> list[dict]:
     waves = []
-    for offset in range(0, len(branches), MAX_ACTIVE_BRANCH_AGENTS):
-        wave_branches = branches[offset : offset + MAX_ACTIVE_BRANCH_AGENTS]
+    for offset in range(0, len(branches), wave_size):
+        wave_branches = branches[offset : offset + wave_size]
         waves.append(
             {
                 "id": wave_id(len(waves) + 1),
@@ -159,6 +164,9 @@ def normalize_brief(brief: dict) -> dict:
         raise SystemExit("brief must include synthesized branches before bundle generation")
 
     job_id = slug(brief["job_id"])
+    max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
+    serial_reason = nonempty_text(brief.get("serial_reason"))
+    parallelization_rationale = nonempty_text(brief.get("parallelization_rationale"))
     branches = []
     for idx, original in enumerate(brief["branches"], start=1):
         bid = original.get("id") or branch_id(idx)
@@ -176,18 +184,34 @@ def normalize_brief(brief: dict) -> dict:
         }
         branches.append(branch)
 
-    waves = brief.get("waves") or chunk_waves(branches)
+    if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
+        raise SystemExit(f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}")
+    if len(branches) == 1 and not serial_reason:
+        raise SystemExit("single-branch bundles are serialized and require brief.serial_reason")
+    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not (serial_reason or parallelization_rationale):
+        raise SystemExit("max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
+
+    waves = brief.get("waves") or chunk_waves(branches, max_active)
+    if len(waves) > MAX_WAVES:
+        raise SystemExit(f"waves must not exceed {MAX_WAVES}")
     branch_ids = {branch["id"] for branch in branches}
     seen_wave_ids = set()
     seen_wave_branches = []
     wave_by_branch = {}
-    for wave in waves:
+    for idx, wave in enumerate(waves):
         wid = require_safe_label(str(wave["id"]), "wave id")
         if wid in seen_wave_ids:
             raise SystemExit(f"duplicate wave id: {wid}")
         seen_wave_ids.add(wid)
         wave["id"] = wid
-        for bid in wave["branches"]:
+        wave_branches = wave.get("branches")
+        if not isinstance(wave_branches, list) or not wave_branches:
+            raise SystemExit(f"wave {wid} must list at least one branch")
+        if len(wave_branches) > max_active:
+            raise SystemExit(f"wave {wid} has more than max_active_branch_agents={max_active} branches")
+        if idx < len(waves) - 1 and len(wave_branches) < max_active and not (serial_reason or parallelization_rationale):
+            raise SystemExit(f"underfilled non-final wave {wid} requires serial_reason or parallelization_rationale")
+        for bid in wave_branches:
             if bid not in branch_ids:
                 raise SystemExit(f"wave {wid} references unknown branch id: {bid}")
             if bid in wave_by_branch:
@@ -203,7 +227,17 @@ def normalize_brief(brief: dict) -> dict:
         **brief,
         "job_id": job_id,
         "base_ref": brief.get("base_ref", "main"),
-        "max_active_branch_agents": require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)),
+        "max_active_branch_agents": max_active,
+        "parallelization": {
+            "parallelism_default": True,
+            "max_active_branch_agents": max_active,
+            "max_branches_per_wave": MAX_ACTIVE_BRANCH_AGENTS,
+            "max_waves": MAX_WAVES,
+            "serial_reason": serial_reason,
+            "parallelization_rationale": parallelization_rationale
+            or f"Branches are grouped into waves of up to {max_active} independent branch agents.",
+            "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave.",
+        },
         "branches": branches,
         "waves": waves,
     }
@@ -242,7 +276,7 @@ Mandatory bootstrap first: verify runtime skill availability before prompt audit
 
 Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
 
-Respect max_active_branch_agents from job.manifest.json; never exceed 5. Run branch waves sequentially. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements.
+Parallelism is the default. Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Launch every branch in the current wave concurrently up to that limit. Run branch waves sequentially. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements. A single-branch or otherwise serialized plan is valid only when job.manifest.json records a serial_reason or parallelization_rationale.
 
 Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.
 """
@@ -250,8 +284,6 @@ Finish only when main.prompt.md Definition of Done is falsifiably satisfied by s
 
 def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
     brief = normalize_brief(brief)
-    if len(brief["branches"]) > DEFAULT_TOTAL_BRANCH_CAP and not brief.get("allow_more_than_25_branches"):
-        raise SystemExit("brief has more than 25 branches; explicit override required")
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     bundle_dir.mkdir(parents=True, exist_ok=True)
@@ -263,6 +295,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         "main_prompt": "main.prompt.md",
         "base_ref": brief["base_ref"],
         "max_active_branch_agents": brief["max_active_branch_agents"],
+        "parallelization": brief["parallelization"],
         "branches": [
             {
                 "id": branch["id"],
@@ -290,6 +323,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             source_summary=brief.get("source_summary", "Source summary not supplied."),
             branch_waves=render_branch_waves(brief["waves"]),
             max_active_branch_agents=brief["max_active_branch_agents"],
+            parallelization_rationale=brief["parallelization"]["parallelization_rationale"],
             merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
             cleanup_policy=brief.get("cleanup_policy", "Do not remove branches or worktrees unless explicitly authorized."),
             required_evidence=bullets(brief.get("required_evidence", [])),
@@ -327,6 +361,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Branches: {len(brief['branches'])}",
             f"Waves: {len(brief['waves'])}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
+            f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
             "",
             "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
             "Run `lint_goal_bundle.py` before launching `/goal`.",

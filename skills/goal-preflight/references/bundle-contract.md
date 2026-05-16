@@ -29,7 +29,16 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
   "job_id": "phaseX",
   "main_prompt": "main.prompt.md",
   "base_ref": "main",
-  "max_active_branch_agents": 5,
+  "max_active_branch_agents": 4,
+  "parallelization": {
+    "parallelism_default": true,
+    "max_active_branch_agents": 4,
+    "max_branches_per_wave": 4,
+    "max_waves": 5,
+    "serial_reason": "",
+    "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
+    "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
+  },
   "branches": [
     {
       "id": "B01",
@@ -56,6 +65,8 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `goal-bootloader.md` points to the bundle root, repository root, `job.manifest.json`, and `main.prompt.md`.
 - `goal-bootloader.md` is under 4000 characters.
 - `main.prompt.md` says prompt audit is first and branches cannot be created until audit passes.
-- `main.prompt.md` says no more than 5 branch orchestrator agents may be active.
+- `main.prompt.md` says no more than 4 branch orchestrator agents may be active.
+- `main.prompt.md` says parallelism is the default and branches in a wave should launch concurrently.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
+- Single-branch bundles include `parallelization.serial_reason`.

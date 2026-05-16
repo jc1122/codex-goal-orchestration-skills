@@ -21,6 +21,10 @@ Wave: {wave}
 
 {work_items}
 
+## Worker Parallelism
+
+Parallel worker packets are the default for independent work items. Launch independent workers in separate child worktrees whenever their owned paths and verification commands do not conflict. If this branch is executed serially, record the reason in the branch status blockers or summary.
+
 ## Tests And Validators
 
 {tests}

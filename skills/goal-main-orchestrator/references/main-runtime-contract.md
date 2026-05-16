@@ -26,7 +26,16 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
   "job_id": "phaseX",
   "main_prompt": "main.prompt.md",
   "base_ref": "main",
-  "max_active_branch_agents": 5,
+  "max_active_branch_agents": 4,
+  "parallelization": {
+    "parallelism_default": true,
+    "max_active_branch_agents": 4,
+    "max_branches_per_wave": 4,
+    "max_waves": 5,
+    "serial_reason": "",
+    "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
+    "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
+  },
   "branches": [
     {
       "id": "B01",
@@ -79,7 +88,7 @@ Do not read full worker logs unless a branch status is missing, failed, or incon
 
 ## Active Agent Limit
 
-`max_active_branch_agents` is a hard runtime limit and must be <= 5. Launch branches by wave when `waves` is present. Keep at most that many branch orchestrator agents active at once.
+`max_active_branch_agents` is a hard runtime limit and must be <= 4. Launch branches by wave when `waves` is present. Parallelism is the default: launch every branch in the current wave concurrently up to the limit, then wait for the wave to finish before launching the next wave. Keep at most that many branch orchestrator agents active at once.
 
 When a branch finishes:
 
@@ -97,8 +106,10 @@ Return `blocked` if:
 - audit did not pass;
 - `prompt-audit.json` does not pin the exact manifest and repo root for this run;
 - manifest branch metadata is missing;
-- `max_active_branch_agents` is missing, non-numeric, or greater than 5;
+- `max_active_branch_agents` is missing, non-numeric, or greater than 4;
 - a wave contains more branches than `max_active_branch_agents`;
+- a manifest contains more than 5 waves or more than 4 branches in any wave;
+- a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;
 - DoD evidence is ambiguous or not falsifiable;

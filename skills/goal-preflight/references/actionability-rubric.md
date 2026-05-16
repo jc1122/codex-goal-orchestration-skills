@@ -8,6 +8,7 @@ Ask the user for clarification before writing final files if any of these are mi
 - cleanup policy
 - top-level DoD
 - branch objective or branch scope
+- serial reason when the job cannot be split into multiple branches
 - required tests/validators
 - acceptance evidence
 - whether unresolved/negative/probe-only labels must be preserved
@@ -15,9 +16,10 @@ Ask the user for clarification before writing final files if any of these are mi
 Do not ask when a conservative default is clear:
 
 - base ref defaults to `main`;
-- max active branch agents defaults to 5;
-- total branch cap defaults to 25;
-- normal jobs should use 3-5 branches;
+- max active branch agents defaults to 4;
+- total branch cap defaults to 20;
+- normal jobs should use 3-4 branches;
+- parallelism is the default;
 - runtime branch creation belongs to `goal-main-orchestrator`;
 - prompt audit is mandatory and fail-closed.
 

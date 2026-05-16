@@ -16,6 +16,6 @@ Mandatory bootstrap first: verify runtime skill availability before prompt audit
 
 Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
 
-Respect max_active_branch_agents from job.manifest.json; never exceed 5. Run branch waves sequentially. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements.
+Parallelism is the default. Respect max_active_branch_agents from job.manifest.json; never exceed 4. Launch every branch in the current wave concurrently up to that limit. Run branch waves sequentially. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements. A single-branch or otherwise serialized plan is valid only when job.manifest.json records a serial_reason or parallelization_rationale.
 
 Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.

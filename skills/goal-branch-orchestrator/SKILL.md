@@ -15,7 +15,7 @@ Your job is:
 2. Read the assigned branch prompt file.
 3. Verify the global prompt audit passed.
 4. Create granular worker packets and worker child worktrees as needed.
-5. Launch Gemini Pro/Flash-first workers with Codex Spark and mini fallback.
+5. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using Gemini Pro/Flash-first workers with Codex Spark and mini fallback.
 6. Inspect worker status, diffs, and focused verification evidence.
 7. Dispatch a read-only heavy-model reviewer.
 8. Return branch status only when the branch prompt DoD is satisfied or explicitly blocked.
@@ -66,6 +66,8 @@ Workers must fit the smallest intended worker context. Spark fallback has a loca
 - exact verification commands;
 - a falsifiable worker DoD;
 - required JSON status output.
+
+Parallel worker packets are the default for independent work items. Use separate child worktrees for workers that can proceed without sharing writable files. If branch work must run serially, record the reason in branch status rather than silently serializing it.
 
 Use `scripts/create_runtime_packet.py` to create worker packets:
 

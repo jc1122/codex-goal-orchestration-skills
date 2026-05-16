@@ -10,6 +10,8 @@ from pathlib import Path, PurePosixPath
 
 
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
+MAX_ACTIVE_BRANCH_AGENTS = 4
+MAX_WAVES = 5
 
 
 def shell_quote(value: str) -> str:
@@ -106,19 +108,49 @@ def main() -> int:
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")
 
-    max_active = manifest.get("max_active_branch_agents", 5)
-    if not isinstance(max_active, int) or max_active < 1 or max_active > 5:
-        raise SystemExit("max_active_branch_agents must be an integer from 1 to 5")
+    max_active = manifest.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)
+    if not isinstance(max_active, int) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
+        raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
+    parallelization = manifest.get("parallelization", {})
+    if not isinstance(parallelization, dict) or parallelization.get("parallelism_default") is not True:
+        raise SystemExit("manifest must declare parallelization.parallelism_default=true")
+    if parallelization.get("max_branches_per_wave") != MAX_ACTIVE_BRANCH_AGENTS:
+        raise SystemExit("manifest parallelization.max_branches_per_wave must be 4")
+    if parallelization.get("max_waves") != MAX_WAVES:
+        raise SystemExit("manifest parallelization.max_waves must be 5")
+    serial_reason = parallelization.get("serial_reason", "")
+    parallelization_rationale = parallelization.get("parallelization_rationale", "")
+    has_parallelization_reason = (
+        isinstance(serial_reason, str)
+        and bool(serial_reason.strip())
+    ) or (
+        isinstance(parallelization_rationale, str)
+        and bool(parallelization_rationale.strip())
+    )
+    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
+        raise SystemExit("max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
 
     waves = manifest.get("waves") or []
+    if len(waves) > MAX_WAVES:
+        raise SystemExit("manifest must not contain more than 5 waves")
     manifest_branch_ids = [branch.get("id") for branch in manifest.get("branches", [])]
+    if len(manifest_branch_ids) > MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES:
+        raise SystemExit("manifest must not contain more than 20 branches")
+    if len(manifest_branch_ids) == 1 and not (isinstance(serial_reason, str) and serial_reason.strip()):
+        raise SystemExit("single-branch manifests require parallelization.serial_reason")
     if len(manifest_branch_ids) != len(set(manifest_branch_ids)):
         raise SystemExit("manifest branch ids must be unique")
     wave_branch_ids = []
-    for wave in waves:
+    for idx, wave in enumerate(waves):
         branch_ids = wave.get("branches", [])
+        if not isinstance(branch_ids, list) or not branch_ids:
+            raise SystemExit(f"wave {wave.get('id')} must list at least one branch")
+        if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
+            raise SystemExit(f"wave {wave.get('id')} has more than 4 branches")
         if len(branch_ids) > max_active:
             raise SystemExit(f"wave {wave.get('id')} exceeds max_active_branch_agents")
+        if idx < len(waves) - 1 and len(branch_ids) < max_active and not has_parallelization_reason:
+            raise SystemExit(f"underfilled non-final wave {wave.get('id')} requires serial_reason or parallelization_rationale")
         wave_branch_ids.extend(branch_ids)
     if len(wave_branch_ids) != len(set(wave_branch_ids)):
         raise SystemExit("branch ids must not appear in more than one wave")
