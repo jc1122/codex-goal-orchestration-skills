@@ -21,6 +21,8 @@ GEMINI_PROBE_PROMPT = "Return exactly: GEMINI_MODEL_PROBE_OK"
 COPILOT_COMMAND = "gh"
 COPILOT_MODEL = "gpt-5.4"
 COPILOT_REASONING_EFFORT = "high"
+COPILOT_PROBE_MODEL = "gpt-5-mini"
+COPILOT_PROBE_REASONING_EFFORT = "low"
 COPILOT_PROBE_TIMEOUT_SECONDS = 20
 COPILOT_PROBE_PROMPT = "Return exactly: COPILOT_MODEL_PROBE_OK"
 SPARK_MODEL = "gpt-5.3-codex-spark"
@@ -385,6 +387,8 @@ gemini_probe_prompt={shell_quote(GEMINI_PROBE_PROMPT)}
 copilot_command={shell_quote(COPILOT_COMMAND)}
 copilot_model={shell_quote(COPILOT_MODEL)}
 copilot_reasoning_effort={shell_quote(COPILOT_REASONING_EFFORT)}
+copilot_probe_model={shell_quote(COPILOT_PROBE_MODEL)}
+copilot_probe_reasoning_effort={shell_quote(COPILOT_PROBE_REASONING_EFFORT)}
 copilot_probe_timeout_seconds={COPILOT_PROBE_TIMEOUT_SECONDS}
 copilot_probe_prompt={shell_quote(COPILOT_PROBE_PROMPT)}
 rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt
@@ -639,7 +643,7 @@ probe_copilot_model() {{
   local probe_share="$packet_dir/session-${{label}}-probe.md"
   (
     cd {shell_quote(worktree)}
-    python3 - "$copilot_command" "$copilot_model" "$copilot_reasoning_effort" "$copilot_probe_timeout_seconds" "$copilot_probe_prompt" "$probe_share" <<'PY'
+    python3 - "$copilot_command" "$copilot_probe_model" "$copilot_probe_reasoning_effort" "$copilot_probe_timeout_seconds" "$copilot_probe_prompt" "$probe_share" <<'PY'
 import subprocess
 import sys
 
@@ -666,6 +670,8 @@ try:
             "json",
             "--stream",
             "off",
+            "--deny-tool",
+            "shell,write,url,memory",
             "--share",
             share_path,
             "-p",
