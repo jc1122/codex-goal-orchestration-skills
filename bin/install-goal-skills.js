@@ -27,7 +27,9 @@ function parseArgs(argv) {
   const args = { dest: null, list: false, dryRun: false, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
-    if (arg === "--dest") {
+    if (arg === "--") {
+      continue;
+    } else if (arg === "--dest") {
       if (i + 1 >= argv.length) {
         throw new Error("--dest requires a directory");
       }
