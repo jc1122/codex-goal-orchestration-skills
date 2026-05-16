@@ -14,8 +14,10 @@ SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
-GEMINI_PRO_MODEL = "gemini-3.1-pro"
-GEMINI_FLASH_MODEL = "gemini-3.1-flash"
+GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
+GEMINI_FLASH_MODEL = "gemini-3-flash-preview"
+GEMINI_PROBE_TIMEOUT_SECONDS = 20
+GEMINI_PROBE_PROMPT = "Return exactly: GEMINI_MODEL_PROBE_OK"
 SPARK_MODEL = "gpt-5.3-codex-spark"
 MINI_MODEL = "gpt-5.4-mini"
 REVIEWER_MODEL = "gpt-5.5"
@@ -325,6 +327,8 @@ branch_name={shell_quote(branch)}
 worktree_path={shell_quote(worktree)}
 gemini_command={shell_quote(GEMINI_COMMAND)}
 gemini_approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
+gemini_probe_timeout_seconds={GEMINI_PROBE_TIMEOUT_SECONDS}
+gemini_probe_prompt={shell_quote(GEMINI_PROBE_PROMPT)}
 
 worktree_dirty() {{
   [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]
@@ -470,6 +474,51 @@ output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
 PY
 }}
 
+probe_gemini_model() {{
+  local label="$1"
+  local model="$2"
+  local probe_path="$packet_dir/events-${{label}}-probe.log"
+  (
+    cd {shell_quote(worktree)}
+    python3 - "$gemini_command" "$model" "$gemini_approval_mode" "$gemini_probe_timeout_seconds" "$gemini_probe_prompt" <<'PY'
+import subprocess
+import sys
+
+command, model, approval_mode, timeout_seconds, prompt = sys.argv[1:6]
+try:
+    result = subprocess.run(
+        [
+            command,
+            "--model",
+            model,
+            "--approval-mode",
+            approval_mode,
+            "--skip-trust",
+            "-p",
+            prompt,
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        timeout=int(timeout_seconds),
+        check=False,
+    )
+except subprocess.TimeoutExpired as exc:
+    output = exc.stdout or ""
+    if isinstance(output, bytes):
+        output = output.decode("utf-8", errors="replace")
+    if output:
+        sys.stdout.write(output)
+    print(f"Gemini model probe timed out after {{timeout_seconds}} seconds.", file=sys.stderr)
+    raise SystemExit(124)
+
+if result.stdout:
+    sys.stdout.write(result.stdout)
+raise SystemExit(result.returncode)
+PY
+  ) > "$probe_path" 2>&1
+}}
+
 run_gemini() {{
   local label="$1"
   local model="$2"
@@ -478,6 +527,7 @@ run_gemini() {{
     echo "Gemini command not found: $gemini_command" > "$raw_path"
     return 127
   fi
+  probe_gemini_model "$label" "$model" || return $?
   (
     cd {shell_quote(worktree)}
     "$gemini_command" \\

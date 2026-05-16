@@ -21,8 +21,8 @@ Resolve all bundle-owned paths from the manifest directory before passing them t
 
 Use this exact worker preference:
 
-1. Gemini CLI with `gemini-3.1-pro`
-2. Gemini CLI with `gemini-3.1-flash`
+1. Gemini CLI with `gemini-3.1-pro-preview`
+2. Gemini CLI with `gemini-3-flash-preview`
 3. `gpt-5.3-codex-spark`
 4. `gpt-5.4-mini`
 
@@ -31,7 +31,7 @@ Fallback is allowed only when:
 - the current worker attempt did not produce a valid status file;
 - the worker worktree is clean.
 
-No Gemini model other than `gemini-3.1-pro` and `gemini-3.1-flash` may be used. Runtime packet generation must not accept model or approval-mode overrides. Gemini is best-effort because quota limits may be tight: missing Gemini CLI, quota errors, invalid JSON, or other clean failures should fall through to the next worker attempt. If Gemini Pro, Gemini Flash, Spark, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every attempt fails cleanly, write a terminal blocked worker `status.json`.
+No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview` may be used. Runtime packet generation must not accept model or approval-mode overrides. Before each full Gemini worker attempt, run a 20-second headless Gemini probe with the same model to catch renamed, retired, unauthorized, or quota-blocked model IDs before the worktree can be dirtied. Gemini is best-effort because quota limits may be tight: missing Gemini CLI, quota errors, invalid JSON, unavailable models, or other clean failures should fall through to the next worker attempt. If Gemini Pro, Gemini Flash, Spark, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every attempt fails cleanly, write a terminal blocked worker `status.json`.
 
 ## Reviewer Model Policy
 
