@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create model-aware Codex CLI worker or reviewer packets for branch orchestration."""
+"""Create model-aware worker or reviewer packets for branch orchestration."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from pathlib import Path, PurePosixPath
 
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
+GEMINI_PRO_MODEL = "gemini-3.1-pro"
+GEMINI_FLASH_MODEL = "gemini-3.1-flash"
 
 
 def shell_quote(value: str) -> str:
@@ -169,7 +171,7 @@ Review the branch against its prompt, worker status files, diffs, test evidence,
 Return only JSON matching `{schema_name}`.
 """
 
-    return f"""# Spark Worker Packet {packet_id}
+    return f"""# Worker Packet {packet_id}
 
 You are Worker {packet_id}.
 
@@ -202,30 +204,16 @@ def launch_for(
     worktree: str,
     schema_name: str,
     output_name: str,
-    primary_model: str,
-    fallback_model: str,
+    worker_model: str,
+    worker_fallback_model: str,
+    reviewer_model: str,
+    reviewer_fallback_model: str,
+    gemini_command: str,
+    gemini_approval_mode: str,
 ) -> str:
     sandbox = "read-only" if role == "reviewer" else "workspace-write"
-    dirty_guard = ""
-    if role == "worker":
-        dirty_guard = f"""
-if [ -s "$(pwd)/{output_name}" ]; then
-  exit 1
-fi
-
-if [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]; then
-  echo "Primary worker failed after leaving dirty worktree; refusing fallback in same worktree." > "$(pwd)/fallback.blocked.txt"
-  exit 2
-fi
-"""
-    else:
-        dirty_guard = f"""
-if [ -s "$(pwd)/{output_name}" ]; then
-  exit 1
-fi
-"""
-
-    return f"""#!/usr/bin/env bash
+    if role == "reviewer":
+        return f"""#!/usr/bin/env bash
 set -euo pipefail
 
 cd "$(dirname "$0")"
@@ -246,11 +234,194 @@ run_model() {{
     > "$(pwd)/events-${{label}}.jsonl" 2>&1
 }}
 
-if run_model primary {shell_quote(primary_model)}; then
+if run_model primary {shell_quote(reviewer_model)}; then
   exit 0
 fi
-{dirty_guard}
-run_model fallback {shell_quote(fallback_model)}
+
+if [ -s "$(pwd)/{output_name}" ]; then
+  exit 1
+fi
+
+run_model fallback {shell_quote(reviewer_fallback_model)}
+"""
+
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
+
+packet_dir="$(pwd)"
+prompt_path="$packet_dir/prompt.md"
+schema_path="$packet_dir/{schema_name}"
+output_path="$packet_dir/{output_name}"
+gemini_command={shell_quote(gemini_command)}
+gemini_approval_mode={shell_quote(gemini_approval_mode)}
+
+worktree_dirty() {{
+  [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]
+}}
+
+guard_clean_for_fallback() {{
+  local label="$1"
+  if [ -s "$output_path" ]; then
+    exit 1
+  fi
+  if worktree_dirty; then
+    echo "$label failed after leaving dirty worktree; refusing fallback in same worktree." > "$packet_dir/fallback.blocked.txt"
+    exit 2
+  fi
+}}
+
+extract_status_json() {{
+  local raw_path="$1"
+  python3 - "$raw_path" "$schema_path" "$output_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+raw_path = Path(sys.argv[1])
+schema_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+
+
+def iter_json_objects(text):
+    for start, char in enumerate(text):
+        if char != "{{":
+            continue
+        depth = 0
+        in_string = False
+        escape = False
+        for index in range(start, len(text)):
+            current = text[index]
+            if in_string:
+                if escape:
+                    escape = False
+                elif current == "\\\\":
+                    escape = True
+                elif current == '"':
+                    in_string = False
+                continue
+            if current == '"':
+                in_string = True
+            elif current == "{{":
+                depth += 1
+            elif current == "}}":
+                depth -= 1
+                if depth == 0:
+                    yield text[start : index + 1]
+                    break
+
+
+def validate_type(value, expected_type):
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "object":
+        return isinstance(value, dict)
+    return True
+
+
+def validate(instance, schema):
+    if schema.get("type") == "object" and not isinstance(instance, dict):
+        raise ValueError("status is not a JSON object")
+    required = schema.get("required", [])
+    missing = [field for field in required if field not in instance]
+    if missing:
+        raise ValueError(f"status missing required fields: {{', '.join(missing)}}")
+    properties = schema.get("properties", {{}})
+    if schema.get("additionalProperties") is False:
+        extra = sorted(set(instance) - set(properties))
+        if extra:
+            raise ValueError(f"status has unsupported fields: {{', '.join(extra)}}")
+    for field, field_schema in properties.items():
+        if field not in instance:
+            continue
+        value = instance[field]
+        if "const" in field_schema and value != field_schema["const"]:
+            raise ValueError(f"{{field}} must be {{field_schema['const']!r}}")
+        if "enum" in field_schema and value not in field_schema["enum"]:
+            raise ValueError(f"{{field}} must be one of {{field_schema['enum']!r}}")
+        if "type" in field_schema and not validate_type(value, field_schema["type"]):
+            raise ValueError(f"{{field}} has wrong type")
+        if field_schema.get("type") == "array":
+            item_schema = field_schema.get("items", {{}})
+            item_type = item_schema.get("type")
+            if item_type:
+                for item in value:
+                    if not validate_type(item, item_type):
+                        raise ValueError(f"{{field}} contains item with wrong type")
+
+
+text = raw_path.read_text(encoding="utf-8", errors="replace")
+schema = json.loads(schema_path.read_text(encoding="utf-8"))
+errors = []
+for candidate in iter_json_objects(text):
+    try:
+        data = json.loads(candidate)
+        validate(data, schema)
+    except Exception as exc:
+        errors.append(str(exc))
+        continue
+    output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+    raise SystemExit(0)
+
+if errors:
+    print("No valid worker status JSON found. Last error: " + errors[-1], file=sys.stderr)
+else:
+    print("No JSON object found in Gemini output.", file=sys.stderr)
+raise SystemExit(1)
+PY
+}}
+
+run_gemini() {{
+  local label="$1"
+  local model="$2"
+  local raw_path="$packet_dir/events-${{label}}.log"
+  command -v "$gemini_command" >/dev/null 2>&1 || return 127
+  (
+    cd {shell_quote(worktree)}
+    "$gemini_command" \\
+      --model "$model" \\
+      --approval-mode "$gemini_approval_mode" \\
+      --skip-trust \\
+      -p "$(cat "$prompt_path")"
+  ) > "$raw_path" 2>&1
+  extract_status_json "$raw_path"
+}}
+
+run_codex() {{
+  local label="$1"
+  local model="$2"
+  codex exec --ephemeral \\
+    -m "$model" \\
+    -C {shell_quote(worktree)} \\
+    -s workspace-write \\
+    --json \\
+    --output-schema "$schema_path" \\
+    -o "$output_path" \\
+    - < "$prompt_path" \\
+    > "$packet_dir/events-${{label}}.jsonl" 2>&1
+}}
+
+if run_gemini gemini-pro {shell_quote(GEMINI_PRO_MODEL)}; then
+  exit 0
+fi
+guard_clean_for_fallback "Gemini Pro"
+
+if run_gemini gemini-flash {shell_quote(GEMINI_FLASH_MODEL)}; then
+  exit 0
+fi
+guard_clean_for_fallback "Gemini Flash"
+
+if run_codex spark {shell_quote(worker_model)}; then
+  exit 0
+fi
+guard_clean_for_fallback "Codex Spark"
+
+run_codex mini {shell_quote(worker_fallback_model)}
 """
 
 
@@ -264,6 +435,8 @@ def main() -> int:
     parser.add_argument("--task-file")
     parser.add_argument("--owned-file", action="append", default=[])
     parser.add_argument("--context-file", action="append", default=[])
+    parser.add_argument("--gemini-command", default="gemini")
+    parser.add_argument("--gemini-approval-mode", default="yolo")
     parser.add_argument("--worker-model", default="gpt-5.3-codex-spark")
     parser.add_argument("--worker-fallback-model", default="gpt-5.4-mini")
     parser.add_argument("--reviewer-model", default="gpt-5.5")
@@ -285,14 +458,10 @@ def main() -> int:
         schema_name = "review.schema.json"
         output_name = "review.json"
         schema = review_schema()
-        primary_model = args.reviewer_model
-        fallback_model = args.reviewer_fallback_model
     else:
         schema_name = "status.schema.json"
         output_name = "status.json"
         schema = status_schema()
-        primary_model = args.worker_model
-        fallback_model = args.worker_fallback_model
 
     (packet_dir / schema_name).write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
     (packet_dir / "prompt.md").write_text(
@@ -315,8 +484,12 @@ def main() -> int:
             str(worktree),
             schema_name,
             output_name,
-            primary_model,
-            fallback_model,
+            args.worker_model,
+            args.worker_fallback_model,
+            args.reviewer_model,
+            args.reviewer_fallback_model,
+            args.gemini_command,
+            args.gemini_approval_mode,
         ),
         encoding="utf-8",
     )

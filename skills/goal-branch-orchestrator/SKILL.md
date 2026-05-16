@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, create path-safe worker/reviewer packets, dispatch granular Spark-first Codex CLI workers with 5.4-mini fallback, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
+description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, create path-safe worker/reviewer packets, dispatch granular Gemini Pro/Flash-first workers with Codex Spark and 5.4-mini fallback, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
 # Goal Branch Orchestrator
@@ -15,7 +15,7 @@ Your job is:
 2. Read the assigned branch prompt file.
 3. Verify the global prompt audit passed.
 4. Create granular worker packets and worker child worktrees as needed.
-5. Launch Spark-first workers through `codex exec`.
+5. Launch Gemini Pro/Flash-first workers with Codex Spark and mini fallback.
 6. Inspect worker status, diffs, and focused verification evidence.
 7. Dispatch a read-only heavy-model reviewer.
 8. Return branch status only when the branch prompt DoD is satisfied or explicitly blocked.
@@ -80,7 +80,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
-The generated worker launcher uses `gpt-5.3-codex-spark` first and falls back to `gpt-5.4-mini` only if no status was produced and the worker worktree stayed clean. If Spark leaves dirty partial work without a status file, the launcher refuses fallback and writes `fallback.blocked.txt`.
+The generated worker launcher uses Gemini CLI first with `gemini-3.1-pro`, then `gemini-3.1-flash`, then `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No other Gemini model is allowed. Gemini is best-effort: if the Gemini command is unavailable, quota-limited, or fails without dirtying the worker worktree, the launcher continues to the next worker. If Gemini Pro, Gemini Flash, or Spark leaves dirty partial work without a valid `status.json`, the launcher refuses fallback and writes `fallback.blocked.txt`.
 
 ## Reviewer Packet
 

@@ -21,16 +21,18 @@ Resolve all bundle-owned paths from the manifest directory before passing them t
 
 Use this exact worker preference:
 
-1. `gpt-5.3-codex-spark`
-2. `gpt-5.4-mini`
+1. Gemini CLI with `gemini-3.1-pro`
+2. Gemini CLI with `gemini-3.1-flash`
+3. `gpt-5.3-codex-spark`
+4. `gpt-5.4-mini`
 
 Fallback is allowed only when:
 
-- the primary model did not produce a valid status file;
+- the current worker attempt did not produce a valid status file;
 - the worker worktree is clean; or
 - the fallback is launched from a fresh child worktree created from the same baseline.
 
-If Spark fails after dirty edits and no status exists, stop and report `blocked`; do not continue in the same worktree.
+No Gemini model other than `gemini-3.1-pro` and `gemini-3.1-flash` may be used. Gemini is best-effort because quota limits may be tight: missing Gemini CLI, quota errors, invalid JSON, or other clean failures should fall through to the next worker attempt. If Gemini Pro, Gemini Flash, or Spark fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree.
 
 ## Reviewer Model Policy
 
