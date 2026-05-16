@@ -88,7 +88,7 @@ def normalize_context_files(values: list[str]) -> list[str]:
 
 
 def exact_string_schema(value: str) -> dict:
-    return {"const": value}
+    return {"type": "string", "const": value}
 
 
 def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
@@ -110,8 +110,8 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
         ],
         "properties": {
             "packet_id": exact_string_schema(packet_id),
-            "role": {"const": "worker"},
-            "status": {"enum": ["pass", "partial", "blocked", "failed"]},
+            "role": exact_string_schema("worker"),
+            "status": {"type": "string", "enum": ["pass", "partial", "blocked", "failed"]},
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
             "changed_files": {"type": "array", "items": {"type": "string"}},
@@ -140,8 +140,8 @@ def review_schema(packet_id: str) -> dict:
         ],
         "properties": {
             "packet_id": exact_string_schema(packet_id),
-            "role": {"const": "reviewer"},
-            "verdict": {"enum": ["mergeable", "mergeable_after_fixes", "blocked", "reject"]},
+            "role": exact_string_schema("reviewer"),
+            "verdict": {"type": "string", "enum": ["mergeable", "mergeable_after_fixes", "blocked", "reject"]},
             "findings": {"type": "array", "items": {"type": "string"}},
             "commands_run": {"type": "array", "items": {"type": "string"}},
             "verification_gaps": {"type": "array", "items": {"type": "string"}},
