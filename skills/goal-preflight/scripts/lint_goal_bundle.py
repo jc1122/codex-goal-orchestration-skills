@@ -18,6 +18,10 @@ SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 
 
+def is_strict_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -119,7 +123,7 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"{key} must be non-empty")
 
     max_active = manifest.get("max_active_branch_agents")
-    if not isinstance(max_active, int) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
+    if not is_strict_int(max_active) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
         defect("job.manifest.json", "critical", "max_active_branch_agents must be an integer from 1 to 4")
 
     parallelization = manifest.get("parallelization", {})
@@ -149,11 +153,12 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "more than 20 branches exceeds 5 waves of 4")
     if len(branches) == 1 and not (isinstance(serial_reason, str) and serial_reason.strip()):
         defect("job.manifest.json", "critical", "single-branch bundles require parallelization.serial_reason")
-    if isinstance(max_active, int) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
+    if is_strict_int(max_active) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
         defect("job.manifest.json", "critical", "max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
 
     ids = [branch.get("id") for branch in branches]
     names = [branch.get("branch_name") for branch in branches]
+    worktree_paths = [branch.get("worktree_path") for branch in branches]
     for bid in ids:
         if not isinstance(bid, str) or not SAFE_ID_RE.fullmatch(bid):
             defect("job.manifest.json", "critical", f"branch id is not safe: {bid!r}")
@@ -164,6 +169,30 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"branch name is not safe: {name!r}")
     if len(names) != len(set(names)):
         defect("job.manifest.json", "critical", "branch names must be unique")
+    if len(worktree_paths) != len(set(worktree_paths)):
+        defect("job.manifest.json", "critical", "branch worktree_path values must be unique")
+
+    reserved_bundle_paths = {
+        "job.manifest.json",
+        "main.prompt.md",
+        "goal-bootloader.md",
+        "PREFLIGHT_REPORT.md",
+        "preflight.lint.json",
+    }
+    branch_bundle_paths: dict[str, str] = {}
+    for branch in branches:
+        for key in ["prompt", "status_path", "review_path"]:
+            value = branch.get(key)
+            if not isinstance(value, str):
+                continue
+            label = f"branch {branch.get('id')} {key}"
+            if value in reserved_bundle_paths:
+                defect("job.manifest.json", "critical", f"{label} collides with reserved bundle file: {value}")
+            owner = branch_bundle_paths.get(value)
+            if owner is not None:
+                defect("job.manifest.json", "critical", f"{label} duplicates {owner}: {value}")
+            else:
+                branch_bundle_paths[value] = label
 
     waves = manifest.get("waves", [])
     wave_branch_ids = []
@@ -181,9 +210,9 @@ def lint(bundle_dir: Path) -> dict:
             branch_ids = []
         if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
             defect("job.manifest.json", "critical", f"wave {wave.get('id')} has more than 4 branches")
-        if isinstance(max_active, int) and len(branch_ids) > max_active:
+        if is_strict_int(max_active) and len(branch_ids) > max_active:
             defect("job.manifest.json", "critical", f"wave {wave.get('id')} exceeds max_active_branch_agents")
-        if idx < len(waves) - 1 and isinstance(max_active, int) and len(branch_ids) < max_active and not has_parallelization_reason:
+        if idx < len(waves) - 1 and is_strict_int(max_active) and len(branch_ids) < max_active and not has_parallelization_reason:
             defect("job.manifest.json", "critical", f"underfilled non-final wave {wave.get('id')} requires serial_reason or parallelization_rationale")
         wave_branch_ids.extend(branch_ids)
     if len(wave_ids) != len(set(wave_ids)):
@@ -220,8 +249,8 @@ def lint(bundle_dir: Path) -> dict:
             "Cleanup Policy",
             "Artifact Policy",
             "close finished branch orchestrator agents",
-            "validate_branch_status.py",
-            "validate_main_status.py",
+            "validate_branch_status.py --manifest",
+            "validate_main_status.py --manifest",
         ]:
             if phrase.lower() not in main_text.lower():
                 defect(str(main_path), "critical", f"main prompt missing required phrase: {phrase}")
@@ -270,7 +299,7 @@ def lint(bundle_dir: Path) -> dict:
             if key not in branch:
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')} missing key: {key}")
         max_workers = branch.get("max_active_worker_packets")
-        if not isinstance(max_workers, int) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
+        if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets must be an integer from 1 to 4")
         work_items = branch.get("work_items", [])
         if not isinstance(work_items, list) or len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
@@ -288,6 +317,12 @@ def lint(bundle_dir: Path) -> dict:
                     defect("job.manifest.json", "critical", f"{item_path}.id duplicates {item_id}")
                 else:
                     seen_work_item_ids.add(item_id)
+                packet_id = item.get("packet_id")
+                expected_packet_id = f"{branch.get('id')}-{item_id}" if isinstance(branch.get("id"), str) and isinstance(item_id, str) else ""
+                if not isinstance(packet_id, str) or not SAFE_LABEL_RE.fullmatch(packet_id):
+                    defect("job.manifest.json", "critical", f"{item_path}.packet_id must match {SAFE_LABEL_RE.pattern}")
+                elif expected_packet_id and packet_id != expected_packet_id:
+                    defect("job.manifest.json", "critical", f"{item_path}.packet_id must be {expected_packet_id!r}")
                 if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
                     defect("job.manifest.json", "critical", f"{item_path}.objective must be non-empty")
                 for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
@@ -353,7 +388,8 @@ def lint(bundle_dir: Path) -> dict:
             "Never exceed",
             "active worker packets",
             "Worker parallelization rationale",
-            "validate_branch_status.py",
+            "Worker packet id",
+            "validate_branch_status.py --manifest",
             "Stop Conditions",
             "git diff --check",
             "do not poll active",

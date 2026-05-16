@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
+import re
+import shlex
 from pathlib import Path
 
 
@@ -12,6 +15,7 @@ STATUSES = {"pass", "partial", "blocked", "failed"}
 AUDIT_STATUSES = {"pass", "failed", "blocked", "missing"}
 REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
 MAX_TOTAL_BRANCHES = 20
+SAFE_REVIEW_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
 
 def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
@@ -65,6 +69,44 @@ def require_string_list(defects: list[str], value: object, path: str, *, min_ite
     return result
 
 
+def contains_base_range_diff_check(commands: list[str], base_ref: str) -> bool:
+    expected_range = f"{base_ref}...HEAD"
+    for command in commands:
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            continue
+        if not tokens or tokens[0] != "git":
+            continue
+        index = 1
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-C":
+                index += 2
+                continue
+            if token == "-c":
+                index += 2
+                continue
+            if token.startswith("-c") and token != "-c":
+                index += 1
+                continue
+            break
+        if index >= len(tokens) or tokens[index] != "diff":
+            continue
+        args = tokens[index + 1 :]
+        if "--check" in args and expected_range in args:
+            return True
+    return False
+
+
+def validate_base_range_diff_check(defects: list[str], commands_value: object, path: str, manifest: object) -> None:
+    commands = require_string_list(defects, commands_value, path, min_items=1)
+    manifest_root = require_object(defects, manifest, "manifest")
+    base_ref = require_string(defects, manifest_root.get("base_ref"), "manifest.base_ref")
+    if base_ref and not contains_base_range_diff_check(commands, base_ref):
+        defect(defects, path, f"must include base-range whitespace check: git diff --check {base_ref}...HEAD")
+
+
 def is_repo_relative_path(value: str) -> bool:
     path = Path(value)
     return not (
@@ -101,31 +143,83 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
         defect(defects, f"{path}.review_status", "must be mergeable when branch status is pass")
 
 
+def load_json_artifact(defects: list[str], path: Path, field: str) -> object:
+    try:
+        return load_json(path)
+    except Exception as exc:  # noqa: BLE001
+        defect(defects, field, f"must be readable JSON at {path}: {exc}")
+        return {}
+
+
+def load_branch_status_validator(defects: list[str]):
+    path = Path(__file__).resolve().parents[2] / "goal-branch-orchestrator" / "scripts" / "validate_branch_status.py"
+    if not path.exists():
+        defect(defects, "$", f"missing branch status validator: {path}")
+        return None
+    spec = importlib.util.spec_from_file_location("goal_branch_validate_branch_status", path)
+    if spec is None or spec.loader is None:
+        defect(defects, "$", f"could not load branch status validator: {path}")
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001
+        defect(defects, "$", f"could not import branch status validator {path}: {exc}")
+        return None
+    return module
+
+
 def expected_branches_from_manifest(defects: list[str], manifest: object) -> dict[str, dict[str, str]]:
     data = require_object(defects, manifest, "manifest")
     branches = data.get("branches")
     expected: dict[str, dict[str, str]] = {}
+    seen_values: dict[str, dict[str, str]] = {
+        "id": {},
+        "branch_name": {},
+        "status_path": {},
+        "review_path": {},
+        "worktree_path": {},
+    }
     if not isinstance(branches, list) or not branches:
         defect(defects, "manifest.branches", "must be a non-empty array")
         return expected
     for index, branch in enumerate(branches):
         branch_data = require_object(defects, branch, f"manifest.branches[{index}]")
         branch_id = require_string(defects, branch_data.get("id"), f"manifest.branches[{index}].id")
+        branch_name = require_string(defects, branch_data.get("branch_name"), f"manifest.branches[{index}].branch_name")
         status_path = require_string(defects, branch_data.get("status_path"), f"manifest.branches[{index}].status_path")
         review_path = require_string(defects, branch_data.get("review_path"), f"manifest.branches[{index}].review_path")
-        if branch_id in expected:
-            defect(defects, f"manifest.branches[{index}].id", f"duplicates branch id {branch_id!r}")
+        worktree_path = require_string(defects, branch_data.get("worktree_path"), f"manifest.branches[{index}].worktree_path")
+        for field, value in [
+            ("id", branch_id),
+            ("branch_name", branch_name),
+            ("status_path", status_path),
+            ("review_path", review_path),
+            ("worktree_path", worktree_path),
+        ]:
+            if not value:
+                continue
+            owner = seen_values[field].get(value)
+            if owner is not None:
+                defect(defects, f"manifest.branches[{index}].{field}", f"duplicates branch {owner}: {value!r}")
+            else:
+                seen_values[field][value] = branch_id
         if status_path and not is_repo_relative_path(status_path):
             defect(defects, f"manifest.branches[{index}].status_path", "must be a repo-relative path without traversal")
         if review_path and not is_repo_relative_path(review_path):
             defect(defects, f"manifest.branches[{index}].review_path", "must be a repo-relative path without traversal")
+        if worktree_path and not is_repo_relative_path(worktree_path):
+            defect(defects, f"manifest.branches[{index}].worktree_path", "must be a repo-relative path without traversal")
         if branch_id and status_path and review_path:
-            expected[branch_id] = {"status_path": status_path, "review_path": review_path}
+            expected[branch_id] = {
+                "status_path": status_path,
+                "review_path": review_path,
+                "branch_name": branch_name,
+            }
     return expected
 
 
-def validate_manifest_branch_coverage(defects: list[str], root: dict, manifest: object) -> None:
-    expected = expected_branches_from_manifest(defects, manifest)
+def validate_manifest_branch_coverage(defects: list[str], root: dict, expected: dict[str, dict[str, str]]) -> None:
     branch_statuses = root.get("branch_statuses")
     if not isinstance(branch_statuses, list):
         return
@@ -157,7 +251,116 @@ def validate_manifest_branch_coverage(defects: list[str], root: dict, manifest: 
             defect(defects, "$.branch_statuses", f"contains branch summaries not declared in manifest: {', '.join(extra)}")
 
 
-def validate_main_status(data: object, *, job_id: str | None, manifest: object) -> list[str]:
+def validate_review_artifact(
+    defects: list[str],
+    data: object,
+    expected_verdict: str,
+    path: str,
+    *,
+    manifest: object,
+    branch_id: str | None,
+) -> None:
+    review = require_object(defects, data, path)
+    required = [
+        "packet_id",
+        "role",
+        "verdict",
+        "findings",
+        "commands_run",
+        "verification_gaps",
+        "residual_risks",
+        "summary",
+    ]
+    for key in required:
+        if key not in review:
+            defect(defects, path, f"missing key: {key}")
+    packet_id = require_string(defects, review.get("packet_id"), f"{path}.packet_id")
+    if packet_id and not SAFE_REVIEW_PACKET_RE.fullmatch(packet_id):
+        defect(defects, f"{path}.packet_id", "must be a safe packet id")
+    if branch_id and packet_id and not packet_id.startswith(f"{branch_id}-R"):
+        defect(defects, f"{path}.packet_id", f"must start with {branch_id}-R")
+    if review.get("role") != "reviewer":
+        defect(defects, f"{path}.role", "must be 'reviewer'")
+    verdict = review.get("verdict")
+    if verdict not in REVIEW_STATUSES - {"missing"}:
+        defect(defects, f"{path}.verdict", f"must be one of {sorted(REVIEW_STATUSES - {'missing'})}")
+    if expected_verdict != "missing" and verdict != expected_verdict:
+        defect(defects, f"{path}.verdict", "must match branch summary review_status")
+    require_string_list(defects, review.get("findings"), f"{path}.findings")
+    validate_base_range_diff_check(defects, review.get("commands_run"), f"{path}.commands_run", manifest)
+    verification_gaps = require_string_list(defects, review.get("verification_gaps"), f"{path}.verification_gaps")
+    if verdict == "mergeable" and verification_gaps:
+        defect(defects, f"{path}.verification_gaps", "must be empty when verdict is mergeable")
+    require_string_list(defects, review.get("residual_risks"), f"{path}.residual_risks")
+    require_string(defects, review.get("summary"), f"{path}.summary")
+
+
+def validate_branch_artifacts(
+    defects: list[str],
+    root: dict,
+    expected: dict[str, dict[str, str]],
+    *,
+    manifest: object,
+    manifest_path: Path,
+    require_artifacts: bool,
+) -> None:
+    branch_statuses = root.get("branch_statuses")
+    if not isinstance(branch_statuses, list):
+        return
+    branch_validator = None
+    for index, item in enumerate(branch_statuses):
+        if not isinstance(item, dict):
+            continue
+        item_path = f"$.branch_statuses[{index}]"
+        branch_id = item.get("branch_id")
+        if not isinstance(branch_id, str) or not branch_id.strip():
+            continue
+        expected_entry = expected.get(branch_id)
+        if expected_entry is None:
+            continue
+        status_artifact = (manifest_path.parent / expected_entry["status_path"]).resolve()
+        review_artifact = (manifest_path.parent / expected_entry["review_path"]).resolve()
+
+        if not status_artifact.exists():
+            defect(defects, f"{item_path}.status_path", f"artifact does not exist: {status_artifact}")
+        else:
+            branch_status = load_json_artifact(defects, status_artifact, f"{item_path}.status_path")
+            if branch_validator is None:
+                branch_validator = load_branch_status_validator(defects)
+            if branch_validator is not None:
+                branch_defects = branch_validator.validate_branch_status(
+                    branch_status,
+                    branch_id=branch_id,
+                    branch=expected_entry.get("branch_name") or None,
+                    worktree=None,
+                    manifest=manifest,
+                    manifest_path=manifest_path,
+                    status_path=status_artifact,
+                )
+                for branch_defect in branch_defects:
+                    defect(defects, f"{item_path}.status_path", f"invalid branch status artifact: {branch_defect}")
+            if isinstance(branch_status, dict):
+                if branch_status.get("status") != item.get("status"):
+                    defect(defects, f"{item_path}.status", "must match branch status artifact status")
+                if branch_status.get("review_status") != item.get("review_status"):
+                    defect(defects, f"{item_path}.review_status", "must match branch status artifact review_status")
+
+        require_review_artifact = require_artifacts or item.get("review_status") != "missing"
+        if not review_artifact.exists():
+            if require_review_artifact:
+                defect(defects, f"{item_path}.review_path", f"artifact does not exist: {review_artifact}")
+        else:
+            validate_review_artifact(
+                defects,
+                load_json_artifact(defects, review_artifact, f"{item_path}.review_path"),
+                str(item.get("review_status", "")),
+                f"{item_path}.review_path",
+                manifest=manifest,
+                branch_id=branch_id,
+            )
+
+
+def validate_main_status(data: object, *, job_id: str | None, manifest: object, manifest_path: Path) -> list[str]:
     defects: list[str] = []
     root = require_object(defects, data, "$")
     required = [
@@ -179,6 +382,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object) 
     manifest_job_id = manifest_root.get("job_id")
     if isinstance(manifest_job_id, str) and manifest_job_id.strip() and root.get("job_id") != manifest_job_id:
         defect(defects, "$.job_id", f"must match manifest job_id {manifest_job_id!r}")
+    expected_branches = expected_branches_from_manifest(defects, manifest)
     require_string(defects, root.get("job_id"), "$.job_id")
     status = root.get("status")
     if status not in STATUSES:
@@ -199,7 +403,15 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object) 
             for index, item in enumerate(branch_statuses):
                 if isinstance(item, dict) and item.get("status") != "pass":
                     defect(defects, f"$.branch_statuses[{index}].status", "must be pass when main status is pass")
-    validate_manifest_branch_coverage(defects, root, manifest)
+    validate_manifest_branch_coverage(defects, root, expected_branches)
+    validate_branch_artifacts(
+        defects,
+        root,
+        expected_branches,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        require_artifacts=status == "pass",
+    )
     require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     require_string_list(defects, root.get("dod_checklist"), "$.dod_checklist", min_items=1)
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")
@@ -221,7 +433,12 @@ def main() -> int:
 
     status_path = resolve_absolute_path(args.status, "--status", must_exist=True)
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
-    defects = validate_main_status(load_json(status_path), job_id=args.job_id, manifest=load_json(manifest_path))
+    defects = validate_main_status(
+        load_json(status_path),
+        job_id=args.job_id,
+        manifest=load_json(manifest_path),
+        manifest_path=manifest_path,
+    )
     result = {"status": "pass" if not defects else "failed", "status_path": status_path.as_posix(), "defects": defects}
     if args.json:
         print(json.dumps(result, indent=2))

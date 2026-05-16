@@ -8,6 +8,8 @@ import json
 import re
 from pathlib import Path, PurePosixPath
 
+from render_goal_bootloader import render_bootloader
+
 
 MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
@@ -83,20 +85,18 @@ def require_relative_path(value: str, field: str) -> str:
 
 
 def require_agent_limit(value: object) -> int:
-    try:
-        limit = int(value)
-    except (TypeError, ValueError) as exc:
-        raise SystemExit("max_active_branch_agents must be an integer from 1 to 4") from exc
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
+    limit = value
     if limit < 1 or limit > MAX_ACTIVE_BRANCH_AGENTS:
         raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
     return limit
 
 
 def require_worker_limit(value: object) -> int:
-    try:
-        limit = int(value)
-    except (TypeError, ValueError) as exc:
-        raise SystemExit("max_active_worker_packets must be an integer from 1 to 4") from exc
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise SystemExit("max_active_worker_packets must be an integer from 1 to 4")
+    limit = value
     if limit < 1 or limit > MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit("max_active_worker_packets must be an integer from 1 to 4")
     return limit
@@ -138,16 +138,19 @@ def bullets(values: list[str], fallback: str = "- none") -> str:
     return "\n".join(f"- {value}" for value in values)
 
 
-def format_work_items(items: list[dict]) -> str:
+def format_work_items(branch_id_value: str, items: list[dict]) -> str:
     if not items:
         return "- No work items supplied; preflight should ask for or synthesize worker-sized items."
     chunks = []
     for idx, item in enumerate(items, start=1):
         item_id = item.get("id") or f"W{idx:02d}"
+        packet_id = item.get("packet_id") or f"{branch_id_value}-{item_id}"
         chunks.append(
             "\n".join(
                 [
                     f"### {item_id}: {item.get('title') or item.get('objective') or 'Work item'}",
+                    "",
+                    f"Worker packet id: {packet_id}",
                     "",
                     item.get("objective", "Objective not supplied."),
                     "",
@@ -185,12 +188,14 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
         if item_id in seen_ids:
             raise SystemExit(f"branch {branch_id_value} duplicate work item id: {item_id}")
         seen_ids.add(item_id)
+        packet_id = require_safe_label(f"{branch_id_value}-{item_id}", f"branch {branch_id_value} work item {item_id} packet_id")
         objective = nonempty_text(item.get("objective"))
         if not objective:
             raise SystemExit(f"branch {branch_id_value} work item {item_id} requires objective")
         normalized_item = {
             **item,
             "id": item_id,
+            "packet_id": packet_id,
             "objective": objective,
             "owned_paths": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} owned_paths") for value in require_string_list(item.get("owned_paths"), f"branch {branch_id_value} work item {item_id} owned_paths", min_items=1)],
             "context_files": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} context_files") for value in require_string_list(item.get("context_files", []), f"branch {branch_id_value} work item {item_id} context_files")],
@@ -220,6 +225,36 @@ def chunk_waves(branches: list[dict], wave_size: int) -> list[dict]:
             }
         )
     return waves
+
+
+def ensure_unique_branch_values(branches: list[dict]) -> None:
+    for field in ["id", "branch_name", "worktree_path"]:
+        seen: dict[str, str] = {}
+        for branch in branches:
+            value = branch[field]
+            owner = seen.get(value)
+            if owner is not None:
+                raise SystemExit(f"branch {branch['id']} {field} duplicates branch {owner}: {value}")
+            seen[value] = branch["id"]
+
+    reserved_bundle_paths = {
+        "job.manifest.json",
+        "main.prompt.md",
+        "goal-bootloader.md",
+        "PREFLIGHT_REPORT.md",
+        "preflight.lint.json",
+    }
+    seen_paths: dict[str, str] = {}
+    for branch in branches:
+        for field in ["prompt", "status_path", "review_path"]:
+            value = branch[field]
+            label = f"branch {branch['id']} {field}"
+            if value in reserved_bundle_paths:
+                raise SystemExit(f"{label} must not collide with reserved bundle file: {value}")
+            owner = seen_paths.get(value)
+            if owner is not None:
+                raise SystemExit(f"{label} duplicates {owner}: {value}")
+            seen_paths[value] = label
 
 
 def normalize_brief(brief: dict) -> dict:
@@ -264,6 +299,8 @@ def normalize_brief(brief: dict) -> dict:
             },
         }
         branches.append(branch)
+
+    ensure_unique_branch_values(branches)
 
     if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
         raise SystemExit(f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}")
@@ -339,34 +376,6 @@ def render_branch_waves(waves: list[dict]) -> str:
         lines.append(f"- {wave['id']}: {', '.join(wave['branches'])}")
     return "\n".join(lines)
 
-
-def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
-    manifest = bundle_dir / "job.manifest.json"
-    main_prompt = bundle_dir / "main.prompt.md"
-    return f"""Use $goal-main-orchestrator.
-
-Prepared bundle:
-- Bundle root: {bundle_dir}
-- Repository root: {repo_root}
-- Manifest: {manifest}
-- Main prompt: {main_prompt}
-
-Read the manifest and main prompt first. Treat main.prompt.md as the runtime contract. Do not infer paths from the current working directory; use the bundle root and repository root above.
-
-If the bundle root or repository root above is wrong because files moved, stop and regenerate the bootloader with goal-preflight. Do not hand-edit these paths.
-
-Pass only absolute paths to goal orchestration scripts. If a script entry path would be relative or would contain `..` traversal, stop and regenerate the bundle or bootloader.
-
-Mandatory bootstrap first: verify runtime skill availability before prompt audit. Resolve GOAL_SKILLS_ROOT from ${{CODEX_HOME:-$HOME/.codex}}/skills, falling back to $HOME/.agents/skills, then run check_goal_skill_availability.py for goal-main-orchestrator and goal-branch-orchestrator. If either skill or required script is unavailable, return blocked and ask the user to install the skills package.
-
-Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
-
-Parallelism is the default. Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Launch every branch in the current wave concurrently up to that limit. Run branch waves sequentially. Each branch entry must declare 1 to 4 worker packets and branch prompts require independent worker packets to launch concurrently up to the branch worker cap. After dispatch, wait for branch agents; do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements. A single-branch or otherwise serialized plan is valid only when job.manifest.json records a serial_reason or parallelization_rationale.
-
-Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.
-"""
-
-
 def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
     brief = normalize_brief(brief)
 
@@ -438,7 +447,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 objective=branch.get("objective", "Objective not supplied."),
                 scope=branch.get("scope", "Scope not supplied."),
                 owned_paths=bullets(branch.get("owned_paths", [])),
-                work_items=format_work_items(branch.get("work_items", [])),
+                work_items=format_work_items(branch["id"], branch.get("work_items", [])),
                 tests=bullets(branch.get("tests", [])),
                 stop_conditions=bullets(branch.get("stop_conditions", [])),
                 dod=bullets(branch.get("dod", [])),

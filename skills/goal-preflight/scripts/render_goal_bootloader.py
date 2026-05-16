@@ -10,26 +10,9 @@ from pathlib import Path
 MAX_ACTIVE_BRANCH_AGENTS = 4
 
 
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
-
-
 def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     manifest = bundle_dir / "job.manifest.json"
     main_prompt = bundle_dir / "main.prompt.md"
-    if not manifest.exists():
-        raise SystemExit(f"missing manifest: {manifest}")
-    if not main_prompt.exists():
-        raise SystemExit(f"missing main prompt: {main_prompt}")
     return f"""Use $goal-main-orchestrator.
 
 Prepared bundle:
@@ -54,6 +37,19 @@ Finish only when main.prompt.md Definition of Done is falsifiably satisfied by s
 """
 
 
+def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        raise SystemExit(f"{field} must be an absolute path: {value!r}")
+    if ".." in expanded.parts:
+        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
+    if must_exist and not expanded.exists():
+        raise SystemExit(f"{field} does not exist: {expanded}")
+    return expanded.resolve(strict=must_exist)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle-dir", required=True)
@@ -65,6 +61,10 @@ def main() -> int:
     path = bundle_dir / "goal-bootloader.md"
     if args.repo_root:
         repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
+        if not (bundle_dir / "job.manifest.json").exists():
+            raise SystemExit(f"missing manifest: {bundle_dir / 'job.manifest.json'}")
+        if not (bundle_dir / "main.prompt.md").exists():
+            raise SystemExit(f"missing main prompt: {bundle_dir / 'main.prompt.md'}")
         text = render_bootloader(bundle_dir, repo_root)
         if args.write:
             path.write_text(text, encoding="utf-8")

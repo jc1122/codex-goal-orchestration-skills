@@ -82,7 +82,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
-The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs do not need to read bundle paths outside the worker worktree. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, GitHub Copilot CLI with `gpt-5.4` and `--effort high`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model, effort, approval-mode, or permission overrides are accepted. All worker providers receive the same generated prompt and must satisfy the same worker status schema; CLI permission controls are provider-specific, so acceptance still depends on schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, the launcher runs a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort: if the command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next worker. Copilot runs the real worker in programmatic mode with `gpt-5.4`, `--effort high`, minimal tool permissions, JSONL events, and a Markdown session share; because Copilot has no local `--output-schema` equivalent, the launcher accepts only the marked final worker JSON and still requires orchestrator diff/test verification. If Gemini or Copilot returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation. If Gemini Pro, Gemini Flash, Copilot, Spark, or mini leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
+The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs do not need to read bundle paths outside the worker worktree. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, GitHub Copilot CLI with `gpt-5.4` and `--effort high`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model, effort, approval-mode, or permission overrides are accepted. All worker providers receive the same generated prompt and must satisfy the same worker status schema; CLI permission controls are provider-specific, so acceptance still depends on schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, the launcher runs a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort: if the command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next worker. Copilot runs the real worker in programmatic mode with `gpt-5.4`, `--effort high`, minimal tool permissions, JSONL events, and a Markdown session share; because Copilot has no local `--output-schema` equivalent, the launcher accepts only the marked final worker JSON and still requires orchestrator diff/test verification. If Gemini or Copilot returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Copilot, Spark, or mini leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
 
 After launching worker packets, wait for the launcher processes to finish. If a worker launcher is still active, do not poll its worktree, event logs, process table, or `status.json`, and do not send status nudges. Inspect worker status files and diffs only after the launcher exits, a worker reports `blocked`/`failed`/`partial`, or the user explicitly enters debug mode.
 
@@ -111,29 +111,31 @@ Before returning, write the branch status JSON to the expected branch status pat
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py" \
   --status /absolute/path/to/branches/B01.status.json \
+  --manifest /absolute/path/to/job.manifest.json \
   --branch-id B01 \
   --branch <branch-name> \
   --worktree /absolute/path/to/.worktrees/<branch-name>
 ```
 
-If validation fails, fix the status artifact or return `blocked`; do not claim `pass` with an invalid branch status. A passing branch status must include `review_status: "mergeable"`, a non-empty command list, a non-empty DoD checklist, and no blockers.
+If validation fails, fix the status artifact or return `blocked`; do not claim `pass` with an invalid branch status. A passing or partial branch status must include exactly one worker status for every manifest work item packet id and no extra worker packet ids. A passing branch status must include only `pass` worker statuses backed by existing manifest-owned `workers/<packet_id>/status.json` artifacts, `review_status: "mergeable"` backed by the manifest review artifact, reviewer packet ids for the same branch, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 
 Before returning `pass`, verify:
 
 - skill and CLI availability bootstrap passed;
-- every worker needed by the branch DoD has status `pass` or an explicitly acceptable `partial`;
+- every manifest worker status is `pass`;
 - 1 to 4 worker packets were used for the branch;
 - no more than 4 active worker packets ran at once, and branch status records the worker parallelism cap, concurrent launch evidence, and any serial/under-capacity reason;
 - accepted worker branches have clean `git diff --check`;
 - focused tests and validators named in the branch prompt ran and are recorded;
 - base-range whitespace validation such as `git diff --check <base-ref>...HEAD` ran and is recorded before review or merge readiness;
 - reviewer verdict is `mergeable`;
+- reviewer verification gaps are empty for `mergeable`;
 - branch orchestration did not poll active worker/reviewer launchers' event logs, process tables, status files, review files, or worktrees while waiting;
 - unsupported, unresolved, negative, or probe-only labels are preserved;
 - branch status file records changed files, commands, tests, blockers, worker parallelism, and final DoD checklist.
-- `validate_branch_status.py` passed for the final branch status file.
+- manifest-bound `validate_branch_status.py` passed for the final branch status file.
 
 If evidence is missing, return `partial` or `blocked`, not `pass`.
 

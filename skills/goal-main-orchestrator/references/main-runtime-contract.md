@@ -51,6 +51,7 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
       "work_items": [
         {
           "id": "W01",
+          "packet_id": "B01-W01",
           "objective": "Bounded worker objective.",
           "owned_paths": ["src/example.py"],
           "verification": ["python3 -m pytest tests/test_example.py -q"],
@@ -101,7 +102,7 @@ Return/write status with these fields:
 }
 ```
 
-Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
+Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also opens review artifacts whenever `review_status` is not `missing`, and for `pass` requires every worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
 
 ## Context Conservation
 

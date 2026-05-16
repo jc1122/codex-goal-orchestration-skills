@@ -18,7 +18,7 @@ plans/orchestration/<job-id>/
 
 ## Manifest
 
-Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, and `review_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths, and reviewer packet ids must belong to the reviewed branch.
 
 Preflight script entry paths are absolute only: `--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir`/`--repo-root` must not depend on the caller's current working directory.
 
@@ -54,6 +54,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       "work_items": [
         {
           "id": "W01",
+          "packet_id": "B01-W01",
           "objective": "Bounded worker objective.",
           "owned_paths": ["src/example.py"],
           "verification": ["python3 -m pytest tests/test_example.py -q"],
@@ -88,10 +89,12 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` says no more than 4 branch orchestrator agents may be active.
 - `main.prompt.md` says parallelism is the default and branches in a wave should launch concurrently.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
-- `main.prompt.md` requires `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
+- `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
+- Branch prompt/status/review paths are unique and cannot overwrite one another.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
-- Branch prompts require final branch status validation with `validate_branch_status.py`.
+- Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
+- Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch concurrently up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.

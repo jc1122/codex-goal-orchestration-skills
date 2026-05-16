@@ -30,6 +30,8 @@ Parallel worker packets are the default for independent work items. This branch 
 
 Worker parallelization rationale: {worker_parallelization_rationale}
 
+Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json`.
+
 After worker dispatch, wait for active worker launchers; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status.
 
 ## Tests And Validators
@@ -38,7 +40,7 @@ After worker dispatch, wait for active worker launchers; do not poll active work
 
 ## Reviewer Requirement
 
-Dispatch a read-only heavy-model reviewer after worker integration. The branch may return pass only if the reviewer verdict is `mergeable`.
+Dispatch a read-only heavy-model reviewer after worker integration. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact exists, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
 
 After reviewer dispatch, wait for the reviewer launcher; do not poll active reviewer event logs, process tables, or review files unless the user explicitly enters debug mode or the launcher exits without a valid review.
 
@@ -56,6 +58,7 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - 1 to 4 worker packets were used for this branch.
 - Independent worker packets launched concurrently up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
+- The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/reviewer launchers were waited on rather than polled.
-- Final branch status JSON passed `validate_branch_status.py`.
+- Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
 {dod}

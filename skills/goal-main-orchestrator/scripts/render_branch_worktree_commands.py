@@ -17,6 +17,10 @@ MAX_WAVES = 5
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 
 
+def is_strict_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
@@ -114,6 +118,12 @@ def validate_branch_worker_contract(branch: dict) -> None:
         if item_id in seen_work_item_ids:
             raise SystemExit(f"branch {bid} duplicate work item id: {item_id}")
         seen_work_item_ids.add(item_id)
+        packet_id = item.get("packet_id")
+        expected_packet_id = f"{bid}-{item_id}"
+        if not isinstance(packet_id, str) or not SAFE_LABEL_RE.fullmatch(packet_id):
+            raise SystemExit(f"branch {bid} work_items[{index}].packet_id must match {SAFE_LABEL_RE.pattern}")
+        if packet_id != expected_packet_id:
+            raise SystemExit(f"branch {bid} work_items[{index}].packet_id must be {expected_packet_id!r}")
         if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
             raise SystemExit(f"branch {bid} work_items[{index}].objective must be non-empty")
         for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
@@ -128,7 +138,7 @@ def validate_branch_worker_contract(branch: dict) -> None:
             if dep == item.get("id"):
                 raise SystemExit(f"branch {bid} work_items[{index}] cannot depend on itself")
     max_workers = branch.get("max_active_worker_packets")
-    if not isinstance(max_workers, int) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
+    if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} max_active_worker_packets must be an integer from 1 to 4")
     worker_parallelism = branch.get("worker_parallelism")
     if not isinstance(worker_parallelism, dict):
@@ -141,6 +151,40 @@ def validate_branch_worker_contract(branch: dict) -> None:
         raise SystemExit(f"branch {bid} worker_parallelism.max_worker_packets_per_branch must be 4")
     if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism["parallelization_rationale"].strip():
         raise SystemExit(f"branch {bid} worker_parallelism.parallelization_rationale must be non-empty")
+
+
+def require_unique_manifest_values(branches: list[dict]) -> None:
+    for field in ["id", "branch_name", "worktree_path"]:
+        seen: dict[str, str] = {}
+        for branch in branches:
+            value = branch.get(field)
+            if not isinstance(value, str):
+                continue
+            owner = seen.get(value)
+            if owner is not None:
+                raise SystemExit(f"branch {branch.get('id')} {field} duplicates branch {owner}: {value}")
+            seen[value] = str(branch.get("id", ""))
+
+    reserved_bundle_paths = {
+        "job.manifest.json",
+        "main.prompt.md",
+        "goal-bootloader.md",
+        "PREFLIGHT_REPORT.md",
+        "preflight.lint.json",
+    }
+    seen_paths: dict[str, str] = {}
+    for branch in branches:
+        for field in ["prompt", "status_path", "review_path"]:
+            value = branch.get(field)
+            if not isinstance(value, str):
+                continue
+            label = f"branch {branch.get('id')} {field}"
+            if value in reserved_bundle_paths:
+                raise SystemExit(f"{label} collides with reserved bundle file: {value}")
+            owner = seen_paths.get(value)
+            if owner is not None:
+                raise SystemExit(f"{label} duplicates {owner}: {value}")
+            seen_paths[value] = label
 
 
 def main() -> int:
@@ -167,6 +211,8 @@ def main() -> int:
 
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")
+    require_string_list(audit.get("checked_files"), "prompt audit checked_files", min_items=1)
+    require_string_list(audit.get("commands_run"), "prompt audit commands_run", min_items=1)
     audit_defects = audit.get("defects", [])
     if not isinstance(audit_defects, list):
         raise SystemExit("prompt audit defects must be an array")
@@ -176,6 +222,15 @@ def main() -> int:
             blocking_audit_defects.append("non-object audit defect")
             continue
         severity = item.get("severity")
+        if severity not in {"critical", "major", "minor"}:
+            blocking_audit_defects.append(str(item.get("message", "invalid audit defect severity")))
+            continue
+        if not isinstance(item.get("file"), str) or not item["file"].strip():
+            blocking_audit_defects.append("audit defect missing file")
+            continue
+        if not isinstance(item.get("message"), str) or not item["message"].strip():
+            blocking_audit_defects.append("audit defect missing message")
+            continue
         if severity in {"critical", "major"}:
             blocking_audit_defects.append(str(item.get("message", "audit defect")))
     if blocking_audit_defects:
@@ -190,7 +245,7 @@ def main() -> int:
             raise SystemExit(f"manifest {key} must be present and non-empty")
 
     max_active = manifest.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)
-    if not isinstance(max_active, int) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
+    if not is_strict_int(max_active) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
         raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
     parallelization = manifest.get("parallelization", {})
     if not isinstance(parallelization, dict) or parallelization.get("parallelism_default") is not True:
@@ -214,7 +269,11 @@ def main() -> int:
     waves = manifest.get("waves") or []
     if len(waves) > MAX_WAVES:
         raise SystemExit("manifest must not contain more than 5 waves")
-    manifest_branch_ids = [branch.get("id") for branch in manifest.get("branches", [])]
+    manifest_branches = manifest.get("branches", [])
+    if not isinstance(manifest_branches, list) or not manifest_branches:
+        raise SystemExit("manifest branches must be a non-empty array")
+    require_unique_manifest_values([branch for branch in manifest_branches if isinstance(branch, dict)])
+    manifest_branch_ids = [branch.get("id") for branch in manifest_branches]
     if len(manifest_branch_ids) > MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES:
         raise SystemExit("manifest must not contain more than 20 branches")
     if len(manifest_branch_ids) == 1 and not (isinstance(serial_reason, str) and serial_reason.strip()):
@@ -239,7 +298,9 @@ def main() -> int:
         raise SystemExit("waves must cover exactly the manifest branch ids")
 
     manifest_dir = manifest_path.parent
-    for branch in manifest.get("branches", []):
+    for branch in manifest_branches:
+        if not isinstance(branch, dict):
+            raise SystemExit("manifest branch entries must be objects")
         for key in ["prompt", "status_path", "review_path", "worktree_path", "branch_name"]:
             if key not in branch:
                 raise SystemExit(f"branch {branch.get('id')} missing {key}")
@@ -273,7 +334,7 @@ def main() -> int:
         raise SystemExit(f"base_ref does not resolve to a commit: {base_ref}")
     seen_names = set()
     seen_worktrees = set()
-    for branch in manifest.get("branches", []):
+    for branch in manifest_branches:
         if selected_ids is not None and branch.get("id") not in selected_ids:
             continue
         name = branch["branch_name"]

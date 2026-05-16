@@ -27,9 +27,9 @@ Base ref: {base_ref}
 - Do not exceed 4 active branch orchestrator agents.
 - Do not read `goal-branch-orchestrator/SKILL.md` in main context; dispatch branch sessions that use that skill.
 - Require each branch to record `git diff --check {base_ref}...HEAD` before merge readiness.
-- Require every branch status to pass `validate_branch_status.py` before accepting it.
+- Require every branch status to pass `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it.
 - Require final `main.status.json` to pass `validate_main_status.py --manifest /absolute/path/to/job.manifest.json`.
-- Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, command evidence, DoD evidence, and no blockers.
+- Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts, exact base-range whitespace command evidence from `git diff --check {base_ref}...HEAD`, no mergeable reviewer verification gaps, DoD evidence, and no blockers.
 - Preserve unsupported, unresolved, negative, and probe-only labels.
 
 ## Parallelization Rationale
@@ -59,6 +59,7 @@ Base ref: {base_ref}
 ## Definition of Done
 
 - Skill availability bootstrap passed for runtime skills before prompt audit.
-- Every branch status passed `validate_branch_status.py`.
+- Every branch status passed manifest-bound `validate_branch_status.py`.
+- Every mergeable review recorded base-range whitespace evidence and no verification gaps.
 - Final `main.status.json` passed manifest-bound `validate_main_status.py`.
 {final_dod}

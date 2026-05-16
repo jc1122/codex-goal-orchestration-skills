@@ -72,6 +72,7 @@ def exact_string_schema(value: str) -> dict:
 
 
 def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
+    nonempty_string = {"type": "string", "minLength": 1}
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -93,7 +94,7 @@ def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
             "repo_root": exact_string_schema(repo_root.as_posix()),
             "status": {"type": "string", "enum": ["pass", "failed", "blocked"]},
             "can_start": {"type": "boolean"},
-            "checked_files": {"type": "array", "items": {"type": "string"}},
+            "checked_files": {"type": "array", "items": nonempty_string},
             "defects": {
                 "type": "array",
                 "items": {
@@ -101,16 +102,16 @@ def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
                     "additionalProperties": False,
                     "required": ["file", "severity", "message"],
                     "properties": {
-                        "file": {"type": "string"},
+                        "file": nonempty_string,
                         "severity": {"type": "string", "enum": ["critical", "major", "minor"]},
-                        "message": {"type": "string"},
+                        "message": nonempty_string,
                     },
                 },
             },
-            "missing_dod_items": {"type": "array", "items": {"type": "string"}},
-            "actionability_verdict": {"type": "string"},
-            "commands_run": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
+            "missing_dod_items": {"type": "array", "items": nonempty_string},
+            "actionability_verdict": nonempty_string,
+            "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
+            "summary": nonempty_string,
         },
     }
 
@@ -123,8 +124,18 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
     waves = manifest.get("waves", [])
     branch_lines = []
     for branch in branches:
+        work_items = branch.get("work_items", [])
+        if isinstance(work_items, list):
+            worker_packet_ids = ",".join(
+                str(item.get("packet_id", "missing"))
+                if isinstance(item, dict)
+                else "invalid"
+                for item in work_items
+            )
+        else:
+            worker_packet_ids = "invalid"
         branch_lines.append(
-            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}".format(
+            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}".format(
                 id=branch.get("id", ""),
                 prompt=resolve_bundle_path(base, branch.get("prompt", ""), "prompt").as_posix(),
                 branch_name=branch.get("branch_name", ""),
@@ -132,7 +143,8 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
                 status=resolve_bundle_path(base, branch.get("status_path", ""), "status_path").as_posix(),
                 review=resolve_bundle_path(base, branch.get("review_path", ""), "review_path").as_posix(),
                 max_workers=branch.get("max_active_worker_packets", "missing"),
-                worker_packets=len(branch.get("work_items", [])) if isinstance(branch.get("work_items", []), list) else "invalid",
+                worker_packets=len(work_items) if isinstance(work_items, list) else "invalid",
+                worker_packet_ids=worker_packet_ids,
             )
         )
 
@@ -165,8 +177,10 @@ Required checks:
 
 - every listed file exists and is readable;
 - manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
+- branch prompt paths, status paths, review paths, and worktree paths are unique and collision-free;
 - every branch declares `max_active_worker_packets` from 1 to 4 and `worker_parallelism.parallelism_default=true`;
-- every branch contains 1 to 4 worker packets total and branch prompts require parallel worker dispatch by default;
+- every branch contains 1 to 4 work items with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids;
+- branch prompts require parallel worker dispatch by default;
 - `max_active_branch_agents` is present and <= 4;
 - parallelism is the default and the manifest contains parallelization metadata;
 - manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;
@@ -174,7 +188,7 @@ Required checks:
 - single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level Definition of Done;
 - every branch prompt defines bounded branch scope and falsifiable Definition of Done;
-- prompts require `validate_branch_status.py` and manifest-bound `validate_main_status.py` before pass;
+- prompts require manifest-bound `validate_branch_status.py` and manifest-bound `validate_main_status.py` before pass;
 - branch prompts are actionable without chat history;
 - prompt files do not require branch creation before audit;
 - merge/cleanup behavior is explicit when expected;
@@ -244,18 +258,35 @@ if data["status"] not in {{"pass", "failed", "blocked"}}:
     raise SystemExit(1)
 if not isinstance(data["can_start"], bool):
     raise SystemExit(1)
-for key in ["checked_files", "defects", "missing_dod_items", "commands_run"]:
-    if not isinstance(data[key], list):
+def require_string_list(key, *, min_items=0):
+    value = data[key]
+    if not isinstance(value, list) or len(value) < min_items:
+        raise SystemExit(1)
+    if any(not isinstance(item, str) or not item.strip() for item in value):
+        raise SystemExit(1)
+
+
+for key in ["checked_files", "missing_dod_items"]:
+    require_string_list(key)
+require_string_list("commands_run", min_items=1)
+if not isinstance(data["defects"], list):
+    raise SystemExit(1)
+for item in data["defects"]:
+    if not isinstance(item, dict):
+        raise SystemExit(1)
+    if not isinstance(item.get("file"), str) or not item["file"].strip():
+        raise SystemExit(1)
+    if item.get("severity") not in {"critical", "major", "minor"}:
+        raise SystemExit(1)
+    if not isinstance(item.get("message"), str) or not item["message"].strip():
         raise SystemExit(1)
 for key in ["actionability_verdict", "summary"]:
-    if not isinstance(data[key], str):
+    if not isinstance(data[key], str) or not data[key].strip():
         raise SystemExit(1)
 if data["status"] == "pass":
-    if data["can_start"] is not True or data["missing_dod_items"]:
+    if data["can_start"] is not True or data["missing_dod_items"] or not data["checked_files"]:
         raise SystemExit(1)
     for item in data["defects"]:
-        if not isinstance(item, dict):
-            raise SystemExit(1)
         if item.get("severity") in {"critical", "major"}:
             raise SystemExit(1)
 PY

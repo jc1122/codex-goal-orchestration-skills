@@ -90,7 +90,7 @@ Launch branch orchestrators according to manifest waves. Parallelism is the defa
 - expected branch status path;
 - expected branch review path.
 
-Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, `max_active_worker_packets` from 1 to 4, and `worker_parallelism.parallelism_default=true`. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
+Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, deterministic worker `packet_id` values in `<branch_id>-<work_item_id>` form, `max_active_worker_packets` from 1 to 4, and `worker_parallelism.parallelism_default=true`. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
 
 The main orchestrator should not implement branch work itself and should not inspect worker event logs unless a branch status is missing, inconsistent, or blocked.
 
@@ -107,6 +107,7 @@ Validate every finished branch status before accepting it:
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py" \
   --status /absolute/path/to/branches/B01.status.json \
+  --manifest /absolute/path/to/job.manifest.json \
   --branch-id B01 \
   --branch <branch-name> \
   --worktree /absolute/path/to/.worktrees/<branch-name>
@@ -121,7 +122,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.p
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a non-empty command list, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 
@@ -132,8 +133,9 @@ Before returning `pass`, verify:
 - manifest cleanup and artifact policies are present and are not contradicted by `main.prompt.md`;
 - every branch listed in the manifest has a status file;
 - every branch requiring review has a review file;
-- every branch status passed `validate_branch_status.py`;
+- every branch status passed manifest-bound `validate_branch_status.py`;
 - every branch summary in `main.status.json` is `pass` with `review_status: "mergeable"`;
+- every mergeable review has empty verification gaps and base-range whitespace evidence;
 - branch statuses satisfy the main prompt DoD;
 - branch statuses/reviews record base-range whitespace validation before merge readiness;
 - branch statuses record the branch worker-packet cap and concurrent worker launch evidence or a serial/under-capacity reason;

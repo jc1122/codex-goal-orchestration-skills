@@ -134,6 +134,7 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
 
 
 def review_schema(packet_id: str) -> dict:
+    nonempty_string = {"type": "string", "minLength": 1}
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -152,11 +153,11 @@ def review_schema(packet_id: str) -> dict:
             "packet_id": exact_string_schema(packet_id),
             "role": exact_string_schema("reviewer"),
             "verdict": {"type": "string", "enum": ["mergeable", "mergeable_after_fixes", "blocked", "reject"]},
-            "findings": {"type": "array", "items": {"type": "string"}},
-            "commands_run": {"type": "array", "items": {"type": "string"}},
-            "verification_gaps": {"type": "array", "items": {"type": "string"}},
-            "residual_risks": {"type": "array", "items": {"type": "string"}},
-            "summary": {"type": "string"},
+            "findings": {"type": "array", "items": nonempty_string},
+            "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
+            "verification_gaps": {"type": "array", "items": nonempty_string},
+            "residual_risks": {"type": "array", "items": nonempty_string},
+            "summary": nonempty_string,
         },
     }
 
@@ -249,7 +250,7 @@ Review the branch against its prompt, worker status files, diffs, test evidence,
 
 Determine the branch base ref from the branch prompt or manifest context. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
-Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished.
+Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
 """
 
     return f"""# Worker Packet {packet_id}
@@ -281,7 +282,7 @@ Return a worker status object matching `{schema_name}`. Allowed `status` values 
 If you are running under Gemini CLI or GitHub Copilot CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
 {GEMINI_STATUS_BEGIN}
-{{"packet_id":"{packet_id}","role":"worker","status":"blocked","branch":"{branch}","worktree":"{worktree}","changed_files":[],"commands_run":[],"tests":[],"blockers":[],"handoff":"replace with concise handoff"}}
+{{"packet_id":"{packet_id}","role":"worker","status":"blocked","branch":"{branch}","worktree":"{worktree}","changed_files":[],"commands_run":["pwd","git status --short --branch"],"tests":[],"blockers":["replace with concrete blocker"],"handoff":"replace with concise handoff"}}
 {GEMINI_STATUS_END}
 """
 
@@ -579,8 +580,6 @@ for source_name, source_text in sources:
         data = json.loads(candidate)
         if data.get("status") == "success":
             data["status"] = "pass"
-            if isinstance(data.get("commands_run"), list):
-                data["commands_run"].append("launcher normalized provider status alias success->pass")
         validate(data, schema)
     except Exception as exc:
         source_errors.append(f"{{source_name}}: invalid marked worker status JSON: {{exc}}")
