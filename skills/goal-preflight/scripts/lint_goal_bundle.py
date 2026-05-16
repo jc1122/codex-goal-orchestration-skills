@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 
 MAX_ACTIVE_BRANCH_AGENTS = 4
+MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
 SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
@@ -245,15 +246,47 @@ def lint(bundle_dir: Path) -> dict:
             "Parallelism is the default",
             "never exceed 4",
             "Launch every branch in the current wave concurrently",
+            "1 to 4 worker packets",
         ]:
             if phrase not in bootloader:
                 defect("goal-bootloader.md", "critical", f"bootloader missing phrase: {phrase}")
 
-    required_branch_keys = ["id", "wave", "prompt", "branch_name", "worktree_path", "status_path", "review_path"]
+    required_branch_keys = [
+        "id",
+        "wave",
+        "prompt",
+        "branch_name",
+        "worktree_path",
+        "status_path",
+        "review_path",
+        "work_items",
+        "max_active_worker_packets",
+        "worker_parallelism",
+    ]
     for branch in branches:
         for key in required_branch_keys:
             if key not in branch:
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')} missing key: {key}")
+        max_workers = branch.get("max_active_worker_packets")
+        if not isinstance(max_workers, int) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets must be an integer from 1 to 4")
+        work_items = branch.get("work_items", [])
+        if not isinstance(work_items, list) or len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets")
+        elif any(not isinstance(item, dict) for item in work_items):
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items entries must be objects")
+        worker_parallelism = branch.get("worker_parallelism", {})
+        if not isinstance(worker_parallelism, dict):
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism must be an object")
+            worker_parallelism = {}
+        if worker_parallelism.get("parallelism_default") is not True:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelism_default must be true")
+        if worker_parallelism.get("max_active_worker_packets") != max_workers:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
+        if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.max_worker_packets_per_branch must be 4")
+        if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism.get("parallelization_rationale", "").strip():
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelization_rationale must be non-empty")
         for key in ["prompt", "status_path", "review_path"]:
             message = relative_path_defect(branch.get(key), key)
             if message:
@@ -276,6 +309,11 @@ def lint(bundle_dir: Path) -> dict:
             "Reviewer Requirement",
             "Bootstrap Requirement",
             "Worker Parallelism",
+            "Max active worker packets",
+            "Max worker packets for this branch",
+            "Never exceed",
+            "active worker packets",
+            "Worker parallelization rationale",
             "Stop Conditions",
             "git diff --check",
             "do not poll active",

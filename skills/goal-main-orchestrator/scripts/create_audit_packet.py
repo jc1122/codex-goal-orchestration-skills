@@ -124,13 +124,15 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
     branch_lines = []
     for branch in branches:
         branch_lines.append(
-            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}".format(
+            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}".format(
                 id=branch.get("id", ""),
                 prompt=resolve_bundle_path(base, branch.get("prompt", ""), "prompt").as_posix(),
                 branch_name=branch.get("branch_name", ""),
                 worktree=resolve_repo_path(repo_root, branch.get("worktree_path", ""), "worktree_path").as_posix(),
                 status=resolve_bundle_path(base, branch.get("status_path", ""), "status_path").as_posix(),
                 review=resolve_bundle_path(base, branch.get("review_path", ""), "review_path").as_posix(),
+                max_workers=branch.get("max_active_worker_packets", "missing"),
+                worker_packets=len(branch.get("work_items", [])) if isinstance(branch.get("work_items", []), list) else "invalid",
             )
         )
 
@@ -163,6 +165,8 @@ Required checks:
 
 - every listed file exists and is readable;
 - manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
+- every branch declares `max_active_worker_packets` from 1 to 4 and `worker_parallelism.parallelism_default=true`;
+- every branch contains 1 to 4 worker packets total and branch prompts require parallel worker dispatch by default;
 - `max_active_branch_agents` is present and <= 4;
 - parallelism is the default and the manifest contains parallelization metadata;
 - manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;

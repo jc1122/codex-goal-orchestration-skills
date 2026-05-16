@@ -17,6 +17,8 @@ The main orchestrator already created the integration worktree. The branch orche
 
 Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer packet scripts. Worker/reviewer packet directories, worktrees, task files, and context files must be absolute paths; the packet generator rejects relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
 
+Each manifest branch must declare `max_active_worker_packets` and `worker_parallelism`. A branch uses 1 to 4 prepared worker packets total. `max_active_worker_packets` is a hard per-branch active cap from 1 to 4. Parallel worker dispatch is the default: launch independent worker packets concurrently up to that cap. If more than 4 worker packets would be needed, stop and split the branch instead of inventing extra packets. If a branch runs serially or below capacity, record the reason in branch status.
+
 ## Worker Model Policy
 
 Use this exact worker preference:
@@ -53,6 +55,14 @@ Return/write status with these fields:
   "branch": "phaseX-B01",
   "worktree": "/absolute/path",
   "worker_statuses": [],
+  "worker_parallelism": {
+    "max_worker_packets_per_branch": 4,
+    "max_active_worker_packets": 4,
+    "max_observed_active_worker_packets": 4,
+    "concurrent_launch_default": true,
+    "serialized_workers": [],
+    "serial_reasons": []
+  },
   "review_status": "mergeable|mergeable_after_fixes|blocked|reject|missing",
   "changed_files": [],
   "commands_run": [],
@@ -84,7 +94,9 @@ While worker or reviewer launchers are active, wait rather than poll. A quiet la
 - Verify the active checkout with `pwd` and `git status --short --branch` before edits or merges.
 - Keep worker ownership disjoint.
 - Prefer one child worktree per worker when workers write.
-- Launch independent worker packets concurrently when owned files and verification commands do not conflict.
+- Use 1 to 4 worker packets for one branch.
+- Launch independent worker packets concurrently when owned files and verification commands do not conflict, up to `max_active_worker_packets`.
+- Never exceed 4 active worker packets in one branch.
 - Record the reason in branch status if worker execution is serialized.
 - Wait for active worker/reviewer launchers instead of polling their event logs, process tables, worktrees, status files, or review files.
 - Inspect diffs before accepting worker summaries.

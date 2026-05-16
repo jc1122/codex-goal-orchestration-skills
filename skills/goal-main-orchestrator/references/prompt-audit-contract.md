@@ -12,6 +12,7 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 
 - every listed file exists and is readable;
 - manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
+- every branch declares 1 to 4 worker packets, `max_active_worker_packets` from 1 to 4, and `worker_parallelism.parallelism_default=true`;
 - `max_active_branch_agents` is present and <= 4;
 - manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;
 - manifest waves, when present, cover every branch exactly once, no wave exceeds `max_active_branch_agents`, no wave has more than 4 branches, and there are no more than 5 waves;

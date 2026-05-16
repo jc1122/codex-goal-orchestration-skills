@@ -45,3 +45,5 @@ Work items are inputs for Spark workers. Keep them small:
 If a work item needs more than roughly 80k-100k tokens of context, split it.
 
 When two work items in the same branch own disjoint files and have independent verification commands, the branch prompt should direct the branch orchestrator to launch them as parallel worker packets in separate child worktrees.
+
+Each branch uses 1 to 4 worker packets total and at most 4 active worker packets. Launch independent worker packets concurrently up to the active cap. If more than 4 worker packets would be needed, split the branch or record why the source material cannot be safely decomposed before generating the bundle. Serial or under-capacity worker execution requires a recorded reason.

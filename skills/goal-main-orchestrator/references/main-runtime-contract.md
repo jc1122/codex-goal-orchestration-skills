@@ -46,7 +46,25 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
       "branch_name": "phaseX-B01",
       "worktree_path": ".worktrees/phaseX-B01",
       "status_path": "branches/B01.status.json",
-      "review_path": "branches/B01.review.json"
+      "review_path": "branches/B01.review.json",
+      "max_active_worker_packets": 4,
+      "work_items": [
+        {
+          "id": "W01",
+          "objective": "Bounded worker objective.",
+          "owned_paths": ["src/example.py"],
+          "verification": ["python3 -m pytest tests/test_example.py -q"],
+          "dod": ["Focused validator passes."]
+        }
+      ],
+      "worker_parallelism": {
+        "parallelism_default": true,
+        "max_active_worker_packets": 4,
+        "max_worker_packets_per_branch": 4,
+        "serial_reason": "",
+        "parallelization_rationale": "Launch independent worker packets concurrently up to 4 active worker packets.",
+        "wave_execution": "Launch independent worker packets concurrently up to max_active_worker_packets; collect finished worker status before launching replacements."
+      }
     }
   ],
   "waves": [
@@ -114,6 +132,8 @@ Return `blocked` if:
 - manifest branch metadata is missing;
 - manifest cleanup or artifact policy is missing or contradicted by `main.prompt.md`;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 4;
+- a branch is missing `max_active_worker_packets` or `worker_parallelism`;
+- a branch does not have 1 to 4 worker packets or `max_active_worker_packets` greater than 4;
 - a wave contains more branches than `max_active_branch_agents`;
 - a manifest contains more than 5 waves or more than 4 branches in any wave;
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;

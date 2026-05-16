@@ -23,7 +23,7 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - artifact preservation policy;
    - branch list or independent branch decomposition that maximizes safe parallelism;
    - `serial_reason` when the job cannot be split into at least two branches;
-   - Spark-sized work items per branch;
+   - 1 to 4 Spark-sized work items per branch;
    - falsifiable DoD and evidence requirements.
 4. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
 5. Write a structured brief JSON.
@@ -57,7 +57,8 @@ Parallelism is the default. When the source material does not define branches/wo
 - prefer 3-4 branches for normal jobs;
 - allow up to 20 branches as 5 waves of up to 4 branches;
 - minimize shared-file overlap within a wave;
-- make every work item Spark-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
+- use 1 to 4 work items per branch, and make every work item Spark-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
+- make independent work items parallel by default so branch orchestrators dispatch them concurrently up to the branch worker cap;
 - include the hard runtime rule that at most 4 branch orchestrator agents may be active and finished agents must be closed before launching replacements;
 - require `serial_reason` for a single-branch bundle;
 - require `parallelization_rationale` or `serial_reason` for underfilled non-final waves or any `max_active_branch_agents` below 4.

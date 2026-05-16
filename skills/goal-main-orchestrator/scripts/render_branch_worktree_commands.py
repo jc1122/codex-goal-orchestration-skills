@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 MAX_ACTIVE_BRANCH_AGENTS = 4
+MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 
 
@@ -81,6 +82,31 @@ def git_ok(repo_root: Path, *args: str) -> bool:
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def validate_branch_worker_contract(branch: dict) -> None:
+    bid = branch.get("id")
+    if "work_items" not in branch:
+        raise SystemExit(f"branch {bid} missing work_items")
+    work_items = branch.get("work_items")
+    if not isinstance(work_items, list) or len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
+        raise SystemExit(f"branch {bid} work_items must contain 1 to 4 worker packets")
+    if any(not isinstance(item, dict) for item in work_items):
+        raise SystemExit(f"branch {bid} work_items entries must be objects")
+    max_workers = branch.get("max_active_worker_packets")
+    if not isinstance(max_workers, int) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
+        raise SystemExit(f"branch {bid} max_active_worker_packets must be an integer from 1 to 4")
+    worker_parallelism = branch.get("worker_parallelism")
+    if not isinstance(worker_parallelism, dict):
+        raise SystemExit(f"branch {bid} worker_parallelism must be an object")
+    if worker_parallelism.get("parallelism_default") is not True:
+        raise SystemExit(f"branch {bid} worker_parallelism.parallelism_default must be true")
+    if worker_parallelism.get("max_active_worker_packets") != max_workers:
+        raise SystemExit(f"branch {bid} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
+    if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
+        raise SystemExit(f"branch {bid} worker_parallelism.max_worker_packets_per_branch must be 4")
+    if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism["parallelization_rationale"].strip():
+        raise SystemExit(f"branch {bid} worker_parallelism.parallelization_rationale must be non-empty")
 
 
 def main() -> int:
@@ -159,6 +185,20 @@ def main() -> int:
         raise SystemExit("branch ids must not appear in more than one wave")
     if waves and set(wave_branch_ids) != set(manifest_branch_ids):
         raise SystemExit("waves must cover exactly the manifest branch ids")
+
+    manifest_dir = manifest_path.parent
+    for branch in manifest.get("branches", []):
+        for key in ["prompt", "status_path", "review_path", "worktree_path", "branch_name"]:
+            if key not in branch:
+                raise SystemExit(f"branch {branch.get('id')} missing {key}")
+        require_relative_path(branch["prompt"], "prompt")
+        require_relative_path(branch["status_path"], "status_path")
+        require_relative_path(branch["review_path"], "review_path")
+        require_relative_path(branch["worktree_path"], "worktree_path")
+        prompt_path = resolve(manifest_dir, branch["prompt"])
+        if not prompt_path.exists():
+            raise SystemExit(f"branch prompt does not exist: {prompt_path}")
+        validate_branch_worker_contract(branch)
 
     if args.list_waves:
         for wave in waves:

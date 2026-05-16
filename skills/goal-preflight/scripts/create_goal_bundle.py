@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 
 MAX_ACTIVE_BRANCH_AGENTS = 4
+MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
 SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
@@ -88,6 +89,16 @@ def require_agent_limit(value: object) -> int:
         raise SystemExit("max_active_branch_agents must be an integer from 1 to 4") from exc
     if limit < 1 or limit > MAX_ACTIVE_BRANCH_AGENTS:
         raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
+    return limit
+
+
+def require_worker_limit(value: object) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit("max_active_worker_packets must be an integer from 1 to 4") from exc
+    if limit < 1 or limit > MAX_WORKER_PACKETS_PER_BRANCH:
+        raise SystemExit("max_active_worker_packets must be an integer from 1 to 4")
     return limit
 
 
@@ -177,14 +188,35 @@ def normalize_brief(brief: dict) -> dict:
         bid = require_safe_id(str(bid).upper(), "branch id")
         branch_name = require_branch_name(original.get("branch_name") or f"{job_id}-{bid.lower()}")
         worktree_path = require_relative_path(original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path")
+        max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
+        worker_serial_reason = nonempty_text(original.get("worker_serial_reason"))
+        worker_parallelization_rationale = nonempty_text(original.get("worker_parallelization_rationale"))
+        work_items = original.get("work_items", [])
+        if not isinstance(work_items, list):
+            raise SystemExit(f"branch {bid} work_items must be a list")
+        if len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
+            raise SystemExit(f"branch {bid} must have 1 to {MAX_WORKER_PACKETS_PER_BRANCH} worker packets; split or synthesize work items")
+        if any(not isinstance(item, dict) for item in work_items):
+            raise SystemExit(f"branch {bid} work_items entries must be objects")
         branch = {
             **original,
+            "work_items": work_items,
             "id": bid,
             "branch_name": branch_name,
             "worktree_path": worktree_path,
             "prompt": require_relative_path(original.get("prompt") or f"branches/{bid}.prompt.md", "prompt"),
             "status_path": require_relative_path(original.get("status_path") or f"branches/{bid}.status.json", "status_path"),
             "review_path": require_relative_path(original.get("review_path") or f"branches/{bid}.review.json", "review_path"),
+            "max_active_worker_packets": max_workers,
+            "worker_parallelism": {
+                "parallelism_default": True,
+                "max_active_worker_packets": max_workers,
+                "max_worker_packets_per_branch": MAX_WORKER_PACKETS_PER_BRANCH,
+                "serial_reason": worker_serial_reason,
+                "parallelization_rationale": worker_parallelization_rationale
+                or f"Launch independent worker packets concurrently up to {max_workers} active worker packets.",
+                "wave_execution": "Launch independent worker packets concurrently up to max_active_worker_packets; collect finished worker status before launching replacements.",
+            },
         }
         branches.append(branch)
 
@@ -284,7 +316,7 @@ Mandatory bootstrap first: verify runtime skill availability before prompt audit
 
 Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
 
-Parallelism is the default. Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Launch every branch in the current wave concurrently up to that limit. Run branch waves sequentially. After dispatch, wait for branch agents; do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements. A single-branch or otherwise serialized plan is valid only when job.manifest.json records a serial_reason or parallelization_rationale.
+Parallelism is the default. Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Launch every branch in the current wave concurrently up to that limit. Run branch waves sequentially. Each branch entry must declare 1 to 4 worker packets and branch prompts require independent worker packets to launch concurrently up to the branch worker cap. After dispatch, wait for branch agents; do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements. A single-branch or otherwise serialized plan is valid only when job.manifest.json records a serial_reason or parallelization_rationale.
 
 Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.
 """
@@ -315,6 +347,9 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 "worktree_path": branch["worktree_path"],
                 "status_path": branch["status_path"],
                 "review_path": branch["review_path"],
+                "work_items": branch["work_items"],
+                "max_active_worker_packets": branch["max_active_worker_packets"],
+                "worker_parallelism": branch["worker_parallelism"],
             }
             for branch in brief["branches"]
         ],
@@ -353,6 +388,8 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 branch_name=branch["branch_name"],
                 worktree_path=branch["worktree_path"],
                 wave=branch["wave"],
+                max_active_worker_packets=branch["max_active_worker_packets"],
+                worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
                 objective=branch.get("objective", "Objective not supplied."),
                 scope=branch.get("scope", "Scope not supplied."),
                 owned_paths=bullets(branch.get("owned_paths", [])),

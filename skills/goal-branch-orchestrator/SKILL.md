@@ -67,7 +67,7 @@ Workers must fit the smallest intended worker context. Spark fallback has a loca
 - a falsifiable worker DoD;
 - required JSON status output.
 
-Parallel worker packets are the default for independent work items. Use separate child worktrees for workers that can proceed without sharing writable files. If branch work must run serially, record the reason in branch status rather than silently serializing it.
+Parallel worker packets are the default for independent work items. Use separate child worktrees for workers that can proceed without sharing writable files. A branch uses 1 to 4 prepared worker packets total. Launch independent worker packets concurrently up to the branch prompt's `max_active_worker_packets` value. That value is a hard cap and must never exceed 4. If branch work must run serially or below the worker cap, record the reason in branch status rather than silently serializing it.
 
 Use `scripts/create_runtime_packet.py` to create worker packets:
 
@@ -110,6 +110,8 @@ Before returning `pass`, verify:
 
 - skill and CLI availability bootstrap passed;
 - every worker needed by the branch DoD has status `pass` or an explicitly acceptable `partial`;
+- 1 to 4 worker packets were used for the branch;
+- no more than 4 active worker packets ran at once, and branch status records the worker parallelism cap, concurrent launch evidence, and any serial/under-capacity reason;
 - accepted worker branches have clean `git diff --check`;
 - focused tests and validators named in the branch prompt ran and are recorded;
 - base-range whitespace validation such as `git diff --check <base-ref>...HEAD` ran and is recorded before review or merge readiness;

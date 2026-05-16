@@ -90,6 +90,8 @@ Launch branch orchestrators according to manifest waves. Parallelism is the defa
 - expected branch status path;
 - expected branch review path.
 
+Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, `max_active_worker_packets` from 1 to 4, and `worker_parallelism.parallelism_default=true`. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
+
 The main orchestrator should not implement branch work itself and should not inspect worker event logs unless a branch status is missing, inconsistent, or blocked.
 
 Do not open or read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Treat that skill as a branch-session launch target: verify it exists during bootstrap, then dispatch a branch orchestrator session that loads and follows it with the inputs above. If branch-session launch is impossible, return `blocked` instead of absorbing the branch runtime instructions into main.
@@ -109,6 +111,7 @@ Before returning `pass`, verify:
 - every branch requiring review has a review file;
 - branch statuses satisfy the main prompt DoD;
 - branch statuses/reviews record base-range whitespace validation before merge readiness;
+- branch statuses record the branch worker-packet cap and concurrent worker launch evidence or a serial/under-capacity reason;
 - no branch wave exceeded `max_active_branch_agents`;
 - main did not poll active branch agents' worker packets, reviewer packets, worktrees, or process tables while waiting;
 - finished branch orchestrators were closed before replacements launched;

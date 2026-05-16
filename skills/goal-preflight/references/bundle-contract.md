@@ -49,7 +49,25 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       "branch_name": "phaseX-B01",
       "worktree_path": ".worktrees/phaseX-B01",
       "status_path": "branches/B01.status.json",
-      "review_path": "branches/B01.review.json"
+      "review_path": "branches/B01.review.json",
+      "max_active_worker_packets": 4,
+      "work_items": [
+        {
+          "id": "W01",
+          "objective": "Bounded worker objective.",
+          "owned_paths": ["src/example.py"],
+          "verification": ["python3 -m pytest tests/test_example.py -q"],
+          "dod": ["Focused validator passes."]
+        }
+      ],
+      "worker_parallelism": {
+        "parallelism_default": true,
+        "max_active_worker_packets": 4,
+        "max_worker_packets_per_branch": 4,
+        "serial_reason": "",
+        "parallelization_rationale": "Launch independent worker packets concurrently up to 4 active worker packets.",
+        "wave_execution": "Launch independent worker packets concurrently up to max_active_worker_packets; collect finished worker status before launching replacements."
+      }
     }
   ],
   "waves": [
@@ -73,4 +91,5 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
+- Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch concurrently up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.
