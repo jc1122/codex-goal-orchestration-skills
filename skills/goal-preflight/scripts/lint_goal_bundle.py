@@ -21,6 +21,19 @@ def load_json(path: Path) -> dict:
         return json.load(handle)
 
 
+def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        raise SystemExit(f"{field} must be an absolute path: {value!r}")
+    if ".." in expanded.parts:
+        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
+    if must_exist and not expanded.exists():
+        raise SystemExit(f"{field} does not exist: {expanded}")
+    return expanded.resolve(strict=must_exist)
+
+
 def resolve(base: Path, value: str) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -146,6 +159,8 @@ def lint(bundle_dir: Path) -> dict:
             "repository root",
             "skill availability bootstrap",
             "prompt audit",
+            "prompt-audit.json",
+            "pins this manifest",
             "max_active_branch_agents",
             "never exceed 5",
             "close finished branch orchestrator agents",
@@ -170,6 +185,8 @@ def lint(bundle_dir: Path) -> dict:
             "main.prompt.md",
             "skill availability",
             "check_goal_skill_availability.py",
+            "absolute paths",
+            "pins the manifest",
         ]:
             if phrase not in bootloader:
                 defect("goal-bootloader.md", "critical", f"bootloader missing phrase: {phrase}")
@@ -221,9 +238,13 @@ def main() -> int:
     parser.add_argument("--output")
     args = parser.parse_args()
 
-    bundle_dir = Path(args.bundle_dir).expanduser().resolve()
+    bundle_dir = resolve_absolute_path(args.bundle_dir, "--bundle-dir", must_exist=True)
     data = lint(bundle_dir)
-    output_path = Path(args.output).expanduser().resolve() if args.output else bundle_dir / "preflight.lint.json"
+    output_path = (
+        resolve_absolute_path(args.output, "--output", must_exist=False)
+        if args.output
+        else bundle_dir / "preflight.lint.json"
+    )
     output_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     print(output_path)
     return 0 if data["status"] == "pass" else 1

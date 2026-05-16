@@ -70,6 +70,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
   --repo-root /absolute/path/to/repo
 ```
 
+`--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir` must be absolute paths with no `..` traversal. The scripts reject cwd-relative entry paths.
+
 Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, and worktree paths are relative to the repository root. Do not use absolute paths, backslashes, or `..` in the brief.
 
 Generated `goal-bootloader.md` is location-bound: it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, rerun this skill or `render_goal_bootloader.py`; do not hand-edit bootloader paths.

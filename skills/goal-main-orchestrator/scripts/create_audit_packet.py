@@ -9,8 +9,25 @@ import os
 from pathlib import Path, PurePosixPath
 
 
+AUDIT_MODEL = "gpt-5.5"
+AUDIT_FALLBACK_MODEL = "gpt-5.4"
+
+
 def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        raise SystemExit(f"{field} must be an absolute path: {value!r}")
+    if ".." in expanded.parts:
+        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
+    if must_exist and not expanded.exists():
+        raise SystemExit(f"{field} does not exist: {expanded}")
+    return expanded.resolve(strict=must_exist)
 
 
 def resolve(base: Path, value: str) -> Path:
@@ -50,12 +67,14 @@ def load_manifest(path: Path) -> dict:
         return json.load(handle)
 
 
-def audit_schema() -> dict:
+def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
         "required": [
+            "manifest",
+            "repo_root",
             "status",
             "can_start",
             "checked_files",
@@ -66,6 +85,8 @@ def audit_schema() -> dict:
             "summary",
         ],
         "properties": {
+            "manifest": {"const": manifest_path.as_posix()},
+            "repo_root": {"const": repo_root.as_posix()},
             "status": {"enum": ["pass", "failed", "blocked"]},
             "can_start": {"type": "boolean"},
             "checked_files": {"type": "array", "items": {"type": "string"}},
@@ -148,17 +169,21 @@ Required checks:
 - `main.prompt.md` requires closing finished branch orchestrator agents before launching replacements;
 - unsupported, unresolved, negative, or probe-only claim labels are preserved.
 
-Return only JSON matching `prompt-audit.schema.json`.
+Return only JSON matching `prompt-audit.schema.json`. The JSON must include `manifest` and `repo_root`
+exactly as specified by the schema.
 """
 
 
-def render_launch(repo_root: Path, primary_model: str, fallback_model: str) -> str:
+def render_launch(repo_root: Path, manifest_path: Path) -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
 git -C {shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/dev/null
+
+output_path="$(pwd)/prompt-audit.json"
+rm -f "$output_path"
 
 run_model() {{
   local label="$1"
@@ -174,15 +199,101 @@ run_model() {{
     > "$(pwd)/events-${{label}}.jsonl" 2>&1
 }}
 
-if run_model primary {shell_quote(primary_model)}; then
+valid_audit() {{
+  python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} <<'PY'
+import json
+import sys
+
+path, manifest, repo_root = sys.argv[1:4]
+try:
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+except Exception:
+    raise SystemExit(1)
+
+required = [
+    "manifest",
+    "repo_root",
+    "status",
+    "can_start",
+    "checked_files",
+    "defects",
+    "missing_dod_items",
+    "actionability_verdict",
+    "commands_run",
+    "summary",
+]
+if any(key not in data for key in required):
+    raise SystemExit(1)
+if data["manifest"] != manifest or data["repo_root"] != repo_root:
+    raise SystemExit(1)
+if data["status"] not in {{"pass", "failed", "blocked"}}:
+    raise SystemExit(1)
+if not isinstance(data["can_start"], bool):
+    raise SystemExit(1)
+for key in ["checked_files", "defects", "missing_dod_items", "commands_run"]:
+    if not isinstance(data[key], list):
+        raise SystemExit(1)
+for key in ["actionability_verdict", "summary"]:
+    if not isinstance(data[key], str):
+        raise SystemExit(1)
+PY
+}}
+
+write_terminal_audit() {{
+  local message="$1"
+  python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} "$message" <<'PY'
+import json
+import sys
+
+output_path, manifest, repo_root, message = sys.argv[1:5]
+data = {{
+    "manifest": manifest,
+    "repo_root": repo_root,
+    "status": "blocked",
+    "can_start": False,
+    "checked_files": [],
+    "defects": [
+        {{
+            "file": "prompt-audit",
+            "severity": "critical",
+            "message": message,
+        }}
+    ],
+    "missing_dod_items": ["prompt audit did not produce a valid audit artifact"],
+    "actionability_verdict": "blocked",
+    "commands_run": [
+        "codex exec --ephemeral -m {AUDIT_MODEL} -C {repo_root.as_posix()} -s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json",
+        "codex exec --ephemeral -m {AUDIT_FALLBACK_MODEL} -C {repo_root.as_posix()} -s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json",
+    ],
+    "summary": message,
+}}
+with open(output_path, "w", encoding="utf-8") as handle:
+    json.dump(data, handle, indent=2)
+    handle.write("\\n")
+PY
+}}
+
+if run_model primary {shell_quote(AUDIT_MODEL)} && valid_audit; then
   exit 0
 fi
 
-if [ -s "$(pwd)/prompt-audit.json" ]; then
+if [ -s "$output_path" ] && valid_audit; then
   exit 1
 fi
 
-run_model fallback {shell_quote(fallback_model)}
+rm -f "$output_path"
+
+if run_model fallback {shell_quote(AUDIT_FALLBACK_MODEL)} && valid_audit; then
+  exit 0
+fi
+
+if [ -s "$output_path" ] && valid_audit; then
+  exit 1
+fi
+
+write_terminal_audit "Prompt audit primary and fallback failed without producing a valid prompt-audit.json."
+exit 1
 """
 
 
@@ -191,18 +302,16 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--model", default="gpt-5.5")
-    parser.add_argument("--fallback-model", default="gpt-5.4")
     args = parser.parse_args()
 
-    manifest_path = Path(args.manifest).expanduser().resolve()
-    repo_root = Path(args.repo_root).expanduser().resolve()
-    out_dir = Path(args.out_dir).expanduser().resolve()
+    manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+    repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
+    out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     manifest = load_manifest(manifest_path)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "prompt-audit.schema.json").write_text(
-        json.dumps(audit_schema(), indent=2) + "\n",
+        json.dumps(audit_schema(manifest_path, repo_root), indent=2) + "\n",
         encoding="utf-8",
     )
     (out_dir / "prompt.md").write_text(
@@ -211,7 +320,7 @@ def main() -> int:
     )
     launch = out_dir / "launch.sh"
     launch.write_text(
-        render_launch(repo_root, args.model, args.fallback_model),
+        render_launch(repo_root, manifest_path),
         encoding="utf-8",
     )
     os.chmod(launch, 0o755)

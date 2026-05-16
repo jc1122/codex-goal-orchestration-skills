@@ -57,6 +57,10 @@ function defaultDest() {
   return path.join(os.homedir(), ".codex", "skills");
 }
 
+function hasTraversal(value) {
+  return value.split(/[\\/]+/).includes("..");
+}
+
 function bundledSkills() {
   return fs
     .readdirSync(skillsRoot, { withFileTypes: true })
@@ -71,6 +75,12 @@ function isSameOrInside(candidate, parent) {
 }
 
 function validateDestRoot(destRoot) {
+  if (!path.isAbsolute(destRoot)) {
+    throw new Error("--dest must be an absolute path");
+  }
+  if (hasTraversal(destRoot)) {
+    throw new Error("--dest must not contain '..' traversal");
+  }
   const resolved = path.resolve(destRoot);
   if (resolved === path.parse(resolved).root) {
     throw new Error("refusing to install skills directly into a filesystem root");

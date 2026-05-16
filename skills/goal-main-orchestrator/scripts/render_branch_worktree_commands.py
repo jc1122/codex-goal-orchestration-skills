@@ -16,6 +16,19 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        raise SystemExit(f"{field} must be an absolute path: {value!r}")
+    if ".." in expanded.parts:
+        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
+    if must_exist and not expanded.exists():
+        raise SystemExit(f"{field} does not exist: {expanded}")
+    return expanded.resolve(strict=must_exist)
+
+
 def resolve(base: Path, value: str) -> Path:
     path = Path(value).expanduser()
     if not path.is_absolute():
@@ -77,14 +90,18 @@ def main() -> int:
     parser.add_argument("--list-waves", action="store_true")
     args = parser.parse_args()
 
-    manifest_path = Path(args.manifest).expanduser().resolve()
-    repo_root = Path(args.repo_root).expanduser().resolve()
-    audit_path = Path(args.audit).expanduser().resolve()
+    manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+    repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
+    audit_path = resolve_absolute_path(args.audit, "--audit", must_exist=True)
     manifest = load_json(manifest_path)
     audit = load_json(audit_path)
 
     if not git_ok(repo_root, "rev-parse", "--show-toplevel"):
         raise SystemExit(f"repo root is not a git checkout: {repo_root}")
+    if audit.get("manifest") != manifest_path.as_posix():
+        raise SystemExit("prompt audit manifest identity does not match --manifest")
+    if audit.get("repo_root") != repo_root.as_posix():
+        raise SystemExit("prompt audit repo_root identity does not match --repo-root")
 
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")

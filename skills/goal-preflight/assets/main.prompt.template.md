@@ -18,7 +18,7 @@ Base ref: {base_ref}
 - Reject absolute paths, backslashes, and `..` traversal in manifest-owned paths.
 - Run skill availability bootstrap before prompt audit.
 - Run prompt audit before branch work.
-- Do not create branch worktrees until prompt audit passes.
+- Do not create branch worktrees until prompt audit passes and `prompt-audit.json` pins this manifest and repository root.
 - Respect max_active_branch_agents={max_active_branch_agents}; it must never exceed 5.
 - Run branch waves sequentially.
 - Close finished branch orchestrator agents before launching replacements.

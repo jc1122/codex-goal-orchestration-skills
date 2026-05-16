@@ -33,27 +33,44 @@ REQUIRED_FILES = {
 }
 
 
+def normalize_absolute_root(value: str | Path, field: str, *, fail_on_relative: bool) -> Path | None:
+    text = str(value)
+    if "\\" in text:
+        if fail_on_relative:
+            raise SystemExit(f"{field} must use POSIX '/' separators: {text!r}")
+        return None
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        if fail_on_relative:
+            raise SystemExit(f"{field} must be an absolute path: {text!r}")
+        return None
+    if ".." in expanded.parts:
+        if fail_on_relative:
+            raise SystemExit(f"{field} must not contain '..' traversal: {text!r}")
+        return None
+    return expanded.resolve(strict=False)
+
+
 def add_unique(paths: list[Path], path: Path | None) -> None:
     if path is None:
         return
-    expanded = path.expanduser()
-    if expanded not in paths:
-        paths.append(expanded)
+    if path not in paths:
+        paths.append(path)
 
 
 def candidate_roots(cli_roots: list[str], allow_fallback_roots: bool) -> list[Path]:
     roots: list[Path] = []
     for root in cli_roots:
-        add_unique(roots, Path(root))
+        add_unique(roots, normalize_absolute_root(root, "--skills-root", fail_on_relative=True))
     if cli_roots and not allow_fallback_roots:
         return roots
     codex_home = os.environ.get("CODEX_HOME")
     if codex_home:
-        add_unique(roots, Path(codex_home) / "skills")
-    add_unique(roots, Path.home() / ".codex" / "skills")
-    add_unique(roots, Path.home() / ".agents" / "skills")
+        add_unique(roots, normalize_absolute_root(Path(codex_home) / "skills", "CODEX_HOME/skills", fail_on_relative=False))
+    add_unique(roots, normalize_absolute_root(Path.home() / ".codex" / "skills", "~/.codex/skills", fail_on_relative=False))
+    add_unique(roots, normalize_absolute_root(Path.home() / ".agents" / "skills", "~/.agents/skills", fail_on_relative=False))
     try:
-        add_unique(roots, Path(__file__).resolve().parents[2])
+        add_unique(roots, normalize_absolute_root(Path(__file__).resolve().parents[2], "script skill root", fail_on_relative=False))
     except IndexError:
         pass
     return roots

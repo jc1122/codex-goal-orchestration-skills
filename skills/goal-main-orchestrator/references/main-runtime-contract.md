@@ -19,7 +19,7 @@ It must not create or rewrite the bootloader, main prompt, branch prompts, or ma
 
 ## Manifest Shape
 
-Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Runtime script arguments for manifest, repo root, audit files, and output directories must be absolute paths with no `..` traversal.
 
 ```json
 {
@@ -95,6 +95,7 @@ If an agent cannot be closed and capacity cannot be freed, return `blocked` rath
 Return `blocked` if:
 
 - audit did not pass;
+- `prompt-audit.json` does not pin the exact manifest and repo root for this run;
 - manifest branch metadata is missing;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 5;
 - a wave contains more branches than `max_active_branch_agents`;

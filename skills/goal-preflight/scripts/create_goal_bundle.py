@@ -35,6 +35,19 @@ def require_safe_label(value: str, field: str) -> str:
     return value
 
 
+def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
+    expanded = Path(value).expanduser()
+    if not expanded.is_absolute():
+        raise SystemExit(f"{field} must be an absolute path: {value!r}")
+    if ".." in expanded.parts:
+        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
+    if must_exist and not expanded.exists():
+        raise SystemExit(f"{field} does not exist: {expanded}")
+    return expanded.resolve(strict=must_exist)
+
+
 def require_branch_name(value: str, field: str = "branch_name") -> str:
     if (
         not value
@@ -223,9 +236,11 @@ Read the manifest and main prompt first. Treat main.prompt.md as the runtime con
 
 If the bundle root or repository root above is wrong because files moved, stop and regenerate the bootloader with goal-preflight. Do not hand-edit these paths.
 
+Pass only absolute paths to goal orchestration scripts. If a script entry path would be relative or would contain `..` traversal, stop and regenerate the bundle or bootloader.
+
 Mandatory bootstrap first: verify runtime skill availability before prompt audit. Resolve GOAL_SKILLS_ROOT from ${{CODEX_HOME:-$HOME/.codex}}/skills, falling back to $HOME/.agents/skills, then run check_goal_skill_availability.py for goal-main-orchestrator and goal-branch-orchestrator. If either skill or required script is unavailable, return blocked and ask the user to install the skills package.
 
-Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass and can_start=true.
+Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
 
 Respect max_active_branch_agents from job.manifest.json; never exceed 5. Run branch waves sequentially. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements.
 
@@ -325,13 +340,13 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--brief", required=True)
-    parser.add_argument("--repo-root", default=".")
+    parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir")
     args = parser.parse_args()
 
-    brief_path = Path(args.brief).expanduser().resolve()
-    repo_root = Path(args.repo_root).expanduser().resolve()
-    out_dir = Path(args.out_dir).expanduser().resolve() if args.out_dir else None
+    brief_path = resolve_absolute_path(args.brief, "--brief", must_exist=True)
+    repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
+    out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False) if args.out_dir else None
     bundle_dir = create_bundle(load_json(brief_path), repo_root, out_dir)
     print(bundle_dir)
     return 0

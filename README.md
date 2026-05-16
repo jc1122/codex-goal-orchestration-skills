@@ -18,13 +18,15 @@ These are packaged in one repository and reference each other by skill name, not
 npx github:jc1122/codex-goal-orchestration-skills
 ```
 
-The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`.
+The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
 
 Use a custom destination:
 
 ```bash
 npx github:jc1122/codex-goal-orchestration-skills -- --dest /path/to/skills
 ```
+
+Custom destinations must be absolute and must not contain `..` traversal.
 
 List bundled skills:
 
@@ -46,6 +48,6 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 4. Runtime bootstrap checks that required skills and scripts are available before prompt audit.
 5. The main orchestrator launches branch sessions that use `goal-branch-orchestrator`.
 
-The runtime enforces skill availability bootstrap, reproducible manifest paths, prompt audit before branch work, branch waves, and a hard limit of 5 active branch orchestrator agents. Bundle prompt/status/review paths are relative to the bundle root; worktree paths are relative to the repository root.
+The runtime enforces skill availability bootstrap, absolute CLI entry paths, reproducible manifest paths, fixed prompt-audit and worker model fallback chains, prompt audit before branch work, branch waves, and a hard limit of 5 active branch orchestrator agents. Bundle prompt/status/review paths are relative to the bundle root; worktree paths are relative to the repository root.
 
 Generated `goal-bootloader.md` files are location-bound because they embed absolute bundle and repository roots. If a bundle or repository checkout is moved, rerun `goal-preflight` or `render_goal_bootloader.py`; do not hand-edit the bootloader paths.

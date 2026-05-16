@@ -1,6 +1,6 @@
 # Prompt Audit Contract
 
-The prompt auditor is a read-only heavy-model agent launched before branch creation.
+The prompt auditor is a read-only heavy-model agent launched before branch creation. The launcher uses exactly `gpt-5.5`, then `gpt-5.4`; do not pass model overrides.
 
 ## Files To Check
 
@@ -26,4 +26,6 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 
 `pass` means orchestration may start. Any missing, ambiguous, or non-actionable contract is `failed` or `blocked`, and main must not create branches.
 
-The auditor returns only JSON matching `prompt-audit.schema.json`.
+The auditor returns only JSON matching `prompt-audit.schema.json`. The schema pins the exact absolute `manifest` and `repo_root` values, and downstream branch worktree rendering must reject an audit artifact whose identity does not match the current command inputs.
+
+If both audit model attempts fail without a valid audit artifact, the launcher writes a terminal blocked `prompt-audit.json` with `can_start=false`.

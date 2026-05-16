@@ -51,7 +51,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_audit_packet.py
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/audit
 ```
 
-Then run the generated `launch.sh`. The audit packet defaults to `gpt-5.5` and falls back to `gpt-5.4`.
+Then run the generated `launch.sh`. The audit packet uses exactly `gpt-5.5`, then `gpt-5.4`; no model overrides are accepted. The packet schema pins the exact manifest path and repository root. If both audit attempts fail without producing a valid `prompt-audit.json`, the launcher writes a terminal blocked `prompt-audit.json`.
 
 Read `references/prompt-audit-contract.md` if the audit fails or if the prepared bundle shape is unclear.
 
