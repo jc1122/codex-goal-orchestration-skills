@@ -190,7 +190,7 @@ cd "$(dirname "$0")"
 git -C {shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/dev/null
 
 output_path="$(pwd)/prompt-audit.json"
-rm -f "$output_path"
+rm -f "$output_path" "$(pwd)/events-primary.jsonl" "$(pwd)/events-fallback.jsonl"
 
 run_model() {{
   local label="$1"

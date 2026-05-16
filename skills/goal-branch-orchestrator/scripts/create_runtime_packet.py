@@ -251,6 +251,7 @@ git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
 
 packet_dir="$(pwd)"
 output_path="$packet_dir/{output_name}"
+rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl"
 
 write_terminal_review() {{
   local message="$1"
@@ -331,6 +332,7 @@ gemini_command={shell_quote(GEMINI_COMMAND)}
 gemini_approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
 gemini_probe_timeout_seconds={GEMINI_PROBE_TIMEOUT_SECONDS}
 gemini_probe_prompt={shell_quote(GEMINI_PROBE_PROMPT)}
+rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt
 
 worktree_dirty() {{
   [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]
