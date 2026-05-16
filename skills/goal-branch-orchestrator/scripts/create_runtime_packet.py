@@ -6,11 +6,62 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+import re
+from pathlib import Path, PurePosixPath
+
+
+SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 
 
 def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def require_safe_label(value: str, field: str) -> str:
+    if not SAFE_LABEL_RE.fullmatch(value):
+        raise SystemExit(f"{field} must match {SAFE_LABEL_RE.pattern}: {value!r}")
+    return value
+
+
+def safe_branch_name(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    return not (
+        any(char in INVALID_BRANCH_CHARS for char in value)
+        or any(char.isspace() for char in value)
+        or value.startswith(("/", "."))
+        or value.endswith(("/", ".", ".lock"))
+        or ".." in value
+        or "@{" in value
+        or "//" in value
+    )
+
+
+def normalize_owned_paths(values: list[str]) -> list[str]:
+    normalized = []
+    for value in values:
+        if "\\" in value:
+            raise SystemExit(f"owned paths must use POSIX '/' separators: {value!r}")
+        if "//" in value:
+            raise SystemExit(f"owned paths must not contain empty path segments: {value!r}")
+        if value.startswith("./") or "/./" in value or value.endswith("/."):
+            raise SystemExit(f"owned paths must not contain '.' path segments: {value!r}")
+        path = PurePosixPath(value)
+        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+            raise SystemExit(f"owned paths must be repo-relative without traversal: {value!r}")
+        normalized.append(path.as_posix())
+    return normalized
+
+
+def normalize_context_files(values: list[str]) -> list[str]:
+    normalized = []
+    for value in values:
+        path = Path(value).expanduser().resolve()
+        if not path.exists():
+            raise SystemExit(f"context file does not exist: {path}")
+        normalized.append(path.as_posix())
+    return normalized
 
 
 def status_schema() -> dict:
@@ -179,8 +230,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
+
 run_model() {{
-  local model="$1"
+  local label="$1"
+  local model="$2"
   codex exec --ephemeral \\
     -m "$model" \\
     -C {shell_quote(worktree)} \\
@@ -189,14 +243,14 @@ run_model() {{
     --output-schema "$(pwd)/{schema_name}" \\
     -o "$(pwd)/{output_name}" \\
     - < "$(pwd)/prompt.md" \\
-    > "$(pwd)/events-${{model}}.jsonl" 2>&1
+    > "$(pwd)/events-${{label}}.jsonl" 2>&1
 }}
 
-if run_model {shell_quote(primary_model)}; then
+if run_model primary {shell_quote(primary_model)}; then
   exit 0
 fi
 {dirty_guard}
-run_model {shell_quote(fallback_model)}
+run_model fallback {shell_quote(fallback_model)}
 """
 
 
@@ -216,7 +270,15 @@ def main() -> int:
     parser.add_argument("--reviewer-fallback-model", default="gpt-5.4")
     args = parser.parse_args()
 
-    packet_dir = Path(args.out_dir).expanduser().resolve() / args.packet_id
+    packet_id = require_safe_label(args.packet_id, "packet-id")
+    branch = args.branch
+    if not safe_branch_name(branch):
+        raise SystemExit(f"branch is not a safe git branch name: {branch!r}")
+    worktree = Path(args.worktree).expanduser().resolve()
+    owned_files = normalize_owned_paths(args.owned_file)
+    context_files = normalize_context_files(args.context_file)
+
+    packet_dir = Path(args.out_dir).expanduser().resolve() / packet_id
     packet_dir.mkdir(parents=True, exist_ok=True)
 
     if args.role == "reviewer":
@@ -236,12 +298,12 @@ def main() -> int:
     (packet_dir / "prompt.md").write_text(
         prompt_for(
             args.role,
-            args.packet_id,
-            args.branch,
-            str(Path(args.worktree).expanduser().resolve()),
+            packet_id,
+            branch,
+            str(worktree),
             schema_name,
-            args.owned_file,
-            args.context_file,
+            owned_files,
+            context_files,
             load_task(args.task_file),
         ),
         encoding="utf-8",
@@ -250,7 +312,7 @@ def main() -> int:
     launch_path.write_text(
         launch_for(
             args.role,
-            str(Path(args.worktree).expanduser().resolve()),
+            str(worktree),
             schema_name,
             output_name,
             primary_model,

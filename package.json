@@ -10,6 +10,9 @@
   "files": [
     "bin/",
     "skills/",
+    "!**/__pycache__/**",
+    "!**/*.pyc",
+    "!**/*.pyo",
     "README.md"
   ],
   "repository": {

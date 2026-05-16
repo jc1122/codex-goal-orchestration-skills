@@ -19,7 +19,7 @@ It must not create or rewrite the bootloader, main prompt, branch prompts, or ma
 
 ## Manifest Shape
 
-Paths are relative to the manifest directory unless absolute.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid.
 
 ```json
 {

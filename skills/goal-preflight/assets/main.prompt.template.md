@@ -14,10 +14,12 @@ Base ref: {base_ref}
 ## Runtime Rules
 
 - Use $goal-main-orchestrator.
+- Treat manifest paths as relative to the bundle root and worktree paths as relative to the repository root.
+- Reject absolute paths, backslashes, and `..` traversal in manifest-owned paths.
 - Run skill availability bootstrap before prompt audit.
 - Run prompt audit before branch work.
 - Do not create branch worktrees until prompt audit passes.
-- Respect max_active_branch_agents=5.
+- Respect max_active_branch_agents={max_active_branch_agents}; it must never exceed 5.
 - Run branch waves sequentially.
 - Close finished branch orchestrator agents before launching replacements.
 - Do not exceed 5 active branch orchestrator agents.

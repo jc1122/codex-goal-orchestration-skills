@@ -15,6 +15,8 @@ The branch runtime receives:
 
 The main orchestrator already created the integration worktree. The branch orchestrator may create worker child worktrees from that branch.
 
+Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer packet scripts. Worker/reviewer packet directories must be absolute paths under the prepared bundle's `workers/` or `reviewers/` directory. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
+
 ## Worker Model Policy
 
 Use this exact worker preference:

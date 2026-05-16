@@ -46,4 +46,4 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 4. Runtime bootstrap checks that required skills and scripts are available before prompt audit.
 5. The main orchestrator launches branch sessions that use `goal-branch-orchestrator`.
 
-The runtime enforces skill availability bootstrap, prompt audit before branch work, branch waves, and a hard limit of 5 active branch orchestrator agents.
+The runtime enforces skill availability bootstrap, reproducible manifest paths, prompt audit before branch work, branch waves, and a hard limit of 5 active branch orchestrator agents. Bundle prompt/status/review paths are relative to the bundle root; worktree paths are relative to the repository root.

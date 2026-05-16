@@ -52,6 +52,7 @@ Confirm:
 - the prompt audit file says `status == "pass"` and `can_start == true`;
 - the branch prompt is the assigned prompt;
 - the branch prompt has an actionable, falsifiable DoD.
+- assigned prompt, status, review, worker, and reviewer packet paths are absolute or are resolved from the bundle root before use.
 
 If any check fails, do not launch workers. Return `blocked`.
 
@@ -76,7 +77,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --worktree /absolute/path/to/.worktrees/<branch-name>-W01 \
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/workers \
   --owned-file src/example.py \
-  --context-file branches/B01.prompt.md
+  --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
 The generated worker launcher uses `gpt-5.3-codex-spark` first and falls back to `gpt-5.4-mini` only if no status was produced and the worker worktree stayed clean. If Spark leaves dirty partial work without a status file, the launcher refuses fallback and writes `fallback.blocked.txt`.
@@ -92,7 +93,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --branch <branch-name> \
   --worktree /absolute/path/to/.worktrees/<branch-name> \
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/reviewers \
-  --context-file branches/B01.prompt.md
+  --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
 Reviewer launchers use `gpt-5.5` first and fall back to `gpt-5.4`, read-only.

@@ -18,7 +18,7 @@ Options:
   --dest <dir>   Install destination. Defaults to $CODEX_HOME/skills or ~/.codex/skills.
   --list         List bundled skills without installing.
   --dry-run      Print planned installs without copying.
-  --force        Accepted for explicit overwrite intent; installs already overwrite matching files.
+  --force        Accepted for explicit overwrite intent; matching skill dirs are replaced.
   -h, --help     Show help.
 `;
 }
@@ -65,6 +65,24 @@ function bundledSkills() {
     .sort();
 }
 
+function isSameOrInside(candidate, parent) {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function validateDestRoot(destRoot) {
+  const resolved = path.resolve(destRoot);
+  if (resolved === path.parse(resolved).root) {
+    throw new Error("refusing to install skills directly into a filesystem root");
+  }
+
+  const realPackageRoot = fs.realpathSync(packageRoot);
+  if (isSameOrInside(resolved, realPackageRoot) || isSameOrInside(realPackageRoot, resolved)) {
+    throw new Error("refusing to install into the package source tree");
+  }
+  return resolved;
+}
+
 function copySkill(name, destRoot, dryRun) {
   const src = path.join(skillsRoot, name);
   const dest = path.join(destRoot, name);
@@ -73,6 +91,7 @@ function copySkill(name, destRoot, dryRun) {
     return;
   }
   fs.mkdirSync(destRoot, { recursive: true });
+  fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(src, dest, { recursive: true, force: true });
   console.log(`installed ${name} -> ${dest}`);
 }
@@ -92,7 +111,7 @@ function main() {
     return;
   }
 
-  const destRoot = path.resolve(args.dest || defaultDest());
+  const destRoot = validateDestRoot(args.dest || defaultDest());
   for (const skill of skills) {
     copySkill(skill, destRoot, args.dryRun);
   }

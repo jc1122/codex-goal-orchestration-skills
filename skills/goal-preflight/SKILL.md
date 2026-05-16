@@ -70,6 +70,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
   --repo-root /absolute/path/to/repo
 ```
 
+Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, and worktree paths are relative to the repository root. Do not use absolute paths, backslashes, or `..` in the brief.
+
 By default, output goes to:
 
 ```text

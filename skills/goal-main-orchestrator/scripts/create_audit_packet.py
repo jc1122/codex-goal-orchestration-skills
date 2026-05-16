@@ -6,7 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 def shell_quote(value: str) -> str:
@@ -18,6 +18,31 @@ def resolve(base: Path, value: str) -> Path:
     if not path.is_absolute():
         path = base / path
     return path.resolve()
+
+
+def require_relative_path(value: object, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"{field} must be a non-empty relative path")
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators, not backslashes: {value!r}")
+    if "//" in value:
+        raise SystemExit(f"{field} must not contain empty path segments: {value!r}")
+    if value.startswith("./") or "/./" in value or value.endswith("/."):
+        raise SystemExit(f"{field} must not contain '.' path segments: {value!r}")
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        raise SystemExit(f"{field} must be relative, not absolute: {value!r}")
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise SystemExit(f"{field} must not contain empty, '.', or '..' segments: {value!r}")
+    return path.as_posix()
+
+
+def resolve_bundle_path(base: Path, value: object, field: str) -> Path:
+    return resolve(base, require_relative_path(value, field))
+
+
+def resolve_repo_path(repo_root: Path, value: object, field: str) -> Path:
+    return resolve(repo_root, require_relative_path(value, field))
 
 
 def load_manifest(path: Path) -> dict:
@@ -67,7 +92,7 @@ def audit_schema() -> dict:
 
 def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
     base = manifest_path.parent
-    main_prompt = resolve(base, manifest["main_prompt"])
+    main_prompt = resolve_bundle_path(base, manifest["main_prompt"], "main_prompt")
     branches = manifest.get("branches", [])
     max_active = manifest.get("max_active_branch_agents", "missing")
     waves = manifest.get("waves", [])
@@ -76,11 +101,11 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
         branch_lines.append(
             "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}".format(
                 id=branch.get("id", ""),
-                prompt=resolve(base, branch.get("prompt", "")).as_posix(),
+                prompt=resolve_bundle_path(base, branch.get("prompt", ""), "prompt").as_posix(),
                 branch_name=branch.get("branch_name", ""),
-                worktree=resolve(repo_root, branch.get("worktree_path", "")).as_posix(),
-                status=resolve(base, branch.get("status_path", "")).as_posix(),
-                review=resolve(base, branch.get("review_path", "")).as_posix(),
+                worktree=resolve_repo_path(repo_root, branch.get("worktree_path", ""), "worktree_path").as_posix(),
+                status=resolve_bundle_path(base, branch.get("status_path", ""), "status_path").as_posix(),
+                review=resolve_bundle_path(base, branch.get("review_path", ""), "review_path").as_posix(),
             )
         )
 
@@ -133,8 +158,11 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+git -C {shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/dev/null
+
 run_model() {{
-  local model="$1"
+  local label="$1"
+  local model="$2"
   codex exec --ephemeral \\
     -m "$model" \\
     -C {shell_quote(repo_root.as_posix())} \\
@@ -143,10 +171,10 @@ run_model() {{
     --output-schema "$(pwd)/prompt-audit.schema.json" \\
     -o "$(pwd)/prompt-audit.json" \\
     - < "$(pwd)/prompt.md" \\
-    > "$(pwd)/events-${{model}}.jsonl" 2>&1
+    > "$(pwd)/events-${{label}}.jsonl" 2>&1
 }}
 
-if run_model {shell_quote(primary_model)}; then
+if run_model primary {shell_quote(primary_model)}; then
   exit 0
 fi
 
@@ -154,7 +182,7 @@ if [ -s "$(pwd)/prompt-audit.json" ]; then
   exit 1
 fi
 
-run_model {shell_quote(fallback_model)}
+run_model fallback {shell_quote(fallback_model)}
 """
 
 

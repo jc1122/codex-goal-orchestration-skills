@@ -40,6 +40,8 @@ If this fails, stop immediately and return `blocked` with the missing skill/scri
 
 After bootstrap passes, run prompt audit. Do not create branches, worktrees, branch orchestrators, workers, reviewers, commits, or merges before `prompt-audit.json` says audit passed and `can_start` is true.
 
+Use the bundle root and repository root from the bootloader. Manifest prompt/status/review paths are relative to the bundle root; worktree paths are relative to the repository root. Treat absolute paths, backslashes, and `..` traversal in manifest-owned paths as `blocked`.
+
 Use `scripts/create_audit_packet.py` to create the audit packet:
 
 ```bash

@@ -18,7 +18,7 @@ plans/orchestration/<job-id>/
 
 ## Manifest
 
-Paths are relative to the manifest directory unless absolute. `worktree_path` is interpreted by the runtime relative to the repository root.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid.
 
 ```json
 {
@@ -49,7 +49,7 @@ Paths are relative to the manifest directory unless absolute. `worktree_path` is
 ## Compatibility Rules
 
 - `goal-bootloader.md` invokes `$goal-main-orchestrator`.
-- `goal-bootloader.md` points to `job.manifest.json` and `main.prompt.md`.
+- `goal-bootloader.md` points to the bundle root, repository root, `job.manifest.json`, and `main.prompt.md`.
 - `goal-bootloader.md` is under 4000 characters.
 - `main.prompt.md` says prompt audit is first and branches cannot be created until audit passes.
 - `main.prompt.md` says no more than 5 branch orchestrator agents may be active.

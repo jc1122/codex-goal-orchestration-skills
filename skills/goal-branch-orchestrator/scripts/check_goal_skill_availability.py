@@ -41,10 +41,12 @@ def add_unique(paths: list[Path], path: Path | None) -> None:
         paths.append(expanded)
 
 
-def candidate_roots(cli_roots: list[str]) -> list[Path]:
+def candidate_roots(cli_roots: list[str], allow_fallback_roots: bool) -> list[Path]:
     roots: list[Path] = []
     for root in cli_roots:
         add_unique(roots, Path(root))
+    if cli_roots and not allow_fallback_roots:
+        return roots
     codex_home = os.environ.get("CODEX_HOME")
     if codex_home:
         add_unique(roots, Path(codex_home) / "skills")
@@ -106,14 +108,22 @@ def main() -> int:
     parser.add_argument("--skills-root", action="append", default=[])
     parser.add_argument("--require", action="append", choices=sorted(REQUIRED_FILES), default=[])
     parser.add_argument("--require-codex-cli", action="store_true")
+    parser.add_argument("--allow-fallback-roots", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
     required = args.require or sorted(REQUIRED_FILES)
-    roots = candidate_roots(args.skills_root)
+    roots = candidate_roots(args.skills_root, args.allow_fallback_roots)
     skills = {skill: find_skill(roots, skill) for skill in required}
     codex_cli = shutil.which("codex") if args.require_codex_cli else None
     blockers = [skill for skill, result in skills.items() if result["status"] != "pass"]
+    selected_roots = {
+        result["selected"]["root"]
+        for result in skills.values()
+        if result.get("selected")
+    }
+    if len(selected_roots) > 1:
+        blockers.append("mixed-skill-roots")
     if args.require_codex_cli and not codex_cli:
         blockers.append("codex-cli")
 
@@ -124,6 +134,7 @@ def main() -> int:
         "skills": skills,
         "codex_cli": codex_cli,
         "blockers": blockers,
+        "selected_roots": sorted(selected_roots),
     }
 
     if args.json:
@@ -136,6 +147,8 @@ def main() -> int:
                 print(f"{skill}: pass at {selected['root']}")
             else:
                 print(f"{skill}: missing")
+        if len(selected_roots) > 1:
+            print(f"selected roots: {', '.join(sorted(selected_roots))}")
         if args.require_codex_cli:
             print(f"codex-cli: {'pass at ' + codex_cli if codex_cli else 'missing'}")
     return 0 if result["status"] == "pass" else 2

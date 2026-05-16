@@ -6,11 +6,14 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 
 MAX_ACTIVE_BRANCH_AGENTS = 5
 DEFAULT_TOTAL_BRANCH_CAP = 25
+SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
+SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
+INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 
 
 def slug(value: str) -> str:
@@ -18,6 +21,60 @@ def slug(value: str) -> str:
     value = re.sub(r"[^a-z0-9]+", "-", value)
     value = re.sub(r"-+", "-", value).strip("-")
     return value or "goal-job"
+
+
+def require_safe_id(value: str, field: str) -> str:
+    if not SAFE_ID_RE.fullmatch(value):
+        raise SystemExit(f"{field} must match {SAFE_ID_RE.pattern}: {value!r}")
+    return value
+
+
+def require_safe_label(value: str, field: str) -> str:
+    if not SAFE_LABEL_RE.fullmatch(value):
+        raise SystemExit(f"{field} must match {SAFE_LABEL_RE.pattern}: {value!r}")
+    return value
+
+
+def require_branch_name(value: str, field: str = "branch_name") -> str:
+    if (
+        not value
+        or any(char in INVALID_BRANCH_CHARS for char in value)
+        or any(char.isspace() for char in value)
+        or value.startswith(("/", "."))
+        or value.endswith(("/", ".", ".lock"))
+        or ".." in value
+        or "@{" in value
+        or "//" in value
+    ):
+        raise SystemExit(f"{field} is not a safe git branch name: {value!r}")
+    return value
+
+
+def require_relative_path(value: str, field: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise SystemExit(f"{field} must be a non-empty relative path")
+    if "\\" in value:
+        raise SystemExit(f"{field} must use POSIX '/' separators, not backslashes: {value!r}")
+    if "//" in value:
+        raise SystemExit(f"{field} must not contain empty path segments: {value!r}")
+    if value.startswith("./") or "/./" in value or value.endswith("/."):
+        raise SystemExit(f"{field} must not contain '.' path segments: {value!r}")
+    path = PurePosixPath(value)
+    if path.is_absolute():
+        raise SystemExit(f"{field} must be relative, not absolute: {value!r}")
+    if any(part in {"", ".", ".."} for part in path.parts):
+        raise SystemExit(f"{field} must not contain empty, '.', or '..' segments: {value!r}")
+    return path.as_posix()
+
+
+def require_agent_limit(value: object) -> int:
+    try:
+        limit = int(value)
+    except (TypeError, ValueError) as exc:
+        raise SystemExit("max_active_branch_agents must be an integer from 1 to 5") from exc
+    if limit < 1 or limit > MAX_ACTIVE_BRANCH_AGENTS:
+        raise SystemExit("max_active_branch_agents must be an integer from 1 to 5")
+    return limit
 
 
 def branch_id(index: int) -> str:
@@ -92,33 +149,48 @@ def normalize_brief(brief: dict) -> dict:
     branches = []
     for idx, original in enumerate(brief["branches"], start=1):
         bid = original.get("id") or branch_id(idx)
-        bid = bid.upper()
-        branch_name = original.get("branch_name") or f"{job_id}-{bid.lower()}"
-        worktree_path = original.get("worktree_path") or f".worktrees/{branch_name}"
+        bid = require_safe_id(str(bid).upper(), "branch id")
+        branch_name = require_branch_name(original.get("branch_name") or f"{job_id}-{bid.lower()}")
+        worktree_path = require_relative_path(original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path")
         branch = {
             **original,
             "id": bid,
             "branch_name": branch_name,
             "worktree_path": worktree_path,
-            "prompt": original.get("prompt") or f"branches/{bid}.prompt.md",
-            "status_path": original.get("status_path") or f"branches/{bid}.status.json",
-            "review_path": original.get("review_path") or f"branches/{bid}.review.json",
+            "prompt": require_relative_path(original.get("prompt") or f"branches/{bid}.prompt.md", "prompt"),
+            "status_path": require_relative_path(original.get("status_path") or f"branches/{bid}.status.json", "status_path"),
+            "review_path": require_relative_path(original.get("review_path") or f"branches/{bid}.review.json", "review_path"),
         }
         branches.append(branch)
 
     waves = brief.get("waves") or chunk_waves(branches)
+    branch_ids = {branch["id"] for branch in branches}
+    seen_wave_ids = set()
+    seen_wave_branches = []
     wave_by_branch = {}
     for wave in waves:
+        wid = require_safe_label(str(wave["id"]), "wave id")
+        if wid in seen_wave_ids:
+            raise SystemExit(f"duplicate wave id: {wid}")
+        seen_wave_ids.add(wid)
+        wave["id"] = wid
         for bid in wave["branches"]:
+            if bid not in branch_ids:
+                raise SystemExit(f"wave {wid} references unknown branch id: {bid}")
+            if bid in wave_by_branch:
+                raise SystemExit(f"branch {bid} appears in more than one wave")
             wave_by_branch[bid] = wave["id"]
+            seen_wave_branches.append(bid)
+    if set(seen_wave_branches) != branch_ids:
+        raise SystemExit("waves must cover every branch exactly once")
     for branch in branches:
-        branch["wave"] = branch.get("wave") or wave_by_branch.get(branch["id"], wave_id(1))
+        branch["wave"] = wave_by_branch[branch["id"]]
 
     return {
         **brief,
         "job_id": job_id,
         "base_ref": brief.get("base_ref", "main"),
-        "max_active_branch_agents": int(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)),
+        "max_active_branch_agents": require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)),
         "branches": branches,
         "waves": waves,
     }
@@ -136,22 +208,24 @@ def render_branch_waves(waves: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def render_bootloader(bundle_dir: Path) -> str:
+def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     manifest = bundle_dir / "job.manifest.json"
     main_prompt = bundle_dir / "main.prompt.md"
     return f"""Use $goal-main-orchestrator.
 
 Prepared bundle:
+- Bundle root: {bundle_dir}
+- Repository root: {repo_root}
 - Manifest: {manifest}
 - Main prompt: {main_prompt}
 
-Read the manifest and main prompt first. Treat main.prompt.md as the runtime contract.
+Read the manifest and main prompt first. Treat main.prompt.md as the runtime contract. Do not infer paths from the current working directory; use the bundle root and repository root above.
 
 Mandatory bootstrap first: verify runtime skill availability before prompt audit. Resolve GOAL_SKILLS_ROOT from ${{CODEX_HOME:-$HOME/.codex}}/skills, falling back to $HOME/.agents/skills, then run check_goal_skill_availability.py for goal-main-orchestrator and goal-branch-orchestrator. If either skill or required script is unavailable, return blocked and ask the user to install the skills package.
 
 Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass and can_start=true.
 
-Respect max_active_branch_agents=5. Run branch waves sequentially. Keep at most 5 branch orchestrator agents active. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements.
+Respect max_active_branch_agents from job.manifest.json; never exceed 5. Run branch waves sequentially. Collect finished branch status/review artifacts and close finished branch orchestrator agents before launching replacements.
 
 Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.
 """
@@ -198,6 +272,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             goal=brief.get("goal", "Goal not supplied."),
             source_summary=brief.get("source_summary", "Source summary not supplied."),
             branch_waves=render_branch_waves(brief["waves"]),
+            max_active_branch_agents=brief["max_active_branch_agents"],
             merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
             cleanup_policy=brief.get("cleanup_policy", "Do not remove branches or worktrees unless explicitly authorized."),
             required_evidence=bullets(brief.get("required_evidence", [])),
@@ -225,7 +300,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             ),
         )
 
-    bootloader = render_bootloader(bundle_dir.resolve())
+    bootloader = render_bootloader(bundle_dir.resolve(), repo_root.resolve())
     write(bundle_dir / "goal-bootloader.md", bootloader)
     report = "\n".join(
         [
@@ -234,7 +309,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Bundle: {bundle_dir.resolve()}",
             f"Branches: {len(brief['branches'])}",
             f"Waves: {len(brief['waves'])}",
-            "Max active branch agents: 5",
+            f"Max active branch agents: {brief['max_active_branch_agents']}",
             "",
             "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
             "Run `lint_goal_bundle.py` before launching `/goal`.",
