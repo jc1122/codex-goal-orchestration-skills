@@ -1,0 +1,24 @@
+# Actionability Rubric
+
+Ask the user for clarification before writing final files if any of these are missing and cannot be inferred safely:
+
+- `job_id`
+- base ref
+- merge policy
+- cleanup policy
+- top-level DoD
+- branch objective or branch scope
+- required tests/validators
+- acceptance evidence
+- whether unresolved/negative/probe-only labels must be preserved
+
+Do not ask when a conservative default is clear:
+
+- base ref defaults to `main`;
+- max active branch agents defaults to 5;
+- total branch cap defaults to 25;
+- normal jobs should use 3-5 branches;
+- runtime branch creation belongs to `goal-main-orchestrator`;
+- prompt audit is mandatory and fail-closed.
+
+Every DoD item should be falsifiable by a file, JSON status, command result, review verdict, or git state.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Main Orchestrator"
+  short_description: "Run audited branch orchestration from /goal."
+  default_prompt: "Use $goal-main-orchestrator to run a prepared job bundle after the user starts /goal."

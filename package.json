@@ -1,0 +1,22 @@
+{
+  "name": "codex-goal-orchestration-skills",
+  "version": "0.1.0",
+  "description": "Codex skills for goal preflight, main orchestration, and branch orchestration.",
+  "license": "MIT",
+  "bin": {
+    "codex-goal-orchestration-skills": "./bin/install-goal-skills.js",
+    "install-codex-goal-skills": "./bin/install-goal-skills.js"
+  },
+  "files": [
+    "bin/",
+    "skills/",
+    "README.md"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jc1122/codex-goal-orchestration-skills.git"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
