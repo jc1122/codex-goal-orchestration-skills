@@ -6,6 +6,12 @@ Install three Codex skills for file-backed `/goal` orchestration:
 - `goal-main-orchestrator`
 - `goal-branch-orchestrator`
 
+These are packaged in one repository and reference each other by skill name, not by separate repository URLs:
+
+- `goal-preflight` generates bootloaders for `$goal-main-orchestrator`.
+- `goal-main-orchestrator` dispatches `$goal-branch-orchestrator`.
+- `goal-branch-orchestrator` creates focused CLI worker/reviewer packets.
+
 ## Install
 
 ```bash
@@ -37,6 +43,7 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 1. Use `goal-preflight` to turn a roadmap, diagnosis, report, or rough brief into a linted goal bundle.
 2. Paste the generated `goal-bootloader.md` text into Copilot `/goal`.
 3. The `/goal` runtime uses `goal-main-orchestrator`.
-4. The main orchestrator launches branch sessions that use `goal-branch-orchestrator`.
+4. Runtime bootstrap checks that required skills and scripts are available before prompt audit.
+5. The main orchestrator launches branch sessions that use `goal-branch-orchestrator`.
 
-The runtime enforces prompt audit first, branch waves, and a hard limit of 5 active branch orchestrator agents.
+The runtime enforces skill availability bootstrap, prompt audit before branch work, branch waves, and a hard limit of 5 active branch orchestrator agents.

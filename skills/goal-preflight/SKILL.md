@@ -13,8 +13,9 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
 
 ## Workflow
 
-1. Read the source report, diagnosis, roadmap, or goal brief.
-2. Extract or synthesize:
+1. Run the skill availability bootstrap below.
+2. Read the source report, diagnosis, roadmap, or goal brief.
+3. Extract or synthesize:
    - `job_id`;
    - top-level goal;
    - base ref;
@@ -22,11 +23,29 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - branch list or independent branch decomposition;
    - Spark-sized work items per branch;
    - falsifiable DoD and evidence requirements.
-3. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
-4. Write a structured brief JSON.
-5. Generate the bundle with `scripts/create_goal_bundle.py`.
-6. Run deterministic lint with `scripts/lint_goal_bundle.py`.
-7. Present the exact `goal-bootloader.md` text in the final response.
+4. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
+5. Write a structured brief JSON.
+6. Generate the bundle with `scripts/create_goal_bundle.py`.
+7. Run deterministic lint with `scripts/lint_goal_bundle.py`.
+8. Present the exact `goal-bootloader.md` text in the final response.
+
+## Skill Availability Bootstrap
+
+Every run starts by confirming the three goal skills are installed in the same discoverable skills root and that their required scripts exist. Resolve the skills root once:
+
+```bash
+GOAL_SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+if [ ! -d "$GOAL_SKILLS_ROOT/goal-preflight" ] && [ -d "$HOME/.agents/skills/goal-preflight" ]; then
+  GOAL_SKILLS_ROOT="$HOME/.agents/skills"
+fi
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/check_goal_skill_availability.py" \
+  --skills-root "$GOAL_SKILLS_ROOT" \
+  --require goal-preflight \
+  --require goal-main-orchestrator \
+  --require goal-branch-orchestrator
+```
+
+If this fails, stop before writing prompt files and tell the user to install or repair the skills package.
 
 ## Parallelization Rules
 
@@ -46,7 +65,7 @@ Read `references/parallelization-rules.md` for branch decomposition guidance.
 Create a structured brief JSON and run:
 
 ```bash
-python3 /home/jakub/.agents/skills/goal-preflight/scripts/create_goal_bundle.py \
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
   --brief /absolute/path/to/brief.json \
   --repo-root /absolute/path/to/repo
 ```
@@ -60,14 +79,14 @@ plans/orchestration/<job-id>/
 Run lint:
 
 ```bash
-python3 /home/jakub/.agents/skills/goal-preflight/scripts/lint_goal_bundle.py \
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py" \
   --bundle-dir /absolute/path/to/plans/orchestration/<job-id>
 ```
 
 Print the bootloader:
 
 ```bash
-python3 /home/jakub/.agents/skills/goal-preflight/scripts/render_goal_bootloader.py \
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py" \
   --bundle-dir /absolute/path/to/plans/orchestration/<job-id>
 ```
 

@@ -85,7 +85,12 @@ def lint(bundle_dir: Path) -> dict:
         defect(str(main_path), "critical", "main prompt is missing")
     else:
         main_text = main_path.read_text(encoding="utf-8")
-        for phrase in ["prompt audit", "max_active_branch_agents=5", "close finished branch orchestrator agents"]:
+        for phrase in [
+            "skill availability bootstrap",
+            "prompt audit",
+            "max_active_branch_agents=5",
+            "close finished branch orchestrator agents",
+        ]:
             if phrase.lower() not in main_text.lower():
                 defect(str(main_path), "critical", f"main prompt missing required phrase: {phrase}")
         if not has_dod(main_text):
@@ -98,7 +103,13 @@ def lint(bundle_dir: Path) -> dict:
         bootloader = bootloader_path.read_text(encoding="utf-8")
         if len(bootloader) > 4000:
             defect("goal-bootloader.md", "critical", "bootloader exceeds 4000 characters")
-        for phrase in ["$goal-main-orchestrator", "job.manifest.json", "main.prompt.md"]:
+        for phrase in [
+            "$goal-main-orchestrator",
+            "job.manifest.json",
+            "main.prompt.md",
+            "skill availability",
+            "check_goal_skill_availability.py",
+        ]:
             if phrase not in bootloader:
                 defect("goal-bootloader.md", "critical", f"bootloader missing phrase: {phrase}")
 
@@ -112,7 +123,14 @@ def lint(bundle_dir: Path) -> dict:
             defect(str(prompt_path), "critical", f"branch prompt missing for {branch.get('id')}")
             continue
         text = prompt_path.read_text(encoding="utf-8")
-        for phrase in ["Objective", "Scope", "Work Items", "Reviewer Requirement", "Stop Conditions"]:
+        for phrase in [
+            "Objective",
+            "Scope",
+            "Work Items",
+            "Reviewer Requirement",
+            "Bootstrap Requirement",
+            "Stop Conditions",
+        ]:
             if phrase.lower() not in text.lower():
                 defect(str(prompt_path), "major", f"branch prompt missing section: {phrase}")
         if not has_dod(text):

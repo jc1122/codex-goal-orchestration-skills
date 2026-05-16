@@ -11,21 +11,39 @@ Act as the runtime main orchestrator only. Do not create `/goal` bootloader text
 
 Your job is:
 
-1. Read the prepared `job.manifest.json` and `main.prompt.md`.
-2. Dispatch a read-only heavy-model prompt auditor before any branch work starts.
-3. Create branch integration worktrees only after the audit passes, one wave at a time when waves are present.
-4. Launch branch orchestrators for the audited branch prompt files without exceeding the hard active-agent limit.
-5. Review branch status/review artifacts against `main.prompt.md` DoD.
-6. Return `pass` only when the DoD is falsifiably satisfied.
+1. Run the skill availability bootstrap.
+2. Read the prepared `job.manifest.json` and `main.prompt.md`.
+3. Dispatch a read-only heavy-model prompt auditor before any branch work starts.
+4. Create branch integration worktrees only after the audit passes, one wave at a time when waves are present.
+5. Launch branch orchestrators for the audited branch prompt files without exceeding the hard active-agent limit.
+6. Review branch status/review artifacts against `main.prompt.md` DoD.
+7. Return `pass` only when the DoD is falsifiably satisfied.
+
+## Skill Availability Bootstrap
+
+Every `/goal` run starts by checking runtime skill availability before prompt audit, branch creation, or agent dispatch. Resolve the skills root once:
+
+```bash
+GOAL_SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+if [ ! -d "$GOAL_SKILLS_ROOT/goal-main-orchestrator" ] && [ -d "$HOME/.agents/skills/goal-main-orchestrator" ]; then
+  GOAL_SKILLS_ROOT="$HOME/.agents/skills"
+fi
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_goal_skill_availability.py" \
+  --skills-root "$GOAL_SKILLS_ROOT" \
+  --require goal-main-orchestrator \
+  --require goal-branch-orchestrator
+```
+
+If this fails, stop immediately and return `blocked` with the missing skill/script names. Do not run prompt audit or create worktrees until bootstrap passes.
 
 ## Mandatory Start
 
-Run prompt audit first. Do not create branches, worktrees, branch orchestrators, workers, reviewers, commits, or merges before `prompt-audit.json` says audit passed and `can_start` is true.
+After bootstrap passes, run prompt audit. Do not create branches, worktrees, branch orchestrators, workers, reviewers, commits, or merges before `prompt-audit.json` says audit passed and `can_start` is true.
 
 Use `scripts/create_audit_packet.py` to create the audit packet:
 
 ```bash
-python3 /home/jakub/.agents/skills/goal-main-orchestrator/scripts/create_audit_packet.py \
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_audit_packet.py" \
   --manifest /absolute/path/to/job.manifest.json \
   --repo-root /absolute/path/to/repo \
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/audit
@@ -40,7 +58,7 @@ Read `references/prompt-audit-contract.md` if the audit fails or if the prepared
 After audit passes, create branch integration worktrees from the manifest. If the manifest has `waves`, render and run one wave at a time. Use `scripts/render_branch_worktree_commands.py` to print the exact `git worktree add` commands:
 
 ```bash
-python3 /home/jakub/.agents/skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py \
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py" \
   --manifest /absolute/path/to/job.manifest.json \
   --repo-root /absolute/path/to/repo \
   --wave wave-01 \
@@ -78,6 +96,7 @@ Track active branch orchestrator agent ids/processes. As each branch finishes, c
 
 Before returning `pass`, verify:
 
+- skill availability bootstrap passed for `goal-main-orchestrator` and `goal-branch-orchestrator`;
 - prompt audit passed;
 - every branch listed in the manifest has a status file;
 - every branch requiring review has a review file;

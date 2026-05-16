@@ -14,7 +14,8 @@ Base ref: {base_ref}
 ## Runtime Rules
 
 - Use $goal-main-orchestrator.
-- Run prompt audit first.
+- Run skill availability bootstrap before prompt audit.
+- Run prompt audit before branch work.
 - Do not create branch worktrees until prompt audit passes.
 - Respect max_active_branch_agents=5.
 - Run branch waves sequentially.
@@ -40,4 +41,5 @@ Base ref: {base_ref}
 
 ## Definition of Done
 
+- Skill availability bootstrap passed for runtime skills before prompt audit.
 {final_dod}
