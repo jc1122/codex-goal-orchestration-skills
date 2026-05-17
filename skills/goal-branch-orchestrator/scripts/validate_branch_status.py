@@ -160,6 +160,18 @@ def load_lite_validator(defects: list[str]):
     return module
 
 
+def lite_validation_command(advice_path: Path, inputs_path: Path) -> str:
+    validator_path = Path(__file__).resolve().parent / "validate_lite_advice.py"
+    return shlex.join([
+        "python3",
+        validator_path.as_posix(),
+        "--advice",
+        advice_path.as_posix(),
+        "--inputs",
+        inputs_path.as_posix(),
+    ])
+
+
 def discover_unrecorded_lite_packets(
     defects: list[str],
     path: str,
@@ -191,12 +203,15 @@ def discover_unrecorded_lite_packets(
             packet_dir.name.startswith(branch_prefix)
             or packet_id.startswith(branch_prefix)
         )
-        relevant = branch_scoped and (
+        branch_lite = (
             purpose in BRANCH_LITE_PURPOSES
             or skill == "goal-branch-orchestrator"
-            or advice_path.exists()
+            or branch_scoped
         )
-        if relevant and packet_id not in reported_ids:
+        if branch_lite and not branch_scoped:
+            defect(defects, path, f"branch Lite packet is not scoped to {branch_prefix}: {packet_id} at {packet_dir}")
+            continue
+        if branch_lite and packet_id not in reported_ids:
             defect(defects, path, f"unrecorded manifest-owned branch Lite packet: {packet_id} at {packet_dir}")
 
 
@@ -270,8 +285,6 @@ def validate_lite_advice_entries(
             defect(defects, f"{item_path}.validation_defects", "must explain failed Lite validation")
         source_files = validate_lite_source_files(defects, data.get("source_files"), f"{item_path}.source_files")
         validation_command = require_string(defects, data.get("validation_command"), f"{item_path}.validation_command")
-        if validation_command and not all(token in validation_command for token in ["validate_lite_advice.py", "--advice", "--inputs"]):
-            defect(defects, f"{item_path}.validation_command", "must record validate_lite_advice.py with --advice and --inputs")
         require_string(defects, data.get("reason"), f"{item_path}.reason")
         if not (advice_path_value and inputs_path_value and is_absolute_path(advice_path_value) and is_absolute_path(inputs_path_value)):
             continue
@@ -285,6 +298,9 @@ def validate_lite_advice_entries(
                 defect(defects, f"{item_path}.advice_path", f"must be manifest-owned Lite advice path: {expected_advice}")
             if inputs_path != expected_inputs:
                 defect(defects, f"{item_path}.inputs_path", f"must be manifest-owned Lite inputs path: {expected_inputs}")
+            expected_command = lite_validation_command(expected_advice, expected_inputs)
+            if validation_command and validation_command != expected_command:
+                defect(defects, f"{item_path}.validation_command", f"must be exactly: {expected_command}")
         if not advice_path.exists():
             defect(defects, f"{item_path}.advice_path", f"artifact does not exist: {advice_path}")
             continue

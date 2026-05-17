@@ -335,7 +335,7 @@ data = {{
     "summary": message,
     "blockers": [message],
     "commands_run": [
-        f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
+        f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
     ],
 }}
 output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")

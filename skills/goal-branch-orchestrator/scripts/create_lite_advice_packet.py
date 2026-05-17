@@ -14,6 +14,7 @@ from pathlib import Path, PurePosixPath
 
 
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+BRANCH_LITE_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*-L[A-Za-z0-9_.-]+$")
 LITE_MODEL = "gemini-3.1-flash-lite-preview"
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "plan"
@@ -335,7 +336,7 @@ data = {{
     "summary": message,
     "blockers": [message],
     "commands_run": [
-        f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
+        f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
     ],
 }}
 output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
@@ -591,6 +592,9 @@ def main() -> int:
     args = parser.parse_args()
 
     packet_id = require_safe_label(args.packet_id, "packet-id")
+    skill = current_skill_name()
+    if skill == "goal-branch-orchestrator" and not BRANCH_LITE_PACKET_RE.fullmatch(packet_id):
+        raise SystemExit("branch Lite packet-id must be scoped as <branch-id>-L<suffix>")
     base_dir = resolve_absolute_path(args.base_dir, "--base-dir", must_exist=True)
     if not base_dir.is_dir():
         raise SystemExit(f"--base-dir must be a directory: {base_dir}")
@@ -617,7 +621,6 @@ def main() -> int:
     extra = task_file.read_text(encoding="utf-8") if task_file else ""
     task_sha256 = sha256_text(extra)
     gemini_path, gemini_version, gemini_sha256 = resolve_gemini()
-    skill = current_skill_name()
     prompt_text = prompt_for(
         packet_id,
         args.purpose,

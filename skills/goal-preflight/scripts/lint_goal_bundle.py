@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import re
+import shlex
 from pathlib import Path, PurePosixPath
 
 
@@ -108,6 +109,18 @@ def load_json_artifact(path: Path) -> object:
         return json.load(handle)
 
 
+def lite_validation_command(advice_path: Path, inputs_path: Path) -> str:
+    validator_path = Path(__file__).resolve().parent / "validate_lite_advice.py"
+    return shlex.join([
+        "python3",
+        validator_path.as_posix(),
+        "--advice",
+        advice_path.as_posix(),
+        "--inputs",
+        inputs_path.as_posix(),
+    ])
+
+
 def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) -> None:
     records = manifest.get("preflight_lite_advice")
     if not isinstance(records, list):
@@ -173,12 +186,13 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         if validation_status == "failed" and not validation_defects:
             defect("job.manifest.json", "critical", f"{path}.validation_defects must explain failed Lite validation")
         validation_command = record.get("validation_command")
-        if not isinstance(validation_command, str) or not all(token in validation_command for token in ["validate_lite_advice.py", "--advice", "--inputs"]):
-            defect("job.manifest.json", "critical", f"{path}.validation_command must record validate_lite_advice.py with --advice and --inputs")
         if not isinstance(record.get("reason"), str) or not record.get("reason", "").strip():
             defect("job.manifest.json", "critical", f"{path}.reason must be a non-empty string")
         advice_path = bundle_dir / expected_advice
         inputs_path = bundle_dir / expected_inputs
+        expected_command = lite_validation_command(advice_path, inputs_path)
+        if not isinstance(validation_command, str) or validation_command != expected_command:
+            defect("job.manifest.json", "critical", f"{path}.validation_command must be exactly: {expected_command}")
         if not advice_path.exists():
             defect("job.manifest.json", "critical", f"{path}.advice_path artifact does not exist: {advice_path}")
             continue
