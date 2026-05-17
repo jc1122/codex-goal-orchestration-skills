@@ -10,29 +10,26 @@ import shlex
 from pathlib import Path
 
 
+def _load_path_rules():
+    path = Path(__file__).resolve().parent / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PATH_RULES = _load_path_rules()
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
 LITE_VALIDATION_STATUSES = {"pass", "failed"}
-SAFE_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+SAFE_PACKET_RE = PATH_RULES.SAFE_PACKET_LABEL_RE
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-PORCELAIN_PREFIX_RE = re.compile(r"^[ MADRCU?!]{2} ")
-
-
-def is_strict_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
-
-
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
+is_strict_int = PATH_RULES.is_strict_int
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
 
 
 def load_json(path: Path) -> object:
@@ -119,28 +116,8 @@ def validate_base_range_diff_check(defects: list[str], commands_value: object, p
         defect(defects, path, f"must include base-range whitespace check: git diff --check {base_ref}...HEAD")
 
 
-def is_repo_relative_path(value: str, *, reject_porcelain: bool = False) -> bool:
-    path = Path(value)
-    return not (
-        "\\" in value
-        or value.startswith("/")
-        or value.startswith("./")
-        or value == "."
-        or "/./" in value
-        or value.endswith("/.")
-        or "//" in value
-        or any(part in {"", ".", ".."} for part in path.parts)
-        or (reject_porcelain and PORCELAIN_PREFIX_RE.match(value) is not None)
-    )
-
-
-def is_absolute_path(value: str) -> bool:
-    path = Path(value)
-    return not (
-        "\\" in value
-        or not path.is_absolute()
-        or ".." in path.parts
-    )
+is_repo_relative_path = PATH_RULES.is_repo_relative_path
+is_absolute_path = PATH_RULES.is_absolute_path
 
 
 def validate_lite_source_files(

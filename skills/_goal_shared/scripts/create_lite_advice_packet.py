@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import shutil
 import subprocess
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 
-SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 BRANCH_LITE_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*-L[A-Za-z0-9_.-]+$")
 LITE_MODEL = "gemini-3.1-flash-lite-preview"
 GEMINI_COMMAND = "gemini"
@@ -38,10 +38,22 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def require_safe_label(value: str, field: str) -> str:
-    if not SAFE_LABEL_RE.fullmatch(value):
-        raise SystemExit(f"{field} must match {SAFE_LABEL_RE.pattern}: {value!r}")
-    return value
+def _load_path_rules():
+    path = Path(__file__).resolve().parent / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PATH_RULES = _load_path_rules()
+require_safe_label = PATH_RULES.require_safe_packet_label
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
+repo_relative_path = PATH_RULES.repo_relative_path
 
 
 def current_skill_name() -> str:
@@ -64,31 +76,6 @@ def allowed_purposes() -> set[str]:
     if skill not in SKILL_PURPOSES:
         raise SystemExit("Lite advice scripts must be run through a goal skill wrapper, not _goal_shared directly.")
     return SKILL_PURPOSES[skill]
-
-
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
-
-
-def repo_relative_path(path: Path, base_dir: Path, field: str) -> str:
-    try:
-        relative = path.resolve().relative_to(base_dir.resolve())
-    except ValueError as exc:
-        raise SystemExit(f"{field} must be inside --base-dir: {path}") from exc
-    text = relative.as_posix()
-    parts = PurePosixPath(text).parts
-    if not text or any(part in {"", ".", ".."} for part in parts):
-        raise SystemExit(f"{field} resolved to an unsafe relative path: {text!r}")
-    return text
 
 
 def sha256_file(path: Path) -> str:

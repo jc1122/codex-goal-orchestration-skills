@@ -4,14 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
-import re
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 
-SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
-INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
 GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
@@ -34,56 +32,32 @@ GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
 MAX_EMBEDDED_CONTEXT_CHARS = 120000
 
 
+def _load_path_rules():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PATH_RULES = _load_path_rules()
+require_safe_label = PATH_RULES.require_safe_packet_label
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
+safe_branch_name = PATH_RULES.safe_branch_name
+
+
 def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
-
-
-def require_safe_label(value: str, field: str) -> str:
-    if not SAFE_LABEL_RE.fullmatch(value):
-        raise SystemExit(f"{field} must match {SAFE_LABEL_RE.pattern}: {value!r}")
-    return value
-
-
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
-
-
-def safe_branch_name(value: object) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    return not (
-        any(char in INVALID_BRANCH_CHARS for char in value)
-        or any(char.isspace() for char in value)
-        or value.startswith(("/", "."))
-        or value.endswith(("/", ".", ".lock"))
-        or ".." in value
-        or "@{" in value
-        or "//" in value
-    )
 
 
 def normalize_owned_paths(values: list[str]) -> list[str]:
     normalized = []
     for value in values:
-        if "\\" in value:
-            raise SystemExit(f"owned paths must use POSIX '/' separators: {value!r}")
-        if "//" in value:
-            raise SystemExit(f"owned paths must not contain empty path segments: {value!r}")
-        if value.startswith("./") or "/./" in value or value.endswith("/."):
-            raise SystemExit(f"owned paths must not contain '.' path segments: {value!r}")
-        path = PurePosixPath(value)
-        if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-            raise SystemExit(f"owned paths must be repo-relative without traversal: {value!r}")
-        normalized.append(path.as_posix())
+        normalized.append(PATH_RULES.require_relative_path(value, "owned paths"))
     return normalized
 
 

@@ -6,82 +6,45 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
-import re
 import shlex
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 
 MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
-SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
-SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
-INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
 PREFLIGHT_LITE_PURPOSES = {"preflight-decomposition", "lint-repair"}
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
 LITE_VALIDATION_STATUSES = {"pass", "failed"}
 
 
-def is_strict_int(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool)
+def _load_path_rules():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PATH_RULES = _load_path_rules()
+SAFE_ID_RE = PATH_RULES.SAFE_ID_RE
+SAFE_LABEL_RE = PATH_RULES.SAFE_LABEL_RE
+is_strict_int = PATH_RULES.is_strict_int
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
+resolve = PATH_RULES.resolve
+relative_path_defect = PATH_RULES.relative_path_defect
+safe_branch_name = PATH_RULES.safe_branch_name
 
 
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
-
-
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
-
-
-def resolve(base: Path, value: str) -> Path:
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
-
-
-def relative_path_defect(value: object, field: str) -> str | None:
-    if not isinstance(value, str) or not value:
-        return f"{field} must be a non-empty relative path"
-    if "\\" in value:
-        return f"{field} must use POSIX '/' separators, not backslashes"
-    if "//" in value:
-        return f"{field} must not contain empty path segments"
-    if value.startswith("./") or "/./" in value or value.endswith("/."):
-        return f"{field} must not contain '.' path segments"
-    path = PurePosixPath(value)
-    if path.is_absolute():
-        return f"{field} must be relative, not absolute"
-    if any(part in {"", ".", ".."} for part in path.parts):
-        return f"{field} must not contain empty, '.', or '..' segments"
-    return None
-
-
-def safe_branch_name(value: object) -> bool:
-    if not isinstance(value, str) or not value:
-        return False
-    return not (
-        any(char in INVALID_BRANCH_CHARS for char in value)
-        or any(char.isspace() for char in value)
-        or value.startswith(("/", "."))
-        or value.endswith(("/", ".", ".lock"))
-        or ".." in value
-        or "@{" in value
-        or "//" in value
-    )
 
 
 def has_dod(text: str) -> bool:

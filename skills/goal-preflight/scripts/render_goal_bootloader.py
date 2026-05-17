@@ -4,10 +4,27 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 from pathlib import Path
 
 
 MAX_ACTIVE_BRANCH_AGENTS = 4
+
+
+def _load_path_rules():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PATH_RULES = _load_path_rules()
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
 
 
 def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
@@ -35,19 +52,6 @@ Parallelism is the default. Respect max_active_branch_agents from job.manifest.j
 
 Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.
 """
-
-
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
 
 
 def main() -> int:

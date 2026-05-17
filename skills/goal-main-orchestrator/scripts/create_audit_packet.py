@@ -4,9 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 
 AUDIT_MODEL = "gpt-5.5"
@@ -17,41 +18,22 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
+def _load_path_rules():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def resolve(base: Path, value: str) -> Path:
-    path = Path(value).expanduser()
-    if not path.is_absolute():
-        path = base / path
-    return path.resolve()
-
-
-def require_relative_path(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value:
-        raise SystemExit(f"{field} must be a non-empty relative path")
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators, not backslashes: {value!r}")
-    if "//" in value:
-        raise SystemExit(f"{field} must not contain empty path segments: {value!r}")
-    if value.startswith("./") or "/./" in value or value.endswith("/."):
-        raise SystemExit(f"{field} must not contain '.' path segments: {value!r}")
-    path = PurePosixPath(value)
-    if path.is_absolute():
-        raise SystemExit(f"{field} must be relative, not absolute: {value!r}")
-    if any(part in {"", ".", ".."} for part in path.parts):
-        raise SystemExit(f"{field} must not contain empty, '.', or '..' segments: {value!r}")
-    return path.as_posix()
+PATH_RULES = _load_path_rules()
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
+resolve = PATH_RULES.resolve
+require_relative_path = PATH_RULES.require_relative_path
 
 
 def resolve_bundle_path(base: Path, value: object, field: str) -> Path:

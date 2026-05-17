@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import subprocess
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 
 LITE_MODEL = "gemini-3.1-flash-lite-preview"
@@ -41,21 +42,25 @@ SKILL_PURPOSES = {
     },
 }
 RISK_LABELS = {"unsupported", "unresolved", "negative", "weakened", "probe-only", "blocked"}
-SAFE_LABEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
-    if "\\" in value:
-        raise SystemExit(f"{field} must use POSIX '/' separators: {value!r}")
-    expanded = Path(value).expanduser()
-    if not expanded.is_absolute():
-        raise SystemExit(f"{field} must be an absolute path: {value!r}")
-    if ".." in expanded.parts:
-        raise SystemExit(f"{field} must not contain '..' traversal: {value!r}")
-    if must_exist and not expanded.exists():
-        raise SystemExit(f"{field} does not exist: {expanded}")
-    return expanded.resolve(strict=must_exist)
+def _load_path_rules():
+    path = Path(__file__).resolve().parent / "path_rules.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared path rules: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared path rules: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+PATH_RULES = _load_path_rules()
+SAFE_LABEL_RE = PATH_RULES.SAFE_PACKET_LABEL_RE
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
+is_relative_path = PATH_RULES.is_repo_relative_path
 
 
 def current_skill_name() -> str:
@@ -197,20 +202,6 @@ def require_string_list(defects: list[str], value: object, path: str, *, min_ite
     if len(result) < min_items:
         defect(defects, path, f"must contain at least {min_items} item(s)")
     return result
-
-
-def is_relative_path(value: str) -> bool:
-    path = PurePosixPath(value)
-    return not (
-        "\\" in value
-        or value.startswith("/")
-        or value.startswith("./")
-        or value == "."
-        or "/./" in value
-        or value.endswith("/.")
-        or "//" in value
-        or any(part in {"", ".", ".."} for part in path.parts)
-    )
 
 
 def validate_live_sources(defects: list[str], inputs: dict | None) -> None:
