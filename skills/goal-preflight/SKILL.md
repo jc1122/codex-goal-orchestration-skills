@@ -1,6 +1,6 @@
 ---
 name: goal-preflight
-description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize independent branch waves and worker-sized work items when missing, enforce reproducible manifest paths, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
+description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize rolling-scheduled branch groups and worker-sized work items when missing, enforce reproducible manifest paths, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
 # Goal Preflight
@@ -22,7 +22,7 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - base ref;
    - merge and cleanup policy;
    - artifact preservation policy;
-   - branch list or independent branch decomposition that maximizes safe parallelism;
+   - branch list or independent branch decomposition that maximizes safe rolling parallelism;
    - `serial_reason` when the job cannot be split into at least two branches;
    - 1 to 4 bounded worker-sized work items per branch;
    - falsifiable DoD and evidence requirements.
@@ -88,13 +88,14 @@ Parallelism is the default. When the source material does not define branches/wo
 
 - split branches by independent outcomes;
 - prefer 3-4 branches for normal jobs;
-- allow up to 20 branches as 5 waves of up to 4 branches;
-- minimize shared-file overlap within a wave;
+- allow up to 20 branches as 5 scheduling groups of up to 4 branches;
+- minimize shared-file overlap among branches likely to run together;
+- use branch-level `depends_on` only for explicit prior-branch dependencies that must complete before a branch can start;
 - use 1 to 4 work items per branch, and make every work item worker-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
 - make independent work items parallel by default so branch orchestrators dispatch them concurrently up to the branch worker cap;
-- include the hard runtime rule that at most 4 branch orchestrator agents may be active and finished agents must be closed before launching replacements;
+- include the hard runtime rule that at most 4 branch orchestrator agents may be active, slots should stay saturated with eligible branches, and finished agents must be closed before launching replacements;
 - require `serial_reason` for a single-branch bundle;
-- require `parallelization_rationale` or `serial_reason` for underfilled non-final waves or any `max_active_branch_agents` below 4.
+- require `parallelization_rationale` or `serial_reason` for any `max_active_branch_agents` below 4.
 
 Read `references/parallelization-rules.md` for branch decomposition guidance.
 

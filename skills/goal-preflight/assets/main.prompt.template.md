@@ -21,7 +21,10 @@ Base ref: {base_ref}
 - Do not create branch worktrees until prompt audit passes and `prompt-audit.json` pins this manifest and repository root.
 - Parallelism is the default; serialization must be justified in `job.manifest.json`.
 - Respect max_active_branch_agents={max_active_branch_agents}; it must never exceed 4.
-- Launch all branches in each wave concurrently up to max_active_branch_agents, then run waves sequentially.
+- Saturate branch orchestrator slots up to max_active_branch_agents.
+- Launch the next eligible branch as soon as capacity is freed; do not wait for a whole wave to finish.
+- Defer a branch only while one of its manifest `depends_on` branch ids is incomplete.
+- Treat waves as scheduling/order groups only, not as implicit dependency barriers.
 - After branch dispatch, wait for branch agents; do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files.
 - Close finished branch orchestrator agents before launching replacements.
 - Do not exceed 4 active branch orchestrator agents.
@@ -40,6 +43,10 @@ Base ref: {base_ref}
 ## Branch Waves
 
 {branch_waves}
+
+## Branch Dependencies
+
+{branch_dependencies}
 
 ## Merge Policy
 

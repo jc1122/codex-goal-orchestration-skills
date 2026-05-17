@@ -35,9 +35,11 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
     "max_active_branch_agents": 4,
     "max_branches_per_wave": 4,
     "max_waves": 5,
+    "scheduling_mode": "rolling",
     "serial_reason": "",
-    "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
-    "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
+    "parallelization_rationale": "Keep up to 4 branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
+    "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
+    "dependency_policy": "Branch depends_on entries are explicit prior-branch dependencies; branches without unresolved depends_on entries are eligible whenever capacity is available."
   },
   "worker_model_policy": {
     "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
@@ -55,6 +57,7 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
       "worktree_path": ".worktrees/phaseX-B01",
       "status_path": "branches/B01.status.json",
       "review_path": "branches/B01.review.json",
+      "depends_on": [],
       "max_active_worker_packets": 4,
       "work_items": [
         {
@@ -166,14 +169,14 @@ Main must not launch Lite before prompt audit to pre-screen prompts. Lite launch
 
 ## Active Agent Limit
 
-`max_active_branch_agents` is a hard runtime limit and must be <= 4. Launch branches by wave when `waves` is present. Parallelism is the default: launch every branch in the current wave concurrently up to the limit, then wait for the wave to finish before launching the next wave. Keep at most that many branch orchestrator agents active at once.
+`max_active_branch_agents` is a hard runtime limit and must be <= 4. Launch branches as a rolling saturated pool. Parallelism is the default: keep up to `max_active_branch_agents` branch orchestrators active whenever eligible branches remain. Do not wait for a whole wave to finish. Waves are scheduling/order groups, not implicit dependency barriers. Defer a branch only while one of its manifest `depends_on` branch ids is incomplete. Keep at most `max_active_branch_agents` branch orchestrator agents active at once.
 
 When a branch finishes:
 
 1. collect its branch status and review artifacts;
 2. record the result;
 3. close or turn off the finished branch orchestrator agent;
-4. launch a replacement only after capacity is freed.
+4. launch the next eligible branch immediately after capacity is freed.
 
 If an agent cannot be closed and capacity cannot be freed, return `blocked` rather than exceeding the limit.
 
@@ -189,8 +192,8 @@ Return `blocked` if:
 - the manifest is missing the fixed `worker_model_policy`;
 - a branch is missing `max_active_worker_packets` or `worker_parallelism`;
 - a branch does not have 1 to 4 worker packets or `max_active_worker_packets` greater than 4;
-- a wave contains more branches than `max_active_branch_agents`;
 - a manifest contains more than 5 waves or more than 4 branches in any wave;
+- a branch `depends_on` entry references an unknown, same, or later branch id;
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;

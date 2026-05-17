@@ -14,8 +14,8 @@ Your job is:
 1. Run the skill availability bootstrap.
 2. Read the prepared `job.manifest.json` and `main.prompt.md`.
 3. Dispatch a read-only heavy-model prompt auditor before any branch work starts.
-4. Create branch integration worktrees only after the audit passes, one wave at a time when waves are present.
-5. Launch all branch orchestrators in the current wave concurrently without exceeding the hard active-agent limit.
+4. Create branch integration worktrees only after the audit passes, one eligible branch at a time as branch-orchestrator capacity is available.
+5. Keep branch orchestrator slots saturated up to the hard active-agent limit; defer only branches with incomplete manifest `depends_on` branch ids.
 6. Optionally use Lite advisors only after prompt audit or after branch artifacts are complete.
 7. Review branch status/review artifacts against `main.prompt.md` DoD.
 8. Return `pass` only when the DoD is falsifiably satisfied.
@@ -81,14 +81,26 @@ After running the generated `launch.sh`, validate `advice.json` with `scripts/va
 
 ## Branch Creation
 
-After audit passes, create branch integration worktrees from the manifest. If the manifest has `waves`, render and run one wave at a time. Use `scripts/render_branch_worktree_commands.py` to print the exact `git worktree add` commands:
+After audit passes, create branch integration worktrees from the manifest. Use rolling scheduling: render and run worktree commands only for branches that are eligible to launch now. A branch is eligible when it is not already active or complete and every branch id in its manifest `depends_on` list is complete. Use `scripts/render_branch_worktree_commands.py` to list ready branch ids or print the exact `git worktree add` command for a branch:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py" \
   --manifest /absolute/path/to/job.manifest.json \
   --repo-root /absolute/path/to/repo \
-  --wave wave-01 \
-  --audit /absolute/path/to/prompt-audit.json
+  --audit /absolute/path/to/prompt-audit.json \
+  --list-ready \
+  --completed-branch B01 \
+  --active-branch B02 \
+  --limit 3
+```
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py" \
+  --manifest /absolute/path/to/job.manifest.json \
+  --repo-root /absolute/path/to/repo \
+  --audit /absolute/path/to/prompt-audit.json \
+  --branch B03 \
+  --completed-branch B01
 ```
 
 Run the printed commands only after checking the repo state:
@@ -103,7 +115,7 @@ If any target branch or worktree already exists, stop and report `blocked` unles
 
 ## Branch Orchestrator Dispatch
 
-Launch branch orchestrators according to manifest waves. Parallelism is the default: launch every branch in the current wave concurrently up to `max_active_branch_agents`, then wait for that wave to finish before launching the next wave. Respect `max_active_branch_agents`; it must be treated as a hard limit and must not exceed 4. Each branch orchestrator must use the `goal-branch-orchestrator` skill and receive:
+Launch branch orchestrators as a rolling saturated pool. Parallelism is the default: keep up to `max_active_branch_agents` branch orchestrators active whenever eligible branches remain. Respect `max_active_branch_agents`; it must be treated as a hard limit and must not exceed 4. Do not wait for a whole wave to finish. When any branch finishes and is validated/closed, launch the next eligible branch immediately. Defer a branch only while one of its manifest `depends_on` branch ids is incomplete; waves are scheduling/order groups, not implicit dependency barriers. Each branch orchestrator must use the `goal-branch-orchestrator` skill and receive:
 
 - the branch id;
 - branch prompt path;
@@ -122,7 +134,7 @@ Do not open or read `goal-branch-orchestrator/SKILL.md` in the main orchestrator
 
 After dispatch, use the native agent wait mechanism with the longest practical timeout. If a wait returns with no completed branch agents, do not poll branch worktrees, worker packets, reviewer packets, process tables, or status files, and do not send status-check nudges. Continue waiting unless the user explicitly enters debug mode or a branch agent returns `blocked`/`failed`/`partial`.
 
-Track active branch orchestrator agent ids/processes. As each branch in a wave finishes, collect its status/review artifacts, then close or turn off the finished branch orchestrator. Launch the next wave only after the current wave is collected and capacity is freed. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
+Track active branch orchestrator agent ids/processes. As each branch finishes, collect its status/review artifacts, validate them, then close or turn off the finished branch orchestrator. If capacity is freed and an eligible unstarted branch remains, create its worktree and launch it immediately. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
 
 ## Status Validation
 
@@ -163,7 +175,8 @@ Before returning `pass`, verify:
 - branch statuses satisfy the main prompt DoD;
 - branch statuses/reviews record base-range whitespace validation before merge readiness;
 - branch statuses record the branch worker-packet cap and concurrent worker launch evidence or a serial/under-capacity reason;
-- no branch wave exceeded `max_active_branch_agents`;
+- no more than `max_active_branch_agents` branch orchestrators were active at once;
+- branch starts were deferred only for incomplete manifest `depends_on` branch ids;
 - main did not poll active branch agents' worker packets, reviewer packets, worktrees, or process tables while waiting;
 - finished branch orchestrators were closed before replacements launched;
 - required commands and validators are recorded;

@@ -16,8 +16,10 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 - every branch declares 1 to 4 work items, deterministic worker `packet_id` values in `<branch_id>-<work_item_id>` form, `max_active_worker_packets` from 1 to 4, and `worker_parallelism.parallelism_default=true`;
 - `max_active_branch_agents` is present and <= 4;
 - manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;
-- manifest waves, when present, cover every branch exactly once, no wave exceeds `max_active_branch_agents`, no wave has more than 4 branches, and there are no more than 5 waves;
-- parallelism is the default and single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
+- manifest waves, when present, cover every branch exactly once, no wave has more than 4 branches, and there are no more than 5 waves;
+- `parallelization.scheduling_mode` is `rolling`, waves are scheduling/order groups rather than dependency barriers, and `main.prompt.md` requires saturating branch orchestrator slots up to `max_active_branch_agents`;
+- branch `depends_on` entries reference only prior branch ids and are the only reason to defer an otherwise eligible branch;
+- parallelism is the default and single-branch or reduced-cap plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level DoD;
 - every branch prompt defines a bounded branch scope and falsifiable DoD;
 - prompts require manifest-bound branch status validation and manifest-bound main status validation before pass;

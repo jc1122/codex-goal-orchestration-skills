@@ -189,6 +189,27 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
     return normalized
 
 
+def normalize_branch_dependencies(branches: list[dict]) -> None:
+    order = {branch["id"]: index for index, branch in enumerate(branches)}
+    for index, branch in enumerate(branches):
+        raw_deps = branch.get("depends_on", [])
+        if not isinstance(raw_deps, list):
+            raise SystemExit(f"branch {branch['id']} depends_on must be a list")
+        deps = []
+        seen = set()
+        for dep_index, dep in enumerate(raw_deps):
+            dep_id = require_safe_id(str(dep).upper(), f"branch {branch['id']} depends_on[{dep_index}]")
+            if dep_id in seen:
+                raise SystemExit(f"branch {branch['id']} depends_on repeats branch {dep_id}")
+            if dep_id not in order:
+                raise SystemExit(f"branch {branch['id']} depends on unknown branch: {dep_id}")
+            if order[dep_id] >= index:
+                raise SystemExit(f"branch {branch['id']} depends_on must reference only prior branch ids; invalid dependency: {dep_id}")
+            seen.add(dep_id)
+            deps.append(dep_id)
+        branch["depends_on"] = deps
+
+
 def chunk_waves(branches: list[dict], wave_size: int) -> list[dict]:
     waves = []
     for offset in range(0, len(branches), wave_size):
@@ -305,8 +326,6 @@ def normalize_brief(brief: dict) -> dict:
             raise SystemExit(f"wave {wid} must list at least one branch")
         if len(wave_branches) > max_active:
             raise SystemExit(f"wave {wid} has more than max_active_branch_agents={max_active} branches")
-        if idx < len(waves) - 1 and len(wave_branches) < max_active and not (serial_reason or parallelization_rationale):
-            raise SystemExit(f"underfilled non-final wave {wid} requires serial_reason or parallelization_rationale")
         for bid in wave_branches:
             if bid not in branch_ids:
                 raise SystemExit(f"wave {wid} references unknown branch id: {bid}")
@@ -318,6 +337,7 @@ def normalize_brief(brief: dict) -> dict:
         raise SystemExit("waves must cover every branch exactly once")
     for branch in branches:
         branch["wave"] = wave_by_branch[branch["id"]]
+    normalize_branch_dependencies(branches)
 
     return {
         **brief,
@@ -333,10 +353,12 @@ def normalize_brief(brief: dict) -> dict:
             "max_active_branch_agents": max_active,
             "max_branches_per_wave": MAX_ACTIVE_BRANCH_AGENTS,
             "max_waves": MAX_WAVES,
+            "scheduling_mode": "rolling",
             "serial_reason": serial_reason,
             "parallelization_rationale": parallelization_rationale
-            or f"Branches are grouped into waves of up to {max_active} independent branch agents.",
-            "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave.",
+            or f"Keep up to {max_active} branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
+            "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
+            "dependency_policy": "Branch depends_on entries are explicit prior-branch dependencies; branches without unresolved depends_on entries are eligible whenever capacity is available.",
         },
         "branches": branches,
         "waves": waves,
@@ -353,6 +375,14 @@ def render_branch_waves(waves: list[dict]) -> str:
     lines = []
     for wave in waves:
         lines.append(f"- {wave['id']}: {', '.join(wave['branches'])}")
+    return "\n".join(lines)
+
+
+def render_branch_dependencies(branches: list[dict]) -> str:
+    lines = []
+    for branch in branches:
+        deps = branch.get("depends_on", [])
+        lines.append(f"- {branch['id']}: {', '.join(deps) if deps else 'none'}")
     return "\n".join(lines)
 
 
@@ -387,6 +417,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 "worktree_path": branch["worktree_path"],
                 "status_path": branch["status_path"],
                 "review_path": branch["review_path"],
+                "depends_on": branch["depends_on"],
                 "work_items": branch["work_items"],
                 "max_active_worker_packets": branch["max_active_worker_packets"],
                 "worker_parallelism": branch["worker_parallelism"],
@@ -407,6 +438,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             goal=brief.get("goal", "Goal not supplied."),
             source_summary=brief.get("source_summary", "Source summary not supplied."),
             branch_waves=render_branch_waves(brief["waves"]),
+            branch_dependencies=render_branch_dependencies(brief["branches"]),
             max_active_branch_agents=brief["max_active_branch_agents"],
             parallelization_rationale=brief["parallelization"]["parallelization_rationale"],
             merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
@@ -428,6 +460,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 branch_name=branch["branch_name"],
                 worktree_path=branch["worktree_path"],
                 wave=branch["wave"],
+                depends_on=bullets(branch.get("depends_on", [])),
                 max_active_worker_packets=branch["max_active_worker_packets"],
                 worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
                 default_worker_ladder=format_worker_ladder(DEFAULT_WORKER_LADDER),
@@ -453,6 +486,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Waves: {len(brief['waves'])}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
+            "Scheduling: rolling; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
             f"Worker model policy: {format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
             f"Artifact policy: {brief['artifact_policy']}",
             f"Cleanup policy: {brief['cleanup_policy']}",

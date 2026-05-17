@@ -117,13 +117,14 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
         else:
             worker_packet_ids = "invalid"
         branch_lines.append(
-            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}".format(
+            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}, depends_on={depends_on}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}".format(
                 id=branch.get("id", ""),
                 prompt=resolve_bundle_path(base, branch.get("prompt", ""), "prompt").as_posix(),
                 branch_name=branch.get("branch_name", ""),
                 worktree=resolve_repo_path(repo_root, branch.get("worktree_path", ""), "worktree_path").as_posix(),
                 status=resolve_bundle_path(base, branch.get("status_path", ""), "status_path").as_posix(),
                 review=resolve_bundle_path(base, branch.get("review_path", ""), "review_path").as_posix(),
+                depends_on=",".join(branch.get("depends_on", [])) if isinstance(branch.get("depends_on", []), list) else "invalid",
                 max_workers=branch.get("max_active_worker_packets", "missing"),
                 worker_packets=len(work_items) if isinstance(work_items, list) else "invalid",
                 worker_packet_ids=worker_packet_ids,
@@ -164,9 +165,11 @@ Required checks:
 - every branch contains 1 to 4 work items with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids;
 - branch prompts require parallel worker dispatch by default;
 - `max_active_branch_agents` is present and <= 4;
-- parallelism is the default and the manifest contains parallelization metadata;
+- parallelism is the default, the manifest contains parallelization metadata, and `parallelization.scheduling_mode` is `rolling`;
 - manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;
-- waves, when present, cover every branch exactly once, no wave exceeds `max_active_branch_agents`, no wave has more than 4 branches, and there are no more than 5 waves;
+- waves, when present, cover every branch exactly once, no wave has more than 4 branches, and there are no more than 5 waves;
+- branch `depends_on` entries, when present, reference only prior branch ids and are the only reason to defer an otherwise eligible branch;
+- `main.prompt.md` requires saturating branch orchestrator slots up to `max_active_branch_agents`, launching the next eligible branch when capacity is freed, and treating waves as scheduling/order groups rather than dependency barriers;
 - single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
 - `main.prompt.md` defines a falsifiable top-level Definition of Done;
 - every branch prompt defines bounded branch scope and falsifiable Definition of Done;

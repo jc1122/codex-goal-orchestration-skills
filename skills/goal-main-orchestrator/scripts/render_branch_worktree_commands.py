@@ -65,6 +65,31 @@ def require_string_list(value: object, field: str, *, min_items: int = 0) -> lis
     return result
 
 
+def validate_branch_dependencies(branches: list[dict]) -> dict[str, list[str]]:
+    order = {branch.get("id"): index for index, branch in enumerate(branches)}
+    dependencies: dict[str, list[str]] = {}
+    for index, branch in enumerate(branches):
+        bid = branch.get("id")
+        if not isinstance(bid, str) or not SAFE_LABEL_RE.fullmatch(bid):
+            raise SystemExit(f"branch id is not safe: {bid!r}")
+        deps = require_string_list(branch.get("depends_on", []), f"branch {bid}.depends_on")
+        seen = set()
+        normalized = []
+        for dep in deps:
+            if dep in seen:
+                raise SystemExit(f"branch {bid} depends_on repeats branch {dep}")
+            if dep not in order:
+                raise SystemExit(f"branch {bid} depends on unknown branch: {dep}")
+            if dep == bid:
+                raise SystemExit(f"branch {bid} cannot depend on itself")
+            if order[dep] >= index:
+                raise SystemExit(f"branch {bid} depends_on must reference only prior branch ids; invalid dependency: {dep}")
+            seen.add(dep)
+            normalized.append(dep)
+        dependencies[bid] = normalized
+    return dependencies
+
+
 def validate_branch_worker_contract(branch: dict) -> None:
     bid = branch.get("id")
     if "work_items" not in branch:
@@ -157,6 +182,11 @@ def main() -> int:
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--audit", required=True)
     parser.add_argument("--wave")
+    parser.add_argument("--branch", action="append", default=[], help="Render one branch id. Repeat for multiple eligible branches.")
+    parser.add_argument("--completed-branch", action="append", default=[], help="Branch id whose status has completed and been accepted.")
+    parser.add_argument("--active-branch", action="append", default=[], help="Branch id already active; used only with --list-ready.")
+    parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted branch ids, one per line.")
+    parser.add_argument("--limit", type=int, help="Maximum branch ids to print with --list-ready.")
     parser.add_argument("--list-waves", action="store_true")
     args = parser.parse_args()
 
@@ -218,6 +248,14 @@ def main() -> int:
         raise SystemExit("manifest parallelization.max_branches_per_wave must be 4")
     if parallelization.get("max_waves") != MAX_WAVES:
         raise SystemExit("manifest parallelization.max_waves must be 5")
+    if parallelization.get("scheduling_mode") != "rolling":
+        raise SystemExit("manifest parallelization.scheduling_mode must be 'rolling'")
+    dependency_policy = parallelization.get("dependency_policy", "")
+    if not isinstance(dependency_policy, str) or not dependency_policy.strip():
+        raise SystemExit("manifest parallelization.dependency_policy must be non-empty")
+    wave_execution = parallelization.get("wave_execution", "")
+    if not isinstance(wave_execution, str) or "saturat" not in wave_execution.lower() or "depends_on" not in wave_execution:
+        raise SystemExit("manifest parallelization.wave_execution must describe rolling saturation and depends_on deferral")
     serial_reason = parallelization.get("serial_reason", "")
     parallelization_rationale = parallelization.get("parallelization_rationale", "")
     has_parallelization_reason = (
@@ -251,15 +289,12 @@ def main() -> int:
             raise SystemExit(f"wave {wave.get('id')} must list at least one branch")
         if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
             raise SystemExit(f"wave {wave.get('id')} has more than 4 branches")
-        if len(branch_ids) > max_active:
-            raise SystemExit(f"wave {wave.get('id')} exceeds max_active_branch_agents")
-        if idx < len(waves) - 1 and len(branch_ids) < max_active and not has_parallelization_reason:
-            raise SystemExit(f"underfilled non-final wave {wave.get('id')} requires serial_reason or parallelization_rationale")
         wave_branch_ids.extend(branch_ids)
     if len(wave_branch_ids) != len(set(wave_branch_ids)):
         raise SystemExit("branch ids must not appear in more than one wave")
     if waves and set(wave_branch_ids) != set(manifest_branch_ids):
         raise SystemExit("waves must cover exactly the manifest branch ids")
+    branch_dependencies = validate_branch_dependencies([branch for branch in manifest_branches if isinstance(branch, dict)])
 
     manifest_dir = manifest_path.parent
     for branch in manifest_branches:
@@ -282,14 +317,70 @@ def main() -> int:
             print(f"{wave.get('id')}: {', '.join(wave.get('branches', []))}")
         return 0
 
+    known_ids = set(manifest_branch_ids)
+    completed = set()
+    for value in args.completed_branch:
+        if value not in known_ids:
+            raise SystemExit(f"--completed-branch references unknown branch id: {value}")
+        completed.add(value)
+    active = set()
+    for value in args.active_branch:
+        if value not in known_ids:
+            raise SystemExit(f"--active-branch references unknown branch id: {value}")
+        active.add(value)
+    if completed & active:
+        raise SystemExit("--completed-branch and --active-branch must not overlap")
+    if args.limit is not None and args.limit < 1:
+        raise SystemExit("--limit must be a positive integer")
+    if args.list_ready:
+        if args.wave or args.branch:
+            raise SystemExit("--list-ready cannot be combined with --wave or --branch")
+        available_capacity = max_active - len(active)
+        if available_capacity <= 0:
+            return 0
+        limit = args.limit if args.limit is not None else available_capacity
+        if limit > available_capacity:
+            raise SystemExit(f"--limit must not exceed remaining branch capacity ({available_capacity})")
+        ready = []
+        for branch in manifest_branches:
+            bid = branch.get("id")
+            if bid in completed or bid in active:
+                continue
+            deps = branch_dependencies.get(bid, [])
+            if all(dep in completed for dep in deps):
+                ready.append(bid)
+        for bid in ready[:limit]:
+            print(bid)
+        return 0
+
     selected_ids = None
+    if args.branch and args.wave:
+        raise SystemExit("--branch cannot be combined with --wave")
+    if args.branch:
+        selected_ids = set()
+        for bid in args.branch:
+            if bid not in known_ids:
+                raise SystemExit(f"--branch references unknown branch id: {bid}")
+            deps = branch_dependencies.get(bid, [])
+            unresolved = [dep for dep in deps if dep not in completed]
+            if unresolved:
+                raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
+            selected_ids.add(bid)
+    elif waves and not args.wave:
+        raise SystemExit("manifest has waves; pass --branch <branch-id>, --list-ready, or --wave <wave-id>")
     if waves:
-        if not args.wave:
-            raise SystemExit("manifest has waves; pass --wave <wave-id> to avoid creating too many worktrees")
-        matches = [wave for wave in waves if wave.get("id") == args.wave]
-        if not matches:
-            raise SystemExit(f"unknown wave: {args.wave}")
-        selected_ids = set(matches[0].get("branches", []))
+        if args.wave:
+            matches = [wave for wave in waves if wave.get("id") == args.wave]
+            if not matches:
+                raise SystemExit(f"unknown wave: {args.wave}")
+            selected_ids = set(matches[0].get("branches", []))
+            for bid in sorted(selected_ids):
+                deps = branch_dependencies.get(bid, [])
+                unresolved = [dep for dep in deps if dep not in completed]
+                if unresolved:
+                    raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
+    if selected_ids is not None and len(active) + len(selected_ids) > max_active:
+        raise SystemExit("selected branches plus active branches would exceed max_active_branch_agents")
 
     base_ref = manifest.get("base_ref", "main")
     if not safe_branch_name(base_ref):

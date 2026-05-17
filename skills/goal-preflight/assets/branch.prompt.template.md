@@ -5,6 +5,8 @@ Base ref: {base_ref}
 Branch name: {branch_name}
 Worktree path: {worktree_path}
 Wave: {wave}
+Depends on branches:
+{depends_on}
 Max active worker packets: {max_active_worker_packets}
 Max worker packets for this branch: 4
 

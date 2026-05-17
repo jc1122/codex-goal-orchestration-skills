@@ -13,23 +13,27 @@ Prefer branches that:
 
 Avoid branches that:
 
-- all edit the same central registry in the same wave;
+- all edit the same central registry without an explicit ordering reason;
 - depend on another branch's unmerged code;
 - combine implementation, docs, and validation for unrelated outcomes;
 - require broad repo exploration by every worker.
 
-## Waves
+## Rolling Branch Scheduling
 
-Use waves to maximize safe parallel execution while respecting the hard active-agent limit:
+Use `max_active_branch_agents` as the real concurrency cap and keep slots saturated with eligible branches:
 
 - at most 4 branch orchestrator agents active at once;
-- at most 4 branches per wave;
-- up to 5 waves;
+- at most 4 branches per scheduling group/wave;
+- up to 5 scheduling groups/waves;
 - up to 20 branches total;
-- main orchestrator closes finished branch agents before launching replacements.
-- launch all branches in the current wave concurrently up to `max_active_branch_agents`.
+- main orchestrator closes finished branch agents before launching replacements;
+- when one branch finishes, launch the next eligible branch immediately if capacity is available;
+- waves are scheduling/order groups, not implicit dependency barriers;
+- defer a branch only while one of its explicit manifest `depends_on` branch ids is incomplete.
 
-Single-branch bundles are serialized and must include `serial_reason`. Underfilled non-final waves or a `max_active_branch_agents` value below 4 must include `parallelization_rationale` or `serial_reason`.
+Single-branch bundles are serialized and must include `serial_reason`. A `max_active_branch_agents` value below 4 must include `parallelization_rationale` or `serial_reason`.
+
+Use branch-level `depends_on` only for true prior-branch dependencies. A dependency must reference an earlier branch id in the manifest order; use it for cases like final audits, integration branches, or branches that need evidence produced by another branch. Do not use waves alone to express dependency.
 
 ## Work Items
 

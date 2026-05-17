@@ -38,9 +38,11 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "max_active_branch_agents": 4,
     "max_branches_per_wave": 4,
     "max_waves": 5,
+    "scheduling_mode": "rolling",
     "serial_reason": "",
-    "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
-    "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
+    "parallelization_rationale": "Keep up to 4 branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
+    "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
+    "dependency_policy": "Branch depends_on entries are explicit prior-branch dependencies; branches without unresolved depends_on entries are eligible whenever capacity is available."
   },
   "worker_model_policy": {
     "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
@@ -59,6 +61,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       "worktree_path": ".worktrees/phaseX-B01",
       "status_path": "branches/B01.status.json",
       "review_path": "branches/B01.review.json",
+      "depends_on": [],
       "max_active_worker_packets": 4,
       "work_items": [
         {
@@ -96,7 +99,8 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `goal-bootloader.md` is under 4000 characters.
 - `main.prompt.md` says prompt audit is first and branches cannot be created until audit passes.
 - `main.prompt.md` says no more than 4 branch orchestrator agents may be active.
-- `main.prompt.md` says parallelism is the default and branches in a wave should launch concurrently.
+- `main.prompt.md` says parallelism is the default, branch orchestrator slots should stay saturated up to `max_active_branch_agents`, and waves are scheduling/order groups rather than implicit dependency barriers.
+- Branch manifest `depends_on` entries reference only prior branch ids; a branch is deferred only while one of those explicit dependencies is incomplete.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
