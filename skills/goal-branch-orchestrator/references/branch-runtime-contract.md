@@ -56,7 +56,7 @@ Allowed branch Lite purposes:
 - `worker-summary`: completed worker statuses, diff names, and test evidence to summary advice.
 - `blocked-triage`: blocked/failed worker status plus relevant failure excerpt to next repair-packet advice.
 
-Validate Lite `advice.json` with `scripts/validate_lite_advice.py` before using it. Lite launchers use the absolute Gemini path captured at packet creation and rehash every input before the model call; the validator rehashes inputs again. Read validated Lite output first, then open only cited original files or spans needed for verification. Ignore Lite when it is unavailable, quota-limited, blocked, invalid, stale, or contradicted by worker artifacts or original files. Lite cannot satisfy worker pass, review pass, mergeability, scientific claim support, or DoD requirements. Record every used or ignored Lite packet in branch status; record `lite_advice: []` when no Lite packet was used.
+Validate Lite `advice.json` with `scripts/validate_lite_advice.py` before using it. Lite launchers use the absolute Gemini path and version captured at packet creation, rehash every input, and rehash `prompt.md` before the model call; the validator rehashes inputs and prompt again. Read validated Lite output first, then open only cited original files or spans needed for verification. Ignore Lite when it is unavailable, quota-limited, blocked, invalid, stale, or contradicted by worker artifacts or original files. Lite cannot satisfy worker pass, review pass, mergeability, scientific claim support, or DoD requirements. Record every used or ignored Lite packet in branch status; record `lite_advice: []` when no Lite packet was used.
 
 ## Branch Status
 
@@ -106,6 +106,8 @@ Return/write status with these fields:
 	        }
 	      ],
 	      "validation_command": "python3 /absolute/path/to/goal-branch-orchestrator/scripts/validate_lite_advice.py --advice /absolute/path/to/lite/B01-L01/advice.json --inputs /absolute/path/to/lite/B01-L01/input-files.json",
+	      "validation_status": "pass|failed",
+	      "validation_defects": [],
 	      "reason": "used only to choose targeted original reads"
 	    }
 	  ],
@@ -119,7 +121,7 @@ Return/write status with these fields:
 }
 ```
 
-Validate the final branch status with `scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. A `pass` or `partial` branch status must include exactly one worker status for every manifest work item `packet_id` and no extra worker packet ids. Worker and branch `changed_files` entries must be repo-relative file paths without git porcelain prefixes; command and test evidence must be exact command strings. Worker `status_path` values must resolve to the manifest-owned `workers/<packet_id>/status.json`; copied or external worker artifacts are invalid. `lite_advice` must be present, even when empty; any recorded Lite packet must point to existing advice/input artifacts and match source hashes exactly, and any `disposition: "used"` Lite packet must pass `validate_lite_advice.py`. Reviewer packet ids must be safe ids for the same branch, such as `B01-R01`. `pass` requires every worker status to be `pass` and backed by its worker `status.json`, `review_status: "mergeable"` backed by the manifest review artifact, empty reviewer verification gaps, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers. Non-pass worker or branch statuses must include at least one blocker.
+Validate the final branch status with `scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. A `pass` or `partial` branch status must include exactly one worker status for every manifest work item `packet_id` and no extra worker packet ids. Worker and branch `changed_files` entries must be repo-relative file paths without git porcelain prefixes; command and test evidence must be exact command strings. Worker `status_path` values must resolve to the manifest-owned `workers/<packet_id>/status.json`; copied or external worker artifacts are invalid. `lite_advice` must be present, even when empty; any recorded Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, and have `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any `disposition: "used"` Lite packet must validate with `validation_status: "pass"`. Reviewer packet ids must be safe ids for the same branch, such as `B01-R01`. `pass` requires every worker status to be `pass` and backed by its worker `status.json`, `review_status: "mergeable"` backed by the manifest review artifact, empty reviewer verification gaps, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers. Non-pass worker or branch statuses must include at least one blocker.
 
 ## Context Conservation
 

@@ -95,6 +95,10 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def sha256_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def resolve_gemini() -> tuple[str, str]:
     executable = shutil.which(GEMINI_COMMAND)
     if executable is None:
@@ -286,6 +290,7 @@ purpose = sys.argv[4]
 status = sys.argv[5]
 message = sys.argv[6]
 inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
+gemini_path = inputs.get("gemini_path") or "gemini"
 data = {{
     "packet_id": packet_id,
     "role": "lite_advisor",
@@ -298,7 +303,7 @@ data = {{
     "summary": message,
     "blockers": [message],
     "commands_run": [
-        "gemini --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
+        f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
     ],
 }}
 output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
@@ -357,6 +362,63 @@ for item in data.get("source_files", []):
 PY
 }}
 
+verify_prompt_current() {{
+  python3 - "$inputs_path" "$prompt_path" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+inputs_path = Path(sys.argv[1])
+prompt_path = Path(sys.argv[2])
+data = json.loads(inputs_path.read_text(encoding="utf-8"))
+expected = data.get("prompt_sha256")
+if not isinstance(expected, str) or not expected.startswith("sha256:"):
+    print("missing prompt_sha256 in input-files.json", file=sys.stderr)
+    raise SystemExit(1)
+if not prompt_path.exists():
+    print(f"Lite prompt missing: {{prompt_path}}", file=sys.stderr)
+    raise SystemExit(1)
+actual = "sha256:" + hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+if actual != expected:
+    print(f"Lite prompt stale: expected {{expected}} got {{actual}}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}}
+
+verify_gemini_version() {{
+  python3 - "$inputs_path" "$gemini_command" <<'PY'
+import json
+import subprocess
+import sys
+from pathlib import Path
+
+inputs_path = Path(sys.argv[1])
+gemini_command = sys.argv[2]
+data = json.loads(inputs_path.read_text(encoding="utf-8"))
+expected = data.get("gemini_version")
+if not isinstance(expected, str) or not expected.strip() or expected == "unavailable":
+    print("missing captured Gemini version in input-files.json", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    completed = subprocess.run(
+        [gemini_command, "--version"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+except Exception as exc:  # noqa: BLE001
+    print(f"could not recheck Gemini version: {{exc}}", file=sys.stderr)
+    raise SystemExit(1)
+version_lines = (completed.stdout or completed.stderr).strip().splitlines()
+actual = version_lines[0] if version_lines else "version-unavailable"
+if actual != expected:
+    print(f"Gemini CLI version changed: expected {{expected!r}} got {{actual!r}}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}}
+
 extract_advice_json() {{
   python3 - "$raw_path" "$output_path" <<'PY'
 import json
@@ -395,6 +457,16 @@ fi
 
 if ! verify_inputs_current; then
   write_terminal_advice blocked "Lite advisor input files changed or became unavailable after packet creation."
+  exit 0
+fi
+
+if ! verify_prompt_current; then
+  write_terminal_advice blocked "Lite advisor prompt.md changed or became unavailable after packet creation."
+  exit 0
+fi
+
+if ! verify_gemini_version; then
+  write_terminal_advice blocked "Gemini CLI version changed or could not be verified after packet creation."
   exit 0
 fi
 
@@ -457,6 +529,7 @@ def main() -> int:
     packet_dir.mkdir(parents=True, exist_ok=True)
     extra = task_file.read_text(encoding="utf-8") if task_file else ""
     gemini_path, gemini_version = resolve_gemini()
+    prompt_text = prompt_for(packet_id, args.purpose, base_dir, sources, extra)
     inputs = {
         "packet_id": packet_id,
         "purpose": args.purpose,
@@ -465,6 +538,7 @@ def main() -> int:
         "model": LITE_MODEL,
         "gemini_path": gemini_path,
         "gemini_version": gemini_version,
+        "prompt_sha256": sha256_text(prompt_text),
         "source_files": sources,
     }
 
@@ -474,7 +548,7 @@ def main() -> int:
         encoding="utf-8",
     )
     (packet_dir / "prompt.md").write_text(
-        prompt_for(packet_id, args.purpose, base_dir, sources, extra),
+        prompt_text,
         encoding="utf-8",
     )
     launch_path = packet_dir / "launch.sh"

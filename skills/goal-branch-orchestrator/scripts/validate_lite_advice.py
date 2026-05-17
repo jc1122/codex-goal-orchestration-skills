@@ -165,6 +165,25 @@ def validate_live_sources(defects: list[str], inputs: dict | None) -> None:
             )
 
 
+def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: Path | None) -> None:
+    if inputs is None:
+        return
+    expected = inputs.get("prompt_sha256")
+    if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
+        defect(defects, "input-files.json.prompt_sha256", "must be sha256:<64 lowercase hex chars>")
+        return
+    if inputs_path is None:
+        defect(defects, "input-files.json.prompt_sha256", "requires --inputs so prompt.md can be verified")
+        return
+    prompt_path = inputs_path.parent / "prompt.md"
+    if not prompt_path.exists():
+        defect(defects, "prompt.md", f"must exist next to input-files.json: {prompt_path}")
+        return
+    actual = sha256_file(prompt_path)
+    if actual != expected:
+        defect(defects, "prompt.md", f"stale prompt metadata: expected {expected}, got {actual}")
+
+
 def validate_source_files(defects: list[str], value: object, path: str, expected: list[dict] | None) -> list[str]:
     if not isinstance(value, list):
         defect(defects, path, "must be an array")
@@ -254,6 +273,7 @@ def validate(
     purpose: str | None,
     expected_sources: list[dict] | None,
     inputs: dict | None,
+    inputs_path: Path | None = None,
 ) -> list[str]:
     defects: list[str] = []
     root = require_object(defects, data, "$")
@@ -291,6 +311,7 @@ def validate(
     if status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
     validate_live_sources(defects, inputs)
+    validate_prompt_hash(defects, inputs, inputs_path)
     source_paths = set(validate_source_files(defects, root.get("source_files"), "$.source_files", expected_sources))
     validate_recommended_reads(
         defects,
@@ -317,17 +338,13 @@ def validate(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--advice", required=True)
-    parser.add_argument("--inputs")
+    parser.add_argument("--inputs", required=True)
     parser.add_argument("--packet-id")
     parser.add_argument("--purpose", choices=sorted(allowed_purposes()))
     args = parser.parse_args()
 
     advice_path = resolve_absolute_path(args.advice, "--advice", must_exist=True)
-    inputs_path = (
-        resolve_absolute_path(args.inputs, "--inputs", must_exist=True)
-        if args.inputs
-        else None
-    )
+    inputs_path = resolve_absolute_path(args.inputs, "--inputs", must_exist=True)
     expected_sources = None
     inputs = None
     if inputs_path:
@@ -347,6 +364,7 @@ def main() -> int:
         purpose=args.purpose,
         expected_sources=expected_sources,
         inputs=inputs,
+        inputs_path=inputs_path,
     )
     if defects:
         print("status=failed")

@@ -80,7 +80,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_lite_advice_p
   --input-file /absolute/path/to/repo/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
-After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by worker artifacts or original files, ignore it. The branch Lite scripts enforce the branch-only purpose allowlist (`branch-packet-planning`, `context-pack`, `worker-summary`, `blocked-triage`), capture the absolute Gemini CLI path at packet creation, rehash all source inputs before launch and during validation, and reject runtime-purpose recommendations outside the explicit input set.
+After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by worker artifacts or original files, ignore it. The branch Lite scripts enforce the branch-only purpose allowlist (`branch-packet-planning`, `context-pack`, `worker-summary`, `blocked-triage`), capture the absolute Gemini CLI path and version at packet creation, rehash all source inputs and `prompt.md` before launch and during validation, and reject runtime-purpose recommendations outside the explicit input set.
 
 ## Worker Packets
 
@@ -143,7 +143,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_stat
   --worktree /absolute/path/to/.worktrees/<branch-name>
 ```
 
-If validation fails, fix the status artifact or return `blocked`; do not claim `pass` with an invalid branch status. A passing or partial branch status must include exactly one worker status for every manifest work item packet id and no extra worker packet ids. A passing branch status must include only `pass` worker statuses backed by existing manifest-owned `workers/<packet_id>/status.json` artifacts, `review_status: "mergeable"` backed by the manifest review artifact, reviewer packet ids for the same branch, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a `lite_advice` array (empty when no Lite was used; auditable records otherwise, with `used` records validating cleanly), a non-empty DoD checklist, and no blockers.
+If validation fails, fix the status artifact or return `blocked`; do not claim `pass` with an invalid branch status. A passing or partial branch status must include exactly one worker status for every manifest work item packet id and no extra worker packet ids. A passing branch status must include only `pass` worker statuses backed by existing manifest-owned `workers/<packet_id>/status.json` artifacts, `review_status: "mergeable"` backed by the manifest review artifact, reviewer packet ids for the same branch, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a `lite_advice` array (empty when no Lite was used; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 

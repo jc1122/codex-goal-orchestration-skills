@@ -16,6 +16,7 @@ AUDIT_STATUSES = {"pass", "failed", "blocked", "missing"}
 REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
+LITE_VALIDATION_STATUSES = {"pass", "failed"}
 MAIN_LITE_PURPOSES = {"audit-defect-summary", "main-summary"}
 MAX_TOTAL_BRANCHES = 20
 SAFE_REVIEW_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
@@ -178,7 +179,7 @@ def load_lite_validator(defects: list[str]):
     return module
 
 
-def validate_lite_advice_entries(defects: list[str], value: object, path: str) -> None:
+def validate_lite_advice_entries(defects: list[str], value: object, path: str, *, manifest_path: Path) -> None:
     if not isinstance(value, list):
         defect(defects, path, "must be an array")
         return
@@ -196,6 +197,8 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str) -
             "inputs_path",
             "source_files",
             "validation_command",
+            "validation_status",
+            "validation_defects",
             "reason",
         ]
         for key in required:
@@ -224,6 +227,14 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str) -
             defect(defects, f"{item_path}.advice_path", "must be an absolute path without traversal")
         if inputs_path_value and not is_absolute_path(inputs_path_value):
             defect(defects, f"{item_path}.inputs_path", "must be an absolute path without traversal")
+        validation_status = data.get("validation_status")
+        if validation_status not in LITE_VALIDATION_STATUSES:
+            defect(defects, f"{item_path}.validation_status", f"must be one of {sorted(LITE_VALIDATION_STATUSES)}")
+        validation_defects = require_string_list(defects, data.get("validation_defects"), f"{item_path}.validation_defects")
+        if validation_status == "pass" and validation_defects:
+            defect(defects, f"{item_path}.validation_defects", "must be empty when validation_status is pass")
+        if validation_status == "failed" and not validation_defects:
+            defect(defects, f"{item_path}.validation_defects", "must explain failed Lite validation")
         source_files = validate_lite_source_files(defects, data.get("source_files"), f"{item_path}.source_files")
         validation_command = require_string(defects, data.get("validation_command"), f"{item_path}.validation_command")
         if validation_command and not all(token in validation_command for token in ["validate_lite_advice.py", "--advice", "--inputs"]):
@@ -233,6 +244,14 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str) -
             continue
         advice_path = Path(advice_path_value).resolve()
         inputs_path = Path(inputs_path_value).resolve()
+        if packet_id:
+            expected_dir = (manifest_path.parent / "lite" / packet_id).resolve()
+            expected_advice = expected_dir / "advice.json"
+            expected_inputs = expected_dir / "input-files.json"
+            if advice_path != expected_advice:
+                defect(defects, f"{item_path}.advice_path", f"must be manifest-owned Lite advice path: {expected_advice}")
+            if inputs_path != expected_inputs:
+                defect(defects, f"{item_path}.inputs_path", f"must be manifest-owned Lite inputs path: {expected_inputs}")
         if not advice_path.exists():
             defect(defects, f"{item_path}.advice_path", f"artifact does not exist: {advice_path}")
             continue
@@ -257,8 +276,6 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str) -
         ]
         if source_files != expected_min:
             defect(defects, f"{item_path}.source_files", "must match input-files.json source metadata exactly")
-        if disposition != "used":
-            continue
         if lite_validator is None:
             lite_validator = load_lite_validator(defects)
         if lite_validator is not None:
@@ -268,9 +285,20 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str) -
                 purpose=purpose or None,
                 expected_sources=expected_sources,
                 inputs=inputs_data,
+                inputs_path=inputs_path,
             )
+            actual_validation_status = "pass" if not lite_defects else "failed"
+            if validation_status in LITE_VALIDATION_STATUSES and validation_status != actual_validation_status:
+                defect(defects, f"{item_path}.validation_status", f"must match actual Lite validation status {actual_validation_status!r}")
+            if validation_status == "failed" and validation_defects != lite_defects:
+                defect(defects, f"{item_path}.validation_defects", "must match actual Lite validation defects exactly")
+            if validation_status == "pass" and validation_defects:
+                defect(defects, f"{item_path}.validation_defects", "must be empty when actual Lite validation passes")
+            if disposition == "used" and lite_defects:
+                defect(defects, item_path, "used Lite advice must pass validation")
             for lite_defect in lite_defects:
-                defect(defects, item_path, f"invalid Lite advice artifact: {lite_defect}")
+                if disposition == "used":
+                    defect(defects, item_path, f"invalid Lite advice artifact: {lite_defect}")
 
 
 def validate_branch_summary(defects: list[str], value: object, path: str) -> None:
@@ -565,7 +593,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
         manifest_path=manifest_path,
         require_artifacts=status == "pass",
     )
-    validate_lite_advice_entries(defects, root.get("lite_advice"), "$.lite_advice")
+    validate_lite_advice_entries(defects, root.get("lite_advice"), "$.lite_advice", manifest_path=manifest_path)
     require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     require_string_list(defects, root.get("dod_checklist"), "$.dod_checklist", min_items=1)
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")

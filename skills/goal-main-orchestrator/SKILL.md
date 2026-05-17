@@ -77,7 +77,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_lite_advice_pac
   --input-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.review.json
 ```
 
-After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it. The main Lite scripts enforce the main-only purpose allowlist (`audit-defect-summary`, `main-summary`), capture the absolute Gemini CLI path at packet creation, rehash all source inputs before launch and during validation, and reject runtime-purpose recommendations outside the explicit input set.
+After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it. The main Lite scripts enforce the main-only purpose allowlist (`audit-defect-summary`, `main-summary`), capture the absolute Gemini CLI path and version at packet creation, rehash all source inputs and `prompt.md` before launch and during validation, and reject runtime-purpose recommendations outside the explicit input set.
 
 ## Branch Creation
 
@@ -146,7 +146,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.p
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty when no Lite was used; auditable records otherwise, with `used` records validating cleanly), a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty when no Lite was used; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 
