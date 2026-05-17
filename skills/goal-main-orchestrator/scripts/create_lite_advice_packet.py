@@ -131,80 +131,6 @@ def source_metadata(path: Path, base_dir: Path) -> dict:
     }
 
 
-def advice_schema(packet_id: str, purpose: str) -> dict:
-    nonempty_string = {"type": "string", "minLength": 1}
-    relative_path = {
-        "type": "string",
-        "minLength": 1,
-        "pattern": r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$)).+",
-    }
-    source_file = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["path", "sha256", "size_bytes", "reason"],
-        "properties": {
-            "path": relative_path,
-            "sha256": {"type": "string", "pattern": r"^sha256:[0-9a-f]{64}$"},
-            "size_bytes": {"type": "integer", "minimum": 0},
-            "reason": nonempty_string,
-        },
-    }
-    recommended_read = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["path", "anchor", "reason"],
-        "properties": {
-            "path": relative_path,
-            "anchor": nonempty_string,
-            "reason": nonempty_string,
-        },
-    }
-    risk_flag = {
-        "type": "object",
-        "additionalProperties": False,
-        "required": ["label", "path", "reason"],
-        "properties": {
-            "label": {
-                "type": "string",
-                "enum": ["unsupported", "unresolved", "negative", "weakened", "probe-only", "blocked"],
-            },
-            "path": relative_path,
-            "reason": nonempty_string,
-        },
-    }
-    return {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "type": "object",
-        "additionalProperties": False,
-        "required": [
-            "packet_id",
-            "role",
-            "purpose",
-            "status",
-            "source_files",
-            "recommended_reads",
-            "risk_flags",
-            "advice",
-            "summary",
-            "blockers",
-            "commands_run",
-        ],
-        "properties": {
-            "packet_id": {"type": "string", "const": packet_id},
-            "role": {"type": "string", "const": "lite_advisor"},
-            "purpose": {"type": "string", "const": purpose},
-            "status": {"type": "string", "enum": ["ok", "partial", "blocked"]},
-            "source_files": {"type": "array", "items": source_file},
-            "recommended_reads": {"type": "array", "items": recommended_read},
-            "risk_flags": {"type": "array", "items": risk_flag},
-            "advice": {"type": "object"},
-            "summary": nonempty_string,
-            "blockers": {"type": "array", "items": nonempty_string},
-            "commands_run": {"type": "array", "items": nonempty_string, "minItems": 1},
-        },
-    }
-
-
 def advice_command(gemini_path: str) -> str:
     command = gemini_path if gemini_path else GEMINI_COMMAND
     return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
@@ -289,7 +215,6 @@ cd "$(dirname "$0")"
 packet_dir="$(pwd)"
 prompt_path="$packet_dir/prompt.md"
 inputs_path="$packet_dir/input-files.json"
-schema_path="$packet_dir/advice.schema.json"
 output_path="$packet_dir/advice.json"
 raw_path="$packet_dir/advice.raw.txt"
 task_path="$packet_dir/task.md"
@@ -646,10 +571,6 @@ def main() -> int:
     }
 
     (packet_dir / "input-files.json").write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
-    (packet_dir / "advice.schema.json").write_text(
-        json.dumps(advice_schema(packet_id, args.purpose), indent=2) + "\n",
-        encoding="utf-8",
-    )
     (packet_dir / "prompt.md").write_text(
         prompt_text,
         encoding="utf-8",
