@@ -103,6 +103,10 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
         return result(defects)
 
+    for dirname in ["branches", "workers", "reviewers", "audit", "lite"]:
+        if not (bundle_dir / dirname).is_dir():
+            defect(dirname + "/", "critical", f"required bundle directory is missing: {dirname}/")
+
     for key in [
         "job_id",
         "main_prompt",
@@ -251,6 +255,7 @@ def lint(bundle_dir: Path) -> dict:
             "close finished branch orchestrator agents",
             "validate_branch_status.py --manifest",
             "validate_main_status.py --manifest",
+            "Optional Lite advisors",
         ]:
             if phrase.lower() not in main_text.lower():
                 defect(str(main_path), "critical", f"main prompt missing required phrase: {phrase}")
@@ -389,6 +394,7 @@ def lint(bundle_dir: Path) -> dict:
             "active worker packets",
             "Worker parallelization rationale",
             "Worker packet id",
+            "Lite Advisors",
             "validate_branch_status.py --manifest",
             "Stop Conditions",
             "git diff --check",

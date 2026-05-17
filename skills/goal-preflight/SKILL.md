@@ -1,13 +1,13 @@
 ---
 name: goal-preflight
-description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: synthesize independent branch waves and worker-sized work items when missing, enforce reproducible manifest paths, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
+description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize independent branch waves and worker-sized work items when missing, enforce reproducible manifest paths, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
 # Goal Preflight
 
 ## Role Boundary
 
-Prepare prompt infrastructure only. Do not launch `/goal`, create branches, create worktrees, run model auditors, dispatch branch orchestrators, or run workers.
+Prepare prompt infrastructure only. Do not launch `/goal`, create branches, create worktrees, run model auditors, dispatch branch orchestrators, or run workers. You may launch CLI-only Lite advisory packets for source digestion or lint-repair advice, but Lite output is advisory and never replaces deterministic lint, prompt audit, or runtime validators.
 
 The runtime owner is `goal-main-orchestrator`; this skill must produce files compatible with it.
 
@@ -15,7 +15,8 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
 
 1. Run the skill availability bootstrap below.
 2. Read the source report, diagnosis, roadmap, or goal brief.
-3. Extract or synthesize:
+3. Optionally create a Lite advisory packet when source material is large/vague or after deterministic lint fails.
+4. Extract or synthesize:
    - `job_id`;
    - top-level goal;
    - base ref;
@@ -25,11 +26,11 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - `serial_reason` when the job cannot be split into at least two branches;
    - 1 to 4 bounded worker-sized work items per branch;
    - falsifiable DoD and evidence requirements.
-4. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
-5. Write a structured brief JSON.
-6. Generate the bundle with `scripts/create_goal_bundle.py`.
-7. Run deterministic lint with `scripts/lint_goal_bundle.py`.
-8. Present the exact `goal-bootloader.md` text in the final response.
+5. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
+6. Write a structured brief JSON.
+7. Generate the bundle with `scripts/create_goal_bundle.py`.
+8. Run deterministic lint with `scripts/lint_goal_bundle.py`.
+9. Present the exact `goal-bootloader.md` text in the final response.
 
 ## Skill Availability Bootstrap
 
@@ -48,6 +49,36 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/check_goal_skill_availability.
 ```
 
 If this fails, stop before writing prompt files and tell the user to install or repair the skills package.
+
+## Lite Advisors
+
+Lite advisors are optional context routers, not authorities. Use `scripts/create_lite_advice_packet.py` only when it is likely to reduce heavy-agent context:
+
+- `preflight-decomposition`: source report, roadmap, or diagnosis to branch/work-item advice;
+- `lint-repair`: `preflight.lint.json`, `job.manifest.json`, and affected prompts to minimal repair advice.
+
+Run Lite with focused explicit input files. Broad input is allowed only for source digestion from a long report or roadmap. Do not pass full repository dumps or unrelated result histories. Read `advice.json` first, then open only cited originals needed to verify or implement the advice.
+
+Example:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_lite_advice_packet.py" \
+  --packet-id P01-L01 \
+  --purpose preflight-decomposition \
+  --base-dir /absolute/path/to/repo \
+  --out-dir /absolute/path/to/repo/plans/orchestration/<job-id>/lite \
+  --input-file /absolute/path/to/repo/plans/source-report.md
+```
+
+Then run the generated `launch.sh` and validate:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/validate_lite_advice.py" \
+  --advice /absolute/path/to/repo/plans/orchestration/<job-id>/lite/P01-L01/advice.json \
+  --inputs /absolute/path/to/repo/plans/orchestration/<job-id>/lite/P01-L01/input-files.json
+```
+
+If Lite is blocked, invalid, stale, or contradicted by source files, ignore the advice and continue with the normal preflight workflow. Do not treat Lite output as lint status, audit status, or DoD evidence.
 
 ## Parallelization Rules
 
@@ -122,4 +153,4 @@ After a successful preflight, include:
 
 Do not make the user open `goal-bootloader.md` manually.
 
-Read `references/bundle-contract.md` for required files and manifest shape. Read `references/actionability-rubric.md` before finalizing prompts from vague source material.
+Read `references/bundle-contract.md` for required files and manifest shape. Read `references/actionability-rubric.md` before finalizing prompts from vague source material. Read `references/lite-advisor-contract.md` before creating Lite packets.

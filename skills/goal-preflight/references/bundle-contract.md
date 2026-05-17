@@ -14,6 +14,7 @@ plans/orchestration/<job-id>/
   workers/
   reviewers/
   audit/
+  lite/
 ```
 
 ## Manifest
@@ -90,11 +91,13 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` says parallelism is the default and branches in a wave should launch concurrently.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
+- `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
 - Branch prompt/status/review paths are unique and cannot overwrite one another.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
 - Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
+- Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/reviewer launchers are active.
 - Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch concurrently up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.

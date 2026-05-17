@@ -12,6 +12,7 @@ The main runtime may create execution artifacts:
 
 - `prompt-audit.json`
 - `main.status.json`
+- optional Lite advisory artifacts under `lite/`
 - branch integration branches/worktrees
 - branch status/review artifacts produced by branch orchestrators
 
@@ -117,9 +118,20 @@ Read high-signal artifacts first:
 
 Do not read full worker logs unless a branch status is missing, failed, or inconsistent with its diff.
 
+Lite advice, when present, is a context router. Read validated Lite `advice.json` first to choose targeted original files, then open only cited originals needed for verification. Do not read Lite summaries and all originals by default. Lite cannot satisfy audit, branch, review, merge, cleanup, or DoD evidence requirements.
+
 Do not read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Main verifies branch-skill availability, creates branch worktrees, and dispatches branch sessions; the branch session is responsible for loading and following the branch skill.
 
 While branch orchestrator agents are active, main must wait rather than poll. Use the native agent wait mechanism with the longest practical timeout. A no-completion wait result is not evidence that a branch is stalled. Main must not inspect worker packets, reviewer packets, branch worktrees, process tables, or branch status files during active-branch waiting, and must not send status-check nudges. Inspect branch artifacts only after a branch agent completes, explicitly reports `blocked`/`failed`/`partial`, or the user explicitly switches to debug mode.
+
+## Lite Advisor Policy
+
+Main may create CLI-only Lite packets only after prompt audit has completed:
+
+- `audit-defect-summary` after failed or blocked audit;
+- `main-summary` after branch status/review artifacts are complete.
+
+Main must not launch Lite before prompt audit to pre-screen prompts. Lite launchers run Gemini Flash Lite in read-only `plan` mode and write `advice.json`. Validate advice with `scripts/validate_lite_advice.py` before using it. If Lite is unavailable, quota-limited, blocked, invalid, stale, or contradicted by branch artifacts, ignore it and continue with the normal status validation path unless the user explicitly required Lite.
 
 ## Active Agent Limit
 
@@ -153,5 +165,6 @@ Return `blocked` if:
 - branch status or main status validation fails;
 - merge-ready branch status/review artifacts do not record base-range whitespace validation;
 - main polled active branch agents' worker packets, reviewer packets, worktrees, process tables, or status files instead of waiting;
+- main treated Lite advice as audit, branch, review, mergeability, cleanup, or DoD evidence;
 - DoD evidence is ambiguous or not falsifiable;
 - the main prompt does not authorize a requested merge/cleanup operation.

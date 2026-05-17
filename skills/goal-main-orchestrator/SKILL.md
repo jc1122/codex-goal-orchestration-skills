@@ -1,6 +1,6 @@
 ---
 name: goal-main-orchestrator
-description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
+description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit, optionally use CLI-only Lite advisors after audit or completed branch artifacts for advisory summaries, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
 ---
 
 # Goal Main Orchestrator
@@ -16,8 +16,9 @@ Your job is:
 3. Dispatch a read-only heavy-model prompt auditor before any branch work starts.
 4. Create branch integration worktrees only after the audit passes, one wave at a time when waves are present.
 5. Launch all branch orchestrators in the current wave concurrently without exceeding the hard active-agent limit.
-6. Review branch status/review artifacts against `main.prompt.md` DoD.
-7. Return `pass` only when the DoD is falsifiably satisfied.
+6. Optionally use Lite advisors only after prompt audit or after branch artifacts are complete.
+7. Review branch status/review artifacts against `main.prompt.md` DoD.
+8. Return `pass` only when the DoD is falsifiably satisfied.
 
 ## Skill Availability Bootstrap
 
@@ -38,7 +39,7 @@ If this fails, stop immediately and return `blocked` with the missing skill/scri
 
 ## Mandatory Start
 
-After bootstrap passes, run prompt audit. Do not create branches, worktrees, branch orchestrators, workers, reviewers, commits, or merges before `prompt-audit.json` says audit passed and `can_start` is true.
+After bootstrap passes, run prompt audit. Do not create Lite packets, branches, worktrees, branch orchestrators, workers, reviewers, commits, or merges before `prompt-audit.json` says audit passed and `can_start` is true, except that a Lite `audit-defect-summary` packet may be used after a failed or blocked audit to summarize defects for handoff.
 
 Use the bundle root and repository root from the bootloader. Manifest prompt/status/review paths are relative to the bundle root; worktree paths are relative to the repository root. Treat absolute paths, backslashes, and `..` traversal in manifest-owned paths as `blocked`.
 
@@ -54,6 +55,29 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_audit_packet.py
 Then run the generated `launch.sh`. The audit packet uses exactly `gpt-5.5`, then `gpt-5.4`; no model overrides are accepted. The packet schema pins the exact manifest path and repository root. If both audit attempts fail without producing a valid `prompt-audit.json`, the launcher writes a terminal blocked `prompt-audit.json`.
 
 Read `references/prompt-audit-contract.md` if the audit fails or if the prepared bundle shape is unclear.
+
+## Lite Advisors
+
+Lite advisors are optional context routers, not authorities. Main may launch Lite only after prompt audit has completed:
+
+- `audit-defect-summary`: summarize a failed or blocked `prompt-audit.json` for handoff;
+- `main-summary`: summarize completed branch status/review artifacts before writing `main.status.json`.
+
+Do not use Lite before prompt audit to pre-screen prompts. Do not let Lite decide audit pass/fail, branch pass/fail, mergeability, cleanup, or DoD satisfaction. Use Lite output to choose targeted originals; validators and heavy reviewers remain authoritative.
+
+Example:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_lite_advice_packet.py" \
+  --packet-id M01-L01 \
+  --purpose main-summary \
+  --base-dir /absolute/path/to/repo \
+  --out-dir /absolute/path/to/plans/orchestration/<job-id>/lite \
+  --input-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.status.json \
+  --input-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.review.json
+```
+
+After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it.
 
 ## Branch Creation
 
@@ -146,7 +170,8 @@ Before returning `pass`, verify:
 - manifest-bound `validate_main_status.py` passed for the final main status file;
 - unresolved, unsupported, negative, or probe-only labels are preserved;
 - final git state matches the main prompt's merge/cleanup policy.
+- Lite advice, when used, was validated and treated only as advisory context routing, not DoD evidence.
 
 If any item is missing or unverifiable, return `partial` or `blocked`, not `pass`.
 
-Read `references/main-runtime-contract.md` for the full status contract and context-conservation rules.
+Read `references/main-runtime-contract.md` for the full status contract and context-conservation rules. Read `references/lite-advisor-contract.md` before creating Lite packets.

@@ -381,7 +381,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    for dirname in ["branches", "workers", "reviewers", "audit"]:
+    for dirname in ["branches", "workers", "reviewers", "audit", "lite"]:
         (bundle_dir / dirname).mkdir(exist_ok=True)
 
     manifest = {
@@ -469,6 +469,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Cleanup policy: {brief['cleanup_policy']}",
             "",
             "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
+            "Lite: optional advisory packets may route context but never satisfy audit, review, mergeability, or DoD evidence.",
             "Run `lint_goal_bundle.py` before launching `/goal`.",
             "",
         ]

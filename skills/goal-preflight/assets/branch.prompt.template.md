@@ -34,6 +34,10 @@ Use the listed Worker packet id for each worker packet. A `pass` or `partial` br
 
 After worker dispatch, wait for active worker launchers; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status.
 
+## Lite Advisors
+
+Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence.
+
 ## Tests And Validators
 
 {tests}
@@ -61,4 +65,5 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/reviewer launchers were waited on rather than polled.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
+- Any Lite advice used was validated and treated only as advisory context routing.
 {dod}

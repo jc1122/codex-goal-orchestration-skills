@@ -15,21 +15,27 @@ REQUIRED_FILES = {
     "goal-preflight": [
         "SKILL.md",
         "scripts/create_goal_bundle.py",
+        "scripts/create_lite_advice_packet.py",
         "scripts/lint_goal_bundle.py",
         "scripts/render_goal_bootloader.py",
+        "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
     "goal-main-orchestrator": [
         "SKILL.md",
         "scripts/create_audit_packet.py",
+        "scripts/create_lite_advice_packet.py",
         "scripts/render_branch_worktree_commands.py",
         "scripts/validate_main_status.py",
+        "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
     "goal-branch-orchestrator": [
         "SKILL.md",
         "scripts/create_runtime_packet.py",
+        "scripts/create_lite_advice_packet.py",
         "scripts/validate_branch_status.py",
+        "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
 }

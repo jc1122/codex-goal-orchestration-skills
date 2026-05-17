@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, create path-safe worker/reviewer packets, dispatch granular Gemini Pro/Flash-first workers with GitHub Copilot gpt-5.4 high-effort and Codex Spark/5.4-mini fallbacks, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
+description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, optionally use CLI-only Lite advisors for packet planning/context packing/completed-worker summaries/blocked triage, create path-safe worker/reviewer packets, dispatch granular Gemini Pro/Flash-first workers with GitHub Copilot gpt-5.4 high-effort and Codex Spark/5.4-mini fallbacks, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
 # Goal Branch Orchestrator
@@ -14,11 +14,13 @@ Your job is:
 1. Run the skill and CLI availability bootstrap.
 2. Read the assigned branch prompt file.
 3. Verify the global prompt audit passed.
-4. Create granular worker packets and worker child worktrees as needed.
-5. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using Gemini Pro/Flash-first workers with GitHub Copilot `gpt-5.4` high-effort and Codex Spark/mini fallbacks.
-6. Inspect worker status, diffs, and focused verification evidence.
-7. Dispatch a read-only heavy-model reviewer.
-8. Return branch status only when the branch prompt DoD is satisfied or explicitly blocked.
+4. Optionally use Lite advisors for packet planning or context routing after required start checks pass.
+5. Create granular worker packets and worker child worktrees as needed.
+6. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using Gemini Pro/Flash-first workers with GitHub Copilot `gpt-5.4` high-effort and Codex Spark/mini fallbacks.
+7. Inspect worker status, diffs, and focused verification evidence.
+8. Optionally use Lite advisors for completed-worker summaries or blocked triage after launchers exit.
+9. Dispatch a read-only heavy-model reviewer.
+10. Return branch status only when the branch prompt DoD is satisfied or explicitly blocked.
 
 ## Required Start
 
@@ -55,6 +57,30 @@ Confirm:
 - assigned prompt, status, review, worker, and reviewer packet paths are absolute or are resolved from the bundle root before use.
 
 If any check fails, do not launch workers. Return `blocked`.
+
+## Lite Advisors
+
+Lite advisors are optional context routers, not workers, reviewers, or authorities. Branch may launch Lite only after required start checks pass and never while worker/reviewer launchers are active:
+
+- `branch-packet-planning`: branch prompt, manifest branch entry, and prompt audit to worker packet advice;
+- `context-pack`: selected branch prompt/read-first files to focused worker context advice;
+- `worker-summary`: completed worker statuses, diff names, and test evidence to summary advice;
+- `blocked-triage`: blocked/failed worker status plus relevant failure excerpt to next repair-packet advice.
+
+Read Lite `advice.json` first, then open only cited original files or spans needed for verification. Do not treat Lite as evidence for worker pass, review pass, mergeability, scientific claim support, or DoD satisfaction.
+
+Example:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_lite_advice_packet.py" \
+  --packet-id B01-L01 \
+  --purpose context-pack \
+  --base-dir /absolute/path/to/repo \
+  --out-dir /absolute/path/to/plans/orchestration/<job-id>/lite \
+  --input-file /absolute/path/to/repo/plans/orchestration/<job-id>/branches/B01.prompt.md
+```
+
+After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by worker artifacts or original files, ignore it.
 
 ## Worker Packets
 
@@ -136,7 +162,8 @@ Before returning `pass`, verify:
 - unsupported, unresolved, negative, or probe-only labels are preserved;
 - branch status file records changed files, commands, tests, blockers, worker parallelism, and final DoD checklist.
 - manifest-bound `validate_branch_status.py` passed for the final branch status file.
+- Lite advice, when used, was validated and treated only as advisory context routing, not worker/review/DoD evidence.
 
 If evidence is missing, return `partial` or `blocked`, not `pass`.
 
-Read `references/branch-runtime-contract.md` for status shape, integration rules, and context-conservation guidance.
+Read `references/branch-runtime-contract.md` for status shape, integration rules, and context-conservation guidance. Read `references/lite-advisor-contract.md` before creating Lite packets.

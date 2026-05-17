@@ -15,7 +15,7 @@ The branch runtime receives:
 
 The main orchestrator already created the integration worktree. The branch orchestrator may create worker child worktrees from that branch.
 
-Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer packet scripts. Worker/reviewer packet directories, worktrees, task files, and context files must be absolute paths; the packet generator rejects relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
+Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer/Lite packet scripts. Worker/reviewer/Lite packet directories, worktrees, task files, and context files must be absolute paths; the packet generators reject relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
 
 Each manifest branch must declare `max_active_worker_packets`, `worker_parallelism`, and 1 to 4 `work_items` with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form. `max_active_worker_packets` is a hard per-branch active cap from 1 to 4. Parallel worker dispatch is the default: launch independent worker packets concurrently up to that cap. If more than 4 worker packets would be needed, stop and split the branch instead of inventing extra packets. If a branch runs serially or below capacity, record the reason in `worker_parallelism.serial_reasons`.
 
@@ -44,6 +44,19 @@ Use this reviewer/auditor preference:
 2. `gpt-5.4`
 
 Reviewers are read-only. They produce findings, verification gaps, residual risks, and mergeability verdicts.
+
+## Lite Advisor Policy
+
+Lite advisors are optional context routers. They are not workers, reviewers, or authorities. Branch may create Lite packets only after required start checks pass and never while worker or reviewer launchers are active.
+
+Allowed branch Lite purposes:
+
+- `branch-packet-planning`: branch prompt, manifest branch entry, and prompt audit to worker packet advice.
+- `context-pack`: selected branch prompt/read-first files to focused worker context advice.
+- `worker-summary`: completed worker statuses, diff names, and test evidence to summary advice.
+- `blocked-triage`: blocked/failed worker status plus relevant failure excerpt to next repair-packet advice.
+
+Validate Lite `advice.json` with `scripts/validate_lite_advice.py` before using it. Read validated Lite output first, then open only cited original files or spans needed for verification. Ignore Lite when it is unavailable, quota-limited, blocked, invalid, stale, or contradicted by worker artifacts or original files. Lite cannot satisfy worker pass, review pass, mergeability, scientific claim support, or DoD requirements.
 
 ## Branch Status
 
@@ -102,6 +115,8 @@ Read high-signal artifacts first:
 
 Do not read full worker event logs unless a worker status is missing, failed, or inconsistent with the worktree diff.
 
+If validated Lite advice exists for the current purpose, read it before opening larger originals. Do not read both Lite summaries and all original files by default; use Lite to choose targeted original reads.
+
 While worker or reviewer launchers are active, wait rather than poll. A quiet launcher is not evidence of a stall. Do not inspect active launcher event logs, process tables, worker worktrees, status files, or review files while waiting. Inspect those artifacts only after the launcher exits, the generated status/review artifact is missing or failed, or the user explicitly switches to debug mode.
 
 ## Integration Rules
@@ -118,4 +133,5 @@ While worker or reviewer launchers are active, wait rather than poll. A quiet la
 - Run both working-tree whitespace checks and base-range whitespace checks, for example `git diff --check <base-ref>...HEAD`, before review or merge readiness.
 - Run branch-level validators after integrating workers.
 - Preserve negative and unresolved scientific labels.
+- Treat Lite advice only as advisory context routing, never as worker/reviewer/DoD evidence.
 - Return blocked rather than guessing when prompt DoD is ambiguous.

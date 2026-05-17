@@ -1,6 +1,6 @@
 # Prompt Audit Contract
 
-The prompt auditor is a read-only heavy-model agent launched before branch creation. The launcher uses exactly `gpt-5.5`, then `gpt-5.4`; do not pass model overrides.
+The prompt auditor is a read-only heavy-model agent launched before branch creation. The launcher uses exactly `gpt-5.5`, then `gpt-5.4`; do not pass model overrides. Lite advisors must not be used before prompt audit to pre-screen or soften prompt defects. After a failed or blocked audit, main may use a Lite `audit-defect-summary` packet only to summarize defects for handoff.
 
 ## Files To Check
 
