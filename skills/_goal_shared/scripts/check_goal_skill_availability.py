@@ -42,6 +42,7 @@ REQUIRED_FILES = {
 REQUIRED_SUPPORT_FILES = [
     "_goal_shared/scripts/create_lite_advice_packet.py",
     "_goal_shared/scripts/validate_lite_advice.py",
+    "_goal_shared/scripts/status_validation.py",
     "_goal_shared/scripts/check_goal_skill_availability.py",
     "_goal_shared/references/lite-advisor-contract.md",
 ]
