@@ -7,6 +7,7 @@ const os = require("os");
 
 const packageRoot = path.resolve(__dirname, "..");
 const skillsRoot = path.join(packageRoot, "skills");
+const supportDirNames = ["_goal_shared"];
 
 function usage() {
   return `Install Codex goal orchestration skills.
@@ -65,8 +66,16 @@ function bundledSkills() {
   return fs
     .readdirSync(skillsRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
+    .filter((entry) => fs.existsSync(path.join(skillsRoot, entry.name, "SKILL.md")))
     .map((entry) => entry.name)
     .sort();
+}
+
+function bundledSupportDirs() {
+  return supportDirNames.filter((name) => {
+    const supportDir = path.join(skillsRoot, name);
+    return fs.existsSync(supportDir) && fs.statSync(supportDir).isDirectory();
+  });
 }
 
 function isSameOrInside(candidate, parent) {
@@ -93,7 +102,7 @@ function validateDestRoot(destRoot) {
   return resolved;
 }
 
-function copySkill(name, destRoot, dryRun) {
+function copyBundledDir(name, destRoot, dryRun, label) {
   const src = path.join(skillsRoot, name);
   const dest = path.join(destRoot, name);
   if (dryRun) {
@@ -103,7 +112,15 @@ function copySkill(name, destRoot, dryRun) {
   fs.mkdirSync(destRoot, { recursive: true });
   fs.rmSync(dest, { recursive: true, force: true });
   fs.cpSync(src, dest, { recursive: true, force: true });
-  console.log(`installed ${name} -> ${dest}`);
+  console.log(`installed ${label} ${name} -> ${dest}`);
+}
+
+function copySkill(name, destRoot, dryRun) {
+  copyBundledDir(name, destRoot, dryRun, "skill");
+}
+
+function copySupportDir(name, destRoot, dryRun) {
+  copyBundledDir(name, destRoot, dryRun, "support");
 }
 
 function main() {
@@ -122,12 +139,17 @@ function main() {
   }
 
   const destRoot = validateDestRoot(args.dest || defaultDest());
+  const supportDirs = bundledSupportDirs();
   for (const skill of skills) {
     copySkill(skill, destRoot, args.dryRun);
   }
+  for (const supportDir of supportDirs) {
+    copySupportDir(supportDir, destRoot, args.dryRun);
+  }
 
   if (!args.dryRun) {
-    console.log(`Installed ${skills.length} skills. Restart Codex or start a new session to refresh skill discovery.`);
+    const supportLabel = supportDirs.length === 1 ? "support directory" : "support directories";
+    console.log(`Installed ${skills.length} skills and ${supportDirs.length} ${supportLabel}. Restart Codex or start a new session to refresh skill discovery.`);
   }
 }
 
