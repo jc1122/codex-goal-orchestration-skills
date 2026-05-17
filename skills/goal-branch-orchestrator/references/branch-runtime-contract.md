@@ -25,16 +25,26 @@ Use this exact worker preference:
 
 1. Gemini CLI with `gemini-3.1-pro-preview`
 2. Gemini CLI with `gemini-3-flash-preview`
-3. GitHub Copilot CLI with `gpt-5.4` and `--effort high`
-4. `gpt-5.3-codex-spark`
+3. `gpt-5.3-codex-spark`
+4. GitHub Copilot CLI with `gpt-5.4` and `--effort high`
 5. `gpt-5.4-mini`
+
+Worker route aliases are exactly:
+
+- `gemini-pro`
+- `gemini-flash`
+- `codex-spark`
+- `copilot-gpt-5.4`
+- `codex-mini`
+
+The branch orchestrator may choose a non-empty ordered subsequence of the default ladder per worker packet when task hardness, context size, quota pressure, or provider availability justifies it. The selected route must preserve the default order; Spark is preferred immediately after Gemini Pro and Gemini Flash, and Copilot comes only after Spark. Runtime packet generation accepts repeated `--worker-route <alias>` values plus a required `--selection-reason` for non-default routes. It writes `route.json`; worker status JSON and branch rollups must copy `selected_ladder` and `selection_reason` exactly.
 
 Fallback is allowed only when:
 
 - the current worker attempt did not produce a valid status file;
 - the worker worktree is clean.
 
-No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview` may be used. Runtime packet generation must not accept model, effort, approval-mode, or permission overrides. Worker prompts must render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs never need to read bundle paths outside the worker worktree. All worker providers receive the same generated prompt and must satisfy the same worker status schema. CLI permission controls are provider-specific, so a provider status is only evidence after schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, run a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, run a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort because quota limits may be tight: missing CLIs, quota errors, invalid JSON, unavailable models, or other clean failures should fall through to the next worker attempt. Copilot must run real worker packets in programmatic mode with `--model gpt-5.4`, `--effort high`, `--no-ask-user`, minimal tool permissions, JSONL output, and a Markdown session share. Do not use `/fleet` for packet execution; the branch orchestrator owns worker parallelism externally. If Gemini or Copilot returns marked worker JSON with `status: "success"`, normalize it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Copilot, Spark, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every attempt fails cleanly, write a terminal blocked worker `status.json`.
+No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview` may be used. Runtime packet generation must not accept model, effort, approval-mode, or permission overrides. Worker prompts must render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs never need to read bundle paths outside the worker worktree. All worker providers receive the same generated prompt and must satisfy the same worker status schema, including route fields. CLI permission controls are provider-specific, so a provider status is only evidence after schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, run a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, run a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort because quota limits may be tight: missing CLIs, quota errors, invalid JSON, unavailable models, or other clean failures should fall through to the next selected worker attempt. Copilot must run real worker packets in programmatic mode with `--model gpt-5.4`, `--effort high`, `--no-ask-user`, minimal tool permissions, JSONL output, and a Markdown session share. Do not use `/fleet` for packet execution; the branch orchestrator owns worker parallelism externally. If Gemini or Copilot returns marked worker JSON with `status: "success"`, normalize it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Spark, Copilot, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every selected attempt fails cleanly, write a terminal blocked worker `status.json`.
 
 ## Reviewer Model Policy
 
@@ -74,6 +84,8 @@ Return/write status with these fields:
       "status": "pass|partial|blocked|failed",
       "status_path": "/absolute/path/to/workers/B01-W01/status.json",
       "worktree": "/absolute/path/to/.worktrees/phaseX-B01-W01",
+      "selected_ladder": ["codex-spark", "copilot-gpt-5.4"],
+      "selection_reason": "Bounded implementation packet; preserve Gemini quota and prefer Spark before Copilot.",
       "changed_files": ["src/example.py"],
       "commands_run": ["python3 -m pytest tests/test_example.py -q"],
       "tests": ["python3 -m pytest tests/test_example.py -q"],
@@ -121,7 +133,7 @@ Return/write status with these fields:
 }
 ```
 
-Validate the final branch status with `scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. A `pass` or `partial` branch status must include exactly one worker status for every manifest work item `packet_id` and no extra worker packet ids. Worker and branch `changed_files` entries must be repo-relative file paths without git porcelain prefixes; command and test evidence must be exact command strings. Worker `status_path` values must resolve to the manifest-owned `workers/<packet_id>/status.json`; copied or external worker artifacts are invalid. `lite_advice` must be present, even when empty; any recorded Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant branch Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no branch Lite packet exists. Any `disposition: "used"` Lite packet must validate with `validation_status: "pass"`. Reviewer packet ids must be safe ids for the same branch, such as `B01-R01`. `pass` requires every worker status to be `pass` and backed by its worker `status.json`, `review_status: "mergeable"` backed by the manifest review artifact, empty reviewer verification gaps, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers. Non-pass worker or branch statuses must include at least one blocker.
+Validate the final branch status with `scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. A `pass` or `partial` branch status must include exactly one worker status for every manifest work item `packet_id` and no extra worker packet ids. Worker and branch `changed_files` entries must be repo-relative file paths without git porcelain prefixes; command and test evidence must be exact command strings. Worker `status_path` values must resolve to the manifest-owned `workers/<packet_id>/status.json`; copied or external worker artifacts are invalid. Worker route fields must be present in branch rollups and worker artifacts, must use allowed aliases in standard order, and must match manifest-owned `workers/<packet_id>/route.json`. `lite_advice` must be present, even when empty; any recorded Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant branch Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no branch Lite packet exists. Any `disposition: "used"` Lite packet must validate with `validation_status: "pass"`. Reviewer packet ids must be safe ids for the same branch, such as `B01-R01`. `pass` requires every worker status to be `pass` and backed by its worker `status.json`, `review_status: "mergeable"` backed by the manifest review artifact, empty reviewer verification gaps, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers. Non-pass worker or branch statuses must include at least one blocker.
 
 ## Context Conservation
 

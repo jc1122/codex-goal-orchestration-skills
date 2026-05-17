@@ -26,6 +26,14 @@ STATUSES = {"pass", "partial", "blocked", "failed"}
 REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
 BRANCH_LITE_PURPOSES = {"branch-packet-planning", "context-pack", "worker-summary", "blocked-triage"}
 MAX_WORKER_PACKETS_PER_BRANCH = 4
+DEFAULT_WORKER_LADDER = (
+    "gemini-pro",
+    "gemini-flash",
+    "codex-spark",
+    "copilot-gpt-5.4",
+    "codex-mini",
+)
+ALLOWED_WORKER_ROUTES = set(DEFAULT_WORKER_LADDER)
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 is_strict_int = STATUS_VALIDATION.is_strict_int
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
@@ -78,6 +86,55 @@ def validate_command_list(defects: list[str], value: object, path: str, *, min_i
     require_string_list(defects, value, path, min_items=min_items)
 
 
+def validate_worker_ladder(defects: list[str], value: object, path: str) -> list[str]:
+    if not isinstance(value, list) or not value:
+        defect(defects, path, "must be a non-empty array")
+        return []
+    aliases = []
+    positions = []
+    seen = set()
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        if not isinstance(item, str) or not item.strip():
+            defect(defects, item_path, "must be a non-empty string")
+            continue
+        if item not in ALLOWED_WORKER_ROUTES:
+            defect(defects, item_path, f"must be one of {sorted(ALLOWED_WORKER_ROUTES)}")
+            continue
+        if item in seen:
+            defect(defects, item_path, "must not repeat a route alias")
+            continue
+        seen.add(item)
+        aliases.append(item)
+        positions.append(DEFAULT_WORKER_LADDER.index(item))
+    if positions != sorted(positions):
+        defect(defects, path, "must preserve standard ladder order")
+    return aliases
+
+
+def validate_worker_route_artifact(
+    defects: list[str],
+    route_value: object,
+    path: str,
+    *,
+    worker: dict,
+) -> None:
+    route = require_object(defects, route_value, path)
+    for key in ["packet_id", "role", "selected_ladder", "selection_reason"]:
+        if key not in route:
+            defect(defects, path, f"missing key: {key}")
+    if route.get("packet_id") != worker.get("packet_id"):
+        defect(defects, f"{path}.packet_id", "must match worker packet_id")
+    if route.get("role") != "worker":
+        defect(defects, f"{path}.role", "must be 'worker'")
+    validate_worker_ladder(defects, route.get("selected_ladder"), f"{path}.selected_ladder")
+    require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
+    if route.get("selected_ladder") != worker.get("selected_ladder"):
+        defect(defects, f"{path}.selected_ladder", "must match worker selected_ladder")
+    if route.get("selection_reason") != worker.get("selection_reason"):
+        defect(defects, f"{path}.selection_reason", "must match worker selection_reason")
+
+
 def validate_worker_status(defects: list[str], value: object, path: str) -> None:
     data = require_object(defects, value, path)
     required = [
@@ -85,6 +142,8 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
         "status",
         "status_path",
         "worktree",
+        "selected_ladder",
+        "selection_reason",
         "changed_files",
         "commands_run",
         "tests",
@@ -103,6 +162,8 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
         defect(defects, f"{path}.status_path", "must be an absolute path without traversal")
     if worktree and not is_absolute_path(worktree):
         defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
+    validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
+    require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
     validate_path_list(defects, data.get("changed_files"), f"{path}.changed_files")
     validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
     validate_command_list(defects, data.get("tests"), f"{path}.tests")
@@ -122,6 +183,8 @@ def validate_worker_artifact(defects: list[str], value: object, path: str) -> di
         "status",
         "branch",
         "worktree",
+        "selected_ladder",
+        "selection_reason",
         "changed_files",
         "commands_run",
         "tests",
@@ -140,6 +203,8 @@ def validate_worker_artifact(defects: list[str], value: object, path: str) -> di
     worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
     if worktree and not is_absolute_path(worktree):
         defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
+    validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
+    require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
     validate_path_list(defects, data.get("changed_files"), f"{path}.changed_files")
     validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
     validate_command_list(defects, data.get("tests"), f"{path}.tests")
@@ -163,7 +228,18 @@ def validate_worker_artifacts(
     if not isinstance(worker_statuses, list):
         return
     require_existing = branch_status in {"pass", "partial"}
-    compared_keys = ["packet_id", "status", "worktree", "changed_files", "commands_run", "tests", "blockers", "handoff"]
+    compared_keys = [
+        "packet_id",
+        "status",
+        "worktree",
+        "selected_ladder",
+        "selection_reason",
+        "changed_files",
+        "commands_run",
+        "tests",
+        "blockers",
+        "handoff",
+    ]
     for index, item in enumerate(worker_statuses):
         if not isinstance(item, dict):
             continue
@@ -195,6 +271,16 @@ def validate_worker_artifacts(
         for key in compared_keys:
             if artifact.get(key) != item.get(key):
                 defect(defects, f"{item_path}.{key}", "must match worker status artifact")
+        route_path = status_artifact.parent / "route.json"
+        if not route_path.exists():
+            defect(defects, f"{item_path}.status_path", f"route artifact does not exist: {route_path}")
+        else:
+            validate_worker_route_artifact(
+                defects,
+                load_json_artifact(defects, route_path, f"{item_path}.route_path"),
+                f"{item_path}.route_path",
+                worker=artifact,
+            )
 
 
 def manifest_branch_entry(defects: list[str], manifest: object, branch_id: str) -> dict:

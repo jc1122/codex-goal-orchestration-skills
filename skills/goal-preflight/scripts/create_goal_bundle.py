@@ -16,6 +16,20 @@ MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
+DEFAULT_WORKER_LADDER = [
+    "gemini-pro",
+    "gemini-flash",
+    "codex-spark",
+    "copilot-gpt-5.4",
+    "codex-mini",
+]
+WORKER_MODEL_POLICY = {
+    "default_ladder": DEFAULT_WORKER_LADDER,
+    "allowed_routes": DEFAULT_WORKER_LADDER,
+    "branch_may_select_worker_route": True,
+    "selection_reason_required": True,
+    "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder.",
+}
 
 
 def slug(value: str) -> str:
@@ -341,6 +355,11 @@ def render_branch_waves(waves: list[dict]) -> str:
         lines.append(f"- {wave['id']}: {', '.join(wave['branches'])}")
     return "\n".join(lines)
 
+
+def format_worker_ladder(values: list[str]) -> str:
+    return " -> ".join(values)
+
+
 def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
     brief = normalize_brief(brief)
 
@@ -357,6 +376,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         "cleanup_policy": brief["cleanup_policy"],
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
+        "worker_model_policy": WORKER_MODEL_POLICY,
         "preflight_lite_advice": brief["preflight_lite_advice"],
         "branches": [
             {
@@ -410,6 +430,8 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 wave=branch["wave"],
                 max_active_worker_packets=branch["max_active_worker_packets"],
                 worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
+                default_worker_ladder=format_worker_ladder(DEFAULT_WORKER_LADDER),
+                allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
                 objective=branch.get("objective", "Objective not supplied."),
                 scope=branch.get("scope", "Scope not supplied."),
                 owned_paths=bullets(branch.get("owned_paths", [])),
@@ -431,6 +453,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Waves: {len(brief['waves'])}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
+            f"Worker model policy: {format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
             f"Artifact policy: {brief['artifact_policy']}",
             f"Cleanup policy: {brief['cleanup_policy']}",
             "",

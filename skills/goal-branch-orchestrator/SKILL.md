@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, optionally use CLI-only Lite advisors for packet planning/context packing/completed-worker summaries/blocked triage, create path-safe worker/reviewer packets, dispatch granular Gemini Pro/Flash-first workers with GitHub Copilot gpt-5.4 high-effort and Codex Spark/5.4-mini fallbacks, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
+description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, optionally use CLI-only Lite advisors for packet planning/context packing/completed-worker summaries/blocked triage, create path-safe worker/reviewer packets, choose allowed per-worker routes from the Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot gpt-5.4 -> Codex mini ladder, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
 # Goal Branch Orchestrator
@@ -16,7 +16,7 @@ Your job is:
 3. Verify the global prompt audit passed.
 4. Optionally use Lite advisors for packet planning or context routing after required start checks pass.
 5. Create granular worker packets and worker child worktrees as needed.
-6. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using Gemini Pro/Flash-first workers with GitHub Copilot `gpt-5.4` high-effort and Codex Spark/mini fallbacks.
+6. Launch independent worker packets concurrently when their owned paths and verification commands do not conflict, using a selected ordered worker route from the Gemini Pro, Gemini Flash, Codex Spark, GitHub Copilot `gpt-5.4` high-effort, Codex mini ladder.
 7. Inspect worker status, diffs, and focused verification evidence.
 8. Optionally use Lite advisors for completed-worker summaries or blocked triage after launchers exit.
 9. Dispatch a read-only heavy-model reviewer.
@@ -95,7 +95,15 @@ Workers must fit the smallest intended worker context across the fixed fallback 
 
 Parallel worker packets are the default for independent work items. Use separate child worktrees for workers that can proceed without sharing writable files. A branch uses 1 to 4 prepared worker packets total. Launch independent worker packets concurrently up to the branch prompt's `max_active_worker_packets` value. That value is a hard cap and must never exceed 4. If branch work must run serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons` rather than silently serializing it.
 
-Use `scripts/create_runtime_packet.py` to create worker packets:
+Use `scripts/create_runtime_packet.py` to create worker packets. The default route is the standard ladder:
+
+1. `gemini-pro`
+2. `gemini-flash`
+3. `codex-spark`
+4. `copilot-gpt-5.4`
+5. `codex-mini`
+
+The branch orchestrator may choose a narrower non-empty ordered subsequence for a worker packet when task hardness, context size, quota pressure, or provider availability justify it. Do not reorder aliases, invent aliases, or use reviewer/auditor models for workers. If you pass any `--worker-route`, also pass a non-empty `--selection-reason`; the packet generator writes `route.json`, and worker/branch status validation rejects route drift.
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py" \
@@ -105,10 +113,13 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --worktree /absolute/path/to/.worktrees/<branch-name>-W01 \
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/workers \
   --owned-file src/example.py \
-  --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
+  --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md \
+  --worker-route codex-spark \
+  --worker-route copilot-gpt-5.4 \
+  --selection-reason "Bounded implementation packet; preserve Gemini quota and prefer Spark before Copilot."
 ```
 
-The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs do not need to read bundle paths outside the worker worktree. Generated worker launchers use exactly this fixed order: Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, GitHub Copilot CLI with `gpt-5.4` and `--effort high`, `gpt-5.3-codex-spark`, then `gpt-5.4-mini`. No model, effort, approval-mode, or permission overrides are accepted. All worker providers receive the same generated prompt and must satisfy the same worker status schema; CLI permission controls are provider-specific, so acceptance still depends on schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, the launcher runs a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort: if the command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next worker. Copilot runs the real worker in programmatic mode with `gpt-5.4`, `--effort high`, minimal tool permissions, JSONL events, and a Markdown session share; because Copilot has no local `--output-schema` equivalent, the launcher accepts only the marked final worker JSON and still requires orchestrator diff/test verification. If Gemini or Copilot returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Copilot, Spark, or mini leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
+The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs do not need to read bundle paths outside the worker worktree. Generated worker launchers use the selected ordered route; the default is Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, `gpt-5.3-codex-spark`, GitHub Copilot CLI with `gpt-5.4` and `--effort high`, then `gpt-5.4-mini`. No model, effort, approval-mode, or permission overrides are accepted. All worker providers receive the same generated prompt and must satisfy the same worker status schema, including `selected_ladder` and `selection_reason`; CLI permission controls are provider-specific, so acceptance still depends on schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, the launcher runs a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort: if the command is unavailable, quota-limited, unavailable, or fails without dirtying the worker worktree, the launcher continues to the next selected worker. Copilot runs the real worker in programmatic mode with `gpt-5.4`, `--effort high`, minimal tool permissions, JSONL events, and a Markdown session share; because Copilot has no local `--output-schema` equivalent, the launcher accepts only the marked final worker JSON and still requires orchestrator diff/test verification. If Gemini or Copilot returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Spark, Copilot, or mini leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, and writes a terminal blocked `status.json`. If all selected attempts fail cleanly, the launcher writes a terminal blocked `status.json`.
 
 After launching worker packets, wait for the launcher processes to finish. If a worker launcher is still active, do not poll its worktree, event logs, process table, or `status.json`, and do not send status nudges. Inspect worker status files and diffs only after the launcher exits, a worker reports `blocked`/`failed`/`partial`, or the user explicitly enters debug mode.
 
@@ -153,6 +164,7 @@ Before returning `pass`, verify:
 - every manifest worker status is `pass`;
 - 1 to 4 worker packets were used for the branch;
 - no more than 4 active worker packets ran at once, and branch status records the worker parallelism cap, concurrent launch evidence, and any serial/under-capacity reason;
+- every worker status records `selected_ladder` and `selection_reason`, and any non-default route is justified by task hardness, context size, quota pressure, or provider availability;
 - accepted worker branches have clean `git diff --check`;
 - focused tests and validators named in the branch prompt ran and are recorded;
 - base-range whitespace validation such as `git diff --check <base-ref>...HEAD` ran and is recorded before review or merge readiness;

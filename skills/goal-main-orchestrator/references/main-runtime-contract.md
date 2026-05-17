@@ -39,6 +39,13 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
     "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
     "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
   },
+  "worker_model_policy": {
+    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
+    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
+    "branch_may_select_worker_route": true,
+    "selection_reason_required": true,
+    "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder."
+  },
   "branches": [
     {
       "id": "B01",
@@ -179,6 +186,7 @@ Return `blocked` if:
 - manifest branch metadata is missing;
 - manifest cleanup or artifact policy is missing or contradicted by `main.prompt.md`;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 4;
+- the manifest is missing the fixed `worker_model_policy`;
 - a branch is missing `max_active_worker_packets` or `worker_parallelism`;
 - a branch does not have 1 to 4 worker packets or `max_active_worker_packets` greater than 4;
 - a wave contains more branches than `max_active_branch_agents`;

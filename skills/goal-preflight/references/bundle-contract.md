@@ -42,6 +42,13 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
     "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
   },
+  "worker_model_policy": {
+    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
+    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
+    "branch_may_select_worker_route": true,
+    "selection_reason_required": true,
+    "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder."
+  },
   "preflight_lite_advice": [],
   "branches": [
     {
@@ -93,6 +100,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
+- `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.
 - Branch prompt/status/review paths are unique and cannot overwrite one another.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
@@ -100,6 +108,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
 - Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
 - Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/reviewer launchers are active.
+- Branch prompts define Worker Model Routing and require `selected_ladder` plus `selection_reason` in every worker status and branch rollup.
 - Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch concurrently up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.

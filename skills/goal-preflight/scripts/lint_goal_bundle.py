@@ -14,6 +14,13 @@ MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
+DEFAULT_WORKER_LADDER = [
+    "gemini-pro",
+    "gemini-flash",
+    "codex-spark",
+    "copilot-gpt-5.4",
+    "codex-mini",
+]
 PREFLIGHT_LITE_PURPOSES = {"preflight-decomposition", "lint-repair"}
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
@@ -255,6 +262,7 @@ def lint(bundle_dir: Path) -> dict:
         "waves",
         "max_active_branch_agents",
         "parallelization",
+        "worker_model_policy",
         "preflight_lite_advice",
     ]:
         if key not in manifest:
@@ -299,6 +307,21 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "single-branch bundles require parallelization.serial_reason")
     if is_strict_int(max_active) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
         defect("job.manifest.json", "critical", "max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
+
+    worker_model_policy = manifest.get("worker_model_policy", {})
+    if not isinstance(worker_model_policy, dict):
+        defect("job.manifest.json", "critical", "worker_model_policy must be an object")
+        worker_model_policy = {}
+    if worker_model_policy.get("default_ladder") != DEFAULT_WORKER_LADDER:
+        defect("job.manifest.json", "critical", f"worker_model_policy.default_ladder must be {DEFAULT_WORKER_LADDER!r}")
+    if worker_model_policy.get("allowed_routes") != DEFAULT_WORKER_LADDER:
+        defect("job.manifest.json", "critical", f"worker_model_policy.allowed_routes must be {DEFAULT_WORKER_LADDER!r}")
+    if worker_model_policy.get("branch_may_select_worker_route") is not True:
+        defect("job.manifest.json", "critical", "worker_model_policy.branch_may_select_worker_route must be true")
+    if worker_model_policy.get("selection_reason_required") is not True:
+        defect("job.manifest.json", "critical", "worker_model_policy.selection_reason_required must be true")
+    if not isinstance(worker_model_policy.get("ordering_rule"), str) or not worker_model_policy.get("ordering_rule", "").strip():
+        defect("job.manifest.json", "critical", "worker_model_policy.ordering_rule must be non-empty")
 
     ids = [branch.get("id") for branch in branches]
     names = [branch.get("branch_name") for branch in branches]
@@ -533,6 +556,8 @@ def lint(bundle_dir: Path) -> dict:
             "Never exceed",
             "active worker packets",
             "Worker parallelization rationale",
+            "Worker Model Routing",
+            "Selected worker ladders",
             "Worker packet id",
             "Lite Advisors",
             "validate_branch_status.py --manifest",

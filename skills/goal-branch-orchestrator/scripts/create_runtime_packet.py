@@ -30,6 +30,28 @@ REVIEWER_FALLBACK_MODEL = "gpt-5.4"
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
 MAX_EMBEDDED_CONTEXT_CHARS = 120000
+DEFAULT_WORKER_LADDER = (
+    "gemini-pro",
+    "gemini-flash",
+    "codex-spark",
+    "copilot-gpt-5.4",
+    "codex-mini",
+)
+ALLOWED_WORKER_ROUTES = set(DEFAULT_WORKER_LADDER)
+WORKER_ROUTE_LABELS = {
+    "gemini-pro": "Gemini Pro",
+    "gemini-flash": "Gemini Flash",
+    "codex-spark": "Codex Spark",
+    "copilot-gpt-5.4": "GitHub Copilot",
+    "codex-mini": "Codex mini",
+}
+WORKER_ROUTE_COMMANDS = {
+    "gemini-pro": f"gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
+    "gemini-flash": f"gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
+    "codex-spark": f"codex exec --ephemeral -m {SPARK_MODEL} -s workspace-write",
+    "copilot-gpt-5.4": f"gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
+    "codex-mini": f"codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
+}
 
 
 def _load_path_rules():
@@ -54,6 +76,10 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def nonempty_text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
 def normalize_owned_paths(values: list[str]) -> list[str]:
     normalized = []
     for value in values:
@@ -67,6 +93,43 @@ def normalize_context_files(values: list[str]) -> list[str]:
         path = resolve_absolute_path(value, "--context-file", must_exist=True)
         normalized.append(path.as_posix())
     return normalized
+
+
+def normalize_worker_ladder(values: list[str]) -> list[str]:
+    if not values:
+        return list(DEFAULT_WORKER_LADDER)
+    flattened = []
+    for value in values:
+        for item in value.split(","):
+            item = item.strip()
+            if item:
+                flattened.append(item)
+    if not flattened:
+        raise SystemExit("worker route must contain at least one route alias")
+    seen = set()
+    positions = []
+    for alias in flattened:
+        if alias not in ALLOWED_WORKER_ROUTES:
+            raise SystemExit(f"unsupported worker route alias: {alias!r}")
+        if alias in seen:
+            raise SystemExit(f"worker route alias repeated: {alias!r}")
+        seen.add(alias)
+        positions.append(DEFAULT_WORKER_LADDER.index(alias))
+    if positions != sorted(positions):
+        raise SystemExit(
+            "worker route aliases must preserve standard ladder order: "
+            + ", ".join(DEFAULT_WORKER_LADDER)
+        )
+    return flattened
+
+
+def worker_route_commands(selected_ladder: list[str]) -> list[str]:
+    commands = []
+    for alias in selected_ladder:
+        if alias == "copilot-gpt-5.4":
+            commands.append(f"gh copilot -- --model {COPILOT_PROBE_MODEL} --effort {COPILOT_PROBE_REASONING_EFFORT}")
+        commands.append(WORKER_ROUTE_COMMANDS[alias])
+    return commands
 
 
 def exact_string_schema(value: str) -> dict:
@@ -86,6 +149,8 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "status",
             "branch",
             "worktree",
+            "selected_ladder",
+            "selection_reason",
             "changed_files",
             "commands_run",
             "tests",
@@ -98,6 +163,12 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "status": {"type": "string", "enum": ["pass", "partial", "blocked", "failed"]},
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
+            "selected_ladder": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "enum": list(DEFAULT_WORKER_LADDER)},
+            },
+            "selection_reason": nonempty_string,
             "changed_files": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path}},
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "tests": {"type": "array", "items": nonempty_string},
@@ -201,6 +272,8 @@ def prompt_for(
     owned_files: list[str],
     context_files: list[str],
     task_text: str,
+    selected_ladder: list[str] | None,
+    selection_reason: str,
 ) -> str:
     if role == "reviewer":
         return f"""# Branch Reviewer Packet {packet_id}
@@ -227,6 +300,25 @@ Determine the branch base ref from the branch prompt or manifest context. Before
 Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
 """
 
+    selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
+    example_status = json.dumps(
+        {
+            "packet_id": packet_id,
+            "role": "worker",
+            "status": "blocked",
+            "branch": branch,
+            "worktree": worktree,
+            "selected_ladder": selected_ladder,
+            "selection_reason": selection_reason,
+            "changed_files": [],
+            "commands_run": ["pwd", "git status --short --branch"],
+            "tests": [],
+            "blockers": ["replace with concrete blocker"],
+            "handoff": "replace with concise handoff",
+        },
+        separators=(",", ":"),
+    )
+
     return f"""# Worker Packet {packet_id}
 
 You are Worker {packet_id}.
@@ -235,6 +327,11 @@ Worktree: {worktree}
 Branch: {branch}
 
 You are not alone in the codebase. Do not revert edits made by others. Own only the files/modules assigned here. If the task needs more than roughly 80k-100k tokens of context, stop and return `blocked` instead of broadening scope.
+
+Selected worker ladder: {", ".join(selected_ladder)}
+Route selection reason: {selection_reason}
+
+Copy `selected_ladder` and `selection_reason` exactly into the final worker status. Do not change model aliases, model ids, effort levels, or provider order.
 
 {optional_list("Owned files/modules", owned_files)}
 
@@ -256,9 +353,59 @@ Return a worker status object matching `{schema_name}`. Allowed `status` values 
 If you are running under Gemini CLI or GitHub Copilot CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
 {GEMINI_STATUS_BEGIN}
-{{"packet_id":"{packet_id}","role":"worker","status":"blocked","branch":"{branch}","worktree":"{worktree}","changed_files":[],"commands_run":["pwd","git status --short --branch"],"tests":[],"blockers":["replace with concrete blocker"],"handoff":"replace with concise handoff"}}
+{example_status}
 {GEMINI_STATUS_END}
 """
+
+
+def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
+    run_commands = {
+        "gemini-pro": f"run_gemini gemini-pro {shell_quote(GEMINI_PRO_MODEL)}",
+        "gemini-flash": f"run_gemini gemini-flash {shell_quote(GEMINI_FLASH_MODEL)}",
+        "codex-spark": f"run_codex spark {shell_quote(SPARK_MODEL)}",
+        "copilot-gpt-5.4": "run_copilot copilot",
+        "codex-mini": f"run_codex mini {shell_quote(MINI_MODEL)}",
+    }
+    lines = []
+    for index, alias in enumerate(selected_ladder):
+        label = WORKER_ROUTE_LABELS[alias]
+        lines.extend(
+            [
+                f"if {run_commands[alias]}; then",
+                "  exit 0",
+                "fi",
+                "",
+            ]
+        )
+        if index < len(selected_ladder) - 1:
+            lines.extend(
+                [
+                    f"guard_clean_for_fallback {shell_quote(label)}",
+                    "",
+                ]
+            )
+            continue
+        lines.extend(
+            [
+                "if [ -s \"$output_path\" ]; then",
+                "  exit 1",
+                "fi",
+                "",
+                "if worktree_dirty; then",
+                f"  echo {shell_quote(label + ' failed after leaving dirty worktree; no fallback remains.')} > \"$packet_dir/fallback.blocked.txt\"",
+                f"  write_terminal_status blocked {shell_quote(label + ' failed after leaving dirty worktree; no fallback remains.')}",
+                "  exit 2",
+                "fi",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            f"write_terminal_status blocked {shell_quote(f'All selected worker route attempts failed cleanly without producing {output_name}.')}",
+            "exit 1",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def launch_for(
@@ -268,6 +415,8 @@ def launch_for(
     worktree: str,
     schema_name: str,
     output_name: str,
+    selected_ladder: list[str] | None,
+    selection_reason: str,
 ) -> str:
     sandbox = "read-only" if role == "reviewer" else "workspace-write"
     if role == "reviewer":
@@ -343,6 +492,9 @@ write_terminal_review "Reviewer primary and fallback failed without producing {o
 exit 1
 """
 
+    selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
+    selected_commands = worker_route_commands(selected_ladder)
+    attempts = worker_attempt_script(selected_ladder, output_name)
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -423,15 +575,10 @@ data = {{
     "status": status,
     "branch": branch,
     "worktree": worktree,
+    "selected_ladder": {json.dumps(selected_ladder)},
+    "selection_reason": {json.dumps(selection_reason)},
     "changed_files": changed_files,
-    "commands_run": [
-        "gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
-        "gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
-        "gh copilot -- --model {COPILOT_PROBE_MODEL} --effort {COPILOT_PROBE_REASONING_EFFORT}",
-        "gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
-        "codex exec --ephemeral -m {SPARK_MODEL} -s workspace-write",
-        "codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
-    ],
+    "commands_run": {json.dumps(selected_commands)},
     "tests": [],
     "blockers": [message, "Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error."],
     "handoff": message + " Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error.",
@@ -501,6 +648,8 @@ def validate(instance, schema):
                 if item_type:
                     if not validate_type(item, item_type):
                         raise ValueError(f"{{field}} contains item with wrong type")
+                if "enum" in item_schema and item not in item_schema["enum"]:
+                    raise ValueError(f"{{field}} contains item outside allowed enum")
                 if isinstance(item, str):
                     if "minLength" in item_schema and len(item) < item_schema["minLength"]:
                         raise ValueError(f"{{field}} contains item that is too short")
@@ -753,42 +902,7 @@ run_codex() {{
     > "$packet_dir/events-${{label}}.jsonl" 2>&1
 }}
 
-if run_gemini gemini-pro {shell_quote(GEMINI_PRO_MODEL)}; then
-  exit 0
-fi
-guard_clean_for_fallback "Gemini Pro"
-
-if run_gemini gemini-flash {shell_quote(GEMINI_FLASH_MODEL)}; then
-  exit 0
-fi
-guard_clean_for_fallback "Gemini Flash"
-
-if run_copilot copilot; then
-  exit 0
-fi
-guard_clean_for_fallback "GitHub Copilot"
-
-if run_codex spark {shell_quote(SPARK_MODEL)}; then
-  exit 0
-fi
-guard_clean_for_fallback "Codex Spark"
-
-if run_codex mini {shell_quote(MINI_MODEL)}; then
-  exit 0
-fi
-
-if [ -s "$output_path" ]; then
-  exit 1
-fi
-
-if worktree_dirty; then
-  echo "Codex mini failed after leaving dirty worktree; no fallback remains." > "$packet_dir/fallback.blocked.txt"
-  write_terminal_status blocked "Codex mini failed after leaving dirty worktree; no fallback remains."
-  exit 2
-fi
-
-write_terminal_status blocked "All worker attempts failed cleanly without producing {output_name}."
-exit 1
+{attempts}
 """
 
 
@@ -802,6 +916,13 @@ def main() -> int:
     parser.add_argument("--task-file")
     parser.add_argument("--owned-file", action="append", default=[])
     parser.add_argument("--context-file", action="append", default=[])
+    parser.add_argument(
+        "--worker-route",
+        action="append",
+        default=[],
+        help="Allowed worker route alias. Repeat to choose a non-empty ordered subsequence of the standard ladder.",
+    )
+    parser.add_argument("--selection-reason", help="Required when --worker-route is supplied; recorded in route.json and worker status.")
     args = parser.parse_args()
 
     packet_id = require_safe_label(args.packet_id, "packet-id")
@@ -816,6 +937,20 @@ def main() -> int:
         if args.task_file
         else None
     )
+    if args.role == "reviewer" and (args.worker_route or args.selection_reason):
+        raise SystemExit("reviewer packets must not set worker route options")
+    selected_ladder: list[str] | None = None
+    selection_reason = ""
+    if args.role == "worker":
+        selected_ladder = normalize_worker_ladder(args.worker_route)
+        selection_reason = nonempty_text(args.selection_reason)
+        if args.worker_route and not selection_reason:
+            raise SystemExit("--selection-reason is required when --worker-route is supplied")
+        if not selection_reason:
+            selection_reason = (
+                "Default standard worker ladder selected: Gemini Pro, Gemini Flash, "
+                "Codex Spark, GitHub Copilot gpt-5.4 high effort, Codex mini."
+            )
 
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     packet_dir = out_dir / packet_id
@@ -841,9 +976,21 @@ def main() -> int:
             owned_files,
             context_files,
             load_task(task_file),
+            selected_ladder,
+            selection_reason,
         ),
         encoding="utf-8",
     )
+    if args.role == "worker":
+        route = {
+            "packet_id": packet_id,
+            "role": "worker",
+            "selected_ladder": selected_ladder,
+            "selection_reason": selection_reason,
+            "default_ladder": list(DEFAULT_WORKER_LADDER),
+            "allowed_aliases": list(DEFAULT_WORKER_LADDER),
+        }
+        (packet_dir / "route.json").write_text(json.dumps(route, indent=2) + "\n", encoding="utf-8")
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(
         launch_for(
@@ -853,6 +1000,8 @@ def main() -> int:
             str(worktree),
             schema_name,
             output_name,
+            selected_ladder,
+            selection_reason,
         ),
         encoding="utf-8",
     )
