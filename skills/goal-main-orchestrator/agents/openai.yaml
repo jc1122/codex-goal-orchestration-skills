@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Main Orchestrator"
-  short_description: "Run audited /goal branch waves with optional Lite summaries."
-  default_prompt: "Use $goal-main-orchestrator to run a prepared /goal bundle: bootstrap skills, audit prompts, optionally use CLI-only Lite summaries after audit or completed branch artifacts, create branch worktrees, and dispatch branch orchestrators."
+  short_description: "Run audited /goal waves with auditable Lite summaries."
+  default_prompt: "Use $goal-main-orchestrator to run a prepared /goal bundle: bootstrap skills, audit prompts, optionally use deterministic CLI-only Lite summaries after audit or completed branch artifacts, create branch worktrees, and dispatch branch orchestrators."

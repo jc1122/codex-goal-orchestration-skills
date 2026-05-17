@@ -87,23 +87,43 @@ Return/write status with these fields:
   "job_id": "phaseX",
   "status": "pass|partial|blocked|failed",
   "audit_status": "pass|failed|blocked|missing",
-  "branch_statuses": [
+	  "branch_statuses": [
     {
       "branch_id": "B01",
       "status": "pass|partial|blocked|failed",
       "status_path": "branches/B01.status.json",
       "review_path": "branches/B01.review.json",
-      "review_status": "mergeable|mergeable_after_fixes|blocked|reject|missing"
-    }
-  ],
-  "commands_run": ["python3 scripts/check_goal_skill_availability.py ...", "python3 scripts/validate_main_status.py --manifest ..."],
+	      "review_status": "mergeable|mergeable_after_fixes|blocked|reject|missing"
+	    }
+	  ],
+	  "lite_advice": [
+	    {
+	      "packet_id": "M01-L01",
+	      "purpose": "main-summary",
+	      "status": "ok|partial|blocked",
+	      "disposition": "used|ignored|unused",
+	      "advice_path": "/absolute/path/to/lite/M01-L01/advice.json",
+	      "inputs_path": "/absolute/path/to/lite/M01-L01/input-files.json",
+	      "source_files": [
+	        {
+	          "path": "plans/orchestration/phaseX/branches/B01.status.json",
+	          "sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	          "size_bytes": 123,
+	          "reason": "explicit Lite input"
+	        }
+	      ],
+	      "validation_command": "python3 /absolute/path/to/goal-main-orchestrator/scripts/validate_lite_advice.py --advice /absolute/path/to/lite/M01-L01/advice.json --inputs /absolute/path/to/lite/M01-L01/input-files.json",
+	      "reason": "used only to choose targeted original reads"
+	    }
+	  ],
+	  "commands_run": ["python3 scripts/check_goal_skill_availability.py ...", "python3 scripts/validate_main_status.py --manifest ..."],
   "dod_checklist": ["prompt audit passed", "all branch statuses validated"],
   "blockers": [],
   "summary": "concise main handoff"
 }
 ```
 
-Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also opens review artifacts whenever `review_status` is not `missing`, and for `pass` requires every worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
+Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to have auditable paths/source hashes, validates `disposition: "used"` Lite advice artifacts and live input hashes, and for `pass` requires every worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
 
 ## Context Conservation
 
@@ -131,7 +151,7 @@ Main may create CLI-only Lite packets only after prompt audit has completed:
 - `audit-defect-summary` after failed or blocked audit;
 - `main-summary` after branch status/review artifacts are complete.
 
-Main must not launch Lite before prompt audit to pre-screen prompts. Lite launchers run Gemini Flash Lite in read-only `plan` mode and write `advice.json`. Validate advice with `scripts/validate_lite_advice.py` before using it. If Lite is unavailable, quota-limited, blocked, invalid, stale, or contradicted by branch artifacts, ignore it and continue with the normal status validation path unless the user explicitly required Lite.
+Main must not launch Lite before prompt audit to pre-screen prompts. Lite launchers run Gemini Flash Lite in read-only `plan` mode using the absolute Gemini path captured at packet creation and write `advice.json`. The launcher and validator rehash every input; stale inputs make the advice invalid. Validate advice with `scripts/validate_lite_advice.py` before using it. If Lite is unavailable, quota-limited, blocked, invalid, stale, or contradicted by branch artifacts, ignore it and continue with the normal status validation path unless the user explicitly required Lite. Record every used or ignored Lite packet in `main.status.json`; record `lite_advice: []` when no Lite packet was used.
 
 ## Active Agent Limit
 

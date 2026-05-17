@@ -8,6 +8,8 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path, PurePosixPath
 
 
@@ -17,7 +19,7 @@ GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "plan"
 LITE_STATUS_BEGIN = "BEGIN_LITE_ADVICE_JSON"
 LITE_STATUS_END = "END_LITE_ADVICE_JSON"
-PURPOSES = {
+ALL_PURPOSES = {
     "preflight-decomposition",
     "lint-repair",
     "audit-defect-summary",
@@ -26,6 +28,16 @@ PURPOSES = {
     "worker-summary",
     "blocked-triage",
     "main-summary",
+}
+SKILL_PURPOSES = {
+    "goal-preflight": {"preflight-decomposition", "lint-repair"},
+    "goal-main-orchestrator": {"audit-defect-summary", "main-summary"},
+    "goal-branch-orchestrator": {
+        "branch-packet-planning",
+        "context-pack",
+        "worker-summary",
+        "blocked-triage",
+    },
 }
 
 
@@ -37,6 +49,17 @@ def require_safe_label(value: str, field: str) -> str:
     if not SAFE_LABEL_RE.fullmatch(value):
         raise SystemExit(f"{field} must match {SAFE_LABEL_RE.pattern}: {value!r}")
     return value
+
+
+def current_skill_name() -> str:
+    try:
+        return Path(__file__).resolve().parents[1].name
+    except IndexError:
+        return ""
+
+
+def allowed_purposes() -> set[str]:
+    return SKILL_PURPOSES.get(current_skill_name(), ALL_PURPOSES)
 
 
 def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
@@ -70,6 +93,25 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def resolve_gemini() -> tuple[str, str]:
+    executable = shutil.which(GEMINI_COMMAND)
+    if executable is None:
+        return "", "unavailable"
+    path = Path(executable).resolve()
+    try:
+        completed = subprocess.run(
+            [path.as_posix(), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return path.as_posix(), f"version-unavailable: {exc}"
+    version = (completed.stdout or completed.stderr).strip().splitlines()
+    return path.as_posix(), version[0] if version else "version-unavailable"
 
 
 def source_metadata(path: Path, base_dir: Path) -> dict:
@@ -176,6 +218,7 @@ Policy:
 - Do not decide mergeability, prompt-audit pass/fail, scientific claim support, or Definition-of-Done satisfaction.
 - Preserve labels exactly when present: `unsupported`, `unresolved`, `negative`, `weakened`, `probe-only`, `blocked`.
 - Recommend targeted original reads with path, anchor, and reason. Do not tell heavy agents to reread every source file by default.
+- For any purpose other than `preflight-decomposition`, `recommended_reads` may cite only the explicit input files listed above.
 - Use focused context. Do not broaden beyond the listed files unless the purpose is `preflight-decomposition`; even then, only recommend additional paths rather than reading the whole repository.
 - If an input file is missing, unreadable, stale, or insufficient, return `status: "blocked"` or `status: "partial"` with blockers.
 
@@ -214,7 +257,15 @@ inputs_path="$packet_dir/input-files.json"
 schema_path="$packet_dir/advice.schema.json"
 output_path="$packet_dir/advice.json"
 raw_path="$packet_dir/advice.raw.txt"
-gemini_command={shell_quote(GEMINI_COMMAND)}
+gemini_command="$(python3 - "$inputs_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print(data.get("gemini_path", ""))
+PY
+)"
 lite_model={shell_quote(LITE_MODEL)}
 approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
 base_dir={shell_quote(base_dir.as_posix())}
@@ -262,6 +313,50 @@ validate_advice() {{
     --purpose {shell_quote(purpose)} >/dev/null
 }}
 
+verify_inputs_current() {{
+  python3 - "$inputs_path" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+inputs_path = Path(sys.argv[1])
+data = json.loads(inputs_path.read_text(encoding="utf-8"))
+base_dir = Path(data.get("base_dir", ""))
+if not base_dir.is_absolute() or not base_dir.exists():
+    print(f"invalid or missing Lite base_dir: {base_dir}", file=sys.stderr)
+    raise SystemExit(1)
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+for item in data.get("source_files", []):
+    rel = item.get("path", "")
+    path = (base_dir / rel).resolve()
+    try:
+        path.relative_to(base_dir.resolve())
+    except ValueError:
+        print(f"Lite input escaped base_dir: {{rel}}", file=sys.stderr)
+        raise SystemExit(1)
+    if not path.exists():
+        print(f"Lite input missing: {{rel}}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_hash = sha256_file(path)
+    actual_size = path.stat().st_size
+    if actual_hash != item.get("sha256") or actual_size != item.get("size_bytes"):
+        print(
+            f"Lite input stale: {{rel}} expected {{item.get('sha256')}}/{{item.get('size_bytes')}} "
+            f"got {{actual_hash}}/{{actual_size}}",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+PY
+}}
+
 extract_advice_json() {{
   python3 - "$raw_path" "$output_path" <<'PY'
 import json
@@ -293,8 +388,13 @@ output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
 PY
 }}
 
-if ! command -v "$gemini_command" >/dev/null 2>&1; then
-  write_terminal_advice blocked "Gemini CLI command not found: $gemini_command"
+if [[ -z "$gemini_command" || ! -x "$gemini_command" ]]; then
+  write_terminal_advice blocked "Gemini CLI command unavailable at packet creation path: $gemini_command"
+  exit 0
+fi
+
+if ! verify_inputs_current; then
+  write_terminal_advice blocked "Lite advisor input files changed or became unavailable after packet creation."
   exit 0
 fi
 
@@ -323,11 +423,12 @@ exit 0
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--packet-id", required=True)
-    parser.add_argument("--purpose", choices=sorted(PURPOSES), required=True)
+    parser.add_argument("--purpose", choices=sorted(allowed_purposes()), required=True)
     parser.add_argument("--base-dir", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--input-file", action="append", default=[])
     parser.add_argument("--task-file")
+    parser.add_argument("--replace", action="store_true", help="Replace an existing packet directory after removing it first.")
     args = parser.parse_args()
 
     packet_id = require_safe_label(args.packet_id, "packet-id")
@@ -349,13 +450,21 @@ def main() -> int:
     sources = [source_metadata(path, base_dir) for path in input_files]
 
     packet_dir = out_dir / packet_id
+    if packet_dir.exists():
+        if not args.replace:
+            raise SystemExit(f"Lite packet already exists; pass --replace to recreate deterministically: {packet_dir}")
+        shutil.rmtree(packet_dir)
     packet_dir.mkdir(parents=True, exist_ok=True)
     extra = task_file.read_text(encoding="utf-8") if task_file else ""
+    gemini_path, gemini_version = resolve_gemini()
     inputs = {
         "packet_id": packet_id,
         "purpose": args.purpose,
+        "skill": current_skill_name(),
         "base_dir": base_dir.as_posix(),
         "model": LITE_MODEL,
+        "gemini_path": gemini_path,
+        "gemini_version": gemini_version,
         "source_files": sources,
     }
 

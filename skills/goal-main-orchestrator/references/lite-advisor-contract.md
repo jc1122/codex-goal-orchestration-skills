@@ -1,6 +1,6 @@
 # Lite Advisor Contract
 
-Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers.
+Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, absolute Gemini binary path captured at packet creation, immutable input hashes, fail-closed validation, and auditable status records.
 
 Use Lite as a context router:
 
@@ -14,14 +14,11 @@ Lite receives focused context by default. Broad context is allowed only for pref
 
 ## Allowed Purposes
 
-- `preflight-decomposition`: source brief/report/roadmap to branch and work-item advice.
-- `lint-repair`: deterministic preflight lint failures to minimal repair advice.
-- `audit-defect-summary`: prompt-audit defects to a concise handoff.
-- `branch-packet-planning`: branch prompt and manifest entry to worker packet advice.
-- `context-pack`: selected branch context to targeted worker read advice.
-- `worker-summary`: completed worker statuses and diffs to summary advice.
-- `blocked-triage`: blocked worker status and failure excerpts to next repair advice.
-- `main-summary`: completed branch statuses/reviews to main handoff advice.
+Scripts enforce the purpose allowlist for the skill they live under:
+
+- `goal-preflight`: `preflight-decomposition`, `lint-repair`.
+- `goal-main-orchestrator`: `audit-defect-summary`, `main-summary`.
+- `goal-branch-orchestrator`: `branch-packet-planning`, `context-pack`, `worker-summary`, `blocked-triage`.
 
 ## Invocation
 
@@ -38,17 +35,19 @@ python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/create_lite_advice_packet.py" \
 
 All `--input-file` paths must be inside `--base-dir`; use the repository root as `--base-dir` when one Lite packet needs both orchestration bundle files and branch worktree files.
 
-Generated launchers run:
+Packet ids are immutable by default. If the packet directory already exists, the generator fails. Pass `--replace` only when intentionally deleting and regenerating that packet.
+
+Generated launchers capture the absolute Gemini CLI path and version in `input-files.json`, then run that captured path:
 
 ```bash
-gemini --model gemini-3.1-flash-lite-preview \
+/absolute/path/to/gemini --model gemini-3.1-flash-lite-preview \
   --approval-mode plan \
   --skip-trust \
   --output-format text \
   -p "$(cat prompt.md)"
 ```
 
-The launcher extracts JSON between `BEGIN_LITE_ADVICE_JSON` and `END_LITE_ADVICE_JSON`, writes `advice.json`, and validates it with `scripts/validate_lite_advice.py`. If Gemini is unavailable, quota-limited, or emits invalid output, the launcher writes a blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
+The launcher rehashes every input before calling Gemini. The validator also rehashes every input when `--inputs` is provided. If Gemini is unavailable, the captured binary path is missing, inputs changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
 
 ## Output
 
@@ -66,6 +65,8 @@ Lite advice must include:
 - `blockers`
 - `commands_run`
 
+For all non-`preflight-decomposition` purposes, `recommended_reads` may only cite explicit Lite input files. `preflight-decomposition` may suggest additional follow-up paths, but the parent agent must open and verify originals before acting.
+
 Validate advice explicitly before using it:
 
 ```bash
@@ -73,3 +74,5 @@ python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/validate_lite_advice.py" \
   --advice /absolute/path/to/lite/B01-L01/advice.json \
   --inputs /absolute/path/to/lite/B01-L01/input-files.json
 ```
+
+When a runtime orchestrator used or ignored a Lite packet, its branch/main status must include a `lite_advice` record with `packet_id`, `purpose`, `status`, `disposition` (`used`, `ignored`, or `unused`), absolute `advice_path`, absolute `inputs_path`, exact `source_files`, `validation_command`, and `reason`. If no Lite packet was used, status must contain `lite_advice: []`.

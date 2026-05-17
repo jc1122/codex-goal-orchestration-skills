@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Preflight"
-  short_description: "Build linted, path-safe /goal bundles with optional Lite advice."
-  default_prompt: "Use $goal-preflight to turn source material into a linted /goal bundle with branch prompts, optional CLI-only Lite advisory packets, and a location-bound bootloader."
+  short_description: "Build linted /goal bundles with deterministic Lite advice packets."
+  default_prompt: "Use $goal-preflight to turn source material into a linted /goal bundle with branch prompts, optional deterministic CLI-only Lite advisory packets, and a location-bound bootloader."

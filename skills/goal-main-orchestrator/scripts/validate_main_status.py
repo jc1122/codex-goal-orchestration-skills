@@ -14,8 +14,12 @@ from pathlib import Path
 STATUSES = {"pass", "partial", "blocked", "failed"}
 AUDIT_STATUSES = {"pass", "failed", "blocked", "missing"}
 REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
+LITE_STATUSES = {"ok", "partial", "blocked"}
+LITE_DISPOSITIONS = {"unused", "used", "ignored"}
+MAIN_LITE_PURPOSES = {"audit-defect-summary", "main-summary"}
 MAX_TOTAL_BRANCHES = 20
 SAFE_REVIEW_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
@@ -119,6 +123,154 @@ def is_repo_relative_path(value: str) -> bool:
         or "//" in value
         or any(part in {"", ".", ".."} for part in path.parts)
     )
+
+
+def is_absolute_path(value: str) -> bool:
+    path = Path(value)
+    return not (
+        "\\" in value
+        or not path.is_absolute()
+        or ".." in path.parts
+    )
+
+
+def validate_lite_source_files(defects: list[str], value: object, path: str) -> list[dict]:
+    if not isinstance(value, list):
+        defect(defects, path, "must be an array")
+        return []
+    result = []
+    seen = set()
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        data = require_object(defects, item, item_path)
+        source_path = require_string(defects, data.get("path"), f"{item_path}.path")
+        sha256 = require_string(defects, data.get("sha256"), f"{item_path}.sha256")
+        size_bytes = data.get("size_bytes")
+        require_string(defects, data.get("reason"), f"{item_path}.reason")
+        if source_path and not is_repo_relative_path(source_path):
+            defect(defects, f"{item_path}.path", "must be relative without traversal")
+        if source_path in seen:
+            defect(defects, f"{item_path}.path", f"duplicates source file {source_path!r}")
+        seen.add(source_path)
+        if sha256 and not SHA256_RE.fullmatch(sha256):
+            defect(defects, f"{item_path}.sha256", "must be sha256:<64 lowercase hex chars>")
+        if not isinstance(size_bytes, int) or isinstance(size_bytes, bool) or size_bytes < 0:
+            defect(defects, f"{item_path}.size_bytes", "must be a non-negative integer")
+        result.append({"path": source_path, "sha256": sha256, "size_bytes": size_bytes, "reason": data.get("reason")})
+    return result
+
+
+def load_lite_validator(defects: list[str]):
+    path = Path(__file__).resolve().parent / "validate_lite_advice.py"
+    if not path.exists():
+        defect(defects, "$.lite_advice", f"missing Lite advice validator: {path}")
+        return None
+    spec = importlib.util.spec_from_file_location("goal_main_validate_lite_advice", path)
+    if spec is None or spec.loader is None:
+        defect(defects, "$.lite_advice", f"could not load Lite advice validator: {path}")
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:  # noqa: BLE001
+        defect(defects, "$.lite_advice", f"could not import Lite advice validator {path}: {exc}")
+        return None
+    return module
+
+
+def validate_lite_advice_entries(defects: list[str], value: object, path: str) -> None:
+    if not isinstance(value, list):
+        defect(defects, path, "must be an array")
+        return
+    lite_validator = None
+    seen = set()
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        data = require_object(defects, item, item_path)
+        required = [
+            "packet_id",
+            "purpose",
+            "status",
+            "disposition",
+            "advice_path",
+            "inputs_path",
+            "source_files",
+            "validation_command",
+            "reason",
+        ]
+        for key in required:
+            if key not in data:
+                defect(defects, item_path, f"missing key: {key}")
+        packet_id = require_string(defects, data.get("packet_id"), f"{item_path}.packet_id")
+        if packet_id and not SAFE_REVIEW_PACKET_RE.fullmatch(packet_id):
+            defect(defects, f"{item_path}.packet_id", "must be a safe packet id")
+        if packet_id in seen:
+            defect(defects, f"{item_path}.packet_id", f"duplicates Lite packet {packet_id!r}")
+        seen.add(packet_id)
+        purpose = require_string(defects, data.get("purpose"), f"{item_path}.purpose")
+        if purpose and purpose not in MAIN_LITE_PURPOSES:
+            defect(defects, f"{item_path}.purpose", f"must be one of {sorted(MAIN_LITE_PURPOSES)}")
+        status = data.get("status")
+        if status not in LITE_STATUSES:
+            defect(defects, f"{item_path}.status", f"must be one of {sorted(LITE_STATUSES)}")
+        disposition = data.get("disposition")
+        if disposition not in LITE_DISPOSITIONS:
+            defect(defects, f"{item_path}.disposition", f"must be one of {sorted(LITE_DISPOSITIONS)}")
+        if disposition == "used" and status != "ok":
+            defect(defects, f"{item_path}.disposition", "may be used only when Lite status is ok")
+        advice_path_value = require_string(defects, data.get("advice_path"), f"{item_path}.advice_path")
+        inputs_path_value = require_string(defects, data.get("inputs_path"), f"{item_path}.inputs_path")
+        if advice_path_value and not is_absolute_path(advice_path_value):
+            defect(defects, f"{item_path}.advice_path", "must be an absolute path without traversal")
+        if inputs_path_value and not is_absolute_path(inputs_path_value):
+            defect(defects, f"{item_path}.inputs_path", "must be an absolute path without traversal")
+        source_files = validate_lite_source_files(defects, data.get("source_files"), f"{item_path}.source_files")
+        validation_command = require_string(defects, data.get("validation_command"), f"{item_path}.validation_command")
+        if validation_command and not all(token in validation_command for token in ["validate_lite_advice.py", "--advice", "--inputs"]):
+            defect(defects, f"{item_path}.validation_command", "must record validate_lite_advice.py with --advice and --inputs")
+        require_string(defects, data.get("reason"), f"{item_path}.reason")
+        if not (advice_path_value and inputs_path_value and is_absolute_path(advice_path_value) and is_absolute_path(inputs_path_value)):
+            continue
+        advice_path = Path(advice_path_value).resolve()
+        inputs_path = Path(inputs_path_value).resolve()
+        if not advice_path.exists():
+            defect(defects, f"{item_path}.advice_path", f"artifact does not exist: {advice_path}")
+            continue
+        if not inputs_path.exists():
+            defect(defects, f"{item_path}.inputs_path", f"artifact does not exist: {inputs_path}")
+            continue
+        advice_data = load_json_artifact(defects, advice_path, f"{item_path}.advice_path")
+        inputs_data = load_json_artifact(defects, inputs_path, f"{item_path}.inputs_path")
+        if not isinstance(inputs_data, dict):
+            defect(defects, f"{item_path}.inputs_path", "must be a JSON object")
+            continue
+        expected_sources = inputs_data.get("source_files") if isinstance(inputs_data.get("source_files"), list) else []
+        expected_min = [
+            {
+                "path": source.get("path"),
+                "sha256": source.get("sha256"),
+                "size_bytes": source.get("size_bytes"),
+                "reason": source.get("reason"),
+            }
+            for source in expected_sources
+            if isinstance(source, dict)
+        ]
+        if source_files != expected_min:
+            defect(defects, f"{item_path}.source_files", "must match input-files.json source metadata exactly")
+        if disposition != "used":
+            continue
+        if lite_validator is None:
+            lite_validator = load_lite_validator(defects)
+        if lite_validator is not None:
+            lite_defects = lite_validator.validate(
+                advice_data,
+                packet_id=packet_id or None,
+                purpose=purpose or None,
+                expected_sources=expected_sources,
+                inputs=inputs_data,
+            )
+            for lite_defect in lite_defects:
+                defect(defects, item_path, f"invalid Lite advice artifact: {lite_defect}")
 
 
 def validate_branch_summary(defects: list[str], value: object, path: str) -> None:
@@ -368,6 +520,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
         "status",
         "audit_status",
         "branch_statuses",
+        "lite_advice",
         "commands_run",
         "dod_checklist",
         "blockers",
@@ -412,6 +565,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
         manifest_path=manifest_path,
         require_artifacts=status == "pass",
     )
+    validate_lite_advice_entries(defects, root.get("lite_advice"), "$.lite_advice")
     require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     require_string_list(defects, root.get("dod_checklist"), "$.dod_checklist", min_items=1)
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")

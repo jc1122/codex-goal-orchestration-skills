@@ -36,7 +36,7 @@ After worker dispatch, wait for active worker launchers; do not poll active work
 
 ## Lite Advisors
 
-Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence.
+Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Record `lite_advice: []` when no Lite packet was used; otherwise record each packet with purpose, status, disposition, advice/input paths, source hashes, validation command, and reason.
 
 ## Tests And Validators
 
@@ -65,5 +65,5 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/reviewer launchers were waited on rather than polled.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
-- Any Lite advice used was validated and treated only as advisory context routing.
+- `lite_advice` records are present, even when empty; any Lite advice used was validated and treated only as advisory context routing.
 {dod}

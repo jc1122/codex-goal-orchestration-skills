@@ -70,7 +70,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_lite_advice_packet.py" 
   --input-file /absolute/path/to/repo/plans/source-report.md
 ```
 
-Then run the generated `launch.sh` and validate:
+Then run the generated `launch.sh` and validate. Packet ids are immutable by default; pass `--replace` only when intentionally regenerating a packet after removing the prior packet directory:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/validate_lite_advice.py" \
@@ -79,6 +79,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/validate_lite_advice.py" \
 ```
 
 If Lite is blocked, invalid, stale, or contradicted by source files, ignore the advice and continue with the normal preflight workflow. Do not treat Lite output as lint status, audit status, or DoD evidence.
+
+The Lite scripts enforce the preflight purpose allowlist (`preflight-decomposition`, `lint-repair`), capture the absolute Gemini CLI path at packet creation, rehash all source inputs before launch and during validation, and reject runtime-purpose recommendations that are outside the explicit input set.
 
 ## Parallelization Rules
 

@@ -29,8 +29,8 @@ Base ref: {base_ref}
 - Require each branch to record `git diff --check {base_ref}...HEAD` before merge readiness.
 - Require every branch status to pass `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it.
 - Require final `main.status.json` to pass `validate_main_status.py --manifest /absolute/path/to/job.manifest.json`.
-- Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts, exact base-range whitespace command evidence from `git diff --check {base_ref}...HEAD`, no mergeable reviewer verification gaps, DoD evidence, and no blockers.
-- Optional Lite advisors are context routers only. Do not launch Lite before prompt audit except for an audit-defect summary after a failed/blocked audit. Validated Lite advice may guide targeted original reads, but it is not audit, review, mergeability, or DoD evidence.
+- Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts, exact base-range whitespace command evidence from `git diff --check {base_ref}...HEAD`, no mergeable reviewer verification gaps, DoD evidence, `lite_advice` audit records, and no blockers.
+- Optional Lite advisors are context routers only. Do not launch Lite before prompt audit except for an audit-defect summary after a failed/blocked audit. Validated Lite advice may guide targeted original reads, but it is not audit, review, mergeability, or DoD evidence. Record `lite_advice: []` when no Lite packet was used; otherwise record each packet with purpose, status, disposition, advice/input paths, source hashes, validation command, and reason.
 - Preserve unsupported, unresolved, negative, and probe-only labels.
 
 ## Parallelization Rationale
@@ -63,5 +63,5 @@ Base ref: {base_ref}
 - Every branch status passed manifest-bound `validate_branch_status.py`.
 - Every mergeable review recorded base-range whitespace evidence and no verification gaps.
 - Final `main.status.json` passed manifest-bound `validate_main_status.py`.
-- Any Lite advice used was validated and treated only as advisory context routing.
+- `lite_advice` records are present, even when empty; any Lite advice used was validated and treated only as advisory context routing.
 {final_dod}
