@@ -78,9 +78,9 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/validate_lite_advice.py" \
   --inputs /absolute/path/to/repo/plans/orchestration/<job-id>/lite/P01-L01/input-files.json
 ```
 
-If Lite is blocked, invalid, stale, or contradicted by source files, ignore the advice and continue with the normal preflight workflow. Do not treat Lite output as lint status, audit status, or DoD evidence.
+If Lite is blocked, invalid, stale, or contradicted by source files, ignore the advice and continue with the normal preflight workflow. Do not treat Lite output as lint status, audit status, or DoD evidence. If any preflight Lite packet exists under the bundle `lite/` directory, record it in `job.manifest.json.preflight_lite_advice`; the linter fails on unrecorded preflight Lite packet directories.
 
-The Lite scripts enforce the preflight purpose allowlist (`preflight-decomposition`, `lint-repair`), capture the absolute Gemini CLI path and version at packet creation, rehash all source inputs and `prompt.md` before launch and during validation, and reject runtime-purpose recommendations that are outside the explicit input set.
+The Lite scripts enforce the preflight purpose allowlist (`preflight-decomposition`, `lint-repair`), capture the absolute Gemini CLI path/version/binary sha256 at packet creation, rehash all source inputs, `task.md`, `prompt.md`, and the Gemini binary during launch/validation, regenerate the prompt from `input-files.json` plus `task.md`, and reject runtime-purpose recommendations that are outside the explicit input set.
 
 ## Parallelization Rules
 

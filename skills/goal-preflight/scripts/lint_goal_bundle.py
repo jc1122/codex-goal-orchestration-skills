@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import re
 from pathlib import Path, PurePosixPath
@@ -16,6 +17,10 @@ DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
 SAFE_ID_RE = re.compile(r"^[A-Z][A-Z0-9_-]{1,31}$")
 SAFE_LABEL_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,63}$")
 INVALID_BRANCH_CHARS = set(" ~^:?*[\\")
+PREFLIGHT_LITE_PURPOSES = {"preflight-decomposition", "lint-repair"}
+LITE_STATUSES = {"ok", "partial", "blocked"}
+LITE_DISPOSITIONS = {"unused", "used", "ignored"}
+LITE_VALIDATION_STATUSES = {"pass", "failed"}
 
 
 def is_strict_int(value: object) -> bool:
@@ -86,6 +91,162 @@ def has_dod(text: str) -> bool:
     return "- " in after
 
 
+def load_lite_validator() -> object | None:
+    path = Path(__file__).resolve().parent / "validate_lite_advice.py"
+    if not path.exists():
+        return None
+    spec = importlib.util.spec_from_file_location("goal_preflight_validate_lite_advice", path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_json_artifact(path: Path) -> object:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) -> None:
+    records = manifest.get("preflight_lite_advice")
+    if not isinstance(records, list):
+        defect("job.manifest.json", "critical", "preflight_lite_advice must be present as an array")
+        return
+    validator = load_lite_validator()
+    if validator is None:
+        defect("job.manifest.json", "critical", "could not load validate_lite_advice.py for preflight Lite provenance")
+        return
+    reported_ids: set[str] = set()
+    for index, record in enumerate(records):
+        path = f"preflight_lite_advice[{index}]"
+        if not isinstance(record, dict):
+            defect("job.manifest.json", "critical", f"{path} must be an object")
+            continue
+        required = [
+            "packet_id",
+            "purpose",
+            "status",
+            "disposition",
+            "advice_path",
+            "inputs_path",
+            "source_files",
+            "validation_command",
+            "validation_status",
+            "validation_defects",
+            "reason",
+        ]
+        for key in required:
+            if key not in record:
+                defect("job.manifest.json", "critical", f"{path} missing key: {key}")
+        packet_id = record.get("packet_id")
+        if not isinstance(packet_id, str) or not SAFE_LABEL_RE.fullmatch(packet_id):
+            defect("job.manifest.json", "critical", f"{path}.packet_id must match {SAFE_LABEL_RE.pattern}")
+            continue
+        if packet_id in reported_ids:
+            defect("job.manifest.json", "critical", f"{path}.packet_id duplicates {packet_id}")
+        reported_ids.add(packet_id)
+        purpose = record.get("purpose")
+        if purpose not in PREFLIGHT_LITE_PURPOSES:
+            defect("job.manifest.json", "critical", f"{path}.purpose must be one of {sorted(PREFLIGHT_LITE_PURPOSES)}")
+        if record.get("status") not in LITE_STATUSES:
+            defect("job.manifest.json", "critical", f"{path}.status must be one of {sorted(LITE_STATUSES)}")
+        if record.get("disposition") not in LITE_DISPOSITIONS:
+            defect("job.manifest.json", "critical", f"{path}.disposition must be one of {sorted(LITE_DISPOSITIONS)}")
+        if record.get("disposition") == "used" and record.get("status") != "ok":
+            defect("job.manifest.json", "critical", f"{path}.disposition may be used only when Lite status is ok")
+        expected_advice = f"lite/{packet_id}/advice.json"
+        expected_inputs = f"lite/{packet_id}/input-files.json"
+        if record.get("advice_path") != expected_advice:
+            defect("job.manifest.json", "critical", f"{path}.advice_path must be {expected_advice!r}")
+        if record.get("inputs_path") != expected_inputs:
+            defect("job.manifest.json", "critical", f"{path}.inputs_path must be {expected_inputs!r}")
+        validation_status = record.get("validation_status")
+        validation_defects = record.get("validation_defects")
+        if validation_status not in LITE_VALIDATION_STATUSES:
+            defect("job.manifest.json", "critical", f"{path}.validation_status must be one of {sorted(LITE_VALIDATION_STATUSES)}")
+        if not isinstance(validation_defects, list) or any(not isinstance(item, str) or not item.strip() for item in validation_defects):
+            defect("job.manifest.json", "critical", f"{path}.validation_defects must be an array of non-empty strings")
+            validation_defects = []
+        if validation_status == "pass" and validation_defects:
+            defect("job.manifest.json", "critical", f"{path}.validation_defects must be empty when validation_status is pass")
+        if validation_status == "failed" and not validation_defects:
+            defect("job.manifest.json", "critical", f"{path}.validation_defects must explain failed Lite validation")
+        validation_command = record.get("validation_command")
+        if not isinstance(validation_command, str) or not all(token in validation_command for token in ["validate_lite_advice.py", "--advice", "--inputs"]):
+            defect("job.manifest.json", "critical", f"{path}.validation_command must record validate_lite_advice.py with --advice and --inputs")
+        if not isinstance(record.get("reason"), str) or not record.get("reason", "").strip():
+            defect("job.manifest.json", "critical", f"{path}.reason must be a non-empty string")
+        advice_path = bundle_dir / expected_advice
+        inputs_path = bundle_dir / expected_inputs
+        if not advice_path.exists():
+            defect("job.manifest.json", "critical", f"{path}.advice_path artifact does not exist: {advice_path}")
+            continue
+        if not inputs_path.exists():
+            defect("job.manifest.json", "critical", f"{path}.inputs_path artifact does not exist: {inputs_path}")
+            continue
+        try:
+            advice_data = load_json_artifact(advice_path)
+            inputs_data = load_json_artifact(inputs_path)
+        except Exception as exc:  # noqa: BLE001
+            defect("job.manifest.json", "critical", f"{path} Lite artifacts must be readable JSON: {exc}")
+            continue
+        expected_sources = inputs_data.get("source_files") if isinstance(inputs_data, dict) and isinstance(inputs_data.get("source_files"), list) else []
+        expected_min = [
+            {
+                "path": source.get("path"),
+                "sha256": source.get("sha256"),
+                "size_bytes": source.get("size_bytes"),
+                "reason": source.get("reason"),
+            }
+            for source in expected_sources
+            if isinstance(source, dict)
+        ]
+        if record.get("source_files") != expected_min:
+            defect("job.manifest.json", "critical", f"{path}.source_files must match input-files.json source metadata exactly")
+        lite_defects = validator.validate(
+            advice_data,
+            packet_id=packet_id,
+            purpose=str(purpose) if isinstance(purpose, str) else None,
+            expected_sources=expected_sources,
+            inputs=inputs_data if isinstance(inputs_data, dict) else None,
+            inputs_path=inputs_path,
+        )
+        actual_validation_status = "pass" if not lite_defects else "failed"
+        if validation_status in LITE_VALIDATION_STATUSES and validation_status != actual_validation_status:
+            defect("job.manifest.json", "critical", f"{path}.validation_status must match actual Lite validation status {actual_validation_status!r}")
+        if validation_status == "failed" and validation_defects != lite_defects:
+            defect("job.manifest.json", "critical", f"{path}.validation_defects must match actual Lite validation defects exactly")
+        if record.get("disposition") == "used" and lite_defects:
+            defect("job.manifest.json", "critical", f"{path} used Lite advice must pass validation")
+
+    lite_root = bundle_dir / "lite"
+    if not lite_root.is_dir():
+        return
+    for packet_dir in sorted(item for item in lite_root.iterdir() if item.is_dir()):
+        inputs_path = packet_dir / "input-files.json"
+        advice_path = packet_dir / "advice.json"
+        inputs_data: object = {}
+        if inputs_path.exists():
+            try:
+                inputs_data = load_json_artifact(inputs_path)
+            except Exception as exc:  # noqa: BLE001
+                defect("job.manifest.json", "critical", f"lite/{packet_dir.name}/input-files.json must be readable JSON: {exc}")
+                continue
+        elif advice_path.exists() and packet_dir.name.startswith("P"):
+            defect("job.manifest.json", "critical", f"unrecorded malformed preflight Lite packet without input-files.json: {packet_dir}")
+            continue
+        if not isinstance(inputs_data, dict):
+            continue
+        purpose = inputs_data.get("purpose")
+        skill = inputs_data.get("skill")
+        input_packet_id = inputs_data.get("packet_id")
+        packet_id = input_packet_id if isinstance(input_packet_id, str) and input_packet_id.strip() else packet_dir.name
+        relevant = purpose in PREFLIGHT_LITE_PURPOSES or skill == "goal-preflight" or packet_dir.name.startswith("P")
+        if relevant and packet_id not in reported_ids:
+            defect("job.manifest.json", "critical", f"unrecorded manifest-owned preflight Lite packet: {packet_id} at {packet_dir}")
+
+
 def lint(bundle_dir: Path) -> dict:
     defects: list[dict] = []
 
@@ -117,9 +278,11 @@ def lint(bundle_dir: Path) -> dict:
         "waves",
         "max_active_branch_agents",
         "parallelization",
+        "preflight_lite_advice",
     ]:
         if key not in manifest:
             defect("job.manifest.json", "critical", f"missing key: {key}")
+    validate_preflight_lite_records(defect, bundle_dir, manifest)
     if not safe_branch_name(manifest.get("base_ref")):
         defect("job.manifest.json", "critical", f"base_ref is not safe: {manifest.get('base_ref')!r}")
     for key in ["artifact_policy", "cleanup_policy"]:

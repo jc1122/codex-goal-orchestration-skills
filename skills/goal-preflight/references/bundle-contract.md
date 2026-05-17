@@ -42,6 +42,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "parallelization_rationale": "Branches are grouped into waves of up to 4 independent branch agents.",
     "wave_execution": "Launch every branch in the current wave concurrently, then close finished branch orchestrators before launching the next wave."
   },
+  "preflight_lite_advice": [],
   "branches": [
     {
       "id": "B01",
@@ -92,6 +93,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
+- `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.
 - Branch prompt/status/review paths are unique and cannot overwrite one another.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.

@@ -179,12 +179,47 @@ def load_lite_validator(defects: list[str]):
     return module
 
 
+def discover_unrecorded_lite_packets(
+    defects: list[str],
+    path: str,
+    *,
+    manifest_path: Path,
+    reported_ids: set[str],
+) -> None:
+    lite_root = manifest_path.parent / "lite"
+    if not lite_root.is_dir():
+        return
+    for packet_dir in sorted(item for item in lite_root.iterdir() if item.is_dir()):
+        inputs_path = packet_dir / "input-files.json"
+        advice_path = packet_dir / "advice.json"
+        inputs_data: object = {}
+        if inputs_path.exists():
+            inputs_data = load_json_artifact(defects, inputs_path, f"{path}.{packet_dir.name}.inputs_path")
+        elif advice_path.exists() and packet_dir.name.startswith("M"):
+            defect(defects, path, f"unrecorded malformed main Lite packet without input-files.json: {packet_dir}")
+            continue
+        if not isinstance(inputs_data, dict):
+            continue
+        purpose = inputs_data.get("purpose")
+        skill = inputs_data.get("skill")
+        input_packet_id = inputs_data.get("packet_id")
+        packet_id = input_packet_id if isinstance(input_packet_id, str) and input_packet_id.strip() else packet_dir.name
+        relevant = (
+            purpose in MAIN_LITE_PURPOSES
+            or skill == "goal-main-orchestrator"
+            or packet_dir.name.startswith("M")
+        )
+        if relevant and packet_id not in reported_ids:
+            defect(defects, path, f"unrecorded manifest-owned main Lite packet: {packet_id} at {packet_dir}")
+
+
 def validate_lite_advice_entries(defects: list[str], value: object, path: str, *, manifest_path: Path) -> None:
     if not isinstance(value, list):
         defect(defects, path, "must be an array")
         return
     lite_validator = None
     seen = set()
+    reported_ids: set[str] = set()
     for index, item in enumerate(value):
         item_path = f"{path}[{index}]"
         data = require_object(defects, item, item_path)
@@ -210,6 +245,8 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str, *
         if packet_id in seen:
             defect(defects, f"{item_path}.packet_id", f"duplicates Lite packet {packet_id!r}")
         seen.add(packet_id)
+        if packet_id:
+            reported_ids.add(packet_id)
         purpose = require_string(defects, data.get("purpose"), f"{item_path}.purpose")
         if purpose and purpose not in MAIN_LITE_PURPOSES:
             defect(defects, f"{item_path}.purpose", f"must be one of {sorted(MAIN_LITE_PURPOSES)}")
@@ -299,6 +336,12 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str, *
             for lite_defect in lite_defects:
                 if disposition == "used":
                     defect(defects, item_path, f"invalid Lite advice artifact: {lite_defect}")
+    discover_unrecorded_lite_packets(
+        defects,
+        path,
+        manifest_path=manifest_path,
+        reported_ids=reported_ids,
+    )
 
 
 def validate_branch_summary(defects: list[str], value: object, path: str) -> None:

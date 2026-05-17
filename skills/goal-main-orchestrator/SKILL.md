@@ -77,7 +77,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_lite_advice_pac
   --input-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.review.json
 ```
 
-After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it. The main Lite scripts enforce the main-only purpose allowlist (`audit-defect-summary`, `main-summary`), capture the absolute Gemini CLI path and version at packet creation, rehash all source inputs and `prompt.md` before launch and during validation, and reject runtime-purpose recommendations outside the explicit input set.
+After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it. The main Lite scripts enforce the main-only purpose allowlist (`audit-defect-summary`, `main-summary`), capture the absolute Gemini CLI path/version/binary sha256 at packet creation, rehash all source inputs, `task.md`, `prompt.md`, and the Gemini binary during launch/validation, regenerate the prompt from `input-files.json` plus `task.md`, and reject runtime-purpose recommendations outside the explicit input set. Main status validation scans manifest-owned `lite/` for relevant main Lite packet directories and fails if they are not recorded in `lite_advice`.
 
 ## Branch Creation
 

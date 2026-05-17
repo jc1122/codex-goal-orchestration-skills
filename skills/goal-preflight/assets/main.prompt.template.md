@@ -63,5 +63,5 @@ Base ref: {base_ref}
 - Every branch status passed manifest-bound `validate_branch_status.py`.
 - Every mergeable review recorded base-range whitespace evidence and no verification gaps.
 - Final `main.status.json` passed manifest-bound `validate_main_status.py`.
-- `lite_advice` records are present, even when empty; any Lite advice used was validated and treated only as advisory context routing.
+- `lite_advice` records are present, even when empty; every relevant main Lite packet directory is recorded, validated, and treated only as advisory context routing.
 {final_dod}

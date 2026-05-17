@@ -1,6 +1,6 @@
 # Lite Advisor Contract
 
-Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, absolute Gemini binary path and version captured at packet creation, immutable input and prompt hashes, fail-closed validation, manifest-owned artifact paths, and auditable status records.
+Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, absolute Gemini binary path, Gemini version, Gemini binary sha256 captured at packet creation, immutable input/prompt/task hashes, regenerated prompt consistency checks, fail-closed validation, manifest-owned artifact paths, unrecorded-packet discovery, and auditable status records.
 
 Use Lite as a context router:
 
@@ -37,7 +37,7 @@ All `--input-file` paths must be inside `--base-dir`; use the repository root as
 
 Packet ids are immutable by default. If the packet directory already exists, the generator fails. Pass `--replace` only when intentionally deleting and regenerating that packet.
 
-Generated launchers capture the absolute Gemini CLI path, Gemini version, and `prompt.md` hash in `input-files.json`, then run that captured path:
+Generated launchers capture the absolute Gemini CLI path, Gemini version, Gemini binary sha256, `task.md` hash, and `prompt.md` hash in `input-files.json`, then run that captured path:
 
 ```bash
 /absolute/path/to/gemini --model gemini-3.1-flash-lite-preview \
@@ -47,7 +47,7 @@ Generated launchers capture the absolute Gemini CLI path, Gemini version, and `p
   -p "$(cat prompt.md)"
 ```
 
-The launcher rehashes every input, rehashes `prompt.md`, and rechecks the Gemini version before calling Gemini. The validator also rehashes every input and `prompt.md`. If Gemini is unavailable, the captured binary path is missing, the Gemini version changed, inputs changed, the prompt changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
+The launcher rehashes every input, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
 
 ## Output
 
@@ -75,4 +75,6 @@ python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/validate_lite_advice.py" \
   --inputs /absolute/path/to/lite/B01-L01/input-files.json
 ```
 
-When a runtime orchestrator used or ignored a Lite packet, its branch/main status must include a `lite_advice` record with `packet_id`, `purpose`, `status`, `disposition` (`used`, `ignored`, or `unused`), absolute manifest-owned `advice_path`, absolute manifest-owned `inputs_path`, exact `source_files`, `validation_command`, `validation_status`, `validation_defects`, and `reason`. Manifest-owned paths are exactly `<manifest-dir>/lite/<packet_id>/advice.json` and `<manifest-dir>/lite/<packet_id>/input-files.json`. If no Lite packet was used, status must contain `lite_advice: []`.
+When preflight used or ignored a Lite packet, `job.manifest.json.preflight_lite_advice` must include a record with `packet_id`, `purpose`, `status`, `disposition` (`used`, `ignored`, or `unused`), manifest-relative `advice_path`, manifest-relative `inputs_path`, exact `source_files`, `validation_command`, `validation_status`, `validation_defects`, and `reason`. Preflight Lite paths are exactly `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`; if no preflight Lite was used, record `preflight_lite_advice: []`. The preflight linter scans `lite/` and fails on unrecorded preflight Lite packets.
+
+When a runtime orchestrator used or ignored a Lite packet, its branch/main status must include a `lite_advice` record with `packet_id`, `purpose`, `status`, `disposition`, absolute manifest-owned `advice_path`, absolute manifest-owned `inputs_path`, exact `source_files`, `validation_command`, `validation_status`, `validation_defects`, and `reason`. Runtime manifest-owned paths are exactly `<manifest-dir>/lite/<packet_id>/advice.json` and `<manifest-dir>/lite/<packet_id>/input-files.json`. If no runtime Lite packet was used, status must contain `lite_advice: []`. Runtime validators scan `lite/` for relevant main/branch Lite packets and fail if they are not recorded.

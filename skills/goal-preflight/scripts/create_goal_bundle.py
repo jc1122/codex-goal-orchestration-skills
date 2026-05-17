@@ -308,6 +308,9 @@ def normalize_brief(brief: dict) -> dict:
         raise SystemExit("single-branch bundles are serialized and require brief.serial_reason")
     if max_active < MAX_ACTIVE_BRANCH_AGENTS and not (serial_reason or parallelization_rationale):
         raise SystemExit("max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
+    preflight_lite_advice = brief.get("preflight_lite_advice", [])
+    if not isinstance(preflight_lite_advice, list):
+        raise SystemExit("preflight_lite_advice must be an array when supplied")
 
     waves = brief.get("waves") or chunk_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
@@ -362,6 +365,7 @@ def normalize_brief(brief: dict) -> dict:
         },
         "branches": branches,
         "waves": waves,
+        "preflight_lite_advice": preflight_lite_advice,
     }
 
 
@@ -392,6 +396,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         "cleanup_policy": brief["cleanup_policy"],
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
+        "preflight_lite_advice": brief["preflight_lite_advice"],
         "branches": [
             {
                 "id": branch["id"],
@@ -469,7 +474,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Cleanup policy: {brief['cleanup_policy']}",
             "",
             "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
-            "Lite: optional advisory packets may route context but never satisfy audit, review, mergeability, or DoD evidence.",
+            "Lite: optional advisory packets may route context but never satisfy audit, review, mergeability, or DoD evidence; preflight Lite provenance lives in job.manifest.json preflight_lite_advice.",
             "Run `lint_goal_bundle.py` before launching `/goal`.",
             "",
         ]

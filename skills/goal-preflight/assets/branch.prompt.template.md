@@ -65,5 +65,5 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/reviewer launchers were waited on rather than polled.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
-- `lite_advice` records are present, even when empty; any Lite advice used was validated and treated only as advisory context routing.
+- `lite_advice` records are present, even when empty; every relevant branch Lite packet directory is recorded, validated, and treated only as advisory context routing.
 {dod}

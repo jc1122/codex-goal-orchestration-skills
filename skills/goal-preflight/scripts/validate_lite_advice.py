@@ -6,12 +6,17 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import subprocess
 from pathlib import Path, PurePosixPath
 
 
 LITE_MODEL = "gemini-3.1-flash-lite-preview"
 GEMINI_APPROVAL_MODE = "plan"
+GEMINI_COMMAND = "gemini"
+LITE_STATUS_BEGIN = "BEGIN_LITE_ADVICE_JSON"
+LITE_STATUS_END = "END_LITE_ADVICE_JSON"
 STATUSES = {"ok", "partial", "blocked"}
 ALL_PURPOSES = {
     "preflight-decomposition",
@@ -68,6 +73,85 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return "sha256:" + digest.hexdigest()
+
+
+def sha256_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def advice_command(gemini_path: str) -> str:
+    command = gemini_path if gemini_path else GEMINI_COMMAND
+    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
+
+
+def prompt_for(
+    packet_id: str,
+    purpose: str,
+    base_dir: str,
+    sources: list[dict],
+    extra: str,
+    *,
+    skill: str,
+    model: str,
+    gemini_path: str,
+    gemini_version: str,
+    gemini_sha256: str,
+    task_sha256: str,
+) -> str:
+    source_lines = "\n".join(
+        f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
+        for item in sources
+    )
+    example_sources = json.dumps(sources, indent=2)
+    command = advice_command(gemini_path)
+    return f"""# Lite Advisory Packet {packet_id}
+
+You are a CLI-only Lite advisor. Do not edit files, create branches, create worktrees, run tests, or decide pass/fail. Your job is to route context cheaply for heavier agents.
+
+Purpose: {purpose}
+Base directory: {base_dir}
+
+Deterministic envelope:
+- Skill: {skill}
+- Model: {model}
+- Gemini path: {gemini_path if gemini_path else "unavailable"}
+- Gemini version: {gemini_version}
+- Gemini sha256: {gemini_sha256}
+- Task guidance sha256: {task_sha256}
+
+Read only these explicit input files:
+{source_lines if source_lines else "- none"}
+
+Policy:
+- Lite output is advisory only.
+- Do not decide mergeability, prompt-audit pass/fail, scientific claim support, or Definition-of-Done satisfaction.
+- Preserve labels exactly when present: `unsupported`, `unresolved`, `negative`, `weakened`, `probe-only`, `blocked`.
+- Recommend targeted original reads with path, anchor, and reason. Do not tell heavy agents to reread every source file by default.
+- For any purpose other than `preflight-decomposition`, `recommended_reads` may cite only the explicit input files listed above.
+- Use focused context. Do not broaden beyond the listed files unless the purpose is `preflight-decomposition`; even then, only recommend additional paths rather than reading the whole repository.
+- If an input file is missing, unreadable, stale, or insufficient, return `status: "blocked"` or `status: "partial"` with blockers.
+
+Additional task guidance:
+{extra.strip() if extra.strip() else "- No extra guidance."}
+
+Return exactly one JSON object between these marker lines. Do not print any other JSON object between them. The `source_files` array must echo this exact metadata for every listed input file:
+
+{LITE_STATUS_BEGIN}
+{{
+  "packet_id": "{packet_id}",
+  "role": "lite_advisor",
+  "purpose": "{purpose}",
+  "status": "ok",
+  "source_files": {example_sources},
+  "recommended_reads": [],
+  "risk_flags": [],
+  "advice": {{}},
+  "summary": "replace with concise advisory summary",
+  "blockers": [],
+  "commands_run": [{json.dumps(command)}]
+}}
+{LITE_STATUS_END}
+"""
 
 
 def load_json(path: Path) -> object:
@@ -165,6 +249,82 @@ def validate_live_sources(defects: list[str], inputs: dict | None) -> None:
             )
 
 
+def validate_gemini_envelope(defects: list[str], inputs: dict, *, lite_status: object) -> None:
+    gemini_path_value = inputs.get("gemini_path")
+    gemini_version = inputs.get("gemini_version")
+    gemini_sha256 = inputs.get("gemini_sha256")
+    blocked = lite_status == "blocked"
+    if gemini_path_value == "" and gemini_version == "unavailable" and gemini_sha256 == "unavailable":
+        if not blocked:
+            defect(defects, "input-files.json.gemini_path", "may be unavailable only for blocked Lite advice")
+        return
+    if not isinstance(gemini_path_value, str) or not gemini_path_value.strip():
+        defect(defects, "input-files.json.gemini_path", "must be a non-empty absolute path or unavailable for blocked advice")
+        return
+    gemini_path = Path(gemini_path_value)
+    if "\\" in gemini_path_value or not gemini_path.is_absolute() or ".." in gemini_path.parts:
+        defect(defects, "input-files.json.gemini_path", "must be an absolute path without traversal")
+        return
+    if not isinstance(gemini_sha256, str) or not SHA256_RE.fullmatch(gemini_sha256):
+        defect(defects, "input-files.json.gemini_sha256", "must be sha256:<64 lowercase hex chars>")
+    if not isinstance(gemini_version, str) or not gemini_version.strip() or gemini_version == "unavailable":
+        defect(defects, "input-files.json.gemini_version", "must be the captured Gemini CLI version")
+    if blocked:
+        return
+    if not gemini_path.exists() or not os.access(gemini_path, os.X_OK):
+        defect(defects, "input-files.json.gemini_path", f"must exist and be executable: {gemini_path}")
+        return
+    actual_hash = sha256_file(gemini_path)
+    if actual_hash != gemini_sha256:
+        defect(defects, "input-files.json.gemini_sha256", f"stale Gemini binary metadata: expected {gemini_sha256}, got {actual_hash}")
+    try:
+        completed = subprocess.run(
+            [gemini_path.as_posix(), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001
+        defect(defects, "input-files.json.gemini_version", f"could not recheck Gemini version: {exc}")
+        return
+    version_lines = (completed.stdout or completed.stderr).strip().splitlines()
+    actual_version = version_lines[0] if version_lines else "version-unavailable"
+    if actual_version != gemini_version:
+        defect(defects, "input-files.json.gemini_version", f"stale Gemini version metadata: expected {gemini_version!r}, got {actual_version!r}")
+
+
+def validate_inputs_envelope(
+    defects: list[str],
+    inputs: dict | None,
+    *,
+    packet_id: str,
+    purpose: str,
+    lite_status: object,
+) -> None:
+    if inputs is None:
+        return
+    input_packet_id = inputs.get("packet_id")
+    if input_packet_id != packet_id:
+        defect(defects, "input-files.json.packet_id", f"must match advice packet_id {packet_id!r}")
+    if isinstance(input_packet_id, str) and not SAFE_LABEL_RE.fullmatch(input_packet_id):
+        defect(defects, "input-files.json.packet_id", "must be a safe packet id")
+    input_purpose = inputs.get("purpose")
+    if input_purpose != purpose:
+        defect(defects, "input-files.json.purpose", f"must match advice purpose {purpose!r}")
+    if isinstance(input_purpose, str) and input_purpose not in allowed_purposes():
+        defect(defects, "input-files.json.purpose", f"not allowed for {current_skill_name()}: {input_purpose!r}")
+    skill = inputs.get("skill")
+    if skill != current_skill_name():
+        defect(defects, "input-files.json.skill", f"must be {current_skill_name()!r}")
+    if inputs.get("model") != LITE_MODEL:
+        defect(defects, "input-files.json.model", f"must be {LITE_MODEL!r}")
+    task_sha256 = inputs.get("task_sha256")
+    if not isinstance(task_sha256, str) or not SHA256_RE.fullmatch(task_sha256):
+        defect(defects, "input-files.json.task_sha256", "must be sha256:<64 lowercase hex chars>")
+    validate_gemini_envelope(defects, inputs, lite_status=lite_status)
+
+
 def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: Path | None) -> None:
     if inputs is None:
         return
@@ -179,9 +339,41 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
     if not prompt_path.exists():
         defect(defects, "prompt.md", f"must exist next to input-files.json: {prompt_path}")
         return
-    actual = sha256_file(prompt_path)
+    task_path = inputs_path.parent / "task.md"
+    if not task_path.exists():
+        defect(defects, "task.md", f"must exist next to input-files.json: {task_path}")
+        return
+    task_text = task_path.read_text(encoding="utf-8")
+    task_sha256 = inputs.get("task_sha256")
+    if isinstance(task_sha256, str) and SHA256_RE.fullmatch(task_sha256):
+        actual_task = sha256_text(task_text)
+        if actual_task != task_sha256:
+            defect(defects, "task.md", f"stale task metadata: expected {task_sha256}, got {actual_task}")
+    source_files = inputs.get("source_files")
+    if not isinstance(source_files, list):
+        source_files = []
+    regenerated = prompt_for(
+        str(inputs.get("packet_id", "")),
+        str(inputs.get("purpose", "")),
+        str(inputs.get("base_dir", "")),
+        source_files,
+        task_text,
+        skill=str(inputs.get("skill", "")),
+        model=str(inputs.get("model", "")),
+        gemini_path=str(inputs.get("gemini_path", "")),
+        gemini_version=str(inputs.get("gemini_version", "")),
+        gemini_sha256=str(inputs.get("gemini_sha256", "")),
+        task_sha256=str(inputs.get("task_sha256", "")),
+    )
+    regenerated_hash = sha256_text(regenerated)
+    if regenerated_hash != expected:
+        defect(defects, "input-files.json.prompt_sha256", f"must match regenerated prompt from input-files.json/task.md: got {regenerated_hash}")
+    actual_text = prompt_path.read_text(encoding="utf-8")
+    actual = sha256_text(actual_text)
     if actual != expected:
         defect(defects, "prompt.md", f"stale prompt metadata: expected {expected}, got {actual}")
+    if actual_text != regenerated:
+        defect(defects, "prompt.md", "must match deterministic prompt regenerated from input-files.json and task.md")
 
 
 def validate_source_files(defects: list[str], value: object, path: str, expected: list[dict] | None) -> list[str]:
@@ -310,6 +502,7 @@ def validate(
     status = root.get("status")
     if status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
+    validate_inputs_envelope(defects, inputs, packet_id=actual_packet_id, purpose=actual_purpose, lite_status=status)
     validate_live_sources(defects, inputs)
     validate_prompt_hash(defects, inputs, inputs_path)
     source_paths = set(validate_source_files(defects, root.get("source_files"), "$.source_files", expected_sources))
@@ -330,7 +523,11 @@ def validate(
         defect(defects, "$.blockers", "must be empty when status is ok")
     if status in {"partial", "blocked"} and not blockers:
         defect(defects, "$.blockers", "must explain non-ok Lite advice")
-    if commands and not any(LITE_MODEL in command and f"--approval-mode {GEMINI_APPROVAL_MODE}" in command for command in commands):
+    if inputs is not None:
+        expected_command = advice_command(str(inputs.get("gemini_path", "")))
+        if commands and expected_command not in commands:
+            defect(defects, "$.commands_run", f"must record exact Lite command {expected_command!r}")
+    elif commands and not any(LITE_MODEL in command and f"--approval-mode {GEMINI_APPROVAL_MODE}" in command for command in commands):
         defect(defects, "$.commands_run", "must record the fixed Lite model and approval mode")
     return defects
 
