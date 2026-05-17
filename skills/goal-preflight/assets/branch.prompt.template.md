@@ -36,7 +36,7 @@ After worker dispatch, wait for active worker launchers; do not poll active work
 
 ## Lite Advisors
 
-Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Record `lite_advice: []` when no Lite packet was used; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, validation command, validation status, validation defects, and reason.
+Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Record `lite_advice: []` only when no relevant branch Lite packet exists; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, validation command, validation status, validation defects, and reason.
 
 ## Tests And Validators
 

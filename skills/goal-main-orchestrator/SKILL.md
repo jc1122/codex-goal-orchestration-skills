@@ -146,7 +146,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.p
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty when no Lite was used; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 

@@ -47,7 +47,7 @@ Generated launchers capture the absolute Gemini CLI path, Gemini version, Gemini
   -p "$(cat prompt.md)"
 ```
 
-The launcher rehashes every input, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
+The launcher rehashes every input, rehashes `task.md`, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
 
 ## Output
 

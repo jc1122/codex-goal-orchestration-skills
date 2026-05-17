@@ -187,10 +187,14 @@ def discover_unrecorded_lite_packets(
         skill = inputs_data.get("skill")
         input_packet_id = inputs_data.get("packet_id")
         packet_id = input_packet_id if isinstance(input_packet_id, str) and input_packet_id.strip() else packet_dir.name
-        relevant = (
+        branch_scoped = bool(branch_prefix) and (
+            packet_dir.name.startswith(branch_prefix)
+            or packet_id.startswith(branch_prefix)
+        )
+        relevant = branch_scoped and (
             purpose in BRANCH_LITE_PURPOSES
             or skill == "goal-branch-orchestrator"
-            or (bool(branch_prefix) and packet_dir.name.startswith(branch_prefix))
+            or advice_path.exists()
         )
         if relevant and packet_id not in reported_ids:
             defect(defects, path, f"unrecorded manifest-owned branch Lite packet: {packet_id} at {packet_dir}")
@@ -232,6 +236,8 @@ def validate_lite_advice_entries(
         packet_id = require_string(defects, data.get("packet_id"), f"{item_path}.packet_id")
         if packet_id and not SAFE_REVIEW_PACKET_RE.fullmatch(packet_id):
             defect(defects, f"{item_path}.packet_id", "must be a safe packet id")
+        if branch_id and packet_id and not packet_id.startswith(f"{branch_id}-L"):
+            defect(defects, f"{item_path}.packet_id", f"must start with {branch_id}-L")
         if packet_id in seen:
             defect(defects, f"{item_path}.packet_id", f"duplicates Lite packet {packet_id!r}")
         seen.add(packet_id)

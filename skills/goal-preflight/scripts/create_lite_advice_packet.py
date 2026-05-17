@@ -207,7 +207,7 @@ def advice_schema(packet_id: str, purpose: str) -> dict:
 
 def advice_command(gemini_path: str) -> str:
     command = gemini_path if gemini_path else GEMINI_COMMAND
-    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
+    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
 
 
 def prompt_for(
@@ -418,6 +418,30 @@ if actual != expected:
 PY
 }}
 
+verify_task_current() {{
+  python3 - "$inputs_path" "$task_path" <<'PY'
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+inputs_path = Path(sys.argv[1])
+task_path = Path(sys.argv[2])
+data = json.loads(inputs_path.read_text(encoding="utf-8"))
+expected = data.get("task_sha256")
+if not isinstance(expected, str) or not expected.startswith("sha256:"):
+    print("missing task_sha256 in input-files.json", file=sys.stderr)
+    raise SystemExit(1)
+if not task_path.exists():
+    print(f"Lite task missing: {{task_path}}", file=sys.stderr)
+    raise SystemExit(1)
+actual = "sha256:" + hashlib.sha256(task_path.read_bytes()).hexdigest()
+if actual != expected:
+    print(f"Lite task stale: expected {{expected}} got {{actual}}", file=sys.stderr)
+    raise SystemExit(1)
+PY
+}}
+
 verify_gemini_binary() {{
   python3 - "$inputs_path" "$gemini_command" <<'PY'
 import hashlib
@@ -520,6 +544,11 @@ fi
 
 if ! verify_prompt_current; then
   write_terminal_advice blocked "Lite advisor prompt.md changed or became unavailable after packet creation."
+  exit 0
+fi
+
+if ! verify_task_current; then
+  write_terminal_advice blocked "Lite advisor task.md changed or became unavailable after packet creation."
   exit 0
 fi
 

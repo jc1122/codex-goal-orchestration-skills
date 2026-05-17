@@ -81,7 +81,7 @@ def sha256_text(text: str) -> str:
 
 def advice_command(gemini_path: str) -> str:
     command = gemini_path if gemini_path else GEMINI_COMMAND
-    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --output-format text"
+    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
 
 
 def prompt_for(
@@ -388,7 +388,7 @@ def validate_source_files(defects: list[str], value: object, path: str, expected
         source_path = require_string(defects, data.get("path"), f"{item_path}.path")
         sha256 = require_string(defects, data.get("sha256"), f"{item_path}.sha256")
         size_bytes = data.get("size_bytes")
-        require_string(defects, data.get("reason"), f"{item_path}.reason")
+        reason = require_string(defects, data.get("reason"), f"{item_path}.reason")
         if source_path and not is_relative_path(source_path):
             defect(defects, f"{item_path}.path", "must be relative without traversal")
         if source_path in seen:
@@ -403,15 +403,17 @@ def validate_source_files(defects: list[str], value: object, path: str, expected
                 "path": source_path,
                 "sha256": sha256,
                 "size_bytes": size_bytes,
+                "reason": reason,
             }
         )
     if expected is not None:
         expected_min = [
             {
-                "path": item.get("path"),
-                "sha256": item.get("sha256"),
-                "size_bytes": item.get("size_bytes"),
-            }
+                    "path": item.get("path"),
+                    "sha256": item.get("sha256"),
+                    "size_bytes": item.get("size_bytes"),
+                    "reason": item.get("reason"),
+                }
             for item in expected
         ]
         if actual != expected_min:
