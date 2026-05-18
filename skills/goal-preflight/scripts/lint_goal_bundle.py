@@ -10,18 +10,6 @@ import shlex
 from pathlib import Path
 
 
-MAX_ACTIVE_BRANCH_AGENTS = 4
-MAX_WORKER_PACKETS_PER_BRANCH = 4
-MAX_WAVES = 5
-DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
-DEFAULT_WORKER_LADDER = [
-    "gemini-pro",
-    "gemini-flash",
-    "codex-spark",
-    "copilot-gpt-5.4",
-    "codex-mini",
-]
-RESEARCH_WORKER_TYPE = "research-worker"
 PREFLIGHT_LITE_PURPOSES = {"preflight-decomposition", "lint-repair"}
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
@@ -40,7 +28,20 @@ def _load_path_rules():
     return module
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
 SAFE_ID_RE = PATH_RULES.SAFE_ID_RE
 SAFE_LABEL_RE = PATH_RULES.SAFE_LABEL_RE
 is_strict_int = PATH_RULES.is_strict_int
@@ -48,6 +49,12 @@ resolve_absolute_path = PATH_RULES.resolve_absolute_path
 resolve = PATH_RULES.resolve
 relative_path_defect = PATH_RULES.relative_path_defect
 safe_branch_name = PATH_RULES.safe_branch_name
+MAX_ACTIVE_BRANCH_AGENTS = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
+MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+MAX_WAVES = CONTRACT.MAX_WAVES
+DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
+DEFAULT_WORKER_LADDER = CONTRACT.worker_ladder_list()
+RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 
 
 def load_json(path: Path) -> dict:
@@ -343,31 +350,11 @@ def lint(bundle_dir: Path) -> dict:
         for key in ["launcher", "network_scope", "local_access"]:
             if not isinstance(research_worker_policy.get(key), str) or not research_worker_policy.get(key, "").strip():
                 defect("job.manifest.json", "critical", f"research_worker_policy.{key} must be non-empty")
-        policy_text = " ".join(str(research_worker_policy.get(key, "")) for key in ["launcher", "network_scope", "local_access"]).lower()
-        rejected_phrases = [
-            "--ignore-user-config",
-            "general web search only",
-            "local file access only",
-            "mcp/connector",
-            "connector tools are unavailable",
-            "shell-network tools prohibited",
-        ]
+        rejected_phrases, required_phrases = CONTRACT.research_policy_defects(research_worker_policy)
         for phrase in rejected_phrases:
-            if phrase in policy_text:
-                defect("job.manifest.json", "critical", f"research_worker_policy contains obsolete narrow-access phrase: {phrase}")
-        for phrase in [
-            "--search",
-            "read-only",
-            "broad read-only information retrieval",
-            "configured",
-            "mcp",
-            "connector",
-            "shell/network",
-            "state-changing",
-            "file-editing",
-        ]:
-            if phrase not in policy_text:
-                defect("job.manifest.json", "critical", f"research_worker_policy must mention {phrase}")
+            defect("job.manifest.json", "critical", f"research_worker_policy contains obsolete narrow-access phrase: {phrase}")
+        for phrase in required_phrases:
+            defect("job.manifest.json", "critical", f"research_worker_policy must mention {phrase}")
 
     ids = [branch.get("id") for branch in branches]
     names = [branch.get("branch_name") for branch in branches]

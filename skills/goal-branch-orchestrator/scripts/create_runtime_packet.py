@@ -10,6 +10,19 @@ import os
 from pathlib import Path
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CONTRACT = _load_contract()
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
 GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
@@ -27,8 +40,8 @@ SPARK_MODEL = "gpt-5.3-codex-spark"
 MINI_MODEL = "gpt-5.4-mini"
 RESEARCH_MODEL = "gpt-5.4"
 RESEARCH_FALLBACK_MODEL = "gpt-5.4-mini"
-RESEARCH_ALIAS = "codex-research"
-RESEARCH_FALLBACK_ALIAS = "codex-research-mini"
+RESEARCH_ALIAS = CONTRACT.RESEARCH_ALIASES[0]
+RESEARCH_FALLBACK_ALIAS = CONTRACT.RESEARCH_ALIASES[1]
 REVIEWER_MODEL = "gpt-5.5"
 REVIEWER_FALLBACK_MODEL = "gpt-5.4"
 WORKER_ATTEMPT_TIMEOUT_SECONDS = 3600
@@ -38,14 +51,8 @@ TIMEOUT_KILL_AFTER_SECONDS = 30
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
 MAX_EMBEDDED_CONTEXT_CHARS = 120000
-DEFAULT_WORKER_LADDER = (
-    "gemini-pro",
-    "gemini-flash",
-    "codex-spark",
-    "copilot-gpt-5.4",
-    "codex-mini",
-)
-ALLOWED_WORKER_ROUTES = set(DEFAULT_WORKER_LADDER)
+DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
+ALLOWED_WORKER_ROUTES = CONTRACT.ALLOWED_WORKER_ROUTES
 WORKER_ROUTE_LABELS = {
     "gemini-pro": "Gemini Pro",
     "gemini-flash": "Gemini Flash",
@@ -85,10 +92,7 @@ PATH_RULES = _load_path_rules()
 require_safe_label = PATH_RULES.require_safe_packet_label
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 safe_branch_name = PATH_RULES.safe_branch_name
-
-
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
+shell_quote = CONTRACT.shell_quote
 
 
 def nonempty_text(value: object) -> str:
@@ -145,15 +149,6 @@ def worker_route_commands(selected_ladder: list[str]) -> list[str]:
             commands.append(f"gh copilot -- --model {COPILOT_PROBE_MODEL} --effort {COPILOT_PROBE_REASONING_EFFORT}")
         commands.append(WORKER_ROUTE_COMMANDS[alias])
     return commands
-
-
-def telemetry_attempt_args(attempts: list[dict]) -> str:
-    lines = []
-    for item in attempts:
-        lines.append("    --attempt-json " + shell_quote(json.dumps(item, separators=(",", ":"))) + " \\")
-    if lines:
-        lines[-1] = lines[-1].removesuffix(" \\")
-    return "\n".join(lines)
 
 
 def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
@@ -268,16 +263,15 @@ def research_telemetry_attempts() -> list[dict]:
 
 def telemetry_function(role: str, packet_id: str, output_name: str, attempts: list[dict]) -> str:
     script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
-    return f"""write_telemetry() {{
-  python3 {shell_quote(script)} \\
-    --packet-dir "$packet_dir" \\
-    --packet-id {shell_quote(packet_id)} \\
-    --role {shell_quote(role)} \\
-    --output-name {shell_quote(output_name)} \\
-    --prompt-name prompt.md \\
-{telemetry_attempt_args(attempts)}
-}}
-"""
+    return CONTRACT.telemetry_shell_function(
+        script_path=script,
+        packet_dir_expr="$packet_dir",
+        packet_id=packet_id,
+        role=role,
+        output_name=output_name,
+        prompt_name="prompt.md",
+        attempts=attempts,
+    )
 
 
 def exact_string_schema(value: str) -> dict:
@@ -291,24 +285,11 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "packet_id",
-            "role",
-            "status",
-            "branch",
-            "worktree",
-            "selected_ladder",
-            "selection_reason",
-            "changed_files",
-            "commands_run",
-            "tests",
-            "blockers",
-            "handoff",
-        ],
+        "required": list(CONTRACT.WORKER_STATUS_REQUIRED),
         "properties": {
             "packet_id": exact_string_schema(packet_id),
             "role": exact_string_schema("worker"),
-            "status": {"type": "string", "enum": ["pass", "partial", "blocked", "failed"]},
+            "status": {"type": "string", "enum": list(CONTRACT.STATUSES)},
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
             "selected_ladder": {
@@ -332,20 +313,11 @@ def review_schema(packet_id: str) -> dict:
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "packet_id",
-            "role",
-            "verdict",
-            "findings",
-            "commands_run",
-            "verification_gaps",
-            "residual_risks",
-            "summary",
-        ],
+        "required": list(CONTRACT.REVIEW_REQUIRED),
         "properties": {
             "packet_id": exact_string_schema(packet_id),
             "role": exact_string_schema("reviewer"),
-            "verdict": {"type": "string", "enum": ["mergeable", "mergeable_after_fixes", "blocked", "reject"]},
+            "verdict": {"type": "string", "enum": [item for item in CONTRACT.REVIEW_STATUSES if item != "missing"]},
             "findings": {"type": "array", "items": nonempty_string},
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "verification_gaps": {"type": "array", "items": nonempty_string},
@@ -363,25 +335,11 @@ def research_schema(packet_id: str, branch: str, worktree: str) -> dict:
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
         "additionalProperties": False,
-        "required": [
-            "packet_id",
-            "role",
-            "status",
-            "branch",
-            "worktree",
-            "search_queries",
-            "source_urls",
-            "tools_used",
-            "local_files_read",
-            "commands_run",
-            "findings",
-            "blockers",
-            "handoff",
-        ],
+        "required": list(CONTRACT.RESEARCH_STATUS_REQUIRED),
         "properties": {
             "packet_id": exact_string_schema(packet_id),
             "role": exact_string_schema("research-worker"),
-            "status": {"type": "string", "enum": ["pass", "partial", "blocked", "failed"]},
+            "status": {"type": "string", "enum": list(CONTRACT.STATUSES)},
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
             "search_queries": {"type": "array", "items": nonempty_string},

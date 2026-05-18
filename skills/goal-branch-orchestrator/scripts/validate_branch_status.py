@@ -10,6 +10,18 @@ import re
 from pathlib import Path
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_status_validation():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "status_validation.py"
     if not path.exists():
@@ -22,21 +34,16 @@ def _load_status_validation():
     return module
 
 
+CONTRACT = _load_contract()
 STATUS_VALIDATION = _load_status_validation()
-STATUSES = {"pass", "partial", "blocked", "failed"}
-REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
+STATUSES = set(CONTRACT.STATUSES)
+REVIEW_STATUSES = set(CONTRACT.REVIEW_STATUSES)
 BRANCH_LITE_PURPOSES = {"branch-packet-planning", "context-pack", "worker-summary", "blocked-triage"}
-MAX_WORKER_PACKETS_PER_BRANCH = 4
-DEFAULT_WORKER_LADDER = (
-    "gemini-pro",
-    "gemini-flash",
-    "codex-spark",
-    "copilot-gpt-5.4",
-    "codex-mini",
-)
-ALLOWED_WORKER_ROUTES = set(DEFAULT_WORKER_LADDER)
-WORK_ITEM_ROLES = {"worker", "research-worker"}
-RESEARCH_ALIASES = ("codex-research", "codex-research-mini")
+MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
+ALLOWED_WORKER_ROUTES = CONTRACT.ALLOWED_WORKER_ROUTES
+WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
+RESEARCH_ALIASES = CONTRACT.RESEARCH_ALIASES
 RESEARCH_FORBIDDEN_COMMAND_PATTERNS = [
     (r"\bgit\s+(push|commit|reset|checkout|clean|merge|rebase)\b", "git state mutation"),
     (r"\b(curl|http|https)\b.*\s-x\s*(post|put|patch|delete)\b", "state-changing HTTP method"),
@@ -197,19 +204,7 @@ def validate_worker_route_artifact(
 
 def validate_worker_status(defects: list[str], value: object, path: str) -> None:
     data = require_object(defects, value, path)
-    required = [
-        "packet_id",
-        "status",
-        "status_path",
-        "worktree",
-        "selected_ladder",
-        "selection_reason",
-        "changed_files",
-        "commands_run",
-        "tests",
-        "blockers",
-        "handoff",
-    ]
+    required = CONTRACT.WORKER_ROLLUP_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
@@ -237,21 +232,7 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
 
 def validate_research_status(defects: list[str], value: object, path: str) -> None:
     data = require_object(defects, value, path)
-    required = [
-        "packet_id",
-        "role",
-        "status",
-        "status_path",
-        "worktree",
-        "search_queries",
-        "source_urls",
-        "tools_used",
-        "local_files_read",
-        "commands_run",
-        "findings",
-        "blockers",
-        "handoff",
-    ]
+    required = CONTRACT.RESEARCH_ROLLUP_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
@@ -298,20 +279,7 @@ def validate_packet_status(defects: list[str], value: object, path: str) -> None
 
 def validate_worker_artifact(defects: list[str], value: object, path: str) -> dict:
     data = require_object(defects, value, path)
-    required = [
-        "packet_id",
-        "role",
-        "status",
-        "branch",
-        "worktree",
-        "selected_ladder",
-        "selection_reason",
-        "changed_files",
-        "commands_run",
-        "tests",
-        "blockers",
-        "handoff",
-    ]
+    required = CONTRACT.WORKER_STATUS_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
@@ -340,21 +308,7 @@ def validate_worker_artifact(defects: list[str], value: object, path: str) -> di
 
 def validate_research_artifact(defects: list[str], value: object, path: str) -> dict:
     data = require_object(defects, value, path)
-    required = [
-        "packet_id",
-        "role",
-        "status",
-        "branch",
-        "worktree",
-        "search_queries",
-        "source_urls",
-        "tools_used",
-        "local_files_read",
-        "commands_run",
-        "findings",
-        "blockers",
-        "handoff",
-    ]
+    required = CONTRACT.RESEARCH_STATUS_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
@@ -402,32 +356,8 @@ def validate_worker_artifacts(
     if not isinstance(worker_statuses, list):
         return
     require_existing = branch_status in {"pass", "partial"}
-    worker_compared_keys = [
-        "packet_id",
-        "status",
-        "worktree",
-        "selected_ladder",
-        "selection_reason",
-        "changed_files",
-        "commands_run",
-        "tests",
-        "blockers",
-        "handoff",
-    ]
-    research_compared_keys = [
-        "packet_id",
-        "role",
-        "status",
-        "worktree",
-        "search_queries",
-        "source_urls",
-        "tools_used",
-        "local_files_read",
-        "commands_run",
-        "findings",
-        "blockers",
-        "handoff",
-    ]
+    worker_compared_keys = [key for key in CONTRACT.WORKER_STATUS_REQUIRED if key not in {"role", "branch"}]
+    research_compared_keys = [key for key in CONTRACT.RESEARCH_STATUS_REQUIRED if key != "branch"]
     for index, item in enumerate(worker_statuses):
         if not isinstance(item, dict):
             continue
@@ -747,16 +677,7 @@ def validate_review_artifact(
     branch_id: str | None,
 ) -> None:
     data = require_object(defects, value, path)
-    required = [
-        "packet_id",
-        "role",
-        "verdict",
-        "findings",
-        "commands_run",
-        "verification_gaps",
-        "residual_risks",
-        "summary",
-    ]
+    required = CONTRACT.REVIEW_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")

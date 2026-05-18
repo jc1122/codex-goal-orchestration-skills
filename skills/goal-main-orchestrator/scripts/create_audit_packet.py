@@ -16,17 +16,20 @@ AUDIT_ATTEMPT_TIMEOUT_SECONDS = 1200
 TIMEOUT_KILL_AFTER_SECONDS = 30
 
 
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def telemetry_attempt_args(attempts: list[dict]) -> str:
-    lines = []
-    for item in attempts:
-        lines.append("    --attempt-json " + shell_quote(json.dumps(item, separators=(",", ":"))) + " \\")
-    if lines:
-        lines[-1] = lines[-1].removesuffix(" \\")
-    return "\n".join(lines)
+CONTRACT = _load_contract()
+shell_quote = CONTRACT.shell_quote
 
 
 def audit_telemetry_attempts() -> list[dict]:
@@ -56,16 +59,15 @@ def audit_telemetry_attempts() -> list[dict]:
 
 def telemetry_function() -> str:
     script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
-    return f"""write_telemetry() {{
-  python3 {shell_quote(script)} \\
-    --packet-dir "$(pwd)" \\
-    --packet-id prompt-audit \\
-    --role prompt-auditor \\
-    --output-name prompt-audit.json \\
-    --prompt-name prompt.md \\
-{telemetry_attempt_args(audit_telemetry_attempts())}
-}}
-"""
+    return CONTRACT.telemetry_shell_function(
+        script_path=script,
+        packet_dir_expr="$(pwd)",
+        packet_id="prompt-audit",
+        role="prompt-auditor",
+        output_name="prompt-audit.json",
+        prompt_name="prompt.md",
+        attempts=audit_telemetry_attempts(),
+    )
 
 
 def _load_path_rules():

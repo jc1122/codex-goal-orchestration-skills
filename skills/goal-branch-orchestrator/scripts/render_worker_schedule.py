@@ -9,11 +9,6 @@ import json
 from pathlib import Path
 
 
-MAX_WORKER_PACKETS_PER_BRANCH = 4
-RESEARCH_WORKER_TYPE = "research-worker"
-WORK_ITEM_ROLES = {"worker", RESEARCH_WORKER_TYPE}
-
-
 def _load_path_rules():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
     if not path.exists():
@@ -26,11 +21,26 @@ def _load_path_rules():
     return module
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
 require_safe_id = PATH_RULES.require_safe_id
 require_safe_label = PATH_RULES.require_safe_label
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 require_relative_path = PATH_RULES.require_relative_path
+MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
 
 
 def is_strict_int(value: object) -> bool:

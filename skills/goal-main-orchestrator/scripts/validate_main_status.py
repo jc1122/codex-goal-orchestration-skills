@@ -9,6 +9,18 @@ import json
 from pathlib import Path
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _load_status_validation():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "status_validation.py"
     if not path.exists():
@@ -21,12 +33,13 @@ def _load_status_validation():
     return module
 
 
+CONTRACT = _load_contract()
 STATUS_VALIDATION = _load_status_validation()
-STATUSES = {"pass", "partial", "blocked", "failed"}
+STATUSES = set(CONTRACT.STATUSES)
 AUDIT_STATUSES = {"pass", "failed", "blocked", "missing"}
-REVIEW_STATUSES = {"mergeable", "mergeable_after_fixes", "blocked", "reject", "missing"}
+REVIEW_STATUSES = set(CONTRACT.REVIEW_STATUSES)
 MAIN_LITE_PURPOSES = {"audit-defect-summary", "main-summary"}
-MAX_TOTAL_BRANCHES = 20
+MAX_TOTAL_BRANCHES = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
@@ -59,7 +72,7 @@ def validate_lite_advice_entries(defects: list[str], value: object, path: str, *
 
 def validate_branch_summary(defects: list[str], value: object, path: str) -> None:
     data = require_object(defects, value, path)
-    required = ["branch_id", "status", "status_path", "review_path", "review_status"]
+    required = CONTRACT.BRANCH_SUMMARY_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
@@ -248,16 +261,7 @@ def validate_review_artifact(
     branch_id: str | None,
 ) -> None:
     review = require_object(defects, data, path)
-    required = [
-        "packet_id",
-        "role",
-        "verdict",
-        "findings",
-        "commands_run",
-        "verification_gaps",
-        "residual_risks",
-        "summary",
-    ]
+    required = CONTRACT.REVIEW_REQUIRED
     for key in required:
         if key not in review:
             defect(defects, path, f"missing key: {key}")
@@ -350,17 +354,7 @@ def validate_branch_artifacts(
 def validate_main_status(data: object, *, job_id: str | None, manifest: object, manifest_path: Path) -> list[str]:
     defects: list[str] = []
     root = require_object(defects, data, "$")
-    required = [
-        "job_id",
-        "status",
-        "audit_status",
-        "branch_statuses",
-        "lite_advice",
-        "commands_run",
-        "dod_checklist",
-        "blockers",
-        "summary",
-    ]
+    required = CONTRACT.MAIN_STATUS_REQUIRED
     for key in required:
         if key not in root:
             defect(defects, "$", f"missing key: {key}")

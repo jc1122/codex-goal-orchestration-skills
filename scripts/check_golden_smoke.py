@@ -11,7 +11,9 @@ import tempfile
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
+SKILLS_ROOT = CHECKOUT_ROOT / "skills"
+REPO_ROOT = CHECKOUT_ROOT
 JOB_ID = "golden-offline-smoke"
 BRANCH_ID = "B01"
 BRANCH_NAME = "golden-offline-smoke"
@@ -22,13 +24,37 @@ LITE_PACKET = "B01-L01"
 
 
 def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    result = subprocess.run(command, cwd=CHECKOUT_ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     if result.returncode != expect:
         print(f"command failed with {result.returncode}, expected {expect}: {' '.join(command)}", file=sys.stderr)
         if result.stdout:
             print(result.stdout, file=sys.stderr)
         raise SystemExit(1)
     return result
+
+
+def skill_script(skill: str, script: str) -> str:
+    return (SKILLS_ROOT / skill / "scripts" / script).as_posix()
+
+
+def install_temp_skills(tmp_path: Path) -> Path:
+    skills_root = tmp_path / "skills"
+    run(["node", (CHECKOUT_ROOT / "bin" / "install-goal-skills.js").as_posix(), "--dest", skills_root.as_posix(), "--force"])
+    for name in ["_goal_shared", "goal-preflight", "goal-main-orchestrator", "goal-branch-orchestrator"]:
+        if not (skills_root / name).is_dir():
+            raise SystemExit(f"temp skill install missing {name}: {skills_root}")
+    return skills_root.resolve()
+
+
+def create_temp_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    run(["git", "init", "-b", "main", repo.as_posix()])
+    (repo / "README.md").write_text("# Golden Smoke Repo\n\nFixture README for installed-skill smoke testing.\n", encoding="utf-8")
+    run(["git", "-C", repo.as_posix(), "config", "user.email", "golden-smoke@example.invalid"])
+    run(["git", "-C", repo.as_posix(), "config", "user.name", "Golden Smoke"])
+    run(["git", "-C", repo.as_posix(), "add", "README.md"])
+    run(["git", "-C", repo.as_posix(), "commit", "-m", "initial fixture"])
+    return repo.resolve()
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -116,7 +142,7 @@ def golden_brief() -> dict:
                         "objective": "Static normal-worker artifact for the golden offline smoke.",
                         "owned_paths": ["README.md"],
                         "context_files": ["README.md"],
-                        "verification": ["npm run check:fixtures"],
+                        "verification": ["git diff --check main...HEAD"],
                         "dod": ["normal worker artifact validates with route and timeout telemetry"],
                     },
                     {
@@ -125,7 +151,7 @@ def golden_brief() -> dict:
                         "objective": "Static research-worker artifact for the golden offline smoke.",
                         "owned_paths": ["README.md"],
                         "context_files": ["README.md"],
-                        "verification": ["npm run check:fixtures"],
+                        "verification": ["git diff --check main...HEAD"],
                         "dod": ["research worker artifact validates with read-only evidence and timeout telemetry"],
                     },
                 ],
@@ -134,7 +160,7 @@ def golden_brief() -> dict:
     }
 
 
-def write_lite_advice(bundle: Path, packet_dir: Path) -> dict:
+def write_lite_advice(packet_dir: Path) -> dict:
     inputs = read_json(packet_dir / "input-files.json")
     source_files = inputs.get("source_files")
     if not isinstance(source_files, list):
@@ -180,7 +206,7 @@ def write_lite_advice(bundle: Path, packet_dir: Path) -> dict:
     )
     validate_command = [
         "python3",
-        (ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "validate_lite_advice.py").as_posix(),
+        skill_script("goal-branch-orchestrator", "validate_lite_advice.py"),
         "--advice",
         (packet_dir / "advice.json").as_posix(),
         "--inputs",
@@ -219,7 +245,7 @@ def write_audit(bundle: Path) -> None:
         "can_start": True,
         "checked_files": ["job.manifest.json", "main.prompt.md", "branches/B01.prompt.md"],
         "commands_run": [
-            "python3 skills/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir <bundle> --no-write"
+            "python3 <installed-goal-preflight>/scripts/lint_goal_bundle.py --bundle-dir <bundle> --no-write"
         ],
         "missing_dod_items": [],
         "defects": [],
@@ -257,30 +283,30 @@ def write_audit(bundle: Path) -> None:
     )
 
 
-def worker_status(bundle: Path) -> dict:
+def worker_status() -> dict:
     return {
         "packet_id": WORKER_PACKET,
         "role": "worker",
         "status": "pass",
         "branch": BRANCH_NAME,
-        "worktree": ROOT.as_posix(),
+        "worktree": REPO_ROOT.as_posix(),
         "selected_ladder": ["codex-mini"],
         "selection_reason": "Golden smoke uses the cheapest deterministic route alias.",
         "changed_files": [],
-        "commands_run": ["npm run check:fixtures"],
-        "tests": ["npm run check:fixtures"],
+        "commands_run": ["git diff --check main...HEAD"],
+        "tests": ["bash -n generated worker launchers"],
         "blockers": [],
         "handoff": "Synthetic normal-worker pass artifact for golden offline smoke.",
     }
 
 
-def research_status(bundle: Path) -> dict:
+def research_status() -> dict:
     return {
         "packet_id": RESEARCH_PACKET,
         "role": "research-worker",
         "status": "pass",
         "branch": BRANCH_NAME,
-        "worktree": ROOT.as_posix(),
+        "worktree": REPO_ROOT.as_posix(),
         "search_queries": ["golden offline smoke research-worker contract"],
         "source_urls": ["https://example.com/golden-smoke"],
         "tools_used": ["local-shell", "local-git", "local-sed", "codex-native-search"],
@@ -298,7 +324,7 @@ def research_status(bundle: Path) -> dict:
 
 
 def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
-    worker = worker_status(bundle)
+    worker = worker_status()
     worker_dir = bundle / "workers" / WORKER_PACKET
     write_json(worker_dir / "status.json", worker)
     write_json(
@@ -331,7 +357,7 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
         ),
     )
 
-    research = research_status(bundle)
+    research = research_status()
     research_dir = bundle / "research" / RESEARCH_PACKET
     write_json(research_dir / "research.json", research)
     write_json(
@@ -425,7 +451,7 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
             "branch_id": BRANCH_ID,
             "status": "pass",
             "branch": BRANCH_NAME,
-            "worktree": ROOT.as_posix(),
+            "worktree": REPO_ROOT.as_posix(),
             "worker_statuses": [worker_rollup, research_rollup],
             "worker_parallelism": {
                 "max_worker_packets_per_branch": 4,
@@ -443,7 +469,7 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
             "review_status": "mergeable",
             "changed_files": [],
             "commands_run": ["git diff --check main...HEAD"],
-            "tests": ["npm run check:fixtures", "npm run check:golden"],
+            "tests": ["bash -n generated launchers", "installed validators passed"],
             "dod_checklist": [
                 "normal worker artifact validates",
                 "research-worker artifact validates",
@@ -470,7 +496,7 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
                 }
             ],
             "lite_advice": [],
-            "commands_run": ["git diff --check main...HEAD", "npm run check:golden"],
+            "commands_run": ["git diff --check main...HEAD", "installed validators passed"],
             "dod_checklist": ["golden offline smoke validates main, branch, packet, Lite, and telemetry artifacts"],
             "blockers": [],
             "summary": "Golden offline smoke main status.",
@@ -495,8 +521,11 @@ def assert_summary(bundle: Path) -> None:
 
 
 def main() -> int:
+    global REPO_ROOT, SKILLS_ROOT
     with tempfile.TemporaryDirectory(prefix="goal-golden-smoke-") as tmp:
         tmp_path = Path(tmp)
+        SKILLS_ROOT = install_temp_skills(tmp_path)
+        REPO_ROOT = create_temp_repo(tmp_path)
         bundle = tmp_path / "bundle"
         brief = tmp_path / "brief.json"
         task_file = tmp_path / "task.md"
@@ -506,25 +535,25 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-preflight/scripts/create_goal_bundle.py",
+                skill_script("goal-preflight", "create_goal_bundle.py"),
                 "--brief",
                 brief.as_posix(),
                 "--repo-root",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--out-dir",
                 bundle.as_posix(),
             ]
         )
-        run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+        run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", bundle.as_posix(), "--no-write"])
 
         run(
             [
                 "python3",
-                "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+                skill_script("goal-main-orchestrator", "create_audit_packet.py"),
                 "--manifest",
                 (bundle / "job.manifest.json").as_posix(),
                 "--repo-root",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--out-dir",
                 (bundle / "audit").as_posix(),
             ]
@@ -534,7 +563,7 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
                 "--role",
                 "worker",
                 "--packet-id",
@@ -542,7 +571,7 @@ def main() -> int:
                 "--branch",
                 BRANCH_NAME,
                 "--worktree",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--out-dir",
                 (bundle / "workers").as_posix(),
                 "--owned-file",
@@ -562,7 +591,7 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
                 "--role",
                 "research-worker",
                 "--packet-id",
@@ -570,7 +599,7 @@ def main() -> int:
                 "--branch",
                 BRANCH_NAME,
                 "--worktree",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--out-dir",
                 (bundle / "research").as_posix(),
                 "--owned-file",
@@ -586,7 +615,7 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
                 "--role",
                 "reviewer",
                 "--packet-id",
@@ -594,7 +623,7 @@ def main() -> int:
                 "--branch",
                 BRANCH_NAME,
                 "--worktree",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--out-dir",
                 (bundle / "reviewers").as_posix(),
                 "--context-file",
@@ -608,24 +637,24 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-branch-orchestrator/scripts/create_lite_advice_packet.py",
+                skill_script("goal-branch-orchestrator", "create_lite_advice_packet.py"),
                 "--packet-id",
                 LITE_PACKET,
                 "--purpose",
                 "branch-packet-planning",
                 "--base-dir",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--out-dir",
                 (bundle / "lite").as_posix(),
                 "--input-file",
-                (ROOT / "README.md").as_posix(),
+                (REPO_ROOT / "README.md").as_posix(),
                 "--task-file",
                 task_file.as_posix(),
             ]
         )
         assert_shell_syntax(bundle / "lite" / LITE_PACKET / "launch.sh")
 
-        lite_record = write_lite_advice(bundle, bundle / "lite" / LITE_PACKET)
+        lite_record = write_lite_advice(bundle / "lite" / LITE_PACKET)
         write_audit(bundle)
         worker, research = write_worker_artifacts(bundle)
         write_review(bundle)
@@ -634,7 +663,7 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
+                skill_script("goal-branch-orchestrator", "validate_branch_status.py"),
                 "--manifest",
                 (bundle / "job.manifest.json").as_posix(),
                 "--status",
@@ -644,14 +673,14 @@ def main() -> int:
                 "--branch",
                 BRANCH_NAME,
                 "--worktree",
-                ROOT.as_posix(),
+                REPO_ROOT.as_posix(),
                 "--json",
             ]
         )
         run(
             [
                 "python3",
-                "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
+                skill_script("goal-main-orchestrator", "summarize_telemetry.py"),
                 "--bundle-dir",
                 bundle.as_posix(),
             ]
@@ -660,7 +689,7 @@ def main() -> int:
         run(
             [
                 "python3",
-                "skills/goal-main-orchestrator/scripts/validate_main_status.py",
+                skill_script("goal-main-orchestrator", "validate_main_status.py"),
                 "--manifest",
                 (bundle / "job.manifest.json").as_posix(),
                 "--status",

@@ -36,8 +36,16 @@ SKILL_PURPOSES = {
 }
 
 
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
+def _load_contract():
+    path = Path(__file__).resolve().parent / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def _load_path_rules():
@@ -52,10 +60,12 @@ def _load_path_rules():
     return module
 
 
+CONTRACT = _load_contract()
 PATH_RULES = _load_path_rules()
 require_safe_label = PATH_RULES.require_safe_packet_label
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 repo_relative_path = PATH_RULES.repo_relative_path
+shell_quote = CONTRACT.shell_quote
 
 
 def current_skill_name() -> str:
@@ -144,27 +154,17 @@ def lite_telemetry_attempts(gemini_path: str) -> list[dict]:
     ]
 
 
-def telemetry_attempt_args(attempts: list[dict]) -> str:
-    lines = []
-    for item in attempts:
-        lines.append("    --attempt-json " + shell_quote(json.dumps(item, separators=(",", ":"))) + " \\")
-    if lines:
-        lines[-1] = lines[-1].removesuffix(" \\")
-    return "\n".join(lines)
-
-
 def telemetry_function(packet_id: str, gemini_path: str) -> str:
     script = (current_script_dir() / "extract_telemetry.py").as_posix()
-    return f"""write_telemetry() {{
-  python3 {shell_quote(script)} \\
-    --packet-dir "$packet_dir" \\
-    --packet-id {shell_quote(packet_id)} \\
-    --role lite_advisor \\
-    --output-name advice.json \\
-    --prompt-name prompt.md \\
-{telemetry_attempt_args(lite_telemetry_attempts(gemini_path))}
-}}
-"""
+    return CONTRACT.telemetry_shell_function(
+        script_path=script,
+        packet_dir_expr="$packet_dir",
+        packet_id=packet_id,
+        role="lite_advisor",
+        output_name="advice.json",
+        prompt_name="prompt.md",
+        attempts=lite_telemetry_attempts(gemini_path),
+    )
 
 
 def prompt_for(

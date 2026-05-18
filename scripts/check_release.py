@@ -39,6 +39,7 @@ REQUIRED_PACKAGE_FILES = {
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
     "scripts/sync_goal_shared.py",
+    "skills/_goal_shared/scripts/orchestration_contract.py",
     "skills/_goal_shared/scripts/status_validation.py",
     "skills/goal-branch-orchestrator/SKILL.md",
     "skills/goal-main-orchestrator/SKILL.md",

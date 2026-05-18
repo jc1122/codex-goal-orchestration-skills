@@ -10,17 +10,6 @@ import subprocess
 from pathlib import Path
 
 
-MAX_ACTIVE_BRANCH_AGENTS = 4
-MAX_WORKER_PACKETS_PER_BRANCH = 4
-MAX_WAVES = 5
-RESEARCH_WORKER_TYPE = "research-worker"
-WORK_ITEM_ROLES = {"worker", RESEARCH_WORKER_TYPE}
-
-
-def shell_quote(value: str) -> str:
-    return "'" + value.replace("'", "'\"'\"'") + "'"
-
-
 def _load_path_rules():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
     if not path.exists():
@@ -33,13 +22,32 @@ def _load_path_rules():
     return module
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
 SAFE_LABEL_RE = PATH_RULES.SAFE_LABEL_RE
 is_strict_int = PATH_RULES.is_strict_int
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 resolve = PATH_RULES.resolve
 require_relative_path = PATH_RULES.require_relative_path
 safe_branch_name = PATH_RULES.safe_branch_name
+shell_quote = CONTRACT.shell_quote
+MAX_ACTIVE_BRANCH_AGENTS = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
+MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+MAX_WAVES = CONTRACT.MAX_WAVES
+RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
+WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
 
 
 def git_ok(repo_root: Path, *args: str) -> bool:
@@ -213,30 +221,9 @@ def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> Non
     for key in ["launcher", "network_scope", "local_access"]:
         if not isinstance(policy.get(key), str) or not policy.get(key, "").strip():
             raise SystemExit(f"manifest research_worker_policy.{key} must be non-empty")
-    policy_text = " ".join(str(policy.get(key, "")) for key in ["launcher", "network_scope", "local_access"]).lower()
-    rejected_phrases = [
-        "--ignore-user-config",
-        "general web search only",
-        "local file access only",
-        "mcp/connector",
-        "connector tools are unavailable",
-        "shell-network tools prohibited",
-    ]
-    rejected = [phrase for phrase in rejected_phrases if phrase in policy_text]
+    rejected, missing = CONTRACT.research_policy_defects(policy)
     if rejected:
         raise SystemExit(f"manifest research_worker_policy contains obsolete narrow-access phrase(s): {', '.join(rejected)}")
-    required_phrases = [
-        "--search",
-        "read-only",
-        "broad read-only information retrieval",
-        "configured",
-        "mcp",
-        "connector",
-        "shell/network",
-        "state-changing",
-        "file-editing",
-    ]
-    missing = [phrase for phrase in required_phrases if phrase not in policy_text]
     if missing:
         raise SystemExit(f"manifest research_worker_policy is missing required boundary phrase(s): {', '.join(missing)}")
 

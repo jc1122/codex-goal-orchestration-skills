@@ -8,9 +8,6 @@ import importlib.util
 from pathlib import Path
 
 
-MAX_ACTIVE_BRANCH_AGENTS = 4
-
-
 def _load_path_rules():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
     if not path.exists():
@@ -23,8 +20,22 @@ def _load_path_rules():
     return module
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
+MAX_ACTIVE_BRANCH_AGENTS = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
 
 
 def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:

@@ -12,33 +12,6 @@ from pathlib import Path
 from render_goal_bootloader import render_bootloader
 
 
-MAX_ACTIVE_BRANCH_AGENTS = 4
-MAX_WORKER_PACKETS_PER_BRANCH = 4
-MAX_WAVES = 5
-DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
-DEFAULT_WORKER_LADDER = [
-    "gemini-pro",
-    "gemini-flash",
-    "codex-spark",
-    "copilot-gpt-5.4",
-    "codex-mini",
-]
-WORKER_MODEL_POLICY = {
-    "default_ladder": DEFAULT_WORKER_LADDER,
-    "allowed_routes": DEFAULT_WORKER_LADDER,
-    "branch_may_select_worker_route": True,
-    "selection_reason_required": True,
-    "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder.",
-}
-RESEARCH_WORKER_POLICY = {
-    "enabled": True,
-    "worker_type": "research-worker",
-    "launcher": "codex --search exec --ephemeral -s read-only",
-    "network_scope": "Broad read-only information retrieval is allowed through Codex native web search, configured CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands. State-changing, destructive, credential, posting, purchasing, and file-editing actions are prohibited.",
-    "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files.",
-}
-
-
 def slug(value: str) -> str:
     value = value.strip().lower()
     value = re.sub(r"[^a-z0-9]+", "-", value)
@@ -58,12 +31,32 @@ def _load_path_rules():
     return module
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
 require_safe_id = PATH_RULES.require_safe_id
 require_safe_label = PATH_RULES.require_safe_label
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 require_branch_name = PATH_RULES.require_branch_name
 require_relative_path = PATH_RULES.require_relative_path
+MAX_ACTIVE_BRANCH_AGENTS = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
+MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+MAX_WAVES = CONTRACT.MAX_WAVES
+DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
+DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
+WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
+RESEARCH_WORKER_POLICY = CONTRACT.RESEARCH_WORKER_POLICY
 
 
 def require_agent_limit(value: object) -> int:
@@ -412,10 +405,6 @@ def render_branch_dependencies(branches: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_worker_ladder(values: list[str]) -> str:
-    return " -> ".join(values)
-
-
 def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
     brief = normalize_brief(brief)
 
@@ -490,7 +479,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 depends_on=bullets(branch.get("depends_on", [])),
                 max_active_worker_packets=branch["max_active_worker_packets"],
                 worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
-                default_worker_ladder=format_worker_ladder(DEFAULT_WORKER_LADDER),
+                default_worker_ladder=CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER),
                 allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
                 objective=branch.get("objective", "Objective not supplied."),
                 scope=branch.get("scope", "Scope not supplied."),
@@ -514,7 +503,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
             "Scheduling: rolling; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
-            f"Worker model policy: {format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
+            f"Worker model policy: {CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
             "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
             f"Artifact policy: {brief['artifact_policy']}",
             f"Cleanup policy: {brief['cleanup_policy']}",

@@ -56,7 +56,7 @@ def telemetry(packet_id: str, role: str, output_name: str, *, accepted_alias: st
     }
 
 
-def research_status(bundle: Path, *, bad_command: str | None = None) -> dict:
+def research_status(*, bad_command: str | None = None) -> dict:
     commands = [
         "pwd",
         "git status --short --branch",
@@ -118,7 +118,7 @@ def branch_status(bundle: Path, research: dict, *, status: str = "partial") -> d
 
 
 def write_valid_research_fixture(bundle: Path) -> None:
-    research = research_status(bundle)
+    research = research_status()
     packet_dir = bundle / "research" / "B01-W01"
     write_json(packet_dir / "research.json", research)
     write_json(
@@ -340,7 +340,7 @@ def main() -> int:
 
         bad_bundle = tmp_path / "bad-security"
         shutil.copytree(bundle, bad_bundle)
-        bad_research = research_status(bad_bundle, bad_command="curl -X POST https://example.com/api")
+        bad_research = research_status(bad_command="curl -X POST https://example.com/api")
         write_json(bad_bundle / "research" / "B01-W01" / "research.json", bad_research)
         write_json(bad_bundle / "branches" / "B01.status.json", branch_status(bad_bundle, bad_research))
         bad_result = validate_branch(bad_bundle, expect=1)

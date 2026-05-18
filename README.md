@@ -57,7 +57,7 @@ npm run check:release
 
 `check:fixtures` validates the preparedness fixture bundle without launching live model CLIs. It covers timeout-wrapped launcher generation, valid broad-access research-worker artifacts, rejection of obsolete narrow research policy text, and rejection of unsafe research-worker command evidence.
 
-`check:golden` builds a complete offline smoke bundle, generates audit, worker, research-worker, reviewer, Lite, branch, main, and telemetry-summary artifacts, then validates them with the real runtime validators.
+`check:golden` installs the skills into a temporary skills root, creates a temporary git repository, builds a complete offline smoke bundle from that installed copy, generates audit, worker, research-worker, reviewer, Lite, branch, main, and telemetry-summary artifacts, then validates them with the installed runtime validators.
 
 `check:release` validates release metadata, installer `--list`/`--version`, temp install parity, and `npm pack --dry-run --json` package contents.
 

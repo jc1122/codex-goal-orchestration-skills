@@ -46,6 +46,7 @@ REQUIRED_FILES = {
 REQUIRED_SUPPORT_FILES = [
     "_goal_shared/scripts/create_lite_advice_packet.py",
     "_goal_shared/scripts/extract_telemetry.py",
+    "_goal_shared/scripts/orchestration_contract.py",
     "_goal_shared/scripts/validate_lite_advice.py",
     "_goal_shared/scripts/path_rules.py",
     "_goal_shared/scripts/status_validation.py",
