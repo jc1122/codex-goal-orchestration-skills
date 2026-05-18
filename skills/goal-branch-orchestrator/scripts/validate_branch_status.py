@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 from pathlib import Path
 
 
@@ -36,6 +37,37 @@ DEFAULT_WORKER_LADDER = (
 ALLOWED_WORKER_ROUTES = set(DEFAULT_WORKER_LADDER)
 WORK_ITEM_ROLES = {"worker", "research-worker"}
 RESEARCH_ALIASES = ("codex-research", "codex-research-mini")
+RESEARCH_FORBIDDEN_COMMAND_PATTERNS = [
+    (r"\bgit\s+(push|commit|reset|checkout|clean|merge|rebase)\b", "git state mutation"),
+    (r"\b(curl|http|https)\b.*\s-x\s*(post|put|patch|delete)\b", "state-changing HTTP method"),
+    (r"\bcurl\b.*(--request\s+(post|put|patch|delete)|--data\b|--data-raw\b|--form\b|\s-d\s)", "state-changing curl request"),
+    (r"\bwget\b.*--post", "state-changing wget request"),
+    (r"\bgh\s+(pr|issue)\s+(create|edit|comment|close|reopen|merge)\b", "state-changing GitHub command"),
+    (r"\bgh\s+repo\s+(delete|archive|edit|rename|transfer)\b", "state-changing GitHub repo command"),
+    (r"\bgh\s+release\s+(create|upload|delete|edit)\b", "state-changing GitHub release command"),
+    (r"\bgh\s+api\b.*(--method|-x)\s*(post|put|patch|delete)\b", "state-changing GitHub API method"),
+    (r"\b(pip|pip3|npm|pnpm|yarn|apt|apt-get|brew|cargo|go)\s+(install|add|update|upgrade|remove|uninstall|publish)\b", "package or system mutation"),
+    (r"\bpython3?\s+-m\s+pip\s+(install|uninstall|download)\b", "Python package mutation or fetch"),
+    (r"\b(rm|mv|cp|tee|touch|mkdir|rmdir|chmod|chown|truncate|dd)\b", "local filesystem mutation"),
+    (r"\bsed\s+-i\b|\bperl\s+-p?i\b", "in-place file edit"),
+    (r"(^|[^&])>\s*[^&\s]", "shell output redirection to file"),
+    (r"(^|\s)(env|printenv|set)(\s|$)", "environment or secret inspection"),
+]
+RESEARCH_SECRET_MARKERS = [
+    ".env",
+    ".ssh/",
+    "/.ssh",
+    "id_rsa",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    ".gnupg/",
+    "/.gnupg",
+    ".netrc",
+    "/etc/shadow",
+    "aws/credentials",
+    "application_default_credentials",
+]
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 is_strict_int = STATUS_VALIDATION.is_strict_int
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
@@ -93,6 +125,25 @@ def validate_url_list(defects: list[str], value: object, path: str) -> None:
     for index, item in enumerate(require_string_list(defects, value, path)):
         if not (item.startswith("https://") or item.startswith("http://")):
             defect(defects, f"{path}[{index}]", "must be an http(s) source URL")
+
+
+def validate_research_security(defects: list[str], commands: list[str], local_files: list[str], path: str) -> None:
+    for index, command in enumerate(commands):
+        normalized = " ".join(command.lower().split())
+        for pattern, reason in RESEARCH_FORBIDDEN_COMMAND_PATTERNS:
+            if re.search(pattern, normalized):
+                defect(defects, f"{path}.commands_run[{index}]", f"research-worker command violates read-only security policy: {reason}")
+                break
+        for marker in RESEARCH_SECRET_MARKERS:
+            if marker in normalized:
+                defect(defects, f"{path}.commands_run[{index}]", f"research-worker command appears to inspect secret or credential material: {marker}")
+                break
+    for index, file_path in enumerate(local_files):
+        normalized = file_path.lower()
+        for marker in RESEARCH_SECRET_MARKERS:
+            if marker in normalized:
+                defect(defects, f"{path}.local_files_read[{index}]", f"research-worker local file appears to be secret or credential material: {marker}")
+                break
 
 
 def validate_worker_ladder(defects: list[str], value: object, path: str) -> list[str]:
@@ -218,8 +269,12 @@ def validate_research_status(defects: list[str], value: object, path: str) -> No
     require_string_list(defects, data.get("search_queries"), f"{path}.search_queries")
     validate_url_list(defects, data.get("source_urls"), f"{path}.source_urls")
     require_string_list(defects, data.get("tools_used"), f"{path}.tools_used")
-    validate_path_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
-    validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    local_files = require_string_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
+    for index, item in enumerate(local_files):
+        if not is_repo_relative_path(item):
+            defect(defects, f"{path}.local_files_read[{index}]", "must be a repo-relative path without git porcelain status")
+    commands = require_string_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    validate_research_security(defects, commands, local_files, path)
     require_string_list(defects, data.get("findings"), f"{path}.findings", min_items=1)
     blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
     if data.get("status") == "pass":
@@ -315,8 +370,12 @@ def validate_research_artifact(defects: list[str], value: object, path: str) -> 
     require_string_list(defects, data.get("search_queries"), f"{path}.search_queries")
     validate_url_list(defects, data.get("source_urls"), f"{path}.source_urls")
     require_string_list(defects, data.get("tools_used"), f"{path}.tools_used")
-    validate_path_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
-    validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    local_files = require_string_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
+    for index, item in enumerate(local_files):
+        if not is_repo_relative_path(item):
+            defect(defects, f"{path}.local_files_read[{index}]", "must be a repo-relative path without git porcelain status")
+    commands = require_string_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    validate_research_security(defects, commands, local_files, path)
     require_string_list(defects, data.get("findings"), f"{path}.findings", min_items=1)
     blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
     if data.get("status") == "pass":

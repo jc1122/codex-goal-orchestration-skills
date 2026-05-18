@@ -8,10 +8,13 @@
     "install-codex-goal-skills": "./bin/install-goal-skills.js"
   },
   "scripts": {
-    "check:shared": "python3 scripts/sync_goal_shared.py"
+    "check:shared": "python3 scripts/sync_goal_shared.py",
+    "check:fixtures": "python3 scripts/check_preparedness_fixtures.py"
   },
   "files": [
     "bin/",
+    "fixtures/",
+    "scripts/check_preparedness_fixtures.py",
     "scripts/sync_goal_shared.py",
     "skills/",
     "!**/__pycache__/**",

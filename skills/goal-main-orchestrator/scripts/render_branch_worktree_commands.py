@@ -79,6 +79,12 @@ def validate_audit_telemetry(audit_path: Path) -> None:
     accepted = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("accepted") is True]
     if len(accepted) != 1 or telemetry.get("accepted_alias") != accepted[0]:
         raise SystemExit("passing prompt audit telemetry must identify exactly one accepted model")
+    for index, item in enumerate(attempts):
+        if not isinstance(item, dict):
+            continue
+        timeout_seconds = item.get("timeout_seconds")
+        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            raise SystemExit(f"prompt audit telemetry attempts[{index}].timeout_seconds must be a positive integer")
     for key in ["prompt_chars", "prompt_bytes", "output_chars", "output_bytes", "event_log_chars", "event_log_bytes"]:
         value = telemetry.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:

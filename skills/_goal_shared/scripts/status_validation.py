@@ -174,6 +174,9 @@ def validate_telemetry_artifact(
         if attempt.get("effort") is not None:
             require_string(defects, attempt.get("effort"), f"{item_path}.effort")
         require_string(defects, attempt.get("command"), f"{item_path}.command")
+        timeout_seconds = attempt.get("timeout_seconds")
+        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            defect(defects, f"{item_path}.timeout_seconds", "must be a positive integer")
         called = attempt.get("called")
         accepted = attempt.get("accepted")
         if not isinstance(called, bool):

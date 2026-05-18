@@ -1,0 +1,36 @@
+{
+  "job_id": "preparedness-research-worker-fixture",
+  "base_ref": "main",
+  "max_active_branch_agents": 1,
+  "serial_reason": "Single-branch fixture for research-worker preparedness checks.",
+  "branches": [
+    {
+      "id": "B01",
+      "title": "Research Worker Preparedness Fixture",
+      "objective": "Validate broad read-only research-worker artifacts without launching live model CLIs.",
+      "branch_name": "preparedness-research-fixture",
+      "worktree_path": ".",
+      "max_active_worker_packets": 1,
+      "worker_serial_reason": "Single static fixture packet.",
+      "work_items": [
+        {
+          "id": "W01",
+          "worker_type": "research-worker",
+          "objective": "Static research-worker status fixture with local read and source URL evidence.",
+          "owned_paths": [
+            "README.md"
+          ],
+          "context_files": [
+            "README.md"
+          ],
+          "verification": [
+            "python3 skills/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest <bundle>/job.manifest.json --status <bundle>/branches/B01.status.json"
+          ],
+          "dod": [
+            "research-worker fixture validates with tools_used, source URL, timeout telemetry, and read-only command evidence"
+          ]
+        }
+      ]
+    }
+  ]
+}

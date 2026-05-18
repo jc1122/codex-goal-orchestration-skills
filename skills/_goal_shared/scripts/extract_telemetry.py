@@ -172,6 +172,9 @@ def build_telemetry(
         probe_logs = [file_stats(packet_dir / str(path)) for path in spec.get("probe_logs", [])]
         called = any(item["exists"] for item in event_logs + probe_logs)
         logs = event_logs + probe_logs
+        timeout_seconds = spec.get("timeout_seconds")
+        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            timeout_seconds = None
         attempts.append(
             {
                 "alias": spec.get("alias", ""),
@@ -179,6 +182,7 @@ def build_telemetry(
                 "model": spec.get("model", ""),
                 "effort": spec.get("effort") or None,
                 "command": spec.get("command", ""),
+                "timeout_seconds": timeout_seconds,
                 "called": called,
                 "event_logs": event_logs,
                 "probe_logs": probe_logs,

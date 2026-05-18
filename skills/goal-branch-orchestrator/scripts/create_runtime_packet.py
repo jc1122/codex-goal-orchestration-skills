@@ -31,6 +31,10 @@ RESEARCH_ALIAS = "codex-research"
 RESEARCH_FALLBACK_ALIAS = "codex-research-mini"
 REVIEWER_MODEL = "gpt-5.5"
 REVIEWER_FALLBACK_MODEL = "gpt-5.4"
+WORKER_ATTEMPT_TIMEOUT_SECONDS = 3600
+RESEARCH_ATTEMPT_TIMEOUT_SECONDS = 1200
+REVIEWER_ATTEMPT_TIMEOUT_SECONDS = 1800
+TIMEOUT_KILL_AFTER_SECONDS = 30
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
 MAX_EMBEDDED_CONTEXT_CHARS = 120000
@@ -164,6 +168,7 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "model": GEMINI_PRO_MODEL,
                     "effort": "",
                     "command": WORKER_ROUTE_COMMANDS[alias],
+                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.log"],
                     "probe_logs": [f"events-{label}-probe.log"],
                 }
@@ -176,6 +181,7 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "model": GEMINI_FLASH_MODEL,
                     "effort": "",
                     "command": WORKER_ROUTE_COMMANDS[alias],
+                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.log"],
                     "probe_logs": [f"events-{label}-probe.log"],
                 }
@@ -188,6 +194,7 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "model": COPILOT_MODEL,
                     "effort": COPILOT_REASONING_EFFORT,
                     "command": WORKER_ROUTE_COMMANDS[alias],
+                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.jsonl"],
                     "probe_logs": [f"events-{label}-probe.jsonl", f"events-{label}-version.log"],
                 }
@@ -201,6 +208,7 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "model": model,
                     "effort": "",
                     "command": WORKER_ROUTE_COMMANDS[alias],
+                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.jsonl"],
                     "probe_logs": [],
                 }
@@ -216,6 +224,7 @@ def reviewer_telemetry_attempts() -> list[dict]:
             "model": REVIEWER_MODEL,
             "effort": "",
             "command": f"codex exec --ephemeral -m {REVIEWER_MODEL} -s read-only",
+            "timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["events-primary.jsonl"],
             "probe_logs": [],
         },
@@ -225,6 +234,7 @@ def reviewer_telemetry_attempts() -> list[dict]:
             "model": REVIEWER_FALLBACK_MODEL,
             "effort": "",
             "command": f"codex exec --ephemeral -m {REVIEWER_FALLBACK_MODEL} -s read-only",
+            "timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["events-fallback.jsonl"],
             "probe_logs": [],
         },
@@ -239,6 +249,7 @@ def research_telemetry_attempts() -> list[dict]:
             "model": RESEARCH_MODEL,
             "effort": "",
             "command": f"codex --search exec --ephemeral -m {RESEARCH_MODEL} -s read-only",
+            "timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["events-primary.jsonl"],
             "probe_logs": [],
         },
@@ -248,6 +259,7 @@ def research_telemetry_attempts() -> list[dict]:
             "model": RESEARCH_FALLBACK_MODEL,
             "effort": "",
             "command": f"codex --search exec --ephemeral -m {RESEARCH_FALLBACK_MODEL} -s read-only",
+            "timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["events-fallback.jsonl"],
             "probe_logs": [],
         },
@@ -682,7 +694,19 @@ git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
 
 packet_dir="$(pwd)"
 output_path="$packet_dir/{output_name}"
+attempt_timeout_seconds={RESEARCH_ATTEMPT_TIMEOUT_SECONDS}
+timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
 rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl" "$packet_dir/telemetry.json"
+
+run_with_timeout() {{
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout command not found; refusing unbounded research-worker attempt." >&2
+    return 127
+  fi
+  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
+}}
 
 write_terminal_research() {{
   local message="$1"
@@ -723,7 +747,7 @@ PY
 run_model() {{
   local label="$1"
   local model="$2"
-  codex --search exec --ephemeral \\
+  run_with_timeout "$attempt_timeout_seconds" codex --search exec --ephemeral \\
     -m "$model" \\
     -C {shell_quote(worktree)} \\
     -s read-only \\
@@ -770,7 +794,19 @@ git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
 
 packet_dir="$(pwd)"
 output_path="$packet_dir/{output_name}"
+attempt_timeout_seconds={REVIEWER_ATTEMPT_TIMEOUT_SECONDS}
+timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
 rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl" "$packet_dir/telemetry.json"
+
+run_with_timeout() {{
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout command not found; refusing unbounded reviewer attempt." >&2
+    return 127
+  fi
+  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
+}}
 
 write_terminal_review() {{
   local message="$1"
@@ -804,7 +840,7 @@ PY
 run_model() {{
   local label="$1"
   local model="$2"
-  codex exec --ephemeral \\
+  run_with_timeout "$attempt_timeout_seconds" codex exec --ephemeral \\
     -m "$model" \\
     -C {shell_quote(worktree)} \\
     -s {sandbox} \\
@@ -869,7 +905,19 @@ copilot_probe_model={shell_quote(COPILOT_PROBE_MODEL)}
 copilot_probe_reasoning_effort={shell_quote(COPILOT_PROBE_REASONING_EFFORT)}
 copilot_probe_timeout_seconds={COPILOT_PROBE_TIMEOUT_SECONDS}
 copilot_probe_prompt={shell_quote(COPILOT_PROBE_PROMPT)}
+worker_attempt_timeout_seconds={WORKER_ATTEMPT_TIMEOUT_SECONDS}
+timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
 rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt "$packet_dir/telemetry.json"
+
+run_with_timeout() {{
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout command not found; refusing unbounded worker attempt." >&2
+    return 127
+  fi
+  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
+}}
 
 worktree_dirty() {{
   [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]
@@ -1131,7 +1179,7 @@ run_gemini() {{
   probe_gemini_model "$label" "$model" || return $?
   (
     cd {shell_quote(worktree)}
-    "$gemini_command" \\
+    run_with_timeout "$worker_attempt_timeout_seconds" "$gemini_command" \\
       --model "$model" \\
       --approval-mode "$gemini_approval_mode" \\
       --skip-trust \\
@@ -1222,7 +1270,7 @@ run_copilot() {{
   probe_copilot_model "$label" || return $?
   (
     cd {shell_quote(worktree)}
-    "$copilot_command" copilot -- \\
+    run_with_timeout "$worker_attempt_timeout_seconds" "$copilot_command" copilot -- \\
       -C {shell_quote(worktree)} \\
       --model "$copilot_model" \\
       --effort "$copilot_reasoning_effort" \\
@@ -1244,7 +1292,7 @@ run_copilot() {{
 run_codex() {{
   local label="$1"
   local model="$2"
-  codex exec --ephemeral \\
+  run_with_timeout "$worker_attempt_timeout_seconds" codex exec --ephemeral \\
     -m "$model" \\
     -C {shell_quote(worktree)} \\
     -s workspace-write \\

@@ -18,6 +18,8 @@ BRANCH_LITE_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*-L[A-Za-z0-9_.-]
 LITE_MODEL = "gemini-3.1-flash-lite-preview"
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "plan"
+LITE_ATTEMPT_TIMEOUT_SECONDS = 600
+TIMEOUT_KILL_AFTER_SECONDS = 30
 LITE_STATUS_BEGIN = "BEGIN_LITE_ADVICE_JSON"
 LITE_STATUS_END = "END_LITE_ADVICE_JSON"
 SKILL_NAME_OVERRIDE: str | None = None
@@ -135,6 +137,7 @@ def lite_telemetry_attempts(gemini_path: str) -> list[dict]:
             "model": LITE_MODEL,
             "effort": "",
             "command": advice_command(gemini_path),
+            "timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["advice.raw.txt"],
             "probe_logs": [],
         }
@@ -259,7 +262,19 @@ PY
 lite_model={shell_quote(LITE_MODEL)}
 approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
 base_dir={shell_quote(base_dir.as_posix())}
+attempt_timeout_seconds={LITE_ATTEMPT_TIMEOUT_SECONDS}
+timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
 rm -f "$output_path" "$raw_path" "$packet_dir/telemetry.json"
+
+run_with_timeout() {{
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout command not found; refusing unbounded Lite advisor attempt." >&2
+    return 127
+  fi
+  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
+}}
 
 write_terminal_advice() {{
   local status="$1"
@@ -520,7 +535,7 @@ fi
 
 (
   cd "$base_dir"
-  "$gemini_command" \\
+  run_with_timeout "$attempt_timeout_seconds" "$gemini_command" \\
     --model "$lite_model" \\
     --approval-mode "$approval_mode" \\
     --skip-trust \\

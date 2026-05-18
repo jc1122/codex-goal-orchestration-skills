@@ -77,7 +77,8 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
 - 1 to 4 worker packets were used for this branch.
 - Worker, research-worker, reviewer, and any Lite packets wrote same-packet `telemetry.json`.
-- Research-worker packets, when present, used broad read-only information retrieval, recorded `tools_used` and source URLs, and wrote same-packet `telemetry.json`.
+- Research-worker packets, when present, used broad read-only information retrieval, recorded `tools_used` and source URLs, passed read-only security validation, and wrote same-packet `telemetry.json`.
+- Packet telemetry records positive `timeout_seconds` for every declared model attempt.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.

@@ -12,6 +12,8 @@ from pathlib import Path
 
 AUDIT_MODEL = "gpt-5.5"
 AUDIT_FALLBACK_MODEL = "gpt-5.4"
+AUDIT_ATTEMPT_TIMEOUT_SECONDS = 1200
+TIMEOUT_KILL_AFTER_SECONDS = 30
 
 
 def shell_quote(value: str) -> str:
@@ -35,6 +37,7 @@ def audit_telemetry_attempts() -> list[dict]:
             "model": AUDIT_MODEL,
             "effort": "",
             "command": f"codex exec --ephemeral -m {AUDIT_MODEL} -s read-only",
+            "timeout_seconds": AUDIT_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["events-primary.jsonl"],
             "probe_logs": [],
         },
@@ -44,6 +47,7 @@ def audit_telemetry_attempts() -> list[dict]:
             "model": AUDIT_FALLBACK_MODEL,
             "effort": "",
             "command": f"codex exec --ephemeral -m {AUDIT_FALLBACK_MODEL} -s read-only",
+            "timeout_seconds": AUDIT_ATTEMPT_TIMEOUT_SECONDS,
             "event_logs": ["events-fallback.jsonl"],
             "probe_logs": [],
         },
@@ -253,12 +257,24 @@ cd "$(dirname "$0")"
 git -C {shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/dev/null
 
 output_path="$(pwd)/prompt-audit.json"
+attempt_timeout_seconds={AUDIT_ATTEMPT_TIMEOUT_SECONDS}
+timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
 rm -f "$output_path" "$(pwd)/events-primary.jsonl" "$(pwd)/events-fallback.jsonl" "$(pwd)/telemetry.json"
+
+run_with_timeout() {{
+  local seconds="$1"
+  shift
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "timeout command not found; refusing unbounded prompt-audit attempt." >&2
+    return 127
+  fi
+  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
+}}
 
 run_model() {{
   local label="$1"
   local model="$2"
-  codex exec --ephemeral \\
+  run_with_timeout "$attempt_timeout_seconds" codex exec --ephemeral \\
     -m "$model" \\
     -C {shell_quote(repo_root.as_posix())} \\
     -s read-only \\

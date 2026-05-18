@@ -48,7 +48,19 @@ No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview`
 
 ## Research Worker Policy
 
-Use `--role research-worker` only for research-only packets. Research workers run `codex --search exec --ephemeral -s read-only` without user-config suppression, which provides Codex native web search plus configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, local read-only file access, and configured tool/skill documentation when relevant. Research workers must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. They write `research.json` under manifest-owned `research/<packet_id>/`, and a passing research status must include `search_queries` when search was used, direct `source_urls`, `tools_used`, repo-relative `local_files_read`, exact `commands_run`, findings, empty blockers, and same-packet `telemetry.json`.
+Use `--role research-worker` only for research-only packets. Research workers run `codex --search exec --ephemeral -s read-only` without user-config suppression, which provides Codex native web search plus configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, local read-only file access, and configured tool/skill documentation when relevant. Research workers must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. They write `research.json` under manifest-owned `research/<packet_id>/`, and a passing research status must include `search_queries` when search was used, direct `source_urls`, `tools_used`, repo-relative `local_files_read`, exact `commands_run`, findings, empty blockers, and same-packet `telemetry.json`. Branch validation rejects obvious state-changing research commands, package/system mutation, file writes, shell redirection to files, environment dumps, and secret/credential path reads.
+
+## Timeout And Retry Policy
+
+All full model/CLI attempts run through `timeout --foreground --kill-after=30s`; if `timeout` is unavailable, the launcher refuses to run an unbounded attempt and records a blocked artifact. Default attempt limits are:
+
+- normal worker route attempt: 3600 seconds;
+- research-worker attempt: 1200 seconds;
+- reviewer attempt: 1800 seconds;
+- prompt-audit attempt: 1200 seconds;
+- Lite advisor attempt: 600 seconds.
+
+A timeout is a failed attempt. Do not poll active logs or status files while waiting for a timeout. Fallback is allowed only when the attempt did not produce a valid artifact and, for write-capable workers, the worker worktree is clean. There is no same-alias retry loop; retry means moving to the next declared fallback alias. Every telemetry attempt must record a positive `timeout_seconds`.
 
 ## Reviewer Model Policy
 
