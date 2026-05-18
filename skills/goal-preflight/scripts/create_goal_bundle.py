@@ -30,6 +30,13 @@ WORKER_MODEL_POLICY = {
     "selection_reason_required": True,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder.",
 }
+RESEARCH_WORKER_POLICY = {
+    "enabled": True,
+    "worker_type": "research-worker",
+    "launcher": "codex --search exec --ephemeral -s read-only",
+    "network_scope": "Broad read-only information retrieval is allowed through Codex native web search, configured CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands. State-changing, destructive, credential, posting, purchasing, and file-editing actions are prohibited.",
+    "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files.",
+}
 
 
 def slug(value: str) -> str:
@@ -94,6 +101,19 @@ def require_string_list(value: object, field: str, *, min_items: int = 0) -> lis
     return result
 
 
+def normalize_worker_type(value: object, field: str) -> str:
+    if value is None:
+        return "worker"
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{field} must be 'worker' or 'research-worker'")
+    normalized = value.strip()
+    if normalized == "research":
+        normalized = "research-worker"
+    if normalized not in {"worker", "research-worker"}:
+        raise SystemExit(f"{field} must be 'worker' or 'research-worker'")
+    return normalized
+
+
 def branch_id(index: int) -> str:
     return f"B{index:02d}"
 
@@ -126,6 +146,7 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
                     f"### {item_id}: {item.get('title') or item.get('objective') or 'Work item'}",
                     "",
                     f"Worker packet id: {packet_id}",
+                    f"Worker type: {item.get('worker_type', 'worker')}",
                     "",
                     item.get("objective", "Objective not supplied."),
                     "",
@@ -171,6 +192,7 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
             **item,
             "id": item_id,
             "packet_id": packet_id,
+            "worker_type": normalize_worker_type(item.get("worker_type"), f"branch {branch_id_value} work item {item_id} worker_type"),
             "objective": objective,
             "owned_paths": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} owned_paths") for value in require_string_list(item.get("owned_paths"), f"branch {branch_id_value} work item {item_id} owned_paths", min_items=1)],
             "context_files": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} context_files") for value in require_string_list(item.get("context_files", []), f"branch {branch_id_value} work item {item_id} context_files")],
@@ -399,7 +421,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    for dirname in ["branches", "workers", "reviewers", "audit", "lite"]:
+    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite"]:
         (bundle_dir / dirname).mkdir(exist_ok=True)
 
     manifest = {
@@ -411,6 +433,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
         "worker_model_policy": WORKER_MODEL_POLICY,
+        "research_worker_policy": RESEARCH_WORKER_POLICY,
         "preflight_lite_advice": brief["preflight_lite_advice"],
         "branches": [
             {
@@ -492,6 +515,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
             "Scheduling: rolling; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
             f"Worker model policy: {format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
+            "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
             f"Artifact policy: {brief['artifact_policy']}",
             f"Cleanup policy: {brief['cleanup_policy']}",
             "",

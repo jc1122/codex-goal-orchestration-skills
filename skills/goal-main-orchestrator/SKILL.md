@@ -126,13 +126,13 @@ Launch branch orchestrators as a rolling saturated pool. Parallelism is the defa
 - expected branch status path;
 - expected branch review path.
 
-Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, deterministic worker `packet_id` values in `<branch_id>-<work_item_id>` form, `max_active_worker_packets` from 1 to 4, `worker_parallelism.parallelism_default=true`, and `worker_parallelism.scheduling_mode=rolling`. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
+Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, deterministic worker `packet_id` values in `<branch_id>-<work_item_id>` form, optional `worker_type` values only from `worker` or `research-worker`, `max_active_worker_packets` from 1 to 4, `worker_parallelism.parallelism_default=true`, and `worker_parallelism.scheduling_mode=rolling`. If any work item uses `research-worker`, verify the manifest includes `research_worker_policy` requiring `codex --search exec --ephemeral -s read-only` without user-config suppression, broad read-only information retrieval through configured CLI/MCP/connector/browser/search tools plus shell/network inspection commands, and no file edits or state-changing actions. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
 
 The main orchestrator should not implement branch work itself and should not inspect worker event logs unless a branch status is missing, inconsistent, or blocked.
 
 Do not open or read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Treat that skill as a branch-session launch target: verify it exists during bootstrap, then dispatch a branch orchestrator session that loads and follows it with the inputs above. If branch-session launch is impossible, return `blocked` instead of absorbing the branch runtime instructions into main.
 
-After dispatch, use the native agent wait mechanism with the longest practical timeout. If a wait returns with no completed branch agents, do not poll branch worktrees, worker packets, reviewer packets, process tables, or status files, and do not send status-check nudges. Continue waiting unless the user explicitly enters debug mode or a branch agent returns `blocked`/`failed`/`partial`.
+After dispatch, use the native agent wait mechanism with the longest practical timeout. If a wait returns with no completed branch agents, do not poll branch worktrees, worker packets, research-worker packets, reviewer packets, process tables, or status files, and do not send status-check nudges. Continue waiting unless the user explicitly enters debug mode or a branch agent returns `blocked`/`failed`/`partial`.
 
 Track active branch orchestrator agent ids/processes. As each branch finishes, collect its status/review artifacts, validate them, then close or turn off the finished branch orchestrator. If capacity is freed and an eligible unstarted branch remains, create its worktree and launch it immediately. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
 
@@ -163,7 +163,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.p
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, prompt-audit/worker/reviewer/Lite `telemetry.json` artifacts, bundle `telemetry.summary.json`, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker/research-worker artifacts and same-branch reviewer artifacts backing those claims, prompt-audit/worker/research-worker/reviewer/Lite `telemetry.json` artifacts, bundle `telemetry.summary.json`, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 
@@ -171,7 +171,7 @@ Before returning `pass`, verify:
 
 - skill availability bootstrap passed for `goal-main-orchestrator` and `goal-branch-orchestrator`;
 - prompt audit passed;
-- prompt audit, worker, reviewer, and used/ignored Lite packets wrote `telemetry.json`;
+- prompt audit, worker, research-worker, reviewer, and used/ignored Lite packets wrote `telemetry.json`;
 - `summarize_telemetry.py --bundle-dir <bundle>` wrote `telemetry.summary.json`;
 - manifest cleanup and artifact policies are present and are not contradicted by `main.prompt.md`;
 - every branch listed in the manifest has a status file;
@@ -184,7 +184,7 @@ Before returning `pass`, verify:
 - branch statuses record the branch worker-packet cap and concurrent worker launch evidence or a serial/under-capacity reason;
 - no more than `max_active_branch_agents` branch orchestrators were active at once;
 - branch starts were deferred only for incomplete manifest `depends_on` branch ids;
-- main did not poll active branch agents' worker packets, reviewer packets, worktrees, or process tables while waiting;
+- main did not poll active branch agents' worker packets, research-worker packets, reviewer packets, worktrees, or process tables while waiting;
 - finished branch orchestrators were closed before replacements launched;
 - required commands and validators are recorded;
 - manifest-bound `validate_main_status.py` passed for the final main status file;

@@ -160,10 +160,17 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
                 else "invalid"
                 for item in work_items
             )
+            worker_types = ",".join(
+                str(item.get("worker_type", "worker"))
+                if isinstance(item, dict)
+                else "invalid"
+                for item in work_items
+            )
         else:
             worker_packet_ids = "invalid"
+            worker_types = "invalid"
         branch_lines.append(
-            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, expected_status_output={status}, expected_review_output={review}, depends_on={depends_on}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}".format(
+            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, expected_status_output={status}, expected_review_output={review}, depends_on={depends_on}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}, worker_types={worker_types}".format(
                 id=branch.get("id", ""),
                 prompt=resolve_bundle_path(base, branch.get("prompt", ""), "prompt").as_posix(),
                 branch_name=branch.get("branch_name", ""),
@@ -174,6 +181,7 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
                 max_workers=branch.get("max_active_worker_packets", "missing"),
                 worker_packets=len(work_items) if isinstance(work_items, list) else "invalid",
                 worker_packet_ids=worker_packet_ids,
+                worker_types=worker_types,
             )
         )
 
@@ -210,6 +218,8 @@ Required checks:
 - branch prompt paths, status paths, review paths, and worktree paths are unique and collision-free;
 - every branch declares `max_active_worker_packets` from 1 to 4 and `worker_parallelism.parallelism_default=true`;
 - every branch contains 1 to 4 work items with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids;
+- work item `worker_type`, when present, is either `worker` or `research-worker`;
+- when any work item is `research-worker`, the manifest includes a research-worker policy requiring `codex --search exec --ephemeral -s read-only` without user-config suppression, broad read-only information retrieval through configured CLI/MCP/connector/browser/search tools plus shell/network inspection commands, and explicit prohibition on file edits or state-changing actions; branch prompts must preserve that boundary;
 - branch prompts require parallel worker dispatch by default;
 - `max_active_branch_agents` is present and <= 4;
 - parallelism is the default, the manifest contains parallelization metadata, and `parallelization.scheduling_mode` is `rolling`;

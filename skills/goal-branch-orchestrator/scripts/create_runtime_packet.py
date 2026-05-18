@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create model-aware worker or reviewer packets for branch orchestration."""
+"""Create model-aware worker, research-worker, or reviewer packets."""
 
 from __future__ import annotations
 
@@ -25,6 +25,10 @@ COPILOT_PROBE_TIMEOUT_SECONDS = 20
 COPILOT_PROBE_PROMPT = "Return exactly: COPILOT_MODEL_PROBE_OK"
 SPARK_MODEL = "gpt-5.3-codex-spark"
 MINI_MODEL = "gpt-5.4-mini"
+RESEARCH_MODEL = "gpt-5.4"
+RESEARCH_FALLBACK_MODEL = "gpt-5.4-mini"
+RESEARCH_ALIAS = "codex-research"
+RESEARCH_FALLBACK_ALIAS = "codex-research-mini"
 REVIEWER_MODEL = "gpt-5.5"
 REVIEWER_FALLBACK_MODEL = "gpt-5.4"
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
@@ -227,6 +231,29 @@ def reviewer_telemetry_attempts() -> list[dict]:
     ]
 
 
+def research_telemetry_attempts() -> list[dict]:
+    return [
+        {
+            "alias": RESEARCH_ALIAS,
+            "provider": "codex",
+            "model": RESEARCH_MODEL,
+            "effort": "",
+            "command": f"codex --search exec --ephemeral -m {RESEARCH_MODEL} -s read-only",
+            "event_logs": ["events-primary.jsonl"],
+            "probe_logs": [],
+        },
+        {
+            "alias": RESEARCH_FALLBACK_ALIAS,
+            "provider": "codex",
+            "model": RESEARCH_FALLBACK_MODEL,
+            "effort": "",
+            "command": f"codex --search exec --ephemeral -m {RESEARCH_FALLBACK_MODEL} -s read-only",
+            "event_logs": ["events-fallback.jsonl"],
+            "probe_logs": [],
+        },
+    ]
+
+
 def telemetry_function(role: str, packet_id: str, output_name: str, attempts: list[dict]) -> str:
     script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
     return f"""write_telemetry() {{
@@ -312,6 +339,47 @@ def review_schema(packet_id: str) -> dict:
             "verification_gaps": {"type": "array", "items": nonempty_string},
             "residual_risks": {"type": "array", "items": nonempty_string},
             "summary": nonempty_string,
+        },
+    }
+
+
+def research_schema(packet_id: str, branch: str, worktree: str) -> dict:
+    repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
+    url = r"^https?://[^ \t\r\n]+$"
+    nonempty_string = {"type": "string", "minLength": 1}
+    return {
+        "$schema": "https://json-schema.org/draft/2020-12/schema",
+        "type": "object",
+        "additionalProperties": False,
+        "required": [
+            "packet_id",
+            "role",
+            "status",
+            "branch",
+            "worktree",
+            "search_queries",
+            "source_urls",
+            "tools_used",
+            "local_files_read",
+            "commands_run",
+            "findings",
+            "blockers",
+            "handoff",
+        ],
+        "properties": {
+            "packet_id": exact_string_schema(packet_id),
+            "role": exact_string_schema("research-worker"),
+            "status": {"type": "string", "enum": ["pass", "partial", "blocked", "failed"]},
+            "branch": exact_string_schema(branch),
+            "worktree": exact_string_schema(worktree),
+            "search_queries": {"type": "array", "items": nonempty_string},
+            "source_urls": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": url}},
+            "tools_used": {"type": "array", "items": nonempty_string},
+            "local_files_read": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path}},
+            "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
+            "findings": {"type": "array", "minItems": 1, "items": nonempty_string},
+            "blockers": {"type": "array", "items": nonempty_string},
+            "handoff": nonempty_string,
         },
     }
 
@@ -407,6 +475,77 @@ Review the branch against its prompt, worker status files, diffs, test evidence,
 Determine the branch base ref from the branch prompt or manifest context. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
 Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
+"""
+
+    if role == "research-worker":
+        example_research = json.dumps(
+            {
+                "packet_id": packet_id,
+                "role": "research-worker",
+                "status": "blocked",
+                "branch": branch,
+                "worktree": worktree,
+                "search_queries": [],
+                "source_urls": [],
+                "tools_used": [],
+                "local_files_read": [],
+                "commands_run": ["pwd", "git status --short --branch"],
+                "findings": ["replace with concrete finding or blocker"],
+                "blockers": ["replace with concrete blocker"],
+                "handoff": "replace with concise research handoff",
+            },
+            separators=(",", ":"),
+        )
+        return f"""# Research Worker Packet {packet_id}
+
+You are Research Worker {packet_id}. Do not edit files.
+
+Worktree: {worktree}
+Branch: {branch}
+
+Allowed information sources:
+
+- Native Codex live web search enabled by the launcher.
+- Configured read-only CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands when they are relevant to the task.
+- Local read-only file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant.
+
+Safety boundaries:
+
+- Do not write or modify local files.
+- Do not mutate remote services or repositories.
+- Do not inspect secrets or unrelated private files.
+- Do not post messages, send email, create tickets, buy anything, change calendars/docs/issues, authenticate new accounts, alter credentials, or exfiltrate secrets.
+- Use broad tools only for read-only information retrieval and record what you used.
+
+Local read scope:
+
+{optional_list("Relevant local files/modules", owned_files)}
+
+{context_section(worktree, context_files)}
+
+Before researching, run:
+
+```bash
+pwd
+git status --short --branch
+```
+
+Task:
+
+{task_text}
+
+Use the appropriate broad read-only tools for current outside information. Record every search query you rely on in `search_queries`; leave it empty only when you used direct URLs, local files, connectors, or other non-search tools instead. Record every source URL that supports a finding in `source_urls`. Use direct source URLs, not just search-result pages. Record every local file you read in `local_files_read` using repo-relative paths only.
+Record every distinct external or local tool family you used in `tools_used`, for example `codex-native-search`, `web-open`, `shell-curl`, `local-rg`, `local-sed`, `mcp-docs`, or `connector-drive`.
+
+Return a research status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` only when the research task is complete, source URLs are captured for all online claims, local files read are recorded, and `tools_used` identifies the tool families used. `commands_run` must contain exact local or shell commands that were actually run.
+
+Do not emit placeholder, draft, or example final-shaped JSON before research is complete. Return exactly one final JSON object matching `{schema_name}`.
+
+Example shape only:
+
+```json
+{example_research}
+```
 """
 
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
@@ -532,6 +671,94 @@ def launch_for(
     selection_reason: str,
 ) -> str:
     sandbox = "read-only" if role == "reviewer" else "workspace-write"
+    if role == "research-worker":
+        research_telemetry = telemetry_function("research-worker", packet_id, output_name, research_telemetry_attempts())
+        return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
+
+packet_dir="$(pwd)"
+output_path="$packet_dir/{output_name}"
+rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl" "$packet_dir/telemetry.json"
+
+write_terminal_research() {{
+  local message="$1"
+  python3 - "$output_path" {shell_quote(packet_id)} {shell_quote(branch)} {shell_quote(worktree)} "$message" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output_path = Path(sys.argv[1])
+packet_id = sys.argv[2]
+branch = sys.argv[3]
+worktree = sys.argv[4]
+message = sys.argv[5]
+data = {{
+    "packet_id": packet_id,
+    "role": "research-worker",
+    "status": "blocked",
+    "branch": branch,
+    "worktree": worktree,
+    "search_queries": [],
+    "source_urls": [],
+    "tools_used": [],
+    "local_files_read": [],
+    "commands_run": [
+        "codex --search exec --ephemeral -m {RESEARCH_MODEL} -s read-only --json --output-schema research.schema.json -o research.json",
+        "codex --search exec --ephemeral -m {RESEARCH_FALLBACK_MODEL} -s read-only --json --output-schema research.schema.json -o research.json",
+    ],
+    "findings": [message],
+    "blockers": [message, "Inspect research-worker event logs in this packet directory for the underlying CLI or schema error."],
+    "handoff": message + " Inspect research-worker event logs in this packet directory for the underlying CLI or schema error.",
+}}
+output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+PY
+}}
+
+{research_telemetry}
+
+run_model() {{
+  local label="$1"
+  local model="$2"
+  codex --search exec --ephemeral \\
+    -m "$model" \\
+    -C {shell_quote(worktree)} \\
+    -s read-only \\
+    --json \\
+    --output-schema "$(pwd)/{schema_name}" \\
+    -o "$(pwd)/{output_name}" \\
+    - < "$(pwd)/prompt.md" \\
+    > "$(pwd)/events-${{label}}.jsonl" 2>&1
+}}
+
+if run_model primary {shell_quote(RESEARCH_MODEL)}; then
+  write_telemetry
+  exit 0
+fi
+
+if [ -s "$(pwd)/{output_name}" ]; then
+  write_telemetry
+  exit 1
+fi
+
+if run_model fallback {shell_quote(RESEARCH_FALLBACK_MODEL)}; then
+  write_telemetry
+  exit 0
+fi
+
+if [ -s "$output_path" ]; then
+  write_telemetry
+  exit 1
+fi
+
+write_terminal_research "Research worker primary and fallback failed without producing {output_name}."
+write_telemetry
+exit 1
+"""
+
     if role == "reviewer":
         reviewer_telemetry = telemetry_function("reviewer", packet_id, output_name, reviewer_telemetry_attempts())
         return f"""#!/usr/bin/env bash
@@ -1034,7 +1261,7 @@ run_codex() {{
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--role", choices=["worker", "reviewer"], required=True)
+    parser.add_argument("--role", choices=["worker", "research-worker", "reviewer"], required=True)
     parser.add_argument("--packet-id", required=True)
     parser.add_argument("--branch", required=True)
     parser.add_argument("--worktree", required=True)
@@ -1063,8 +1290,8 @@ def main() -> int:
         if args.task_file
         else None
     )
-    if args.role == "reviewer" and (args.worker_route or args.selection_reason):
-        raise SystemExit("reviewer packets must not set worker route options")
+    if args.role in {"research-worker", "reviewer"} and (args.worker_route or args.selection_reason):
+        raise SystemExit("research-worker and reviewer packets must not set worker route options")
     selected_ladder: list[str] | None = None
     selection_reason = ""
     if args.role == "worker":
@@ -1086,6 +1313,10 @@ def main() -> int:
         schema_name = "review.schema.json"
         output_name = "review.json"
         schema = review_schema(packet_id)
+    elif args.role == "research-worker":
+        schema_name = "research.schema.json"
+        output_name = "research.json"
+        schema = research_schema(packet_id, branch, str(worktree))
     else:
         schema_name = "status.schema.json"
         output_name = "status.json"

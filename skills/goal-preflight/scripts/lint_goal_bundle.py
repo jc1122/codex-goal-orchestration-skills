@@ -21,6 +21,7 @@ DEFAULT_WORKER_LADDER = [
     "copilot-gpt-5.4",
     "codex-mini",
 ]
+RESEARCH_WORKER_TYPE = "research-worker"
 PREFLIGHT_LITE_PURPOSES = {"preflight-decomposition", "lint-repair"}
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
@@ -330,6 +331,44 @@ def lint(bundle_dir: Path) -> dict:
     if not isinstance(worker_model_policy.get("ordering_rule"), str) or not worker_model_policy.get("ordering_rule", "").strip():
         defect("job.manifest.json", "critical", "worker_model_policy.ordering_rule must be non-empty")
 
+    research_worker_policy = manifest.get("research_worker_policy")
+    if research_worker_policy is not None:
+        if not isinstance(research_worker_policy, dict):
+            defect("job.manifest.json", "critical", "research_worker_policy must be an object when present")
+            research_worker_policy = {}
+        if research_worker_policy.get("enabled") is not True:
+            defect("job.manifest.json", "critical", "research_worker_policy.enabled must be true when present")
+        if research_worker_policy.get("worker_type") != RESEARCH_WORKER_TYPE:
+            defect("job.manifest.json", "critical", "research_worker_policy.worker_type must be 'research-worker'")
+        for key in ["launcher", "network_scope", "local_access"]:
+            if not isinstance(research_worker_policy.get(key), str) or not research_worker_policy.get(key, "").strip():
+                defect("job.manifest.json", "critical", f"research_worker_policy.{key} must be non-empty")
+        policy_text = " ".join(str(research_worker_policy.get(key, "")) for key in ["launcher", "network_scope", "local_access"]).lower()
+        rejected_phrases = [
+            "--ignore-user-config",
+            "general web search only",
+            "local file access only",
+            "mcp/connector",
+            "connector tools are unavailable",
+            "shell-network tools prohibited",
+        ]
+        for phrase in rejected_phrases:
+            if phrase in policy_text:
+                defect("job.manifest.json", "critical", f"research_worker_policy contains obsolete narrow-access phrase: {phrase}")
+        for phrase in [
+            "--search",
+            "read-only",
+            "broad read-only information retrieval",
+            "configured",
+            "mcp",
+            "connector",
+            "shell/network",
+            "state-changing",
+            "file-editing",
+        ]:
+            if phrase not in policy_text:
+                defect("job.manifest.json", "critical", f"research_worker_policy must mention {phrase}")
+
     ids = [branch.get("id") for branch in branches]
     names = [branch.get("branch_name") for branch in branches]
     worktree_paths = [branch.get("worktree_path") for branch in branches]
@@ -475,6 +514,7 @@ def lint(bundle_dir: Path) -> dict:
         "max_active_worker_packets",
         "worker_parallelism",
     ]
+    has_research_work_item = False
     for branch in branches:
         for key in required_branch_keys:
             if key not in branch:
@@ -525,6 +565,11 @@ def lint(bundle_dir: Path) -> dict:
                     defect("job.manifest.json", "critical", f"{item_path}.packet_id must be {expected_packet_id!r}")
                 if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
                     defect("job.manifest.json", "critical", f"{item_path}.objective must be non-empty")
+                worker_type = item.get("worker_type", "worker")
+                if worker_type not in {"worker", RESEARCH_WORKER_TYPE}:
+                    defect("job.manifest.json", "critical", f"{item_path}.worker_type must be 'worker' or 'research-worker'")
+                if worker_type == RESEARCH_WORKER_TYPE:
+                    has_research_work_item = True
                 for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
                     values = item.get(key, [])
                     if key in {"owned_paths", "verification", "dod"} and key not in item:
@@ -618,6 +663,12 @@ def lint(bundle_dir: Path) -> dict:
                 defect(str(prompt_path), "major", f"branch prompt missing section: {phrase}")
         if not has_dod(text):
             defect(str(prompt_path), "critical", f"branch {branch.get('id')} lacks a falsifiable Definition of Done")
+
+    if has_research_work_item:
+        if research_worker_policy is None:
+            defect("job.manifest.json", "critical", "research_worker_policy is required when any work item uses worker_type='research-worker'")
+        if not (bundle_dir / "research").is_dir():
+            defect("research/", "critical", "research work items require research/ packet directory")
 
     return result(defects)
 

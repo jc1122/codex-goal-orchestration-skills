@@ -16,7 +16,7 @@ The main runtime may create execution artifacts:
 - `telemetry.summary.json`
 - optional Lite advisory artifacts under `lite/`
 - branch integration branches/worktrees
-- branch status/review artifacts produced by branch orchestrators
+- branch worker, research-worker, status, and review artifacts produced by branch orchestrators
 
 It must not create or rewrite the bootloader, main prompt, branch prompts, or manifest.
 
@@ -50,6 +50,13 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
     "selection_reason_required": true,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder."
   },
+  "research_worker_policy": {
+    "enabled": true,
+    "worker_type": "research-worker",
+    "launcher": "codex --search exec --ephemeral -s read-only",
+    "network_scope": "Broad read-only information retrieval is allowed through Codex native web search, configured CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands. State-changing, destructive, credential, posting, purchasing, and file-editing actions are prohibited.",
+    "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files."
+  },
   "branches": [
     {
       "id": "B01",
@@ -65,6 +72,7 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
         {
           "id": "W01",
           "packet_id": "B01-W01",
+          "worker_type": "worker",
           "objective": "Bounded worker objective.",
           "owned_paths": ["src/example.py"],
           "verification": ["python3 -m pytest tests/test_example.py -q"],
@@ -142,7 +150,7 @@ Return/write status with these fields:
 
 `lite_advice` must be present, even when empty. Any recorded main Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant main Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no main Lite packet exists.
 
-Run `scripts/summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` before final validation so `telemetry.summary.json` reflects the current audit, worker, reviewer, and Lite packet telemetry. Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also validates prompt-audit telemetry, opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to use manifest-owned `lite/<packet_id>/` paths, validates every Lite advice artifact, live input/task/prompt hashes, and Lite telemetry, checks the captured Gemini path/version/binary sha for non-blocked Lite advice, requires recorded validation command/status/defects to match actual validation, scans manifest-owned `lite/` for unrecorded main Lite packets, and for `pass` requires every worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every worker/reviewer packet to have same-packet `telemetry.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a `telemetry.summary.json` file, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
+Run `scripts/summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` before final validation so `telemetry.summary.json` reflects the current audit, worker, research-worker, reviewer, and Lite packet telemetry. Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also validates prompt-audit telemetry, opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to use manifest-owned `lite/<packet_id>/` paths, validates every Lite advice artifact, live input/task/prompt hashes, and Lite telemetry, checks the captured Gemini path/version/binary sha for non-blocked Lite advice, requires recorded validation command/status/defects to match actual validation, scans manifest-owned `lite/` for unrecorded main Lite packets, and for `pass` requires every normal worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every research-worker artifact to live at the manifest-owned `research/<packet_id>/research.json`, every worker/research-worker/reviewer packet to have same-packet `telemetry.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a `telemetry.summary.json` file, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
 
 ## Context Conservation
 
@@ -161,7 +169,7 @@ Lite advice, when present, is a context router. Read validated Lite `advice.json
 
 Do not read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Main verifies branch-skill availability, creates branch worktrees, and dispatches branch sessions; the branch session is responsible for loading and following the branch skill.
 
-While branch orchestrator agents are active, main must wait rather than poll. Use the native agent wait mechanism with the longest practical timeout. A no-completion wait result is not evidence that a branch is stalled. Main must not inspect worker packets, reviewer packets, branch worktrees, process tables, or branch status files during active-branch waiting, and must not send status-check nudges. Inspect branch artifacts only after a branch agent completes, explicitly reports `blocked`/`failed`/`partial`, or the user explicitly switches to debug mode.
+While branch orchestrator agents are active, main must wait rather than poll. Use the native agent wait mechanism with the longest practical timeout. A no-completion wait result is not evidence that a branch is stalled. Main must not inspect worker packets, research-worker packets, reviewer packets, branch worktrees, process tables, or branch status files during active-branch waiting, and must not send status-check nudges. Inspect branch artifacts only after a branch agent completes, explicitly reports `blocked`/`failed`/`partial`, or the user explicitly switches to debug mode.
 
 ## Lite Advisor Policy
 
@@ -196,6 +204,7 @@ Return `blocked` if:
 - manifest cleanup or artifact policy is missing or contradicted by `main.prompt.md`;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 4;
 - the manifest is missing the fixed `worker_model_policy`;
+- the manifest contains a `research-worker` work item but is missing a research-worker policy requiring `codex --search exec --ephemeral -s read-only` without user-config suppression, broad read-only information retrieval through configured CLI/MCP/connector/browser/search tools and shell/network inspection commands, and no file edits or state-changing actions;
 - a branch is missing `max_active_worker_packets` or `worker_parallelism`;
 - a branch does not have 1 to 4 worker packets or `max_active_worker_packets` greater than 4;
 - a branch `worker_parallelism.scheduling_mode` is not `rolling`;
@@ -205,10 +214,10 @@ Return `blocked` if:
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;
-- worker, reviewer, Lite, or final summary telemetry required for a `pass` run is missing;
+- worker, research-worker, reviewer, Lite, or final summary telemetry required for a `pass` run is missing;
 - branch status or main status validation fails;
 - merge-ready branch status/review artifacts do not record base-range whitespace validation;
-- main polled active branch agents' worker packets, reviewer packets, worktrees, process tables, or status files instead of waiting;
+- main polled active branch agents' worker packets, research-worker packets, reviewer packets, worktrees, process tables, or status files instead of waiting;
 - main treated Lite advice as audit, branch, review, mergeability, cleanup, or DoD evidence;
 - DoD evidence is ambiguous or not falsifiable;
 - the main prompt does not authorize a requested merge/cleanup operation.

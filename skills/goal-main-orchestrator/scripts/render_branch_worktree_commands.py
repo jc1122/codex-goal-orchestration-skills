@@ -13,6 +13,8 @@ from pathlib import Path
 MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
+RESEARCH_WORKER_TYPE = "research-worker"
+WORK_ITEM_ROLES = {"worker", RESEARCH_WORKER_TYPE}
 
 
 def shell_quote(value: str) -> str:
@@ -146,6 +148,9 @@ def validate_branch_worker_contract(branch: dict) -> None:
             raise SystemExit(f"branch {bid} work_items[{index}].packet_id must be {expected_packet_id!r}")
         if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
             raise SystemExit(f"branch {bid} work_items[{index}].objective must be non-empty")
+        worker_type = item.get("worker_type", "worker")
+        if worker_type not in WORK_ITEM_ROLES:
+            raise SystemExit(f"branch {bid} work_items[{index}].worker_type must be 'worker' or 'research-worker'")
         for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
             values = require_string_list(item.get(key, []), f"branch {bid} work_items[{index}].{key}", min_items=min_items)
             if key in {"owned_paths", "context_files"}:
@@ -179,6 +184,55 @@ def validate_branch_worker_contract(branch: dict) -> None:
     slot_refill = worker_parallelism.get("slot_refill", "")
     if not isinstance(slot_refill, str) or "launch" not in slot_refill.lower():
         raise SystemExit(f"branch {bid} worker_parallelism.slot_refill must describe launching replacements")
+
+
+def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> None:
+    has_research_worker = False
+    for branch in branches:
+        work_items = branch.get("work_items", [])
+        if not isinstance(work_items, list):
+            continue
+        if any(isinstance(item, dict) and item.get("worker_type") == RESEARCH_WORKER_TYPE for item in work_items):
+            has_research_worker = True
+            break
+    if not has_research_worker:
+        return
+    policy = manifest.get("research_worker_policy")
+    if not isinstance(policy, dict):
+        raise SystemExit("manifest research_worker_policy is required when any work item uses worker_type='research-worker'")
+    if policy.get("enabled") is not True:
+        raise SystemExit("manifest research_worker_policy.enabled must be true")
+    if policy.get("worker_type") != RESEARCH_WORKER_TYPE:
+        raise SystemExit("manifest research_worker_policy.worker_type must be 'research-worker'")
+    for key in ["launcher", "network_scope", "local_access"]:
+        if not isinstance(policy.get(key), str) or not policy.get(key, "").strip():
+            raise SystemExit(f"manifest research_worker_policy.{key} must be non-empty")
+    policy_text = " ".join(str(policy.get(key, "")) for key in ["launcher", "network_scope", "local_access"]).lower()
+    rejected_phrases = [
+        "--ignore-user-config",
+        "general web search only",
+        "local file access only",
+        "mcp/connector",
+        "connector tools are unavailable",
+        "shell-network tools prohibited",
+    ]
+    rejected = [phrase for phrase in rejected_phrases if phrase in policy_text]
+    if rejected:
+        raise SystemExit(f"manifest research_worker_policy contains obsolete narrow-access phrase(s): {', '.join(rejected)}")
+    required_phrases = [
+        "--search",
+        "read-only",
+        "broad read-only information retrieval",
+        "configured",
+        "mcp",
+        "connector",
+        "shell/network",
+        "state-changing",
+        "file-editing",
+    ]
+    missing = [phrase for phrase in required_phrases if phrase not in policy_text]
+    if missing:
+        raise SystemExit(f"manifest research_worker_policy is missing required boundary phrase(s): {', '.join(missing)}")
 
 
 def require_unique_manifest_values(branches: list[dict]) -> None:
@@ -351,6 +405,7 @@ def main() -> int:
         if not prompt_path.exists():
             raise SystemExit(f"branch prompt does not exist: {prompt_path}")
         validate_branch_worker_contract(branch)
+    validate_research_worker_policy(manifest, [branch for branch in manifest_branches if isinstance(branch, dict)])
 
     if args.list_waves:
         for wave in waves:

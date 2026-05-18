@@ -34,7 +34,9 @@ Worker parallelization rationale: {worker_parallelization_rationale}
 
 Use `render_worker_schedule.py --list-ready` with the current completed and active worker packet ids before initial launch and after every worker completion.
 
-Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json` plus same-packet `telemetry.json`.
+Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every normal worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json` plus same-packet `telemetry.json`.
+
+If a work item lists `Worker type: research-worker`, create it with `create_runtime_packet.py --role research-worker`, put the packet under manifest-owned `research/<packet_id>/`, and use it only for outside information gathering. Research workers run `codex --search exec --ephemeral -s read-only` without user-config suppression, so they may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, read-only local file access, and configured tool/skill documentation when relevant. They must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. Branch `pass` requires every research-worker status to be `pass` and backed by `research/<packet_id>/research.json` plus same-packet `telemetry.json`.
 
 After worker dispatch, wait for the next active worker launcher to exit; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status. After integrating an exited worker, refill capacity from eligible work items rather than waiting for all currently active workers to finish.
 
@@ -50,7 +52,7 @@ When creating a worker packet with a non-default route, pass repeated `--worker-
 
 ## Lite Advisors
 
-Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Branch Lite packet ids must be scoped as `<branch-id>-L<suffix>`. Record `lite_advice: []` only when no relevant branch Lite packet exists; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, exact validation command, validation status, validation defects, telemetry, and reason.
+Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/research-worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Branch Lite packet ids must be scoped as `<branch-id>-L<suffix>`. Record `lite_advice: []` only when no relevant branch Lite packet exists; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, exact validation command, validation status, validation defects, telemetry, and reason.
 
 ## Tests And Validators
 
@@ -74,12 +76,13 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
 - 1 to 4 worker packets were used for this branch.
-- Worker, reviewer, and any Lite packets wrote same-packet `telemetry.json`.
+- Worker, research-worker, reviewer, and any Lite packets wrote same-packet `telemetry.json`.
+- Research-worker packets, when present, used broad read-only information retrieval, recorded `tools_used` and source URLs, and wrote same-packet `telemetry.json`.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
 - The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
-- Active worker/reviewer launchers were waited on rather than polled.
+- Active worker/research-worker/reviewer launchers were waited on rather than polled.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
 - `lite_advice` records are present, even when empty; every relevant branch Lite packet directory is recorded, validated, and treated only as advisory context routing.
 {dod}

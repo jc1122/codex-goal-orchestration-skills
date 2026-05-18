@@ -10,6 +10,8 @@ from pathlib import Path
 
 
 MAX_WORKER_PACKETS_PER_BRANCH = 4
+RESEARCH_WORKER_TYPE = "research-worker"
+WORK_ITEM_ROLES = {"worker", RESEARCH_WORKER_TYPE}
 
 
 def _load_path_rules():
@@ -106,6 +108,9 @@ def validate_work_items(branch: dict, branch_id: str) -> tuple[list[dict], int]:
         expected_packet_id = f"{branch_id}-{item_id}"
         if packet_id != expected_packet_id:
             raise SystemExit(f"branch {branch_id} work_items[{index}].packet_id must be {expected_packet_id!r}")
+        worker_type = item.get("worker_type", "worker")
+        if worker_type not in WORK_ITEM_ROLES:
+            raise SystemExit(f"branch {branch_id} work_items[{index}].worker_type must be 'worker' or 'research-worker'")
         for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
             values = require_string_list(item.get(key, []), f"branch {branch_id} work_items[{index}].{key}", min_items=min_items)
             if key in {"owned_paths", "context_files"}:

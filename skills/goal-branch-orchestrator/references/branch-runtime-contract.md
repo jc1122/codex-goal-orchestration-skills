@@ -15,9 +15,9 @@ The branch runtime receives:
 
 The main orchestrator already created the integration worktree. The branch orchestrator may create worker child worktrees from that branch.
 
-Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer/Lite packet scripts. Worker/reviewer/Lite packet directories, worktrees, task files, and context files must be absolute paths; the packet generators reject relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
+Resolve all bundle-owned paths from the manifest directory before passing them to worker/research-worker/reviewer/Lite packet scripts. Worker/research-worker/reviewer/Lite packet directories, worktrees, task files, and context files must be absolute paths; the packet generators reject relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
 
-Each manifest branch must declare `max_active_worker_packets`, `worker_parallelism`, and 1 to 4 `work_items` with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form. `max_active_worker_packets` is a hard per-branch active cap from 1 to 4. Parallel worker dispatch is the default: launch independent worker packets as a rolling saturated pool up to that cap. Work-item `depends_on` entries must reference prior work item ids and are the only reason to defer an otherwise eligible worker. When a worker launcher exits, collect and integrate its status/diff, remove it from the active set, and launch the next eligible worker immediately if capacity is available. If more than 4 worker packets would be needed, stop and split the branch instead of inventing extra packets. If a branch runs serially or below capacity, record the reason in `worker_parallelism.serial_reasons`.
+Each manifest branch must declare `max_active_worker_packets`, `worker_parallelism`, and 1 to 4 `work_items` with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form. Work items may declare `worker_type: "worker"` for normal code/config/test/doc work or `worker_type: "research-worker"` for outside-information gathering. `max_active_worker_packets` is a hard per-branch active cap from 1 to 4. Parallel worker dispatch is the default: launch independent worker packets as a rolling saturated pool up to that cap. Work-item `depends_on` entries must reference prior work item ids and are the only reason to defer an otherwise eligible worker. When a worker launcher exits, collect and integrate its status/diff or research findings, remove it from the active set, and launch the next eligible worker immediately if capacity is available. If more than 4 worker packets would be needed, stop and split the branch instead of inventing extra packets. If a branch runs serially or below capacity, record the reason in `worker_parallelism.serial_reasons`.
 
 ## Worker Model Policy
 
@@ -45,6 +45,10 @@ Fallback is allowed only when:
 - the worker worktree is clean.
 
 No Gemini model other than `gemini-3.1-pro-preview` and `gemini-3-flash-preview` may be used. Runtime packet generation must not accept model, effort, approval-mode, or permission overrides. Worker prompts must render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs never need to read bundle paths outside the worker worktree. All worker providers receive the same generated prompt and must satisfy the same worker status schema, including route fields. CLI permission controls are provider-specific, so a provider status is only evidence after schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, run a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, run a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort because quota limits may be tight: missing CLIs, quota errors, invalid JSON, unavailable models, or other clean failures should fall through to the next selected worker attempt. Copilot must run real worker packets in programmatic mode with `--model gpt-5.4`, `--effort high`, `--no-ask-user`, minimal tool permissions, JSONL output, and a Markdown session share. Do not use `/fleet` for packet execution; the branch orchestrator owns worker parallelism externally. Every launcher terminal path writes same-packet `telemetry.json` with declared/called/accepted route aliases, provider/model ids, prompt/output/log character and byte counts, and any token counts exposed in provider logs. If Gemini or Copilot returns marked worker JSON with `status: "success"`, normalize it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Spark, Copilot, or mini fails after dirty edits and no valid `status.json` exists, stop and report `blocked`; do not continue in the same worktree. If every selected attempt fails cleanly, write a terminal blocked worker `status.json` and `telemetry.json`.
+
+## Research Worker Policy
+
+Use `--role research-worker` only for research-only packets. Research workers run `codex --search exec --ephemeral -s read-only` without user-config suppression, which provides Codex native web search plus configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, local read-only file access, and configured tool/skill documentation when relevant. Research workers must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. They write `research.json` under manifest-owned `research/<packet_id>/`, and a passing research status must include `search_queries` when search was used, direct `source_urls`, `tools_used`, repo-relative `local_files_read`, exact `commands_run`, findings, empty blockers, and same-packet `telemetry.json`.
 
 ## Reviewer Model Policy
 
@@ -91,6 +95,21 @@ Return/write status with these fields:
       "tests": ["python3 -m pytest tests/test_example.py -q"],
       "blockers": [],
       "handoff": "concise worker handoff"
+    },
+    {
+      "packet_id": "B01-W02",
+      "role": "research-worker",
+      "status": "pass|partial|blocked|failed",
+      "status_path": "/absolute/path/to/research/B01-W02/research.json",
+      "worktree": "/absolute/path/to/.worktrees/phaseX-B01-W02",
+      "search_queries": ["current external fact query"],
+      "source_urls": ["https://example.com/source"],
+      "tools_used": ["codex-native-search", "local-sed"],
+      "local_files_read": ["plans/source-brief.md"],
+      "commands_run": ["pwd", "git status --short --branch", "sed -n '1,120p' plans/source-brief.md"],
+      "findings": ["source-backed finding"],
+      "blockers": [],
+      "handoff": "concise research handoff"
     }
   ],
 	  "worker_parallelism": {
@@ -137,7 +156,7 @@ Return/write status with these fields:
 }
 ```
 
-Validate the final branch status with `scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. A `pass` or `partial` branch status must include exactly one worker status for every manifest work item `packet_id` and no extra worker packet ids. Worker and branch `changed_files` entries must be repo-relative file paths without git porcelain prefixes; command and test evidence must be exact command strings. Worker `status_path` values must resolve to the manifest-owned `workers/<packet_id>/status.json`; copied or external worker artifacts are invalid. Worker route fields must be present in branch rollups and worker artifacts, must use allowed aliases in standard order, and must match manifest-owned `workers/<packet_id>/route.json`. Same-packet worker `telemetry.json` must exist, declare the selected ladder exactly, and record called aliases as a prefix of the selected ladder. `lite_advice` must be present, even when empty; any recorded Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, have same-packet telemetry, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant branch Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no branch Lite packet exists. Any `disposition: "used"` Lite packet must validate with `validation_status: "pass"`. Reviewer packet ids must be safe ids for the same branch, such as `B01-R01`, and reviewer `telemetry.json` must exist. `pass` requires every worker status to be `pass` and backed by its worker `status.json`, `review_status: "mergeable"` backed by the manifest review artifact, empty reviewer verification gaps, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers. Non-pass worker or branch statuses must include at least one blocker.
+Validate the final branch status with `scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`. A `pass` or `partial` branch status must include exactly one worker status for every manifest work item `packet_id` and no extra worker packet ids. Worker and branch `changed_files` entries must be repo-relative file paths without git porcelain prefixes; command and test evidence must be exact command strings. Normal worker `status_path` values must resolve to manifest-owned `workers/<packet_id>/status.json`; research-worker `status_path` values must resolve to manifest-owned `research/<packet_id>/research.json`; copied or external artifacts are invalid. Worker route fields must be present in normal worker branch rollups and worker artifacts, must use allowed aliases in standard order, and must match manifest-owned `workers/<packet_id>/route.json`. Same-packet worker/research-worker `telemetry.json` must exist. Research-worker telemetry aliases must be `codex-research` or `codex-research-mini`, and passing research-worker statuses must record direct source URLs plus `tools_used`. `lite_advice` must be present, even when empty; any recorded Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, have same-packet telemetry, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant branch Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no branch Lite packet exists. Any `disposition: "used"` Lite packet must validate with `validation_status: "pass"`. Reviewer packet ids must be safe ids for the same branch, such as `B01-R01`, and reviewer `telemetry.json` must exist. `pass` requires every worker and research-worker status to be `pass` and backed by its manifest-owned artifact, `review_status: "mergeable"` backed by the manifest review artifact, empty reviewer verification gaps, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a non-empty DoD checklist, and no blockers. Non-pass worker or branch statuses must include at least one blocker.
 
 ## Context Conservation
 
@@ -145,8 +164,8 @@ Read high-signal artifacts first:
 
 1. branch prompt;
 2. prompt audit JSON;
-3. worker status JSON files;
-4. worker/reviewer/Lite telemetry JSON files;
+3. worker and research-worker status JSON files;
+4. worker/research-worker/reviewer/Lite telemetry JSON files;
 5. `git diff --name-only`;
 6. `git diff --check`;
 7. focused test output;
@@ -156,7 +175,7 @@ Do not read full worker event logs unless a worker status is missing, failed, or
 
 If validated Lite advice exists for the current purpose, read it before opening larger originals. Do not read both Lite summaries and all original files by default; use Lite to choose targeted original reads.
 
-While worker or reviewer launchers are active, wait rather than poll. A quiet launcher is not evidence of a stall. Do not inspect active launcher event logs, process tables, worker worktrees, status files, or review files while waiting. Inspect those artifacts only after the launcher exits, the generated status/review artifact is missing or failed, or the user explicitly switches to debug mode.
+While worker, research-worker, or reviewer launchers are active, wait rather than poll. A quiet launcher is not evidence of a stall. Do not inspect active launcher event logs, process tables, worker worktrees, status files, research files, or review files while waiting. Inspect those artifacts only after the launcher exits, the generated status/research/review artifact is missing or failed, or the user explicitly switches to debug mode.
 
 ## Integration Rules
 
@@ -168,10 +187,10 @@ While worker or reviewer launchers are active, wait rather than poll. A quiet la
 - After a worker launcher exits, integrate its status/diff, free its active slot, and launch the next eligible worker immediately if capacity is available.
 - Never exceed 4 active worker packets in one branch.
 - Record the reason in `worker_parallelism.serial_reasons` if worker execution is serialized.
-- Wait for active worker/reviewer launchers instead of polling their event logs, process tables, worktrees, status files, or review files.
+- Wait for active worker/research-worker/reviewer launchers instead of polling their event logs, process tables, worktrees, status files, research files, or review files.
 - Inspect diffs before accepting worker summaries.
 - Run both working-tree whitespace checks and base-range whitespace checks, for example `git diff --check <base-ref>...HEAD`, before review or merge readiness.
 - Run branch-level validators after integrating workers.
 - Preserve negative and unresolved scientific labels.
-- Treat Lite advice only as advisory context routing, never as worker/reviewer/DoD evidence.
+- Treat Lite advice only as advisory context routing, never as worker/research-worker/reviewer/DoD evidence.
 - Return blocked rather than guessing when prompt DoD is ambiguous.

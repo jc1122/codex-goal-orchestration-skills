@@ -34,6 +34,8 @@ DEFAULT_WORKER_LADDER = (
     "codex-mini",
 )
 ALLOWED_WORKER_ROUTES = set(DEFAULT_WORKER_LADDER)
+WORK_ITEM_ROLES = {"worker", "research-worker"}
+RESEARCH_ALIASES = ("codex-research", "codex-research-mini")
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 is_strict_int = STATUS_VALIDATION.is_strict_int
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
@@ -85,6 +87,12 @@ def validate_lite_advice_entries(
 
 def validate_command_list(defects: list[str], value: object, path: str, *, min_items: int = 0) -> None:
     require_string_list(defects, value, path, min_items=min_items)
+
+
+def validate_url_list(defects: list[str], value: object, path: str) -> None:
+    for index, item in enumerate(require_string_list(defects, value, path)):
+        if not (item.startswith("https://") or item.startswith("http://")):
+            defect(defects, f"{path}[{index}]", "must be an http(s) source URL")
 
 
 def validate_worker_ladder(defects: list[str], value: object, path: str) -> list[str]:
@@ -176,6 +184,63 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
     require_string(defects, data.get("handoff"), f"{path}.handoff")
 
 
+def validate_research_status(defects: list[str], value: object, path: str) -> None:
+    data = require_object(defects, value, path)
+    required = [
+        "packet_id",
+        "role",
+        "status",
+        "status_path",
+        "worktree",
+        "search_queries",
+        "source_urls",
+        "tools_used",
+        "local_files_read",
+        "commands_run",
+        "findings",
+        "blockers",
+        "handoff",
+    ]
+    for key in required:
+        if key not in data:
+            defect(defects, path, f"missing key: {key}")
+    require_string(defects, data.get("packet_id"), f"{path}.packet_id")
+    if data.get("role") != "research-worker":
+        defect(defects, f"{path}.role", "must be 'research-worker'")
+    if data.get("status") not in STATUSES:
+        defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
+    status_path = require_string(defects, data.get("status_path"), f"{path}.status_path")
+    worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
+    if status_path and not is_absolute_path(status_path):
+        defect(defects, f"{path}.status_path", "must be an absolute path without traversal")
+    if worktree and not is_absolute_path(worktree):
+        defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
+    require_string_list(defects, data.get("search_queries"), f"{path}.search_queries")
+    validate_url_list(defects, data.get("source_urls"), f"{path}.source_urls")
+    require_string_list(defects, data.get("tools_used"), f"{path}.tools_used")
+    validate_path_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
+    validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    require_string_list(defects, data.get("findings"), f"{path}.findings", min_items=1)
+    blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
+    if data.get("status") == "pass":
+        if blockers:
+            defect(defects, f"{path}.blockers", "must be empty when status is pass")
+        if not data.get("source_urls"):
+            defect(defects, f"{path}.source_urls", "must record at least one source URL when status is pass")
+        if not data.get("tools_used"):
+            defect(defects, f"{path}.tools_used", "must record at least one tool family when status is pass")
+    if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
+        defect(defects, f"{path}.blockers", "must explain non-pass status")
+    require_string(defects, data.get("handoff"), f"{path}.handoff")
+
+
+def validate_packet_status(defects: list[str], value: object, path: str) -> None:
+    if isinstance(value, dict) and value.get("role") == "research-worker":
+        validate_research_status(defects, value, path)
+    else:
+        validate_worker_status(defects, value, path)
+
+
 def validate_worker_artifact(defects: list[str], value: object, path: str) -> dict:
     data = require_object(defects, value, path)
     required = [
@@ -218,6 +283,55 @@ def validate_worker_artifact(defects: list[str], value: object, path: str) -> di
     return data
 
 
+def validate_research_artifact(defects: list[str], value: object, path: str) -> dict:
+    data = require_object(defects, value, path)
+    required = [
+        "packet_id",
+        "role",
+        "status",
+        "branch",
+        "worktree",
+        "search_queries",
+        "source_urls",
+        "tools_used",
+        "local_files_read",
+        "commands_run",
+        "findings",
+        "blockers",
+        "handoff",
+    ]
+    for key in required:
+        if key not in data:
+            defect(defects, path, f"missing key: {key}")
+    require_string(defects, data.get("packet_id"), f"{path}.packet_id")
+    if data.get("role") != "research-worker":
+        defect(defects, f"{path}.role", "must be 'research-worker'")
+    if data.get("status") not in STATUSES:
+        defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
+    require_string(defects, data.get("branch"), f"{path}.branch")
+    worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
+    if worktree and not is_absolute_path(worktree):
+        defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
+    require_string_list(defects, data.get("search_queries"), f"{path}.search_queries")
+    validate_url_list(defects, data.get("source_urls"), f"{path}.source_urls")
+    require_string_list(defects, data.get("tools_used"), f"{path}.tools_used")
+    validate_path_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
+    validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    require_string_list(defects, data.get("findings"), f"{path}.findings", min_items=1)
+    blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
+    if data.get("status") == "pass":
+        if blockers:
+            defect(defects, f"{path}.blockers", "must be empty when status is pass")
+        if not data.get("source_urls"):
+            defect(defects, f"{path}.source_urls", "must record at least one source URL when status is pass")
+        if not data.get("tools_used"):
+            defect(defects, f"{path}.tools_used", "must record at least one tool family when status is pass")
+    if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
+        defect(defects, f"{path}.blockers", "must explain non-pass status")
+    require_string(defects, data.get("handoff"), f"{path}.handoff")
+    return data
+
+
 def validate_worker_artifacts(
     defects: list[str],
     worker_statuses: object,
@@ -229,7 +343,7 @@ def validate_worker_artifacts(
     if not isinstance(worker_statuses, list):
         return
     require_existing = branch_status in {"pass", "partial"}
-    compared_keys = [
+    worker_compared_keys = [
         "packet_id",
         "status",
         "worktree",
@@ -241,37 +355,78 @@ def validate_worker_artifacts(
         "blockers",
         "handoff",
     ]
+    research_compared_keys = [
+        "packet_id",
+        "role",
+        "status",
+        "worktree",
+        "search_queries",
+        "source_urls",
+        "tools_used",
+        "local_files_read",
+        "commands_run",
+        "findings",
+        "blockers",
+        "handoff",
+    ]
     for index, item in enumerate(worker_statuses):
         if not isinstance(item, dict):
             continue
         item_path = f"$.worker_statuses[{index}]"
+        item_role = item.get("role") if isinstance(item.get("role"), str) else "worker"
         status_path_value = item.get("status_path")
         if not isinstance(status_path_value, str) or not status_path_value.strip() or not is_absolute_path(status_path_value):
             continue
         status_artifact = Path(status_path_value).resolve()
         packet_id = item.get("packet_id")
         if isinstance(packet_id, str) and packet_id.strip():
-            expected_status_artifact = (manifest_path.parent / "workers" / packet_id / "status.json").resolve()
+            expected_status_artifact = (
+                (manifest_path.parent / "research" / packet_id / "research.json").resolve()
+                if item_role == "research-worker"
+                else (manifest_path.parent / "workers" / packet_id / "status.json").resolve()
+            )
             if status_artifact != expected_status_artifact:
                 defect(
                     defects,
                     f"{item_path}.status_path",
-                    f"must be manifest-owned worker status path: {expected_status_artifact}",
+                    f"must be manifest-owned {item_role} status path: {expected_status_artifact}",
                 )
         if not status_artifact.exists():
             if require_existing:
                 defect(defects, f"{item_path}.status_path", f"artifact does not exist: {status_artifact}")
             continue
-        artifact = validate_worker_artifact(
-            defects,
-            load_json_artifact(defects, status_artifact, f"{item_path}.status_path"),
-            f"{item_path}.status_path",
-        )
+        if item_role == "research-worker":
+            artifact = validate_research_artifact(
+                defects,
+                load_json_artifact(defects, status_artifact, f"{item_path}.status_path"),
+                f"{item_path}.status_path",
+            )
+            compared_keys = research_compared_keys
+        else:
+            artifact = validate_worker_artifact(
+                defects,
+                load_json_artifact(defects, status_artifact, f"{item_path}.status_path"),
+                f"{item_path}.status_path",
+            )
+            compared_keys = worker_compared_keys
         if isinstance(branch, str) and branch.strip() and artifact.get("branch") != branch:
             defect(defects, f"{item_path}.status_path.branch", "must match branch status branch")
         for key in compared_keys:
             if artifact.get(key) != item.get(key):
-                defect(defects, f"{item_path}.{key}", "must match worker status artifact")
+                defect(defects, f"{item_path}.{key}", "must match packet status artifact")
+        if item_role == "research-worker":
+            telemetry = validate_telemetry_artifact(
+                defects,
+                status_artifact.parent / "telemetry.json",
+                f"{item_path}.telemetry_path",
+                packet_id=str(packet_id) if isinstance(packet_id, str) else None,
+                role="research-worker",
+                allowed_aliases=RESEARCH_ALIASES,
+                require_called=True,
+            )
+            if artifact.get("status") == "pass" and telemetry.get("accepted_alias") not in RESEARCH_ALIASES:
+                defect(defects, f"{item_path}.telemetry_path.accepted_alias", "must identify the accepted research route when research status is pass")
+            continue
         route_path = status_artifact.parent / "route.json"
         if not route_path.exists():
             defect(defects, f"{item_path}.status_path", f"route artifact does not exist: {route_path}")
@@ -361,6 +516,31 @@ def expected_worker_packet_ids(defects: list[str], branch_entry: dict, branch_id
     return packet_ids
 
 
+def expected_worker_packet_roles(defects: list[str], branch_entry: dict, branch_id: str) -> dict[str, str]:
+    roles = {}
+    work_items = branch_entry.get("work_items")
+    if not isinstance(work_items, list):
+        return roles
+    for index, item in enumerate(work_items):
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("id")
+        packet_id = item.get("packet_id")
+        if not isinstance(item_id, str) or not isinstance(packet_id, str):
+            continue
+        expected_packet_id = f"{branch_id}-{item_id}"
+        if packet_id != expected_packet_id:
+            continue
+        role = item.get("worker_type", "worker")
+        if role == "research":
+            role = "research-worker"
+        if role not in WORK_ITEM_ROLES:
+            defect(defects, f"manifest.branch.work_items[{index}].worker_type", f"must be one of {sorted(WORK_ITEM_ROLES)}")
+            role = "worker"
+        roles[packet_id] = role
+    return roles
+
+
 def validate_manifest_branch_contract(
     defects: list[str],
     root: dict,
@@ -399,6 +579,7 @@ def validate_manifest_branch_contract(
         defect(defects, "$.worker_parallelism.max_active_worker_packets", "must match manifest max_active_worker_packets")
 
     expected_ids = set(expected_worker_packet_ids(defects, branch_entry, branch_id))
+    expected_roles = expected_worker_packet_roles(defects, branch_entry, branch_id)
     worker_statuses = root.get("worker_statuses")
     if not isinstance(worker_statuses, list) or not expected_ids:
         return branch_entry
@@ -415,6 +596,10 @@ def validate_manifest_branch_contract(
         seen_ids.add(packet_id)
         if packet_id not in expected_ids:
             defect(defects, f"$.worker_statuses[{index}].packet_id", "is not declared by manifest work_items")
+        expected_role = expected_roles.get(packet_id, "worker")
+        actual_role = item.get("role") if isinstance(item.get("role"), str) else "worker"
+        if actual_role != expected_role:
+            defect(defects, f"$.worker_statuses[{index}].role", f"must be {expected_role!r} for manifest work item")
     if require_all_workers:
         missing = sorted(expected_ids - seen_ids)
         extra = sorted(seen_ids - expected_ids)
@@ -632,7 +817,7 @@ def validate_branch_status(
         defect(defects, "$.worker_statuses", f"must contain {min_workers} to 4 worker status objects")
     else:
         for index, item in enumerate(worker_statuses):
-            validate_worker_status(defects, item, f"$.worker_statuses[{index}]")
+            validate_packet_status(defects, item, f"$.worker_statuses[{index}]")
     validate_worker_rollup(defects, worker_statuses, status)
     validate_worker_artifacts(
         defects,

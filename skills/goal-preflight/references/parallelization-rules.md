@@ -46,6 +46,8 @@ Work items are inputs for worker packet launchers. Keep them small:
 - falsifiable DoD;
 - stop conditions.
 
+Use normal `worker` work items for code, config, test, and documentation changes. Use `research-worker` only for outside-information gathering that needs broad read-only information retrieval plus local read-only file context. Research workers may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, and local read-only inspection. They must not edit files or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions.
+
 If a work item needs more than roughly 80k-100k tokens of context, split it.
 
 When two work items in the same branch own disjoint files and have independent verification commands, the branch prompt should direct the branch orchestrator to launch them as parallel worker packets in separate child worktrees.

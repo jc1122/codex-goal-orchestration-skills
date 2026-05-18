@@ -16,7 +16,7 @@ USAGE_KEYS = (
     "cached_input_tokens",
     "total_tokens",
 )
-TELEMETRY_ROOTS = ("audit", "workers", "reviewers", "lite")
+TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite")
 
 
 def zero_usage() -> dict[str, int]:

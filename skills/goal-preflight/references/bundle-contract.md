@@ -13,6 +13,7 @@ plans/orchestration/<job-id>/
   branches/
     B01.prompt.md
   workers/
+  research/
   reviewers/
   audit/
   lite/
@@ -20,7 +21,7 @@ plans/orchestration/<job-id>/
 
 ## Manifest
 
-Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, and `review_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths, and reviewer packet ids must belong to the reviewed branch.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, and `review_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime normal worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths. Runtime research-worker artifacts must resolve to manifest-owned `research/<packet_id>/research.json` paths. Reviewer packet ids must belong to the reviewed branch.
 
 Preflight script entry paths are absolute only: `--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir`/`--repo-root` must not depend on the caller's current working directory.
 
@@ -52,6 +53,13 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "selection_reason_required": true,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder."
   },
+  "research_worker_policy": {
+    "enabled": true,
+    "worker_type": "research-worker",
+    "launcher": "codex --search exec --ephemeral -s read-only",
+    "network_scope": "Broad read-only information retrieval is allowed through Codex native web search, configured CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands. State-changing, destructive, credential, posting, purchasing, and file-editing actions are prohibited.",
+    "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files."
+  },
   "preflight_lite_advice": [],
   "branches": [
     {
@@ -68,6 +76,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
         {
           "id": "W01",
           "packet_id": "B01-W01",
+          "worker_type": "worker",
           "objective": "Bounded worker objective.",
           "owned_paths": ["src/example.py"],
           "verification": ["python3 -m pytest tests/test_example.py -q"],
@@ -110,16 +119,17 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - `main.prompt.md` requires `summarize_telemetry.py --bundle-dir <bundle>` before final validation and requires `telemetry.summary.json` for pass.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
 - `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
+- `job.manifest.json` contains `research_worker_policy` defining `research-worker` packets as broad read-only information retrieval through Codex native search plus configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and read-only local access. It must not suppress user config, and it must prohibit file edits and state-changing actions.
 - `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.
 - Branch prompt/status/review paths are unique and cannot overwrite one another.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
 - Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
-- Branch prompts require worker, reviewer, and Lite packet `telemetry.json` artifacts for pass.
-- Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/reviewer launchers are active.
+- Branch prompts require worker, research-worker, reviewer, and Lite packet `telemetry.json` artifacts for pass.
+- Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/research-worker/reviewer launchers are active.
 - Branch prompts define Worker Model Routing and require `selected_ladder` plus `selection_reason` in every worker status and branch rollup.
-- Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids.
+- Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, optional `worker_type` values of `worker` or `research-worker`, and branch prompts list those packet ids.
 - Work-item `depends_on` entries reference only prior work item ids and are the only reason to defer an otherwise eligible worker.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch as a rolling saturated pool up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.
