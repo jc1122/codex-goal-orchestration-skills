@@ -100,6 +100,7 @@ def validate_branch_worker_contract(branch: dict) -> None:
     if any(not isinstance(item, dict) for item in work_items):
         raise SystemExit(f"branch {bid} work_items entries must be objects")
     seen_work_item_ids = set()
+    work_item_order = {}
     for index, item in enumerate(work_items):
         item_id = item.get("id")
         if not isinstance(item_id, str) or not SAFE_LABEL_RE.fullmatch(item_id):
@@ -107,6 +108,7 @@ def validate_branch_worker_contract(branch: dict) -> None:
         if item_id in seen_work_item_ids:
             raise SystemExit(f"branch {bid} duplicate work item id: {item_id}")
         seen_work_item_ids.add(item_id)
+        work_item_order[item_id] = index
         packet_id = item.get("packet_id")
         expected_packet_id = f"{bid}-{item_id}"
         if not isinstance(packet_id, str) or not SAFE_LABEL_RE.fullmatch(packet_id):
@@ -124,8 +126,8 @@ def validate_branch_worker_contract(branch: dict) -> None:
         for dep in item.get("depends_on", []):
             if dep not in seen_work_item_ids:
                 raise SystemExit(f"branch {bid} work_items[{index}] depends on unknown work item: {dep}")
-            if dep == item.get("id"):
-                raise SystemExit(f"branch {bid} work_items[{index}] cannot depend on itself")
+            if work_item_order[dep] >= index:
+                raise SystemExit(f"branch {bid} work_items[{index}] depends_on must reference only prior work item ids: {dep}")
     max_workers = branch.get("max_active_worker_packets")
     if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} max_active_worker_packets must be an integer from 1 to 4")
@@ -134,12 +136,20 @@ def validate_branch_worker_contract(branch: dict) -> None:
         raise SystemExit(f"branch {bid} worker_parallelism must be an object")
     if worker_parallelism.get("parallelism_default") is not True:
         raise SystemExit(f"branch {bid} worker_parallelism.parallelism_default must be true")
+    if worker_parallelism.get("scheduling_mode") != "rolling":
+        raise SystemExit(f"branch {bid} worker_parallelism.scheduling_mode must be 'rolling'")
     if worker_parallelism.get("max_active_worker_packets") != max_workers:
         raise SystemExit(f"branch {bid} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
     if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} worker_parallelism.max_worker_packets_per_branch must be 4")
     if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism["parallelization_rationale"].strip():
         raise SystemExit(f"branch {bid} worker_parallelism.parallelization_rationale must be non-empty")
+    dependency_policy = worker_parallelism.get("dependency_policy", "")
+    if not isinstance(dependency_policy, str) or "depends_on" not in dependency_policy:
+        raise SystemExit(f"branch {bid} worker_parallelism.dependency_policy must mention depends_on")
+    slot_refill = worker_parallelism.get("slot_refill", "")
+    if not isinstance(slot_refill, str) or "launch" not in slot_refill.lower():
+        raise SystemExit(f"branch {bid} worker_parallelism.slot_refill must describe launching replacements")
 
 
 def require_unique_manifest_values(branches: list[dict]) -> None:

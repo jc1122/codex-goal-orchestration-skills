@@ -29,6 +29,7 @@ Base ref: {base_ref}
 - Close finished branch orchestrator agents before launching replacements.
 - Do not exceed 4 active branch orchestrator agents.
 - Do not read `goal-branch-orchestrator/SKILL.md` in main context; dispatch branch sessions that use that skill.
+- Require each branch to launch independent workers as a rolling saturated pool up to its `max_active_worker_packets` cap.
 - Require each branch to record `git diff --check {base_ref}...HEAD` before merge readiness.
 - Require every branch status to pass `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it.
 - Require final `main.status.json` to pass `validate_main_status.py --manifest /absolute/path/to/job.manifest.json`.

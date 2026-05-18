@@ -92,7 +92,7 @@ Parallelism is the default. When the source material does not define branches/wo
 - minimize shared-file overlap among branches likely to run together;
 - use branch-level `depends_on` only for explicit prior-branch dependencies that must complete before a branch can start;
 - use 1 to 4 work items per branch, and make every work item worker-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
-- make independent work items parallel by default so branch orchestrators dispatch them concurrently up to the branch worker cap;
+- make independent work items parallel by default so branch orchestrators dispatch them as a rolling saturated worker pool up to the branch worker cap;
 - include the hard runtime rule that at most 4 branch orchestrator agents may be active, slots should stay saturated with eligible branches, and finished agents must be closed before launching replacements;
 - require `serial_reason` for a single-branch bundle;
 - require `parallelization_rationale` or `serial_reason` for any `max_active_branch_agents` below 4.

@@ -180,12 +180,13 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
         }
         normalized.append(normalized_item)
     known_ids = {item["id"] for item in normalized}
-    for item in normalized:
+    order = {item["id"]: index for index, item in enumerate(normalized)}
+    for index, item in enumerate(normalized):
         for dep in item["depends_on"]:
             if dep not in known_ids:
                 raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends on unknown work item: {dep}")
-            if dep == item["id"]:
-                raise SystemExit(f"branch {branch_id_value} work item {item['id']} cannot depend on itself")
+            if order[dep] >= index:
+                raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends_on must reference only prior work item ids: {dep}")
     return normalized
 
 
@@ -286,12 +287,15 @@ def normalize_brief(brief: dict) -> dict:
             "max_active_worker_packets": max_workers,
             "worker_parallelism": {
                 "parallelism_default": True,
+                "scheduling_mode": "rolling",
                 "max_active_worker_packets": max_workers,
                 "max_worker_packets_per_branch": MAX_WORKER_PACKETS_PER_BRANCH,
                 "serial_reason": worker_serial_reason,
                 "parallelization_rationale": worker_parallelization_rationale
-                or f"Launch independent worker packets concurrently up to {max_workers} active worker packets.",
-                "wave_execution": "Launch independent worker packets concurrently up to max_active_worker_packets; collect finished worker status before launching replacements.",
+                or f"Launch independent worker packets as a rolling saturated pool up to {max_workers} active worker packets.",
+                "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
+                "dependency_policy": "Work item depends_on entries are explicit prior-worker dependencies; workers without unresolved depends_on entries are eligible whenever capacity is available.",
+                "slot_refill": "After a worker launcher exits, collect and integrate its status/diff, remove it from the active set, then launch the next eligible worker immediately if capacity is available.",
             },
         }
         branches.append(branch)

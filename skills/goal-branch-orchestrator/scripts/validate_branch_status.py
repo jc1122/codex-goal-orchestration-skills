@@ -311,6 +311,7 @@ def expected_worker_packet_ids(defects: list[str], branch_entry: dict, branch_id
         defect(defects, "manifest.branch.work_items", "must contain 1 to 4 work item objects")
         return []
     packet_ids = []
+    work_item_order = {}
     for index, item in enumerate(work_items):
         if not isinstance(item, dict):
             defect(defects, f"manifest.branch.work_items[{index}]", "must be an object")
@@ -322,6 +323,11 @@ def expected_worker_packet_ids(defects: list[str], branch_entry: dict, branch_id
             if packet_id != expected_packet_id:
                 defect(defects, f"manifest.branch.work_items[{index}].packet_id", f"must be {expected_packet_id!r}")
             packet_ids.append(packet_id)
+            work_item_order[item_id] = index
+        deps = require_string_list(defects, item.get("depends_on", []), f"manifest.branch.work_items[{index}].depends_on")
+        for dep in deps:
+            if dep not in work_item_order or work_item_order[dep] >= index:
+                defect(defects, f"manifest.branch.work_items[{index}].depends_on", f"must reference only prior work item ids; invalid dependency: {dep}")
     if len(packet_ids) != len(set(packet_ids)):
         defect(defects, "manifest.branch.work_items", "packet_id values must be unique")
     return packet_ids
@@ -398,8 +404,12 @@ def validate_worker_parallelism(defects: list[str], value: object, path: str, *,
         "max_active_worker_packets",
         "max_observed_active_worker_packets",
         "concurrent_launch_default",
+        "rolling_refill_default",
+        "scheduling_mode",
         "serialized_workers",
+        "deferred_workers",
         "serial_reasons",
+        "refill_events",
     ]
     for key in required:
         if key not in data:
@@ -416,12 +426,22 @@ def validate_worker_parallelism(defects: list[str], value: object, path: str, *,
         defect(defects, f"{path}.max_observed_active_worker_packets", "must not exceed max_active_worker_packets")
     if data.get("concurrent_launch_default") is not True:
         defect(defects, f"{path}.concurrent_launch_default", "must be true")
+    if data.get("rolling_refill_default") is not True:
+        defect(defects, f"{path}.rolling_refill_default", "must be true")
+    if data.get("scheduling_mode") != "rolling":
+        defect(defects, f"{path}.scheduling_mode", "must be rolling")
     serialized_workers = require_string_list(defects, data.get("serialized_workers"), f"{path}.serialized_workers")
+    deferred_workers = require_string_list(defects, data.get("deferred_workers"), f"{path}.deferred_workers")
     serial_reasons = require_string_list(defects, data.get("serial_reasons"), f"{path}.serial_reasons")
+    refill_events = require_string_list(defects, data.get("refill_events"), f"{path}.refill_events")
     if serialized_workers and not serial_reasons:
         defect(defects, f"{path}.serial_reasons", "must justify serialized workers")
+    if deferred_workers and not serial_reasons:
+        defect(defects, f"{path}.serial_reasons", "must justify deferred workers")
     if is_strict_int(max_active) and max_active < MAX_WORKER_PACKETS_PER_BRANCH and not serial_reasons:
         defect(defects, f"{path}.serial_reasons", "must justify max_active_worker_packets below 4")
+    if is_strict_int(max_active) and worker_count > max_active and not refill_events:
+        defect(defects, f"{path}.refill_events", "must record worker slot refill events when worker count exceeds max_active_worker_packets")
     if (
         worker_count > 1
         and is_strict_int(max_active)

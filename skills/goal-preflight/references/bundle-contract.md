@@ -75,11 +75,14 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       ],
       "worker_parallelism": {
         "parallelism_default": true,
+        "scheduling_mode": "rolling",
         "max_active_worker_packets": 4,
         "max_worker_packets_per_branch": 4,
         "serial_reason": "",
-        "parallelization_rationale": "Launch independent worker packets concurrently up to 4 active worker packets.",
-        "wave_execution": "Launch independent worker packets concurrently up to max_active_worker_packets; collect finished worker status before launching replacements."
+        "parallelization_rationale": "Launch independent worker packets as a rolling saturated pool up to 4 active worker packets.",
+        "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
+        "dependency_policy": "Work item depends_on entries are explicit prior-worker dependencies; workers without unresolved depends_on entries are eligible whenever capacity is available.",
+        "slot_refill": "After a worker launcher exits, collect and integrate its status/diff, remove it from the active set, then launch the next eligible worker immediately if capacity is available."
       }
     }
   ],
@@ -114,5 +117,6 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/reviewer launchers are active.
 - Branch prompts define Worker Model Routing and require `selected_ladder` plus `selection_reason` in every worker status and branch rollup.
 - Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids.
-- Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch concurrently up to that active cap.
+- Work-item `depends_on` entries reference only prior work item ids and are the only reason to defer an otherwise eligible worker.
+- Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch as a rolling saturated pool up to that active cap.
 - Single-branch bundles include `parallelization.serial_reason`.

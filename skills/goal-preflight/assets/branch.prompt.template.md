@@ -28,13 +28,15 @@ Max worker packets for this branch: 4
 
 ## Worker Parallelism
 
-Parallel worker packets are the default for independent work items. This branch contains 1 to 4 worker packets total. Launch independent workers in separate child worktrees whenever their owned paths and verification commands do not conflict. Never exceed {max_active_worker_packets} active worker packets for this branch, and never exceed 4 active worker packets under any circumstance. If a work item has a `Depends on` entry, do not launch it until the dependency's output is integrated and available as context. If this branch is executed serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons`.
+Parallel worker packets are the default for independent work items. This branch contains 1 to 4 worker packets total. Launch independent workers as a rolling saturated pool in separate child worktrees whenever their owned paths and verification commands do not conflict. Never exceed {max_active_worker_packets} active worker packets for this branch, and never exceed 4 active worker packets under any circumstance. If a work item has a `Depends on` entry, do not launch it until the dependency's output is integrated and available as context. When any worker launcher exits, collect and integrate its status/diff, free its active slot, and launch the next eligible worker immediately if capacity is available. If this branch is executed serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons`.
 
 Worker parallelization rationale: {worker_parallelization_rationale}
 
+Use `render_worker_schedule.py --list-ready` with the current completed and active worker packet ids before initial launch and after every worker completion.
+
 Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json`.
 
-After worker dispatch, wait for active worker launchers; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status.
+After worker dispatch, wait for the next active worker launcher to exit; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status. After integrating an exited worker, refill capacity from eligible work items rather than waiting for all currently active workers to finish.
 
 ## Worker Model Routing
 
@@ -72,7 +74,7 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
 - 1 to 4 worker packets were used for this branch.
-- Independent worker packets launched concurrently up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
+- Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
 - The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.

@@ -422,6 +422,7 @@ def lint(bundle_dir: Path) -> dict:
             "Cleanup Policy",
             "Artifact Policy",
             "close finished branch orchestrator agents",
+            "rolling saturated pool",
             "validate_branch_status.py --manifest",
             "validate_main_status.py --manifest",
             "Optional Lite advisors",
@@ -454,6 +455,7 @@ def lint(bundle_dir: Path) -> dict:
             "depends_on",
             "waves are scheduling/order groups",
             "1 to 4 worker packets",
+            "rolling saturated pool",
         ]:
             if phrase not in bootloader:
                 defect("goal-bootloader.md", "critical", f"bootloader missing phrase: {phrase}")
@@ -537,26 +539,39 @@ def lint(bundle_dir: Path) -> dict:
                             if message:
                                 defect("job.manifest.json", "critical", message)
             known_work_item_ids = {item.get("id") for item in work_items if isinstance(item, dict)}
+            work_item_order = {
+                item.get("id"): index
+                for index, item in enumerate(work_items)
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
             for index, item in enumerate(work_items):
                 if not isinstance(item, dict):
                     continue
                 for dep in item.get("depends_on", []):
                     if dep not in known_work_item_ids:
                         defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] depends on unknown work item: {dep}")
-                    if dep == item.get("id"):
-                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] cannot depend on itself")
+                    elif work_item_order.get(dep, index) >= index:
+                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] depends_on must reference only prior work item ids: {dep}")
         worker_parallelism = branch.get("worker_parallelism", {})
         if not isinstance(worker_parallelism, dict):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism must be an object")
             worker_parallelism = {}
         if worker_parallelism.get("parallelism_default") is not True:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelism_default must be true")
+        if worker_parallelism.get("scheduling_mode") != "rolling":
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.scheduling_mode must be rolling")
         if worker_parallelism.get("max_active_worker_packets") != max_workers:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
         if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.max_worker_packets_per_branch must be 4")
         if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism.get("parallelization_rationale", "").strip():
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelization_rationale must be non-empty")
+        dependency_policy = worker_parallelism.get("dependency_policy", "")
+        if not isinstance(dependency_policy, str) or "depends_on" not in dependency_policy:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.dependency_policy must mention depends_on")
+        slot_refill = worker_parallelism.get("slot_refill", "")
+        if not isinstance(slot_refill, str) or "launch" not in slot_refill.lower():
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.slot_refill must describe launching replacements")
         for key in ["prompt", "status_path", "review_path"]:
             message = relative_path_defect(branch.get(key), key)
             if message:
@@ -584,6 +599,8 @@ def lint(bundle_dir: Path) -> dict:
             "Max worker packets for this branch",
             "Never exceed",
             "active worker packets",
+            "rolling saturated pool",
+            "render_worker_schedule.py",
             "Worker parallelization rationale",
             "Worker Model Routing",
             "Selected worker ladders",

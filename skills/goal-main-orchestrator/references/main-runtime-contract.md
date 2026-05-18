@@ -71,11 +71,14 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
       ],
       "worker_parallelism": {
         "parallelism_default": true,
+        "scheduling_mode": "rolling",
         "max_active_worker_packets": 4,
         "max_worker_packets_per_branch": 4,
         "serial_reason": "",
-        "parallelization_rationale": "Launch independent worker packets concurrently up to 4 active worker packets.",
-        "wave_execution": "Launch independent worker packets concurrently up to max_active_worker_packets; collect finished worker status before launching replacements."
+        "parallelization_rationale": "Launch independent worker packets as a rolling saturated pool up to 4 active worker packets.",
+        "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
+        "dependency_policy": "Work item depends_on entries are explicit prior-worker dependencies; workers without unresolved depends_on entries are eligible whenever capacity is available.",
+        "slot_refill": "After a worker launcher exits, collect and integrate its status/diff, remove it from the active set, then launch the next eligible worker immediately if capacity is available."
       }
     }
   ],
@@ -192,8 +195,10 @@ Return `blocked` if:
 - the manifest is missing the fixed `worker_model_policy`;
 - a branch is missing `max_active_worker_packets` or `worker_parallelism`;
 - a branch does not have 1 to 4 worker packets or `max_active_worker_packets` greater than 4;
+- a branch `worker_parallelism.scheduling_mode` is not `rolling`;
 - a manifest contains more than 5 waves or more than 4 branches in any wave;
 - a branch `depends_on` entry references an unknown, same, or later branch id;
+- a work-item `depends_on` entry references an unknown, same, or later work item id;
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;

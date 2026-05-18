@@ -126,7 +126,7 @@ Launch branch orchestrators as a rolling saturated pool. Parallelism is the defa
 - expected branch status path;
 - expected branch review path.
 
-Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, deterministic worker `packet_id` values in `<branch_id>-<work_item_id>` form, `max_active_worker_packets` from 1 to 4, and `worker_parallelism.parallelism_default=true`. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
+Before dispatching a branch, verify its manifest entry declares 1 to 4 `work_items`, deterministic worker `packet_id` values in `<branch_id>-<work_item_id>` form, `max_active_worker_packets` from 1 to 4, `worker_parallelism.parallelism_default=true`, and `worker_parallelism.scheduling_mode=rolling`. If not, return `blocked`; do not let a branch session infer missing worker-packet policy.
 
 The main orchestrator should not implement branch work itself and should not inspect worker event logs unless a branch status is missing, inconsistent, or blocked.
 

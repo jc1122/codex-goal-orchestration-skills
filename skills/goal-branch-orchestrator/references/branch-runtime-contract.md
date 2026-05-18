@@ -17,7 +17,7 @@ The main orchestrator already created the integration worktree. The branch orche
 
 Resolve all bundle-owned paths from the manifest directory before passing them to worker/reviewer/Lite packet scripts. Worker/reviewer/Lite packet directories, worktrees, task files, and context files must be absolute paths; the packet generators reject relative paths and `..` traversal. Worker-owned files should stay repo-relative and must not contain absolute paths or `..` traversal.
 
-Each manifest branch must declare `max_active_worker_packets`, `worker_parallelism`, and 1 to 4 `work_items` with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form. `max_active_worker_packets` is a hard per-branch active cap from 1 to 4. Parallel worker dispatch is the default: launch independent worker packets concurrently up to that cap. If more than 4 worker packets would be needed, stop and split the branch instead of inventing extra packets. If a branch runs serially or below capacity, record the reason in `worker_parallelism.serial_reasons`.
+Each manifest branch must declare `max_active_worker_packets`, `worker_parallelism`, and 1 to 4 `work_items` with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form. `max_active_worker_packets` is a hard per-branch active cap from 1 to 4. Parallel worker dispatch is the default: launch independent worker packets as a rolling saturated pool up to that cap. Work-item `depends_on` entries must reference prior work item ids and are the only reason to defer an otherwise eligible worker. When a worker launcher exits, collect and integrate its status/diff, remove it from the active set, and launch the next eligible worker immediately if capacity is available. If more than 4 worker packets would be needed, stop and split the branch instead of inventing extra packets. If a branch runs serially or below capacity, record the reason in `worker_parallelism.serial_reasons`.
 
 ## Worker Model Policy
 
@@ -94,12 +94,16 @@ Return/write status with these fields:
     }
   ],
 	  "worker_parallelism": {
-    "max_worker_packets_per_branch": 4,
-    "max_active_worker_packets": 4,
-    "max_observed_active_worker_packets": 4,
-    "concurrent_launch_default": true,
-    "serialized_workers": [],
-	    "serial_reasons": []
+	    "max_worker_packets_per_branch": 4,
+	    "max_active_worker_packets": 4,
+	    "max_observed_active_worker_packets": 4,
+	    "concurrent_launch_default": true,
+	    "rolling_refill_default": true,
+	    "scheduling_mode": "rolling",
+	    "serialized_workers": [],
+	    "deferred_workers": [],
+	    "serial_reasons": [],
+	    "refill_events": []
 	  },
 	  "lite_advice": [
 	    {
@@ -159,7 +163,8 @@ While worker or reviewer launchers are active, wait rather than poll. A quiet la
 - Keep worker ownership disjoint.
 - Prefer one child worktree per worker when workers write.
 - Use 1 to 4 worker packets for one branch.
-- Launch independent worker packets concurrently when owned files and verification commands do not conflict, up to `max_active_worker_packets`.
+- Launch independent worker packets as a rolling saturated pool when owned files and verification commands do not conflict, up to `max_active_worker_packets`.
+- After a worker launcher exits, integrate its status/diff, free its active slot, and launch the next eligible worker immediately if capacity is available.
 - Never exceed 4 active worker packets in one branch.
 - Record the reason in `worker_parallelism.serial_reasons` if worker execution is serialized.
 - Wait for active worker/reviewer launchers instead of polling their event logs, process tables, worktrees, status files, or review files.
