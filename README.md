@@ -18,6 +18,12 @@ These are packaged in one repository and reference each other by skill name, not
 npx github:jc1122/codex-goal-orchestration-skills
 ```
 
+Install a pinned release tag:
+
+```bash
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.0
+```
+
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
 
 Use a custom destination:
