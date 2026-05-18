@@ -163,7 +163,7 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
         else:
             worker_packet_ids = "invalid"
         branch_lines.append(
-            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, status={status}, review={review}, depends_on={depends_on}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}".format(
+            "- {id}: prompt={prompt}, branch={branch_name}, worktree={worktree}, expected_status_output={status}, expected_review_output={review}, depends_on={depends_on}, max_active_worker_packets={max_workers}, worker_packets={worker_packets}, worker_packet_ids={worker_packet_ids}".format(
                 id=branch.get("id", ""),
                 prompt=resolve_bundle_path(base, branch.get("prompt", ""), "prompt").as_posix(),
                 branch_name=branch.get("branch_name", ""),
@@ -204,7 +204,8 @@ Audit `job.manifest.json`, `main.prompt.md`, and every listed branch prompt befo
 
 Required checks:
 
-- every listed file exists and is readable;
+- every audit input file exists and is readable: `job.manifest.json`, `main.prompt.md`, and every branch prompt path;
+- status paths, review paths, and worktree paths are expected runtime output/target paths and do not need to exist before prompt audit;
 - manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
 - branch prompt paths, status paths, review paths, and worktree paths are unique and collision-free;
 - every branch declares `max_active_worker_packets` from 1 to 4 and `worker_parallelism.parallelism_default=true`;
