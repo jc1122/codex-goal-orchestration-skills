@@ -6,6 +6,7 @@ const path = require("path");
 const os = require("os");
 
 const packageRoot = path.resolve(__dirname, "..");
+const packageJson = require(path.join(packageRoot, "package.json"));
 const skillsRoot = path.join(packageRoot, "skills");
 const supportDirNames = ["_goal_shared"];
 
@@ -18,6 +19,7 @@ Usage:
 Options:
   --dest <dir>   Install destination. Defaults to $CODEX_HOME/skills or ~/.codex/skills.
   --list         List bundled skills without installing.
+  --version      Print package version.
   --dry-run      Print planned installs without copying.
   --force        Accepted for explicit overwrite intent; matching skill dirs are replaced.
   -h, --help     Show help.
@@ -25,7 +27,7 @@ Options:
 }
 
 function parseArgs(argv) {
-  const args = { dest: null, list: false, dryRun: false, help: false };
+  const args = { dest: null, list: false, version: false, dryRun: false, help: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
     if (arg === "--") {
@@ -38,6 +40,8 @@ function parseArgs(argv) {
       i += 1;
     } else if (arg === "--list") {
       args.list = true;
+    } else if (arg === "--version") {
+      args.version = true;
     } else if (arg === "--dry-run") {
       args.dryRun = true;
     } else if (arg === "--force") {
@@ -127,6 +131,10 @@ function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
     process.stdout.write(usage());
+    return;
+  }
+  if (args.version) {
+    console.log(packageJson.version);
     return;
   }
 

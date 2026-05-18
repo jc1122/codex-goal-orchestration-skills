@@ -46,11 +46,29 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 npm run check:shared
 npm run check:fixtures
 npm run check:golden
+npm run check:release
 ```
 
 `check:fixtures` validates the preparedness fixture bundle without launching live model CLIs. It covers timeout-wrapped launcher generation, valid broad-access research-worker artifacts, rejection of obsolete narrow research policy text, and rejection of unsafe research-worker command evidence.
 
 `check:golden` builds a complete offline smoke bundle, generates audit, worker, research-worker, reviewer, Lite, branch, main, and telemetry-summary artifacts, then validates them with the real runtime validators.
+
+`check:release` validates release metadata, installer `--list`/`--version`, temp install parity, and `npm pack --dry-run --json` package contents.
+
+## Release
+
+Before creating a production candidate tag:
+
+```bash
+npm run check:shared
+npm run check:fixtures
+npm run check:golden
+npm run check:release -- --require-clean
+git tag v<package.json version>
+git push origin main v<package.json version>
+```
+
+Update `package.json` version before tagging. Do not tag from a dirty tree.
 
 ## Workflow
 
