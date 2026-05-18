@@ -45,9 +45,12 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 ```bash
 npm run check:shared
 npm run check:fixtures
+npm run check:golden
 ```
 
 `check:fixtures` validates the preparedness fixture bundle without launching live model CLIs. It covers timeout-wrapped launcher generation, valid broad-access research-worker artifacts, rejection of obsolete narrow research policy text, and rejection of unsafe research-worker command evidence.
+
+`check:golden` builds a complete offline smoke bundle, generates audit, worker, research-worker, reviewer, Lite, branch, main, and telemetry-summary artifacts, then validates them with the real runtime validators.
 
 ## Workflow
 

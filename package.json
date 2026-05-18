@@ -9,11 +9,13 @@
   },
   "scripts": {
     "check:shared": "python3 scripts/sync_goal_shared.py",
-    "check:fixtures": "python3 scripts/check_preparedness_fixtures.py"
+    "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
+    "check:golden": "python3 scripts/check_golden_smoke.py"
   },
   "files": [
     "bin/",
     "fixtures/",
+    "scripts/check_golden_smoke.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/sync_goal_shared.py",
     "skills/",
