@@ -1,6 +1,6 @@
 # Prompt Audit Contract
 
-The prompt auditor is a read-only heavy-model agent launched before branch creation. The launcher uses exactly `gpt-5.5`, then `gpt-5.4`; do not pass model overrides. Lite advisors must not be used before prompt audit to pre-screen or soften prompt defects. After a failed or blocked audit, main may use a Lite `audit-defect-summary` packet only to summarize defects for handoff.
+The prompt auditor is a read-only heavy-model agent launched before branch creation. The launcher uses exactly `gpt-5.5`, then `gpt-5.4`; do not pass model overrides. It writes `telemetry.json` next to `prompt-audit.json` on every terminal path. Lite advisors must not be used before prompt audit to pre-screen or soften prompt defects. After a failed or blocked audit, main may use a Lite `audit-defect-summary` packet only to summarize defects for handoff.
 
 ## Files To Check
 
@@ -36,4 +36,4 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 
 The auditor returns only JSON matching `prompt-audit.schema.json`. The schema pins the exact absolute `manifest` and `repo_root` values, and downstream branch worktree rendering must reject an audit artifact whose identity does not match the current command inputs.
 
-If both audit model attempts fail without a valid audit artifact, the launcher writes a terminal blocked `prompt-audit.json` with `can_start=false`.
+If both audit model attempts fail without a valid audit artifact, the launcher writes a terminal blocked `prompt-audit.json` with `can_start=false` and telemetry that records the failed declared/called audit attempts. Passing audit telemetry must identify exactly one accepted attempt and preserve prompt/output/log character and byte counts plus any token usage exposed in event logs.

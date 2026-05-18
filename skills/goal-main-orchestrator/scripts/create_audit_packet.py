@@ -18,6 +18,52 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def telemetry_attempt_args(attempts: list[dict]) -> str:
+    lines = []
+    for item in attempts:
+        lines.append("    --attempt-json " + shell_quote(json.dumps(item, separators=(",", ":"))) + " \\")
+    if lines:
+        lines[-1] = lines[-1].removesuffix(" \\")
+    return "\n".join(lines)
+
+
+def audit_telemetry_attempts() -> list[dict]:
+    return [
+        {
+            "alias": "gpt-5.5",
+            "provider": "codex",
+            "model": AUDIT_MODEL,
+            "effort": "",
+            "command": f"codex exec --ephemeral -m {AUDIT_MODEL} -s read-only",
+            "event_logs": ["events-primary.jsonl"],
+            "probe_logs": [],
+        },
+        {
+            "alias": "gpt-5.4",
+            "provider": "codex",
+            "model": AUDIT_FALLBACK_MODEL,
+            "effort": "",
+            "command": f"codex exec --ephemeral -m {AUDIT_FALLBACK_MODEL} -s read-only",
+            "event_logs": ["events-fallback.jsonl"],
+            "probe_logs": [],
+        },
+    ]
+
+
+def telemetry_function() -> str:
+    script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
+    return f"""write_telemetry() {{
+  python3 {shell_quote(script)} \\
+    --packet-dir "$(pwd)" \\
+    --packet-id prompt-audit \\
+    --role prompt-auditor \\
+    --output-name prompt-audit.json \\
+    --prompt-name prompt.md \\
+{telemetry_attempt_args(audit_telemetry_attempts())}
+}}
+"""
+
+
 def _load_path_rules():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
     if not path.exists():
@@ -187,6 +233,7 @@ exactly as specified by the schema.
 
 
 def render_launch(repo_root: Path, manifest_path: Path) -> str:
+    telemetry = telemetry_function()
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -195,7 +242,7 @@ cd "$(dirname "$0")"
 git -C {shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/dev/null
 
 output_path="$(pwd)/prompt-audit.json"
-rm -f "$output_path" "$(pwd)/events-primary.jsonl" "$(pwd)/events-fallback.jsonl"
+rm -f "$output_path" "$(pwd)/events-primary.jsonl" "$(pwd)/events-fallback.jsonl" "$(pwd)/telemetry.json"
 
 run_model() {{
   local label="$1"
@@ -277,6 +324,8 @@ if data["status"] == "pass":
 PY
 }}
 
+{telemetry}
+
 write_terminal_audit() {{
   local message="$1"
   python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} "$message" <<'PY'
@@ -315,24 +364,29 @@ PY
 }}
 
 if run_model primary {shell_quote(AUDIT_MODEL)} && valid_audit; then
+  write_telemetry
   exit 0
 fi
 
 if [ -s "$output_path" ] && valid_audit; then
+  write_telemetry
   exit 1
 fi
 
 rm -f "$output_path"
 
 if run_model fallback {shell_quote(AUDIT_FALLBACK_MODEL)} && valid_audit; then
+  write_telemetry
   exit 0
 fi
 
 if [ -s "$output_path" ] && valid_audit; then
+  write_telemetry
   exit 1
 fi
 
 write_terminal_audit "Prompt audit primary and fallback failed without producing a valid prompt-audit.json."
+write_telemetry
 exit 1
 """
 

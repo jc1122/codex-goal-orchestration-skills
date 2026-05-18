@@ -11,7 +11,9 @@ The main runtime consumes artifacts prepared before `/goal` starts:
 The main runtime may create execution artifacts:
 
 - `prompt-audit.json`
+- audit `telemetry.json`
 - `main.status.json`
+- `telemetry.summary.json`
 - optional Lite advisory artifacts under `lite/`
 - branch integration branches/worktrees
 - branch status/review artifacts produced by branch orchestrators
@@ -140,7 +142,7 @@ Return/write status with these fields:
 
 `lite_advice` must be present, even when empty. Any recorded main Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant main Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no main Lite packet exists.
 
-Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to use manifest-owned `lite/<packet_id>/` paths, validates every Lite advice artifact and live input/task/prompt hashes, checks the captured Gemini path/version/binary sha for non-blocked Lite advice, requires recorded validation command/status/defects to match actual validation, scans manifest-owned `lite/` for unrecorded main Lite packets, and for `pass` requires every worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
+Run `scripts/summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` before final validation so `telemetry.summary.json` reflects the current audit, worker, reviewer, and Lite packet telemetry. Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also validates prompt-audit telemetry, opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to use manifest-owned `lite/<packet_id>/` paths, validates every Lite advice artifact, live input/task/prompt hashes, and Lite telemetry, checks the captured Gemini path/version/binary sha for non-blocked Lite advice, requires recorded validation command/status/defects to match actual validation, scans manifest-owned `lite/` for unrecorded main Lite packets, and for `pass` requires every worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every worker/reviewer packet to have same-packet `telemetry.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a `telemetry.summary.json` file, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
 
 ## Context Conservation
 
@@ -168,7 +170,7 @@ Main may create CLI-only Lite packets only after prompt audit has completed:
 - `audit-defect-summary` after failed or blocked audit;
 - `main-summary` after branch status/review artifacts are complete.
 
-Main must not launch Lite before prompt audit to pre-screen prompts. Lite launchers run Gemini Flash Lite in read-only `plan` mode using the absolute Gemini path, version, and binary sha256 captured at packet creation and write `advice.json`. The launcher and validator rehash every input, `task.md`, `prompt.md`, and the Gemini binary; stale inputs, prompt/task drift, or Gemini binary drift make the advice invalid or blocked. Validate advice with `scripts/validate_lite_advice.py` before using it. If Lite is unavailable, quota-limited, blocked, invalid, stale, or contradicted by branch artifacts, ignore it and continue with the normal status validation path unless the user explicitly required Lite. Record every used or ignored Lite packet in `main.status.json`; record `lite_advice: []` only when no relevant main Lite packet exists.
+Main must not launch Lite before prompt audit to pre-screen prompts. Lite launchers run Gemini Flash Lite in read-only `plan` mode using the absolute Gemini path, version, and binary sha256 captured at packet creation and write `advice.json` plus `telemetry.json`. The launcher and validator rehash every input, `task.md`, `prompt.md`, and the Gemini binary; stale inputs, prompt/task drift, Gemini binary drift, or missing telemetry make the advice invalid or blocked. Validate advice with `scripts/validate_lite_advice.py` before using it. If Lite is unavailable, quota-limited, blocked, invalid, stale, or contradicted by branch artifacts, ignore it and continue with the normal status validation path unless the user explicitly required Lite. Record every used or ignored Lite packet in `main.status.json`; record `lite_advice: []` only when no relevant main Lite packet exists.
 
 ## Active Agent Limit
 
@@ -189,6 +191,7 @@ Return `blocked` if:
 
 - audit did not pass;
 - `prompt-audit.json` does not pin the exact manifest and repo root for this run;
+- prompt-audit telemetry is missing or inconsistent;
 - manifest branch metadata is missing;
 - manifest cleanup or artifact policy is missing or contradicted by `main.prompt.md`;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 4;
@@ -202,6 +205,7 @@ Return `blocked` if:
 - a single-branch or otherwise serialized manifest lacks `serial_reason` or `parallelization_rationale`;
 - a branch worktree target already exists without an explicit reuse policy;
 - branch status/review files are missing;
+- worker, reviewer, Lite, or final summary telemetry required for a `pass` run is missing;
 - branch status or main status validation fails;
 - merge-ready branch status/review artifacts do not record base-range whitespace validation;
 - main polled active branch agents' worker packets, reviewer packets, worktrees, process tables, or status files instead of waiting;

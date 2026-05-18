@@ -1,6 +1,6 @@
 ---
 name: goal-main-orchestrator
-description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit, optionally use CLI-only Lite advisors after audit or completed branch artifacts for advisory summaries, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
+description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit with telemetry, optionally use CLI-only Lite advisors after audit or completed branch artifacts for advisory summaries, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, summarize packet telemetry, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
 ---
 
 # Goal Main Orchestrator
@@ -52,7 +52,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_audit_packet.py
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/audit
 ```
 
-Then run the generated `launch.sh`. The audit packet uses exactly `gpt-5.5`, then `gpt-5.4`; no model overrides are accepted. The packet schema pins the exact manifest path and repository root. If both audit attempts fail without producing a valid `prompt-audit.json`, the launcher writes a terminal blocked `prompt-audit.json`.
+Then run the generated `launch.sh`. The audit packet uses exactly `gpt-5.5`, then `gpt-5.4`; no model overrides are accepted. The packet schema pins the exact manifest path and repository root. The launcher always writes packet-local `telemetry.json` with declared/called/accepted model aliases, model ids, prompt/output/log character and byte counts, and best-effort token usage when provider logs expose it. If both audit attempts fail without producing a valid `prompt-audit.json`, the launcher writes a terminal blocked `prompt-audit.json`.
 
 Read `references/prompt-audit-contract.md` if the audit fails or if the prepared bundle shape is unclear.
 
@@ -77,7 +77,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_lite_advice_pac
   --input-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.review.json
 ```
 
-After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it. The main Lite scripts enforce the main-only purpose allowlist (`audit-defect-summary`, `main-summary`), capture the absolute Gemini CLI path/version/binary sha256 at packet creation, rehash all source inputs, `task.md`, `prompt.md`, and the Gemini binary during launch/validation, regenerate the prompt from `input-files.json` plus `task.md`, and reject runtime-purpose recommendations outside the explicit input set. Main status validation scans manifest-owned `lite/` for relevant main Lite packet directories and fails if they are not recorded in `lite_advice`; recorded Lite validation commands must be the exact `python3 <skill>/scripts/validate_lite_advice.py --advice <packet>/advice.json --inputs <packet>/input-files.json` command for that manifest-owned packet.
+After running the generated `launch.sh`, validate `advice.json` with `scripts/validate_lite_advice.py`. If Lite is blocked, invalid, stale, or contradicted by branch artifacts, ignore it. The main Lite scripts enforce the main-only purpose allowlist (`audit-defect-summary`, `main-summary`), capture the absolute Gemini CLI path/version/binary sha256 at packet creation, rehash all source inputs, `task.md`, `prompt.md`, and the Gemini binary during launch/validation, regenerate the prompt from `input-files.json` plus `task.md`, write packet-local `telemetry.json`, and reject runtime-purpose recommendations outside the explicit input set. Main status validation scans manifest-owned `lite/` for relevant main Lite packet directories and fails if they are not recorded in `lite_advice`; recorded Lite validation commands must be the exact `python3 <skill>/scripts/validate_lite_advice.py --advice <packet>/advice.json --inputs <packet>/input-files.json` command for that manifest-owned packet.
 
 ## Branch Creation
 
@@ -149,7 +149,12 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_stat
   --worktree /absolute/path/to/.worktrees/<branch-name>
 ```
 
-Before final return, write `main.status.json` and validate it:
+Before final return, summarize all packet telemetry, write `main.status.json`, and validate it:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py" \
+  --bundle-dir /absolute/path/to/plans/orchestration/<job-id>
+```
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py" \
@@ -158,7 +163,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.p
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker artifacts and same-branch reviewer artifacts backing those claims, prompt-audit/worker/reviewer/Lite `telemetry.json` artifacts, bundle `telemetry.summary.json`, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 
@@ -166,6 +171,8 @@ Before returning `pass`, verify:
 
 - skill availability bootstrap passed for `goal-main-orchestrator` and `goal-branch-orchestrator`;
 - prompt audit passed;
+- prompt audit, worker, reviewer, and used/ignored Lite packets wrote `telemetry.json`;
+- `summarize_telemetry.py --bundle-dir <bundle>` wrote `telemetry.summary.json`;
 - manifest cleanup and artifact policies are present and are not contradicted by `main.prompt.md`;
 - every branch listed in the manifest has a status file;
 - every branch requiring review has a review file;

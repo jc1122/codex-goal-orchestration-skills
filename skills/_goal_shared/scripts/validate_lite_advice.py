@@ -204,6 +204,63 @@ def require_string_list(defects: list[str], value: object, path: str, *, min_ite
     return result
 
 
+def require_nonnegative_int(defects: list[str], value: object, path: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        defect(defects, path, "must be a non-negative integer")
+        return 0
+    return value
+
+
+def validate_telemetry(defects: list[str], inputs_path: Path | None, *, packet_id: str, lite_status: object) -> None:
+    if inputs_path is None:
+        defect(defects, "telemetry.json", "requires --inputs so packet telemetry can be verified")
+        return
+    telemetry_path = inputs_path.parent / "telemetry.json"
+    if not telemetry_path.exists():
+        defect(defects, "telemetry.json", f"must exist next to advice.json: {telemetry_path}")
+        return
+    try:
+        data = load_json(telemetry_path)
+    except Exception as exc:  # noqa: BLE001
+        defect(defects, "telemetry.json", f"must be readable JSON: {exc}")
+        return
+    root = require_object(defects, data, "telemetry.json")
+    if root.get("schema_version") != 1:
+        defect(defects, "telemetry.json.schema_version", "must be 1")
+    if root.get("packet_id") != packet_id:
+        defect(defects, "telemetry.json.packet_id", f"must be {packet_id!r}")
+    if root.get("role") != "lite_advisor":
+        defect(defects, "telemetry.json.role", "must be 'lite_advisor'")
+    for key in [
+        "prompt_chars",
+        "prompt_bytes",
+        "output_chars",
+        "output_bytes",
+        "event_log_chars",
+        "event_log_bytes",
+    ]:
+        require_nonnegative_int(defects, root.get(key), f"telemetry.json.{key}")
+    attempts = root.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) != 1:
+        defect(defects, "telemetry.json.attempts", "must contain exactly one Lite attempt")
+        return
+    attempt = require_object(defects, attempts[0], "telemetry.json.attempts[0]")
+    if attempt.get("alias") != "gemini-lite":
+        defect(defects, "telemetry.json.attempts[0].alias", "must be 'gemini-lite'")
+    if attempt.get("provider") != "gemini":
+        defect(defects, "telemetry.json.attempts[0].provider", "must be 'gemini'")
+    if attempt.get("model") != LITE_MODEL:
+        defect(defects, "telemetry.json.attempts[0].model", f"must be {LITE_MODEL!r}")
+    if not isinstance(attempt.get("called"), bool):
+        defect(defects, "telemetry.json.attempts[0].called", "must be a boolean")
+    if not isinstance(attempt.get("accepted"), bool):
+        defect(defects, "telemetry.json.attempts[0].accepted", "must be a boolean")
+    if lite_status == "ok" and attempt.get("called") is not True:
+        defect(defects, "telemetry.json.attempts[0].called", "must be true when Lite advice status is ok")
+    if attempt.get("accepted") is True and attempt.get("called") is not True:
+        defect(defects, "telemetry.json.attempts[0].accepted", "may be true only when called is true")
+
+
 def validate_live_sources(defects: list[str], inputs: dict | None) -> None:
     if inputs is None:
         return
@@ -523,6 +580,7 @@ def validate(
         defect(defects, "$.blockers", "must be empty when status is ok")
     if status in {"partial", "blocked"} and not blockers:
         defect(defects, "$.blockers", "must explain non-ok Lite advice")
+    validate_telemetry(defects, inputs_path, packet_id=actual_packet_id, lite_status=status)
     if inputs is not None:
         expected_command = advice_command(str(inputs.get("gemini_path", "")))
         if commands and expected_command not in commands:

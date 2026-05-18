@@ -424,6 +424,8 @@ def lint(bundle_dir: Path) -> dict:
             "close finished branch orchestrator agents",
             "rolling saturated pool",
             "validate_branch_status.py --manifest",
+            "summarize_telemetry.py --bundle-dir",
+            "telemetry.summary.json",
             "validate_main_status.py --manifest",
             "Optional Lite advisors",
         ]:
@@ -605,6 +607,7 @@ def lint(bundle_dir: Path) -> dict:
             "Worker Model Routing",
             "Selected worker ladders",
             "Worker packet id",
+            "telemetry.json",
             "Lite Advisors",
             "validate_branch_status.py --manifest",
             "Stop Conditions",

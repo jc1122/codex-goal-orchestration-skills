@@ -1,6 +1,6 @@
 ---
 name: goal-preflight
-description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize rolling-scheduled branch groups and worker-sized work items when missing, enforce reproducible manifest paths, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
+description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize rolling-scheduled branch groups and worker-sized work items when missing, enforce reproducible manifest paths and telemetry requirements, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
 # Goal Preflight
@@ -80,7 +80,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/validate_lite_advice.py" \
 
 If Lite is blocked, invalid, stale, or contradicted by source files, ignore the advice and continue with the normal preflight workflow. Do not treat Lite output as lint status, audit status, or DoD evidence. If any preflight Lite packet exists under the bundle `lite/` directory, record it in `job.manifest.json.preflight_lite_advice` with the exact expanded validation command shown above; the linter fails on unrecorded preflight Lite packet directories or non-canonical validation commands.
 
-The Lite scripts enforce the preflight purpose allowlist (`preflight-decomposition`, `lint-repair`), capture the absolute Gemini CLI path/version/binary sha256 at packet creation, rehash all source inputs, `task.md`, `prompt.md`, and the Gemini binary during launch/validation, regenerate the prompt from `input-files.json` plus `task.md`, and reject runtime-purpose recommendations that are outside the explicit input set.
+The Lite scripts enforce the preflight purpose allowlist (`preflight-decomposition`, `lint-repair`), capture the absolute Gemini CLI path/version/binary sha256 at packet creation, rehash all source inputs, `task.md`, `prompt.md`, and the Gemini binary during launch/validation, regenerate the prompt from `input-files.json` plus `task.md`, write packet-local `telemetry.json`, and reject runtime-purpose recommendations that are outside the explicit input set.
 
 ## Parallelization Rules
 
@@ -94,6 +94,7 @@ Parallelism is the default. When the source material does not define branches/wo
 - use 1 to 4 work items per branch, and make every work item worker-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
 - make independent work items parallel by default so branch orchestrators dispatch them as a rolling saturated worker pool up to the branch worker cap;
 - include the hard runtime rule that at most 4 branch orchestrator agents may be active, slots should stay saturated with eligible branches, and finished agents must be closed before launching replacements;
+- require prompt-audit, worker, reviewer, and Lite packet `telemetry.json` plus a final `telemetry.summary.json`;
 - require `serial_reason` for a single-branch bundle;
 - require `parallelization_rationale` or `serial_reason` for any `max_active_branch_agents` below 4.
 

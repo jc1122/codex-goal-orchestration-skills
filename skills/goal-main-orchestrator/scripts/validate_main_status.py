@@ -37,6 +37,7 @@ require_object = STATUS_VALIDATION.require_object
 require_string = STATUS_VALIDATION.require_string
 require_string_list = STATUS_VALIDATION.require_string_list
 validate_base_range_diff_check = STATUS_VALIDATION.validate_base_range_diff_check
+validate_telemetry_artifact = STATUS_VALIDATION.validate_telemetry_artifact
 is_repo_relative_path = STATUS_VALIDATION.is_repo_relative_path
 is_absolute_path = STATUS_VALIDATION.is_absolute_path
 
@@ -76,6 +77,65 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
         defect(defects, f"{path}.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")
     if data.get("status") == "pass" and review_status != "mergeable":
         defect(defects, f"{path}.review_status", "must be mergeable when branch status is pass")
+
+
+def validate_audit_artifacts(defects: list[str], root: dict, *, manifest_path: Path, require_artifacts: bool) -> None:
+    audit_status = root.get("audit_status")
+    audit_path = manifest_path.parent / "audit" / "prompt-audit.json"
+    if not audit_path.exists():
+        if require_artifacts or audit_status != "missing":
+            defect(defects, "$.audit_status", f"prompt audit artifact does not exist: {audit_path}")
+        return
+    audit = require_object(defects, load_json_artifact(defects, audit_path, "$.audit_status.artifact"), "$.audit_status.artifact")
+    if audit.get("manifest") != manifest_path.as_posix():
+        defect(defects, "$.audit_status.artifact.manifest", "must match manifest path")
+    if audit.get("status") not in AUDIT_STATUSES - {"missing"}:
+        defect(defects, "$.audit_status.artifact.status", f"must be one of {sorted(AUDIT_STATUSES - {'missing'})}")
+    if audit_status != "missing" and audit.get("status") != audit_status:
+        defect(defects, "$.audit_status", "must match prompt audit artifact status")
+    if not isinstance(audit.get("can_start"), bool):
+        defect(defects, "$.audit_status.artifact.can_start", "must be a boolean")
+    require_string_list(defects, audit.get("checked_files"), "$.audit_status.artifact.checked_files")
+    require_string_list(defects, audit.get("commands_run"), "$.audit_status.artifact.commands_run", min_items=1)
+    if audit.get("status") == "pass":
+        if audit.get("can_start") is not True:
+            defect(defects, "$.audit_status.artifact.can_start", "must be true when audit status is pass")
+        if audit.get("missing_dod_items"):
+            defect(defects, "$.audit_status.artifact.missing_dod_items", "must be empty when audit status is pass")
+    validate_telemetry_artifact(
+        defects,
+        audit_path.parent / "telemetry.json",
+        "$.audit_status.telemetry_path",
+        packet_id="prompt-audit",
+        role="prompt-auditor",
+        allowed_aliases=("gpt-5.5", "gpt-5.4"),
+        require_called=True,
+    )
+
+
+def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, require_artifacts: bool) -> None:
+    summary_path = manifest_path.parent / "telemetry.summary.json"
+    if not summary_path.exists():
+        if require_artifacts:
+            defect(defects, "$.telemetry_summary", f"telemetry summary does not exist: {summary_path}")
+        return
+    summary = require_object(defects, load_json_artifact(defects, summary_path, "$.telemetry_summary"), "$.telemetry_summary")
+    if summary.get("schema_version") != 1:
+        defect(defects, "$.telemetry_summary.schema_version", "must be 1")
+    if summary.get("bundle_dir") != manifest_path.parent.as_posix():
+        defect(defects, "$.telemetry_summary.bundle_dir", "must match manifest bundle directory")
+    telemetry_files = summary.get("telemetry_files")
+    if not isinstance(telemetry_files, list):
+        defect(defects, "$.telemetry_summary.telemetry_files", "must be an array")
+    elif require_artifacts and not telemetry_files:
+        defect(defects, "$.telemetry_summary.telemetry_files", "must contain packet telemetry files")
+    totals = require_object(defects, summary.get("totals"), "$.telemetry_summary.totals")
+    for key in ["packet_count", "attempts_declared", "attempts_called", "prompt_chars", "output_chars", "event_log_chars"]:
+        value = totals.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            defect(defects, f"$.telemetry_summary.totals.{key}", "must be a non-negative integer")
+    if require_artifacts and isinstance(telemetry_files, list) and totals.get("packet_count") != len(telemetry_files):
+        defect(defects, "$.telemetry_summary.totals.packet_count", "must match telemetry_files length")
 
 
 def load_branch_status_validator(defects: list[str]):
@@ -320,6 +380,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
         defect(defects, "$.audit_status", f"must be one of {sorted(AUDIT_STATUSES)}")
     if status == "pass" and audit_status != "pass":
         defect(defects, "$.audit_status", "must be pass when main status is pass")
+    validate_audit_artifacts(defects, root, manifest_path=manifest_path, require_artifacts=status == "pass")
     branch_statuses = root.get("branch_statuses")
     min_branches = 1 if status in {"pass", "partial"} else 0
     if not isinstance(branch_statuses, list) or len(branch_statuses) < min_branches or len(branch_statuses) > MAX_TOTAL_BRANCHES:
@@ -341,6 +402,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
         require_artifacts=status == "pass",
     )
     validate_lite_advice_entries(defects, root.get("lite_advice"), "$.lite_advice", manifest_path=manifest_path)
+    validate_telemetry_summary(defects, manifest_path=manifest_path, require_artifacts=status == "pass")
     require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     require_string_list(defects, root.get("dod_checklist"), "$.dod_checklist", min_items=1)
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")

@@ -18,6 +18,7 @@ REQUIRED_FILES = {
         "scripts/create_lite_advice_packet.py",
         "scripts/lint_goal_bundle.py",
         "scripts/render_goal_bootloader.py",
+        "scripts/extract_telemetry.py",
         "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
@@ -26,6 +27,8 @@ REQUIRED_FILES = {
         "scripts/create_audit_packet.py",
         "scripts/create_lite_advice_packet.py",
         "scripts/render_branch_worktree_commands.py",
+        "scripts/extract_telemetry.py",
+        "scripts/summarize_telemetry.py",
         "scripts/validate_main_status.py",
         "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
@@ -34,6 +37,7 @@ REQUIRED_FILES = {
         "SKILL.md",
         "scripts/create_runtime_packet.py",
         "scripts/create_lite_advice_packet.py",
+        "scripts/extract_telemetry.py",
         "scripts/validate_branch_status.py",
         "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
@@ -41,6 +45,7 @@ REQUIRED_FILES = {
 }
 REQUIRED_SUPPORT_FILES = [
     "_goal_shared/scripts/create_lite_advice_packet.py",
+    "_goal_shared/scripts/extract_telemetry.py",
     "_goal_shared/scripts/validate_lite_advice.py",
     "_goal_shared/scripts/path_rules.py",
     "_goal_shared/scripts/status_validation.py",

@@ -78,6 +78,144 @@ def load_json_artifact(defects: list[str], path: Path, field: str) -> object:
         return {}
 
 
+def require_nonnegative_int(defects: list[str], value: object, path: str) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        defect(defects, path, "must be a non-negative integer")
+        return 0
+    return value
+
+
+def validate_usage(defects: list[str], value: object, path: str) -> None:
+    if value is None:
+        return
+    if not isinstance(value, dict):
+        defect(defects, path, "must be null or an object")
+        return
+    allowed = {
+        "input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+        "cached_input_tokens",
+        "total_tokens",
+    }
+    for key, item in value.items():
+        if key not in allowed:
+            defect(defects, f"{path}.{key}", f"unsupported usage key; allowed keys are {sorted(allowed)}")
+            continue
+        require_nonnegative_int(defects, item, f"{path}.{key}")
+
+
+def validate_telemetry_logs(defects: list[str], value: object, path: str) -> None:
+    if not isinstance(value, list):
+        defect(defects, path, "must be an array")
+        return
+    for index, item in enumerate(value):
+        item_path = f"{path}[{index}]"
+        data = require_object(defects, item, item_path)
+        require_string(defects, data.get("path"), f"{item_path}.path")
+        if not isinstance(data.get("exists"), bool):
+            defect(defects, f"{item_path}.exists", "must be a boolean")
+        require_nonnegative_int(defects, data.get("bytes"), f"{item_path}.bytes")
+        require_nonnegative_int(defects, data.get("chars"), f"{item_path}.chars")
+        validate_usage(defects, data.get("usage"), f"{item_path}.usage")
+
+
+def validate_telemetry_artifact(
+    defects: list[str],
+    telemetry_path: Path,
+    path: str,
+    *,
+    packet_id: str | None = None,
+    role: str | None = None,
+    allowed_aliases: list[str] | tuple[str, ...] | set[str] | None = None,
+    require_called: bool = True,
+) -> dict:
+    if not telemetry_path.exists():
+        defect(defects, path, f"missing telemetry artifact: {telemetry_path}")
+        return {}
+    data = require_object(defects, load_json_artifact(defects, telemetry_path, path), path)
+    if data.get("schema_version") != 1:
+        defect(defects, f"{path}.schema_version", "must be 1")
+    actual_packet = require_string(defects, data.get("packet_id"), f"{path}.packet_id")
+    if packet_id is not None and actual_packet and actual_packet != packet_id:
+        defect(defects, f"{path}.packet_id", f"must be {packet_id!r}")
+    actual_role = require_string(defects, data.get("role"), f"{path}.role")
+    if role is not None and actual_role and actual_role != role:
+        defect(defects, f"{path}.role", f"must be {role!r}")
+    for key in [
+        "output_artifact",
+        "prompt_artifact",
+    ]:
+        require_string(defects, data.get(key), f"{path}.{key}")
+    for key in [
+        "prompt_chars",
+        "prompt_bytes",
+        "output_chars",
+        "output_bytes",
+        "event_log_chars",
+        "event_log_bytes",
+    ]:
+        require_nonnegative_int(defects, data.get(key), f"{path}.{key}")
+    if data.get("accepted_alias") is not None:
+        require_string(defects, data.get("accepted_alias"), f"{path}.accepted_alias")
+    attempts = data.get("attempts")
+    if not isinstance(attempts, list):
+        defect(defects, f"{path}.attempts", "must be an array")
+        attempts = []
+    allowed_alias_set = set(allowed_aliases or [])
+    called_aliases = []
+    accepted_aliases = []
+    for index, item in enumerate(attempts):
+        item_path = f"{path}.attempts[{index}]"
+        attempt = require_object(defects, item, item_path)
+        alias = require_string(defects, attempt.get("alias"), f"{item_path}.alias")
+        require_string(defects, attempt.get("provider"), f"{item_path}.provider")
+        require_string(defects, attempt.get("model"), f"{item_path}.model")
+        if attempt.get("effort") is not None:
+            require_string(defects, attempt.get("effort"), f"{item_path}.effort")
+        require_string(defects, attempt.get("command"), f"{item_path}.command")
+        called = attempt.get("called")
+        accepted = attempt.get("accepted")
+        if not isinstance(called, bool):
+            defect(defects, f"{item_path}.called", "must be a boolean")
+            called = False
+        if not isinstance(accepted, bool):
+            defect(defects, f"{item_path}.accepted", "must be a boolean")
+            accepted = False
+        if alias and allowed_alias_set and alias not in allowed_alias_set:
+            defect(defects, f"{item_path}.alias", f"must be one of {sorted(allowed_alias_set)}")
+        if called and alias:
+            called_aliases.append(alias)
+        if accepted:
+            if not called:
+                defect(defects, f"{item_path}.accepted", "may be true only for called attempts")
+            if alias:
+                accepted_aliases.append(alias)
+        validate_telemetry_logs(defects, attempt.get("event_logs"), f"{item_path}.event_logs")
+        validate_telemetry_logs(defects, attempt.get("probe_logs"), f"{item_path}.probe_logs")
+        validate_usage(defects, attempt.get("usage"), f"{item_path}.usage")
+    if require_called and not called_aliases:
+        defect(defects, f"{path}.attempts", "must record at least one called model attempt")
+    if len(accepted_aliases) > 1:
+        defect(defects, f"{path}.attempts", "must mark at most one accepted attempt")
+    if isinstance(data.get("accepted_alias"), str):
+        if data["accepted_alias"] not in accepted_aliases:
+            defect(defects, f"{path}.accepted_alias", "must match the accepted attempt alias")
+    elif accepted_aliases:
+        defect(defects, f"{path}.accepted_alias", "must be set when an attempt is marked accepted")
+    totals = require_object(defects, data.get("totals"), f"{path}.totals")
+    attempts_declared = require_nonnegative_int(defects, totals.get("attempts_declared"), f"{path}.totals.attempts_declared")
+    attempts_called = require_nonnegative_int(defects, totals.get("attempts_called"), f"{path}.totals.attempts_called")
+    if attempts_declared != len(attempts):
+        defect(defects, f"{path}.totals.attempts_declared", "must match attempts length")
+    if attempts_called != len(called_aliases):
+        defect(defects, f"{path}.totals.attempts_called", "must match called attempt count")
+    require_nonnegative_int(defects, totals.get("event_log_chars"), f"{path}.totals.event_log_chars")
+    require_nonnegative_int(defects, totals.get("event_log_bytes"), f"{path}.totals.event_log_bytes")
+    validate_usage(defects, totals.get("known_usage"), f"{path}.totals.known_usage")
+    return data
+
+
 def contains_base_range_diff_check(commands: list[str], base_ref: str) -> bool:
     expected_range = f"{base_ref}...HEAD"
     for command in commands:

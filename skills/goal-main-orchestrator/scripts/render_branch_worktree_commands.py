@@ -54,6 +54,35 @@ def load_json(path: Path) -> dict:
         return json.load(handle)
 
 
+def validate_audit_telemetry(audit_path: Path) -> None:
+    telemetry_path = audit_path.parent / "telemetry.json"
+    if not telemetry_path.exists():
+        raise SystemExit(f"prompt audit telemetry does not exist: {telemetry_path}")
+    telemetry = load_json(telemetry_path)
+    if telemetry.get("schema_version") != 1:
+        raise SystemExit("prompt audit telemetry schema_version must be 1")
+    if telemetry.get("packet_id") != "prompt-audit":
+        raise SystemExit("prompt audit telemetry packet_id must be 'prompt-audit'")
+    if telemetry.get("role") != "prompt-auditor":
+        raise SystemExit("prompt audit telemetry role must be 'prompt-auditor'")
+    attempts = telemetry.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        raise SystemExit("prompt audit telemetry attempts must be a non-empty array")
+    aliases = [item.get("alias") for item in attempts if isinstance(item, dict)]
+    if aliases != ["gpt-5.5", "gpt-5.4"]:
+        raise SystemExit("prompt audit telemetry attempts must declare gpt-5.5 then gpt-5.4")
+    called = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("called") is True]
+    if not called or called != aliases[: len(called)]:
+        raise SystemExit("prompt audit telemetry called attempts must be a non-empty prefix of the audit ladder")
+    accepted = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("accepted") is True]
+    if len(accepted) != 1 or telemetry.get("accepted_alias") != accepted[0]:
+        raise SystemExit("passing prompt audit telemetry must identify exactly one accepted model")
+    for key in ["prompt_chars", "prompt_bytes", "output_chars", "output_bytes", "event_log_chars", "event_log_bytes"]:
+        value = telemetry.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise SystemExit(f"prompt audit telemetry {key} must be a non-negative integer")
+
+
 def require_string_list(value: object, field: str, *, min_items: int = 0) -> list[str]:
     if not isinstance(value, list) or len(value) < min_items:
         raise SystemExit(f"{field} must contain at least {min_items} item(s)")
@@ -215,6 +244,7 @@ def main() -> int:
 
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")
+    validate_audit_telemetry(audit_path)
     require_string_list(audit.get("checked_files"), "prompt audit checked_files", min_items=1)
     require_string_list(audit.get("commands_run"), "prompt audit commands_run", min_items=1)
     audit_defects = audit.get("defects", [])

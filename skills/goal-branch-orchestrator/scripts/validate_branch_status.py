@@ -45,6 +45,7 @@ require_string = STATUS_VALIDATION.require_string
 require_string_list = STATUS_VALIDATION.require_string_list
 is_absolute_path = STATUS_VALIDATION.is_absolute_path
 validate_base_range_diff_check = STATUS_VALIDATION.validate_base_range_diff_check
+validate_telemetry_artifact = STATUS_VALIDATION.validate_telemetry_artifact
 
 
 def is_repo_relative_path(value: str) -> bool:
@@ -281,6 +282,33 @@ def validate_worker_artifacts(
                 f"{item_path}.route_path",
                 worker=artifact,
             )
+        telemetry = validate_telemetry_artifact(
+            defects,
+            status_artifact.parent / "telemetry.json",
+            f"{item_path}.telemetry_path",
+            packet_id=str(packet_id) if isinstance(packet_id, str) else None,
+            role="worker",
+            allowed_aliases=DEFAULT_WORKER_LADDER,
+            require_called=True,
+        )
+        telemetry_attempts = telemetry.get("attempts") if isinstance(telemetry.get("attempts"), list) else []
+        telemetry_aliases = [
+            attempt.get("alias")
+            for attempt in telemetry_attempts
+            if isinstance(attempt, dict) and isinstance(attempt.get("alias"), str)
+        ]
+        selected_ladder = artifact.get("selected_ladder") if isinstance(artifact.get("selected_ladder"), list) else []
+        if telemetry_aliases and selected_ladder and telemetry_aliases != selected_ladder:
+            defect(defects, f"{item_path}.telemetry_path.attempts", "declared telemetry attempts must match selected_ladder exactly")
+        called_aliases = [
+            attempt.get("alias")
+            for attempt in telemetry_attempts
+            if isinstance(attempt, dict) and attempt.get("called") is True and isinstance(attempt.get("alias"), str)
+        ]
+        if called_aliases and selected_ladder and called_aliases != selected_ladder[: len(called_aliases)]:
+            defect(defects, f"{item_path}.telemetry_path.attempts", "called worker attempts must be a prefix of selected_ladder")
+        if artifact.get("status") == "pass" and telemetry.get("accepted_alias") not in selected_ladder:
+            defect(defects, f"{item_path}.telemetry_path.accepted_alias", "must identify the accepted worker route when worker status is pass")
 
 
 def manifest_branch_entry(defects: list[str], manifest: object, branch_id: str) -> dict:
@@ -527,13 +555,29 @@ def validate_review_artifact_for_branch(
         if require_existing:
             defect(defects, "$.review_status", f"review artifact does not exist: {review_artifact}")
         return
+    review_data = load_json_artifact(defects, review_artifact, "$.review_status")
     validate_review_artifact(
         defects,
-        load_json_artifact(defects, review_artifact, "$.review_status"),
+        review_data,
         str(review_status),
         "$.review_status",
         manifest=manifest,
         branch_id=str(branch_entry.get("id", "")) or None,
+    )
+    packet_id = review_data.get("packet_id") if isinstance(review_data, dict) else None
+    review_packet_dir = (
+        manifest_path.parent / "reviewers" / packet_id
+        if isinstance(packet_id, str) and packet_id.strip()
+        else review_artifact.parent
+    )
+    validate_telemetry_artifact(
+        defects,
+        review_packet_dir / "telemetry.json",
+        "$.review_status.telemetry_path",
+        packet_id=packet_id if isinstance(packet_id, str) else None,
+        role="reviewer",
+        allowed_aliases=("gpt-5.5", "gpt-5.4"),
+        require_called=True,
     )
 
 

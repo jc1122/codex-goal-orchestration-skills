@@ -9,6 +9,7 @@ plans/orchestration/<job-id>/
   goal-bootloader.md
   preflight.lint.json
   PREFLIGHT_REPORT.md
+  telemetry.summary.json        # runtime-created before final pass
   branches/
     B01.prompt.md
   workers/
@@ -106,6 +107,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - Branch manifest `depends_on` entries reference only prior branch ids; a branch is deferred only while one of those explicit dependencies is incomplete.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
+- `main.prompt.md` requires `summarize_telemetry.py --bundle-dir <bundle>` before final validation and requires `telemetry.summary.json` for pass.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
 - `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.
@@ -114,6 +116,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
 - Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
+- Branch prompts require worker, reviewer, and Lite packet `telemetry.json` artifacts for pass.
 - Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/reviewer launchers are active.
 - Branch prompts define Worker Model Routing and require `selected_ladder` plus `selection_reason` in every worker status and branch rollup.
 - Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids.

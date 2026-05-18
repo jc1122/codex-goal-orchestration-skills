@@ -34,7 +34,7 @@ Worker parallelization rationale: {worker_parallelization_rationale}
 
 Use `render_worker_schedule.py --list-ready` with the current completed and active worker packet ids before initial launch and after every worker completion.
 
-Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json`.
+Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json` plus same-packet `telemetry.json`.
 
 After worker dispatch, wait for the next active worker launcher to exit; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status. After integrating an exited worker, refill capacity from eligible work items rather than waiting for all currently active workers to finish.
 
@@ -46,11 +46,11 @@ Allowed worker route aliases: {allowed_worker_routes}
 
 Selected worker ladders may be chosen by the branch orchestrator per worker packet when task hardness, context size, quota pressure, or provider availability justify it. A selected ladder must be a non-empty ordered subsequence of the default worker ladder; do not reorder providers, invent model aliases, change model ids, or use reviewer/auditor models for worker packets. Prefer Spark immediately after Gemini Pro and Gemini Flash; Copilot `gpt-5.4` comes only after Spark in the standard ladder.
 
-When creating a worker packet with a non-default route, pass repeated `--worker-route <alias>` values and a non-empty `--selection-reason`. Every worker status and branch rollup must record `selected_ladder` and `selection_reason`, and the final validator must reject route drift from the packet's manifest-owned `route.json`.
+When creating a worker packet with a non-default route, pass repeated `--worker-route <alias>` values and a non-empty `--selection-reason`. Every worker status and branch rollup must record `selected_ladder` and `selection_reason`, and the final validator must reject route drift from the packet's manifest-owned `route.json` and `telemetry.json`.
 
 ## Lite Advisors
 
-Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Branch Lite packet ids must be scoped as `<branch-id>-L<suffix>`. Record `lite_advice: []` only when no relevant branch Lite packet exists; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, exact validation command, validation status, validation defects, and reason.
+Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Branch Lite packet ids must be scoped as `<branch-id>-L<suffix>`. Record `lite_advice: []` only when no relevant branch Lite packet exists; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, exact validation command, validation status, validation defects, telemetry, and reason.
 
 ## Tests And Validators
 
@@ -58,7 +58,7 @@ Optional Lite advisors are context routers only. After required start checks pas
 
 ## Reviewer Requirement
 
-Dispatch a read-only heavy-model reviewer after worker integration. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact exists, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
+Dispatch a read-only heavy-model reviewer after worker integration. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact and same-packet `telemetry.json` exist, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
 
 After reviewer dispatch, wait for the reviewer launcher; do not poll active reviewer event logs, process tables, or review files unless the user explicitly enters debug mode or the launcher exits without a valid review.
 
@@ -74,6 +74,7 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
 - 1 to 4 worker packets were used for this branch.
+- Worker, reviewer, and any Lite packets wrote same-packet `telemetry.json`.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.

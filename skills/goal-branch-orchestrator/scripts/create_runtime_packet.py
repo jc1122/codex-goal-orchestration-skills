@@ -52,6 +52,13 @@ WORKER_ROUTE_COMMANDS = {
     "copilot-gpt-5.4": f"gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
     "codex-mini": f"codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
 }
+WORKER_ROUTE_EVENT_LABELS = {
+    "gemini-pro": "gemini-pro",
+    "gemini-flash": "gemini-flash",
+    "codex-spark": "spark",
+    "copilot-gpt-5.4": "copilot",
+    "codex-mini": "mini",
+}
 
 
 def _load_path_rules():
@@ -130,6 +137,108 @@ def worker_route_commands(selected_ladder: list[str]) -> list[str]:
             commands.append(f"gh copilot -- --model {COPILOT_PROBE_MODEL} --effort {COPILOT_PROBE_REASONING_EFFORT}")
         commands.append(WORKER_ROUTE_COMMANDS[alias])
     return commands
+
+
+def telemetry_attempt_args(attempts: list[dict]) -> str:
+    lines = []
+    for item in attempts:
+        lines.append("    --attempt-json " + shell_quote(json.dumps(item, separators=(",", ":"))) + " \\")
+    if lines:
+        lines[-1] = lines[-1].removesuffix(" \\")
+    return "\n".join(lines)
+
+
+def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
+    attempts = []
+    for alias in selected_ladder:
+        label = WORKER_ROUTE_EVENT_LABELS[alias]
+        if alias == "gemini-pro":
+            attempts.append(
+                {
+                    "alias": alias,
+                    "provider": "gemini",
+                    "model": GEMINI_PRO_MODEL,
+                    "effort": "",
+                    "command": WORKER_ROUTE_COMMANDS[alias],
+                    "event_logs": [f"events-{label}.log"],
+                    "probe_logs": [f"events-{label}-probe.log"],
+                }
+            )
+        elif alias == "gemini-flash":
+            attempts.append(
+                {
+                    "alias": alias,
+                    "provider": "gemini",
+                    "model": GEMINI_FLASH_MODEL,
+                    "effort": "",
+                    "command": WORKER_ROUTE_COMMANDS[alias],
+                    "event_logs": [f"events-{label}.log"],
+                    "probe_logs": [f"events-{label}-probe.log"],
+                }
+            )
+        elif alias == "copilot-gpt-5.4":
+            attempts.append(
+                {
+                    "alias": alias,
+                    "provider": "copilot",
+                    "model": COPILOT_MODEL,
+                    "effort": COPILOT_REASONING_EFFORT,
+                    "command": WORKER_ROUTE_COMMANDS[alias],
+                    "event_logs": [f"events-{label}.jsonl"],
+                    "probe_logs": [f"events-{label}-probe.jsonl", f"events-{label}-version.log"],
+                }
+            )
+        else:
+            model = SPARK_MODEL if alias == "codex-spark" else MINI_MODEL
+            attempts.append(
+                {
+                    "alias": alias,
+                    "provider": "codex",
+                    "model": model,
+                    "effort": "",
+                    "command": WORKER_ROUTE_COMMANDS[alias],
+                    "event_logs": [f"events-{label}.jsonl"],
+                    "probe_logs": [],
+                }
+            )
+    return attempts
+
+
+def reviewer_telemetry_attempts() -> list[dict]:
+    return [
+        {
+            "alias": "gpt-5.5",
+            "provider": "codex",
+            "model": REVIEWER_MODEL,
+            "effort": "",
+            "command": f"codex exec --ephemeral -m {REVIEWER_MODEL} -s read-only",
+            "event_logs": ["events-primary.jsonl"],
+            "probe_logs": [],
+        },
+        {
+            "alias": "gpt-5.4",
+            "provider": "codex",
+            "model": REVIEWER_FALLBACK_MODEL,
+            "effort": "",
+            "command": f"codex exec --ephemeral -m {REVIEWER_FALLBACK_MODEL} -s read-only",
+            "event_logs": ["events-fallback.jsonl"],
+            "probe_logs": [],
+        },
+    ]
+
+
+def telemetry_function(role: str, packet_id: str, output_name: str, attempts: list[dict]) -> str:
+    script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
+    return f"""write_telemetry() {{
+  python3 {shell_quote(script)} \\
+    --packet-dir "$packet_dir" \\
+    --packet-id {shell_quote(packet_id)} \\
+    --role {shell_quote(role)} \\
+    --output-name {shell_quote(output_name)} \\
+    --prompt-name prompt.md \\
+{telemetry_attempt_args(attempts)}
+}}
+"""
 
 
 def exact_string_schema(value: str) -> dict:
@@ -372,6 +481,7 @@ def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
         lines.extend(
             [
                 f"if {run_commands[alias]}; then",
+                "  write_telemetry",
                 "  exit 0",
                 "fi",
                 "",
@@ -388,12 +498,14 @@ def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
         lines.extend(
             [
                 "if [ -s \"$output_path\" ]; then",
+                "  write_telemetry",
                 "  exit 1",
                 "fi",
                 "",
                 "if worktree_dirty; then",
                 f"  echo {shell_quote(label + ' failed after leaving dirty worktree; no fallback remains.')} > \"$packet_dir/fallback.blocked.txt\"",
                 f"  write_terminal_status blocked {shell_quote(label + ' failed after leaving dirty worktree; no fallback remains.')}",
+                "  write_telemetry",
                 "  exit 2",
                 "fi",
                 "",
@@ -402,6 +514,7 @@ def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
     lines.extend(
         [
             f"write_terminal_status blocked {shell_quote(f'All selected worker route attempts failed cleanly without producing {output_name}.')}",
+            "write_telemetry",
             "exit 1",
         ]
     )
@@ -420,6 +533,7 @@ def launch_for(
 ) -> str:
     sandbox = "read-only" if role == "reviewer" else "workspace-write"
     if role == "reviewer":
+        reviewer_telemetry = telemetry_function("reviewer", packet_id, output_name, reviewer_telemetry_attempts())
         return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -429,7 +543,7 @@ git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
 
 packet_dir="$(pwd)"
 output_path="$packet_dir/{output_name}"
-rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl"
+rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl" "$packet_dir/telemetry.json"
 
 write_terminal_review() {{
   local message="$1"
@@ -458,6 +572,8 @@ output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
 PY
 }}
 
+{reviewer_telemetry}
+
 run_model() {{
   local label="$1"
   local model="$2"
@@ -473,28 +589,34 @@ run_model() {{
 }}
 
 if run_model primary {shell_quote(REVIEWER_MODEL)}; then
+  write_telemetry
   exit 0
 fi
 
 if [ -s "$(pwd)/{output_name}" ]; then
+  write_telemetry
   exit 1
 fi
 
 if run_model fallback {shell_quote(REVIEWER_FALLBACK_MODEL)}; then
+  write_telemetry
   exit 0
 fi
 
 if [ -s "$output_path" ]; then
+  write_telemetry
   exit 1
 fi
 
 write_terminal_review "Reviewer primary and fallback failed without producing {output_name}."
+write_telemetry
 exit 1
 """
 
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
     selected_commands = worker_route_commands(selected_ladder)
     attempts = worker_attempt_script(selected_ladder, output_name)
+    worker_telemetry = telemetry_function("worker", packet_id, output_name, worker_telemetry_attempts(selected_ladder))
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -520,7 +642,7 @@ copilot_probe_model={shell_quote(COPILOT_PROBE_MODEL)}
 copilot_probe_reasoning_effort={shell_quote(COPILOT_PROBE_REASONING_EFFORT)}
 copilot_probe_timeout_seconds={COPILOT_PROBE_TIMEOUT_SECONDS}
 copilot_probe_prompt={shell_quote(COPILOT_PROBE_PROMPT)}
-rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt
+rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt "$packet_dir/telemetry.json"
 
 worktree_dirty() {{
   [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]
@@ -529,11 +651,13 @@ worktree_dirty() {{
 guard_clean_for_fallback() {{
   local label="$1"
   if [ -s "$output_path" ]; then
+    write_telemetry
     exit 1
   fi
   if worktree_dirty; then
     echo "$label failed after leaving dirty worktree; refusing fallback in same worktree." > "$packet_dir/fallback.blocked.txt"
     write_terminal_status blocked "$label failed after leaving dirty worktree; refusing fallback in same worktree."
+    write_telemetry
     exit 2
   fi
 }}
@@ -586,6 +710,8 @@ data = {{
 output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
 PY
 }}
+
+{worker_telemetry}
 
 extract_status_json() {{
   local raw_path="$1"

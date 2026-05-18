@@ -127,6 +127,43 @@ def advice_command(gemini_path: str) -> str:
     return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
 
 
+def lite_telemetry_attempts(gemini_path: str) -> list[dict]:
+    return [
+        {
+            "alias": "gemini-lite",
+            "provider": "gemini",
+            "model": LITE_MODEL,
+            "effort": "",
+            "command": advice_command(gemini_path),
+            "event_logs": ["advice.raw.txt"],
+            "probe_logs": [],
+        }
+    ]
+
+
+def telemetry_attempt_args(attempts: list[dict]) -> str:
+    lines = []
+    for item in attempts:
+        lines.append("    --attempt-json " + shell_quote(json.dumps(item, separators=(",", ":"))) + " \\")
+    if lines:
+        lines[-1] = lines[-1].removesuffix(" \\")
+    return "\n".join(lines)
+
+
+def telemetry_function(packet_id: str, gemini_path: str) -> str:
+    script = (current_script_dir() / "extract_telemetry.py").as_posix()
+    return f"""write_telemetry() {{
+  python3 {shell_quote(script)} \\
+    --packet-dir "$packet_dir" \\
+    --packet-id {shell_quote(packet_id)} \\
+    --role lite_advisor \\
+    --output-name advice.json \\
+    --prompt-name prompt.md \\
+{telemetry_attempt_args(lite_telemetry_attempts(gemini_path))}
+}}
+"""
+
+
 def prompt_for(
     packet_id: str,
     purpose: str,
@@ -197,7 +234,8 @@ Return exactly one JSON object between these marker lines. Do not print any othe
 """
 
 
-def launch_for(packet_id: str, purpose: str, base_dir: Path) -> str:
+def launch_for(packet_id: str, purpose: str, base_dir: Path, gemini_path: str) -> str:
+    telemetry = telemetry_function(packet_id, gemini_path)
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -221,7 +259,7 @@ PY
 lite_model={shell_quote(LITE_MODEL)}
 approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
 base_dir={shell_quote(base_dir.as_posix())}
-rm -f "$output_path" "$raw_path"
+rm -f "$output_path" "$raw_path" "$packet_dir/telemetry.json"
 
 write_terminal_advice() {{
   local status="$1"
@@ -257,6 +295,8 @@ data = {{
 output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
 PY
 }}
+
+{telemetry}
 
 validate_advice() {{
   python3 {shell_quote((current_script_dir() / "validate_lite_advice.py").as_posix())} \\
@@ -450,26 +490,31 @@ PY
 
 if [[ -z "$gemini_command" || ! -x "$gemini_command" ]]; then
   write_terminal_advice blocked "Gemini CLI command unavailable at packet creation path: $gemini_command"
+  write_telemetry
   exit 0
 fi
 
 if ! verify_inputs_current; then
   write_terminal_advice blocked "Lite advisor input files changed or became unavailable after packet creation."
+  write_telemetry
   exit 0
 fi
 
 if ! verify_prompt_current; then
   write_terminal_advice blocked "Lite advisor prompt.md changed or became unavailable after packet creation."
+  write_telemetry
   exit 0
 fi
 
 if ! verify_task_current; then
   write_terminal_advice blocked "Lite advisor task.md changed or became unavailable after packet creation."
+  write_telemetry
   exit 0
 fi
 
 if ! verify_gemini_binary; then
   write_terminal_advice blocked "Gemini CLI binary or version changed or could not be verified after packet creation."
+  write_telemetry
   exit 0
 fi
 
@@ -483,14 +528,19 @@ fi
     -p "$(cat "$prompt_path")"
 ) > "$raw_path" 2>&1 || {{
   write_terminal_advice blocked "Lite advisor command failed. Inspect advice.raw.txt for CLI, quota, auth, or model errors."
+  write_telemetry
   exit 0
 }}
 
-if extract_advice_json && validate_advice; then
-  exit 0
+if extract_advice_json; then
+  write_telemetry
+  if validate_advice; then
+    exit 0
+  fi
 fi
 
 write_terminal_advice blocked "Lite advisor did not produce valid advice JSON."
+write_telemetry
 exit 0
 """
 
@@ -570,7 +620,7 @@ def main() -> int:
     )
     (packet_dir / "task.md").write_text(extra, encoding="utf-8")
     launch_path = packet_dir / "launch.sh"
-    launch_path.write_text(launch_for(packet_id, args.purpose, base_dir), encoding="utf-8")
+    launch_path.write_text(launch_for(packet_id, args.purpose, base_dir, gemini_path), encoding="utf-8")
     os.chmod(launch_path, 0o755)
     print(packet_dir)
     return 0

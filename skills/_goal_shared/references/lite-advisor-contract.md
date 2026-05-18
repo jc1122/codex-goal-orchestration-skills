@@ -1,6 +1,6 @@
 # Lite Advisor Contract
 
-Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, absolute Gemini binary path, Gemini version, Gemini binary sha256 captured at packet creation, immutable input/prompt/task hashes, regenerated prompt consistency checks, fail-closed validation, manifest-owned artifact paths, unrecorded-packet discovery, and auditable status records.
+Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file plus one telemetry file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, absolute Gemini binary path, Gemini version, Gemini binary sha256 captured at packet creation, immutable input/prompt/task hashes, regenerated prompt consistency checks, fail-closed validation, manifest-owned artifact paths, unrecorded-packet discovery, packet-local telemetry, and auditable status records.
 
 Use Lite as a context router:
 
@@ -47,7 +47,7 @@ Generated launchers capture the absolute Gemini CLI path, Gemini version, Gemini
   -p "$(cat prompt.md)"
 ```
 
-The launcher rehashes every input, rehashes `task.md`, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
+The launcher rehashes every input, rehashes `task.md`, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. It writes `telemetry.json` next to `advice.json` on every terminal path. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, verifies packet telemetry, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
 
 ## Output
 
@@ -66,6 +66,8 @@ Lite advice must include:
 - `commands_run`
 
 For all non-`preflight-decomposition` purposes, `recommended_reads` may only cite explicit Lite input files. `preflight-decomposition` may suggest additional follow-up paths, but the parent agent must open and verify originals before acting.
+
+`telemetry.json` must include `packet_id`, `role: "lite_advisor"`, the fixed `gemini-lite` attempt with provider/model id, `called`/`accepted` booleans, prompt/output/log character and byte counts, and any token counts that the Gemini CLI exposes in logs. Character and byte counts are the deterministic spending proxy when token counts are unavailable.
 
 Validate advice explicitly before using it:
 
