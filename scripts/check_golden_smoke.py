@@ -8,6 +8,9 @@ import shlex
 import subprocess
 import sys
 import tempfile
+import hashlib
+import os
+import shutil
 from pathlib import Path
 
 
@@ -69,6 +72,68 @@ def read_json(path: Path) -> dict:
     return data
 
 
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    digest.update(path.read_bytes())
+    return "sha256:" + digest.hexdigest()
+
+
+def write_scheduler_ledgers(bundle: Path) -> None:
+    manifest_sha = sha256_file(bundle / "job.manifest.json")
+    write_json(
+        bundle / "schedulers" / "B01.worker.scheduler.json",
+        {
+            "schema_version": 1,
+            "scheduler_kind": "branch-worker-pool",
+            "scheduler_path": "schedulers/B01.worker.scheduler.json",
+            "manifest_sha256": manifest_sha,
+            "capacity": 4,
+            "item_ids": [WORKER_PACKET, RESEARCH_PACKET],
+            "events": [
+                {"event": "ready", "id": WORKER_PACKET},
+                {"event": "ready", "id": RESEARCH_PACKET},
+                {"event": "launch", "id": WORKER_PACKET},
+                {"event": "launch", "id": RESEARCH_PACKET},
+                {"event": "finish", "id": WORKER_PACKET, "status": "pass"},
+                {"event": "close", "id": WORKER_PACKET},
+                {"event": "finish", "id": RESEARCH_PACKET, "status": "pass"},
+                {"event": "close", "id": RESEARCH_PACKET},
+            ],
+        },
+    )
+    write_json(
+        bundle / "schedulers" / "main.scheduler.json",
+        {
+            "schema_version": 1,
+            "scheduler_kind": "main-branch-pool",
+            "scheduler_path": "schedulers/main.scheduler.json",
+            "manifest_sha256": manifest_sha,
+            "capacity": 1,
+            "item_ids": [BRANCH_ID],
+            "events": [
+                {"event": "ready", "id": BRANCH_ID},
+                {"event": "launch", "id": BRANCH_ID},
+                {"event": "finish", "id": BRANCH_ID, "status": "pass"},
+                {"event": "close", "id": BRANCH_ID},
+            ],
+        },
+    )
+
+
+def review_input_hashes(bundle: Path) -> dict[str, str]:
+    rel_paths = [
+        "job.manifest.json",
+        "branches/B01.prompt.md",
+        "schedulers/B01.worker.scheduler.json",
+        f"workers/{WORKER_PACKET}/status.json",
+        f"workers/{WORKER_PACKET}/route.json",
+        f"workers/{WORKER_PACKET}/telemetry.json",
+        f"research/{RESEARCH_PACKET}/research.json",
+        f"research/{RESEARCH_PACKET}/telemetry.json",
+    ]
+    return {rel_path: sha256_file(bundle / rel_path) for rel_path in rel_paths}
+
+
 def telemetry(packet_id: str, role: str, output_name: str, *, accepted_alias: str | None, attempts: list[dict]) -> dict:
     called_count = sum(1 for item in attempts if item.get("called") is True)
     return {
@@ -126,7 +191,7 @@ def golden_brief() -> dict:
         "job_id": JOB_ID,
         "base_ref": "main",
         "max_active_branch_agents": 1,
-        "serial_reason": "Single-branch golden smoke keeps the offline gate small.",
+        "serial_reasons": ["Single-branch golden smoke keeps the offline gate small."],
         "branches": [
             {
                 "id": BRANCH_ID,
@@ -149,7 +214,7 @@ def golden_brief() -> dict:
                         "id": "W02",
                         "worker_type": "research-worker",
                         "objective": "Static research-worker artifact for the golden offline smoke.",
-                        "owned_paths": ["README.md"],
+                        "owned_paths": ["research/golden-smoke.md"],
                         "context_files": ["README.md"],
                         "verification": ["git diff --check main...HEAD"],
                         "dod": ["research worker artifact validates with read-only evidence and timeout telemetry"],
@@ -392,7 +457,43 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
     return worker, research
 
 
-def write_review(bundle: Path) -> None:
+def write_pre_review_gate(bundle: Path, input_hashes: dict[str, str]) -> None:
+    write_json(
+        bundle / "branches" / "B01.pre_review_gate.json",
+        {
+            "schema_version": 1,
+            "branch_id": BRANCH_ID,
+            "status": "pass",
+            "review_packet_id": REVIEW_PACKET,
+            "commands_run": ["git diff --check main...HEAD"],
+            "checks": {
+                "manifest_validation": {"status": "pass", "command": "python3 lint_goal_bundle.py --bundle-dir <bundle> --no-write"},
+                "status_validation": {"status": "pass", "command": "python3 validate_branch_status.py --manifest <manifest> --status <pre-review-status>"},
+                "tests": {"status": "pass", "commands": ["bash -n generated launchers", "installed validators passed"]},
+                "diff_check": {"status": "pass", "command": "git diff --check main...HEAD"},
+                "artifacts_fresh": {"status": "pass", "artifacts": sorted(input_hashes)},
+                "ownership": {"status": "pass", "changed_files": []},
+                "dod_evidence": {
+                    "status": "pass",
+                    "items": [
+                        "normal worker artifact validates",
+                        "research-worker artifact validates",
+                        "scheduler ledger validates",
+                    ],
+                },
+            },
+            "input_hashes": input_hashes,
+            "reuse_policy": {
+                "mode": "new",
+                "accepted": False,
+                "input_hashes_match": False,
+                "source_review_path": None,
+            },
+        },
+    )
+
+
+def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
     review = {
         "packet_id": REVIEW_PACKET,
         "role": "reviewer",
@@ -401,6 +502,13 @@ def write_review(bundle: Path) -> None:
         "commands_run": ["git diff --check main...HEAD"],
         "verification_gaps": [],
         "residual_risks": ["Synthetic smoke does not exercise live model CLIs."],
+        "input_hashes": input_hashes,
+        "reuse_policy": {
+            "mode": "new",
+            "accepted": False,
+            "input_hashes_match": False,
+            "source_review_path": None,
+        },
         "summary": "Synthetic reviewer pass for golden offline smoke.",
     }
     write_json(bundle / "branches" / "B01.review.json", review)
@@ -454,12 +562,19 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
             "worktree": REPO_ROOT.as_posix(),
             "worker_statuses": [worker_rollup, research_rollup],
             "worker_parallelism": {
+                "scheduler_path": "schedulers/B01.worker.scheduler.json",
                 "max_worker_packets_per_branch": 4,
                 "max_active_worker_packets": 4,
                 "max_observed_active_worker_packets": 2,
+                "max_observed_active": 2,
                 "concurrent_launch_default": True,
                 "rolling_refill_default": True,
                 "scheduling_mode": "rolling",
+                "launched_ids": [WORKER_PACKET, RESEARCH_PACKET],
+                "finished_ids": [WORKER_PACKET, RESEARCH_PACKET],
+                "active_ids": [],
+                "blocked_ids": [],
+                "deferred_ids": [],
                 "serialized_workers": [],
                 "deferred_workers": [],
                 "serial_reasons": [],
@@ -486,6 +601,15 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
             "job_id": JOB_ID,
             "status": "pass",
             "audit_status": "pass",
+            "branch_parallelism": {
+                "scheduler_path": "schedulers/main.scheduler.json",
+                "launched_ids": [BRANCH_ID],
+                "finished_ids": [BRANCH_ID],
+                "active_ids": [],
+                "blocked_ids": [],
+                "deferred_ids": [],
+                "max_observed_active": 1,
+            },
             "branch_statuses": [
                 {
                     "branch_id": BRANCH_ID,
@@ -615,28 +739,6 @@ def main() -> int:
         run(
             [
                 "python3",
-                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
-                "--role",
-                "reviewer",
-                "--packet-id",
-                REVIEW_PACKET,
-                "--branch",
-                BRANCH_NAME,
-                "--worktree",
-                REPO_ROOT.as_posix(),
-                "--out-dir",
-                (bundle / "reviewers").as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ]
-        )
-        assert_shell_syntax(bundle / "reviewers" / REVIEW_PACKET / "launch.sh")
-
-        run(
-            [
-                "python3",
                 skill_script("goal-branch-orchestrator", "create_lite_advice_packet.py"),
                 "--packet-id",
                 LITE_PACKET,
@@ -657,7 +759,37 @@ def main() -> int:
         lite_record = write_lite_advice(bundle / "lite" / LITE_PACKET)
         write_audit(bundle)
         worker, research = write_worker_artifacts(bundle)
-        write_review(bundle)
+        write_scheduler_ledgers(bundle)
+        input_hashes = review_input_hashes(bundle)
+        write_pre_review_gate(bundle, input_hashes)
+        run(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
+                "--role",
+                "reviewer",
+                "--packet-id",
+                REVIEW_PACKET,
+                "--branch",
+                BRANCH_NAME,
+                "--worktree",
+                REPO_ROOT.as_posix(),
+                "--out-dir",
+                (bundle / "reviewers").as_posix(),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--pre-review-gate",
+                (bundle / "branches" / "B01.pre_review_gate.json").as_posix(),
+                "--context-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--context-file",
+                (bundle / "branches" / "B01.pre_review_gate.json").as_posix(),
+                "--task-file",
+                task_file.as_posix(),
+            ]
+        )
+        assert_shell_syntax(bundle / "reviewers" / REVIEW_PACKET / "launch.sh")
+        write_review(bundle, input_hashes)
         write_branch_and_main_status(bundle, worker, research, lite_record)
 
         run(
@@ -699,6 +831,53 @@ def main() -> int:
                 "--json",
             ]
         )
+
+        mismatch_bundle = tmp_path / "reviewer-hash-mismatch"
+        shutil.copytree(bundle, mismatch_bundle)
+        mismatch_review = read_json(mismatch_bundle / "branches" / "B01.review.json")
+        mismatch_review["input_hashes"]["branches/B01.prompt.md"] = "sha256:" + "1" * 64
+        write_json(mismatch_bundle / "branches" / "B01.review.json", mismatch_review)
+        write_json(mismatch_bundle / "reviewers" / REVIEW_PACKET / "review.json", mismatch_review)
+        mismatch_result = run(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "validate_branch_status.py"),
+                "--manifest",
+                (mismatch_bundle / "job.manifest.json").as_posix(),
+                "--status",
+                (mismatch_bundle / "branches" / "B01.status.json").as_posix(),
+                "--branch-id",
+                BRANCH_ID,
+                "--branch",
+                BRANCH_NAME,
+                "--worktree",
+                REPO_ROOT.as_posix(),
+                "--json",
+            ],
+            expect=1,
+        )
+        if "input_hashes" not in mismatch_result.stdout:
+            raise SystemExit("reviewer reuse/hash mismatch fixture did not fail on input_hashes")
+
+        stale_bundle = tmp_path / "stale-telemetry-summary"
+        shutil.copytree(bundle, stale_bundle)
+        os.utime(stale_bundle / "workers" / WORKER_PACKET / "telemetry.json", None)
+        stale_result = run(
+            [
+                "python3",
+                skill_script("goal-main-orchestrator", "validate_main_status.py"),
+                "--manifest",
+                (stale_bundle / "job.manifest.json").as_posix(),
+                "--status",
+                (stale_bundle / "main.status.json").as_posix(),
+                "--job-id",
+                JOB_ID,
+                "--json",
+            ],
+            expect=1,
+        )
+        if "stale" not in stale_result.stdout:
+            raise SystemExit("stale telemetry fixture did not fail on stale summary evidence")
 
     print("status=pass")
     return 0

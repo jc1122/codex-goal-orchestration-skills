@@ -22,7 +22,20 @@ def _load_contract():
     return module
 
 
+def _load_status_validation():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "status_validation.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared status validation helpers: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_status_validation", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared status validation helpers: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 CONTRACT = _load_contract()
+STATUS_VALIDATION = _load_status_validation()
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
 GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
@@ -322,6 +335,12 @@ def review_schema(packet_id: str) -> dict:
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "verification_gaps": {"type": "array", "items": nonempty_string},
             "residual_risks": {"type": "array", "items": nonempty_string},
+            "input_hashes": {
+                "type": "object",
+            },
+            "reuse_policy": {
+                "type": "object",
+            },
             "summary": nonempty_string,
         },
     }
@@ -441,6 +460,8 @@ git diff --check HEAD
 ```
 
 Review the branch against its prompt, worker status files, diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible.
+
+The branch orchestrator must have supplied a passing `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `input_hashes` exactly into the final review JSON, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every recorded input hash matches exactly; otherwise produce a fresh review.
 
 Determine the branch base ref from the branch prompt or manifest context. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
@@ -1272,6 +1293,8 @@ def main() -> int:
     parser.add_argument("--branch", required=True)
     parser.add_argument("--worktree", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--manifest", help="Required for reviewer packets; absolute path to job.manifest.json.")
+    parser.add_argument("--pre-review-gate", help="Required for reviewer packets; absolute path to pre_review_gate.json.")
     parser.add_argument("--task-file")
     parser.add_argument("--owned-file", action="append", default=[])
     parser.add_argument("--context-file", action="append", default=[])
@@ -1298,6 +1321,25 @@ def main() -> int:
     )
     if args.role in {"research-worker", "reviewer"} and (args.worker_route or args.selection_reason):
         raise SystemExit("research-worker and reviewer packets must not set worker route options")
+    if args.role == "reviewer":
+        if not args.manifest:
+            raise SystemExit("reviewer packets require --manifest")
+        if not args.pre_review_gate:
+            raise SystemExit("reviewer packets require --pre-review-gate")
+        manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+        gate_path = resolve_absolute_path(args.pre_review_gate, "--pre-review-gate", must_exist=True)
+        branch_id = packet_id.split("-R", 1)[0] if "-R" in packet_id else ""
+        defects: list[str] = []
+        STATUS_VALIDATION.validate_pre_review_gate_artifact(
+            defects,
+            gate_path,
+            "pre_review_gate",
+            manifest_path=manifest_path,
+            branch_id=branch_id,
+            review_packet_id=packet_id,
+        )
+        if defects:
+            raise SystemExit("pre-review gate failed; refusing reviewer packet generation:\n" + "\n".join(defects))
     selected_ladder: list[str] | None = None
     selection_reason = ""
     if args.role == "worker":

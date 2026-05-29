@@ -81,6 +81,16 @@ def nonempty_text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
+def normalize_reason_list(value: object, fallback: str = "") -> list[str]:
+    if isinstance(value, list):
+        return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    if fallback:
+        return [fallback]
+    return []
+
+
 def require_string_list(value: object, field: str, *, min_items: int = 0) -> list[str]:
     if not isinstance(value, list):
         raise SystemExit(f"{field} must be a list")
@@ -258,7 +268,7 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
     }
     seen_paths: dict[str, str] = {}
     for branch in branches:
-        for field in ["prompt", "status_path", "review_path"]:
+        for field in ["prompt", "status_path", "review_path", "pre_review_gate_path"]:
             value = branch[field]
             label = f"branch {branch['id']} {field}"
             if value in reserved_bundle_paths:
@@ -279,6 +289,7 @@ def normalize_brief(brief: dict) -> dict:
     base_ref = require_branch_name(str(brief.get("base_ref", "main")), "base_ref")
     max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
     serial_reason = nonempty_text(brief.get("serial_reason"))
+    serial_reasons = normalize_reason_list(brief.get("serial_reasons"), serial_reason)
     parallelization_rationale = nonempty_text(brief.get("parallelization_rationale"))
     branches = []
     for idx, original in enumerate(brief["branches"], start=1):
@@ -288,6 +299,7 @@ def normalize_brief(brief: dict) -> dict:
         worktree_path = require_relative_path(original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path")
         max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
         worker_serial_reason = nonempty_text(original.get("worker_serial_reason"))
+        worker_serial_reasons = normalize_reason_list(original.get("worker_serial_reasons"), worker_serial_reason)
         worker_parallelization_rationale = nonempty_text(original.get("worker_parallelization_rationale"))
         work_items = normalize_work_items(original.get("work_items", []), bid)
         branch = {
@@ -299,13 +311,15 @@ def normalize_brief(brief: dict) -> dict:
             "prompt": require_relative_path(original.get("prompt") or f"branches/{bid}.prompt.md", "prompt"),
             "status_path": require_relative_path(original.get("status_path") or f"branches/{bid}.status.json", "status_path"),
             "review_path": require_relative_path(original.get("review_path") or f"branches/{bid}.review.json", "review_path"),
+            "pre_review_gate_path": require_relative_path(original.get("pre_review_gate_path") or CONTRACT.pre_review_gate_path(bid), "pre_review_gate_path"),
             "max_active_worker_packets": max_workers,
             "worker_parallelism": {
                 "parallelism_default": True,
                 "scheduling_mode": "rolling",
+                "scheduler_path": CONTRACT.worker_scheduler_path(bid),
                 "max_active_worker_packets": max_workers,
                 "max_worker_packets_per_branch": MAX_WORKER_PACKETS_PER_BRANCH,
-                "serial_reason": worker_serial_reason,
+                "serial_reasons": worker_serial_reasons,
                 "parallelization_rationale": worker_parallelization_rationale
                 or f"Launch independent worker packets as a rolling saturated pool up to {max_workers} active worker packets.",
                 "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
@@ -319,10 +333,10 @@ def normalize_brief(brief: dict) -> dict:
 
     if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
         raise SystemExit(f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}")
-    if len(branches) == 1 and not serial_reason:
-        raise SystemExit("single-branch bundles are serialized and require brief.serial_reason")
-    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not (serial_reason or parallelization_rationale):
-        raise SystemExit("max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
+    if len(branches) == 1 and not serial_reasons:
+        raise SystemExit("single-branch bundles are serialized and require brief.serial_reasons or brief.serial_reason")
+    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not (serial_reasons or parallelization_rationale):
+        raise SystemExit("max_active_branch_agents below 4 requires serial_reasons, serial_reason, or parallelization_rationale")
     preflight_lite_advice = brief.get("preflight_lite_advice", [])
     if not isinstance(preflight_lite_advice, list):
         raise SystemExit("preflight_lite_advice must be an array when supplied")
@@ -373,7 +387,8 @@ def normalize_brief(brief: dict) -> dict:
             "max_branches_per_wave": MAX_ACTIVE_BRANCH_AGENTS,
             "max_waves": MAX_WAVES,
             "scheduling_mode": "rolling",
-            "serial_reason": serial_reason,
+            "scheduler_path": CONTRACT.MAIN_SCHEDULER_PATH,
+            "serial_reasons": serial_reasons,
             "parallelization_rationale": parallelization_rationale
             or f"Keep up to {max_active} branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
             "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
@@ -410,7 +425,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite"]:
+    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers"]:
         (bundle_dir / dirname).mkdir(exist_ok=True)
 
     manifest = {
@@ -433,6 +448,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 "worktree_path": branch["worktree_path"],
                 "status_path": branch["status_path"],
                 "review_path": branch["review_path"],
+                "pre_review_gate_path": branch["pre_review_gate_path"],
                 "depends_on": branch["depends_on"],
                 "work_items": branch["work_items"],
                 "max_active_worker_packets": branch["max_active_worker_packets"],
@@ -456,6 +472,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             branch_waves=render_branch_waves(brief["waves"]),
             branch_dependencies=render_branch_dependencies(brief["branches"]),
             max_active_branch_agents=brief["max_active_branch_agents"],
+            main_scheduler_path=CONTRACT.MAIN_SCHEDULER_PATH,
             parallelization_rationale=brief["parallelization"]["parallelization_rationale"],
             merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
             cleanup_policy=brief["cleanup_policy"],
@@ -478,6 +495,8 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 wave=branch["wave"],
                 depends_on=bullets(branch.get("depends_on", [])),
                 max_active_worker_packets=branch["max_active_worker_packets"],
+                worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
+                pre_review_gate_path=branch["pre_review_gate_path"],
                 worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
                 default_worker_ladder=CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER),
                 allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
@@ -502,7 +521,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Waves: {len(brief['waves'])}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
-            "Scheduling: rolling; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
+            f"Scheduling: rolling; runtime branch scheduler ledger path is {CONTRACT.MAIN_SCHEDULER_PATH}; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
             f"Worker model policy: {CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
             "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
             f"Artifact policy: {brief['artifact_policy']}",

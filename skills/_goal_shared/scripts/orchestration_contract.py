@@ -10,6 +10,21 @@ MAX_ACTIVE_BRANCH_AGENTS = 4
 MAX_WORKER_PACKETS_PER_BRANCH = 4
 MAX_WAVES = 5
 DEFAULT_TOTAL_BRANCH_CAP = MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES
+MAIN_SCHEDULER_PATH = "schedulers/main.scheduler.json"
+WORKER_SCHEDULER_PATH_TEMPLATE = "schedulers/{branch_id}.worker.scheduler.json"
+PRE_REVIEW_GATE_PATH_TEMPLATE = "branches/{branch_id}.pre_review_gate.json"
+SCHEDULER_SCHEMA_VERSION = 1
+SCHEDULER_EVENTS = (
+    "ready",
+    "launch",
+    "finish",
+    "close",
+    "refill",
+    "defer",
+    "under_capacity",
+    "blocked",
+)
+SCHEDULER_TERMINAL_STATUSES = ("pass", "partial", "blocked", "failed")
 
 WORKER_ROLE = "worker"
 RESEARCH_WORKER_TYPE = "research-worker"
@@ -127,6 +142,8 @@ REVIEW_REQUIRED = (
     "commands_run",
     "verification_gaps",
     "residual_risks",
+    "input_hashes",
+    "reuse_policy",
     "summary",
 )
 BRANCH_SUMMARY_REQUIRED = ("branch_id", "status", "status_path", "review_path", "review_status")
@@ -134,6 +151,7 @@ MAIN_STATUS_REQUIRED = (
     "job_id",
     "status",
     "audit_status",
+    "branch_parallelism",
     "branch_statuses",
     "lite_advice",
     "commands_run",
@@ -149,6 +167,14 @@ def shell_quote(value: str) -> str:
 
 def worker_ladder_list() -> list[str]:
     return list(DEFAULT_WORKER_LADDER)
+
+
+def worker_scheduler_path(branch_id: str) -> str:
+    return WORKER_SCHEDULER_PATH_TEMPLATE.format(branch_id=branch_id)
+
+
+def pre_review_gate_path(branch_id: str) -> str:
+    return PRE_REVIEW_GATE_PATH_TEMPLATE.format(branch_id=branch_id)
 
 
 def format_worker_ladder(values: list[str] | tuple[str, ...] = DEFAULT_WORKER_LADDER) -> str:

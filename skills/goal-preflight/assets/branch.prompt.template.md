@@ -30,6 +30,10 @@ Max worker packets for this branch: 4
 
 Parallel worker packets are the default for independent work items. This branch contains 1 to 4 worker packets total. Launch independent workers as a rolling saturated pool in separate child worktrees whenever their owned paths and verification commands do not conflict. Never exceed {max_active_worker_packets} active worker packets for this branch, and never exceed 4 active worker packets under any circumstance. If a work item has a `Depends on` entry, do not launch it until the dependency's output is integrated and available as context. When any worker launcher exits, collect and integrate its status/diff, free its active slot, and launch the next eligible worker immediately if capacity is available. If this branch is executed serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons`.
 
+Worker scheduler ledger: {worker_scheduler_path}
+
+Record `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` events in that scheduler ledger. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Final validation reconstructs active worker counts from this ledger and rejects duplicate launches, launches above cap, missing finishes/closes, missing refill events, and eligible-idle gaps even if status prose claims saturation.
+
 Worker parallelization rationale: {worker_parallelization_rationale}
 
 Use `render_worker_schedule.py --list-ready` with the current completed and active worker packet ids before initial launch and after every worker completion.
@@ -60,7 +64,7 @@ Optional Lite advisors are context routers only. After required start checks pas
 
 ## Reviewer Requirement
 
-Dispatch a read-only heavy-model reviewer after worker integration. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact and same-packet `telemetry.json` exist, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
+Before reviewer packet generation, write `{pre_review_gate_path}` with `status: "pass"`, current input hashes, validator/test/diff/ownership/DoD gate results, and reviewer reuse policy. Dispatch a read-only heavy-model reviewer only after that deterministic pre-review gate passes. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact and same-packet `telemetry.json` exist, reviewer input hashes match `{pre_review_gate_path}` exactly, reviewer reuse is accepted only when all recorded hashes match, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
 
 After reviewer dispatch, wait for the reviewer launcher; do not poll active reviewer event logs, process tables, or review files unless the user explicitly enters debug mode or the launcher exits without a valid review.
 
@@ -80,9 +84,10 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - Research-worker packets, when present, used broad read-only information retrieval, recorded `tools_used` and source URLs, passed read-only security validation, and wrote same-packet `telemetry.json`.
 - Packet telemetry records positive `timeout_seconds` for every declared model attempt.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
+- `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with explicit refill/deferral evidence.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
-- The reviewer artifact exists, is `mergeable`, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
+- `{pre_review_gate_path}` passed before reviewer launch; the reviewer artifact exists, is `mergeable`, records matching reviewer input hashes and reuse policy, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/research-worker/reviewer launchers were waited on rather than polled.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
 - `lite_advice` records are present, even when empty; every relevant branch Lite packet directory is recorded, validated, and treated only as advisory context routing.

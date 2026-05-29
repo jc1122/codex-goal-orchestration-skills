@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import re
 import shlex
@@ -259,6 +260,436 @@ def validate_base_range_diff_check(defects: list[str], commands_value: object, p
 
 is_repo_relative_path = PATH_RULES.is_repo_relative_path
 is_absolute_path = PATH_RULES.is_absolute_path
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def relative_hashes(defects: list[str], value: object, path: str, *, root_dir: Path) -> dict[str, str]:
+    if not isinstance(value, dict):
+        defect(defects, path, "must be an object mapping relative paths to sha256 digests")
+        return {}
+    result: dict[str, str] = {}
+    for key, digest in value.items():
+        item_path = f"{path}.{key}" if isinstance(key, str) else f"{path}.<invalid>"
+        if not isinstance(key, str) or not key.strip():
+            defect(defects, path, "hash keys must be non-empty relative paths")
+            continue
+        if not is_repo_relative_path(key):
+            defect(defects, item_path, "hash key must be relative without traversal")
+            continue
+        if not isinstance(digest, str) or not SHA256_RE.fullmatch(digest):
+            defect(defects, item_path, "must be sha256:<64 lowercase hex chars>")
+            continue
+        target = (root_dir / key).resolve()
+        try:
+            target.relative_to(root_dir.resolve())
+        except ValueError:
+            defect(defects, item_path, "hash target escapes bundle root")
+            continue
+        if not target.exists():
+            defect(defects, item_path, f"hash target does not exist: {target}")
+            continue
+        actual = sha256_file(target)
+        if digest != actual:
+            defect(defects, item_path, "must match current file sha256")
+        result[key] = digest
+    return result
+
+
+def validate_reuse_policy(defects: list[str], value: object, path: str) -> None:
+    data = require_object(defects, value, path)
+    mode = data.get("mode")
+    if mode not in {"new", "reuse"}:
+        defect(defects, f"{path}.mode", "must be 'new' or 'reuse'")
+    if not isinstance(data.get("accepted"), bool):
+        defect(defects, f"{path}.accepted", "must be a boolean")
+    if not isinstance(data.get("input_hashes_match"), bool):
+        defect(defects, f"{path}.input_hashes_match", "must be a boolean")
+    source = data.get("source_review_path")
+    if source is not None and (not isinstance(source, str) or not source.strip()):
+        defect(defects, f"{path}.source_review_path", "must be null or a non-empty string")
+    if data.get("accepted") is True:
+        if mode != "reuse":
+            defect(defects, f"{path}.mode", "must be 'reuse' when accepted is true")
+        if data.get("input_hashes_match") is not True:
+            defect(defects, f"{path}.input_hashes_match", "must be true when reviewer reuse is accepted")
+        if not isinstance(source, str) or not source.strip():
+            defect(defects, f"{path}.source_review_path", "must identify the reused review artifact when accepted is true")
+
+
+def _ordered_subset(values: set[str], order: list[str]) -> list[str]:
+    return [item for item in order if item in values]
+
+
+def _event_reason(defects: list[str], event: dict, path: str) -> str:
+    reason = require_string(defects, event.get("reason"), f"{path}.reason")
+    return reason
+
+
+def validate_scheduler_ledger(
+    defects: list[str],
+    ledger_value: object,
+    path: str,
+    *,
+    scheduler_kind: str,
+    expected_path: str,
+    expected_ids: list[str],
+    dependencies: dict[str, list[str]],
+    capacity: int,
+    manifest_path: Path | None = None,
+    require_all_launched: bool = False,
+) -> dict[str, list[str] | int]:
+    root = require_object(defects, ledger_value, path)
+    if root.get("schema_version") != 1:
+        defect(defects, f"{path}.schema_version", "must be 1")
+    if root.get("scheduler_kind") != scheduler_kind:
+        defect(defects, f"{path}.scheduler_kind", f"must be {scheduler_kind!r}")
+    if root.get("scheduler_path") != expected_path:
+        defect(defects, f"{path}.scheduler_path", f"must be {expected_path!r}")
+    if root.get("capacity") != capacity:
+        defect(defects, f"{path}.capacity", f"must be {capacity}")
+    if root.get("item_ids") != expected_ids:
+        defect(defects, f"{path}.item_ids", "must match manifest item order exactly")
+    if manifest_path is not None:
+        manifest_sha = root.get("manifest_sha256")
+        if not isinstance(manifest_sha, str) or not SHA256_RE.fullmatch(manifest_sha):
+            defect(defects, f"{path}.manifest_sha256", "must be sha256:<64 lowercase hex chars>")
+        else:
+            actual_manifest_sha = sha256_file(manifest_path)
+            if manifest_sha != actual_manifest_sha:
+                defect(defects, f"{path}.manifest_sha256", "must match current job.manifest.json sha256")
+    events = root.get("events")
+    if not isinstance(events, list) or not events:
+        defect(defects, f"{path}.events", "must be a non-empty array")
+        events = []
+
+    expected_set = set(expected_ids)
+    active: set[str] = set()
+    ready_seen: set[str] = set()
+    launched: set[str] = set()
+    finished: set[str] = set()
+    closed: set[str] = set()
+    deferred: dict[str, str] = {}
+    blocked: dict[str, str] = {}
+    under_capacity: dict[str, str] = {}
+    max_observed = 0
+    refill_required = False
+
+    def eligible_ids() -> list[str]:
+        eligible = []
+        for item_id in expected_ids:
+            if item_id in launched:
+                continue
+            deps = dependencies.get(item_id, [])
+            if all(dep in closed for dep in deps):
+                eligible.append(item_id)
+        return eligible
+
+    def unexcused_eligible() -> list[str]:
+        excused = set(deferred) | set(blocked) | set(under_capacity)
+        return [item_id for item_id in eligible_ids() if item_id not in excused]
+
+    for index, raw_event in enumerate(events):
+        event_path = f"{path}.events[{index}]"
+        event = require_object(defects, raw_event, event_path)
+        event_name = event.get("event")
+        if event_name not in {
+            "ready",
+            "launch",
+            "finish",
+            "close",
+            "refill",
+            "defer",
+            "under_capacity",
+            "blocked",
+        }:
+            defect(defects, f"{event_path}.event", "must be a supported scheduler event")
+            continue
+
+        before_eligible = eligible_ids()
+        before_unexcused = unexcused_eligible()
+        if before_unexcused and len(active) < capacity:
+            addresses_idle = False
+            event_id = event.get("id")
+            if event_name in {"ready", "launch", "defer", "blocked"} and isinstance(event_id, str):
+                addresses_idle = event_id in before_unexcused
+            elif event_name in {"refill", "under_capacity"}:
+                eligible_values = event.get("eligible_ids")
+                addresses_idle = (
+                    isinstance(eligible_values, list)
+                    and any(isinstance(item, str) and item in before_unexcused for item in eligible_values)
+                )
+            if not addresses_idle:
+                defect(
+                    defects,
+                    event_path,
+                    "eligible items were idle below capacity without launch, refill, defer, under_capacity, or blocked evidence: "
+                    + ", ".join(before_unexcused),
+                )
+            if refill_required and event_name != "refill":
+                defect(defects, event_path, "missing refill event after capacity was freed with eligible items waiting")
+
+        event_id = event.get("id")
+        if event_name not in {"under_capacity", "refill"}:
+            event_id = require_string(defects, event_id, f"{event_path}.id")
+            if event_id and event_id not in expected_set:
+                defect(defects, f"{event_path}.id", "is not declared in the manifest scheduler item set")
+
+        if event_name == "ready":
+            if event_id in ready_seen:
+                defect(defects, f"{event_path}.id", "duplicates ready event")
+            if event_id and event_id not in before_eligible:
+                defect(defects, f"{event_path}.id", "may be ready only after dependencies are closed and before launch")
+            ready_seen.add(str(event_id))
+            continue
+
+        if event_name == "refill":
+            eligible_values = event.get("eligible_ids")
+            if not isinstance(eligible_values, list) or not eligible_values:
+                defect(defects, f"{event_path}.eligible_ids", "must list eligible items considered for refill")
+                eligible_values = []
+            for value_index, value in enumerate(eligible_values):
+                if not isinstance(value, str) or value not in before_eligible:
+                    defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
+            if len(active) >= capacity:
+                defect(defects, event_path, "refill requires free capacity")
+            refill_required = False
+            continue
+
+        if event_name == "launch":
+            if event_id in launched:
+                defect(defects, f"{event_path}.id", "duplicates launch event")
+            if event_id and event_id not in before_eligible:
+                defect(defects, f"{event_path}.id", "cannot launch before dependencies are closed")
+            if len(active) >= capacity:
+                defect(defects, event_path, "active scheduler count would exceed capacity")
+            if event_id:
+                launched.add(str(event_id))
+                active.add(str(event_id))
+                under_capacity.pop(str(event_id), None)
+                deferred.pop(str(event_id), None)
+                blocked.pop(str(event_id), None)
+                max_observed = max(max_observed, len(active))
+            continue
+
+        if event_name == "finish":
+            if event_id and event_id not in active:
+                defect(defects, f"{event_path}.id", "cannot finish an item that is not active")
+            if event_id in finished:
+                defect(defects, f"{event_path}.id", "duplicates finish event")
+            status = event.get("status")
+            if status not in {"pass", "partial", "blocked", "failed"}:
+                defect(defects, f"{event_path}.status", "must be one of ['blocked', 'failed', 'partial', 'pass']")
+            if event_id:
+                finished.add(str(event_id))
+            continue
+
+        if event_name == "close":
+            if event_id and event_id not in active:
+                defect(defects, f"{event_path}.id", "cannot close an item that is not active")
+            if event_id and event_id not in finished:
+                defect(defects, f"{event_path}.id", "cannot close an item before finish")
+            if event_id in closed:
+                defect(defects, f"{event_path}.id", "duplicates close event")
+            if event_id:
+                active.discard(str(event_id))
+                closed.add(str(event_id))
+            if unexcused_eligible() and len(active) < capacity:
+                refill_required = True
+            continue
+
+        if event_name == "defer":
+            reason = _event_reason(defects, event, event_path)
+            if event_id:
+                deferred[str(event_id)] = reason
+            continue
+
+        if event_name == "blocked":
+            reason = _event_reason(defects, event, event_path)
+            if event_id:
+                blocked[str(event_id)] = reason
+            continue
+
+        if event_name == "under_capacity":
+            reason = _event_reason(defects, event, event_path)
+            eligible_values = event.get("eligible_ids")
+            if not isinstance(eligible_values, list) or not eligible_values:
+                defect(defects, f"{event_path}.eligible_ids", "must list idle eligible items")
+                eligible_values = []
+            for value_index, value in enumerate(eligible_values):
+                if not isinstance(value, str) or value not in before_eligible:
+                    defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
+                    continue
+                under_capacity[value] = reason
+
+    for item_id in _ordered_subset(launched - finished, expected_ids):
+        defect(defects, path, f"launched item is missing a finish event: {item_id}")
+    for item_id in _ordered_subset(launched - closed, expected_ids):
+        defect(defects, path, f"launched item is missing a close event: {item_id}")
+    if active:
+        defect(defects, path, "final active scheduler set must be empty after validation: " + ", ".join(_ordered_subset(active, expected_ids)))
+    missing_launches = [item_id for item_id in expected_ids if item_id not in launched]
+    if require_all_launched and missing_launches:
+        defect(defects, path, "must launch every manifest scheduler item for pass/partial status: " + ", ".join(missing_launches))
+    for item_id in missing_launches:
+        if item_id not in deferred and item_id not in blocked and item_id not in under_capacity:
+            defect(defects, path, f"unlaunched manifest item lacks structured defer/under_capacity/blocked reason: {item_id}")
+
+    return {
+        "launched": _ordered_subset(launched, expected_ids),
+        "finished": _ordered_subset(finished, expected_ids),
+        "active": _ordered_subset(active, expected_ids),
+        "blocked": _ordered_subset(set(blocked), expected_ids),
+        "deferred": _ordered_subset(set(deferred) | set(under_capacity), expected_ids),
+        "max_observed_active": max_observed,
+    }
+
+
+def validate_scheduler_artifact(
+    defects: list[str],
+    scheduler_path: Path,
+    path: str,
+    *,
+    scheduler_kind: str,
+    expected_path: str,
+    expected_ids: list[str],
+    dependencies: dict[str, list[str]],
+    capacity: int,
+    manifest_path: Path | None = None,
+    require_all_launched: bool = False,
+) -> dict[str, list[str] | int]:
+    if not scheduler_path.exists():
+        defect(defects, path, f"scheduler artifact does not exist: {scheduler_path}")
+        return {
+            "launched": [],
+            "finished": [],
+            "active": [],
+            "blocked": [],
+            "deferred": [],
+            "max_observed_active": 0,
+        }
+    ledger = load_json_artifact(defects, scheduler_path, path)
+    return validate_scheduler_ledger(
+        defects,
+        ledger,
+        path,
+        scheduler_kind=scheduler_kind,
+        expected_path=expected_path,
+        expected_ids=expected_ids,
+        dependencies=dependencies,
+        capacity=capacity,
+        manifest_path=manifest_path,
+        require_all_launched=require_all_launched,
+    )
+
+
+def validate_scheduler_rollup(
+    defects: list[str],
+    value: object,
+    path: str,
+    *,
+    expected_path: str,
+    summary: dict[str, list[str] | int],
+    max_capacity: int,
+) -> str:
+    data = require_object(defects, value, path)
+    required = [
+        "scheduler_path",
+        "launched_ids",
+        "finished_ids",
+        "active_ids",
+        "blocked_ids",
+        "deferred_ids",
+        "max_observed_active",
+    ]
+    for key in required:
+        if key not in data:
+            defect(defects, path, f"missing key: {key}")
+    scheduler_path = require_string(defects, data.get("scheduler_path"), f"{path}.scheduler_path")
+    if scheduler_path and scheduler_path != expected_path:
+        defect(defects, f"{path}.scheduler_path", f"must be {expected_path!r}")
+    for field, summary_key in [
+        ("launched_ids", "launched"),
+        ("finished_ids", "finished"),
+        ("active_ids", "active"),
+        ("blocked_ids", "blocked"),
+        ("deferred_ids", "deferred"),
+    ]:
+        values = require_string_list(defects, data.get(field), f"{path}.{field}")
+        expected_values = summary.get(summary_key, [])
+        if isinstance(expected_values, list) and values != expected_values:
+            defect(defects, f"{path}.{field}", "must match scheduler ledger reconstruction exactly")
+    observed = data.get("max_observed_active")
+    if not isinstance(observed, int) or isinstance(observed, bool) or observed < 0 or observed > max_capacity:
+        defect(defects, f"{path}.max_observed_active", f"must be an integer from 0 to {max_capacity}")
+    elif observed != summary.get("max_observed_active"):
+        defect(defects, f"{path}.max_observed_active", "must match scheduler ledger reconstruction exactly")
+    return scheduler_path
+
+
+def validate_pre_review_gate_artifact(
+    defects: list[str],
+    gate_path: Path,
+    path: str,
+    *,
+    manifest_path: Path,
+    branch_id: str,
+    review_packet_id: str | None = None,
+    required_input_paths: list[str] | None = None,
+) -> dict:
+    if not gate_path.exists():
+        defect(defects, path, f"pre-review gate artifact does not exist: {gate_path}")
+        return {}
+    gate = require_object(defects, load_json_artifact(defects, gate_path, path), path)
+    if gate.get("schema_version") != 1:
+        defect(defects, f"{path}.schema_version", "must be 1")
+    if gate.get("branch_id") != branch_id:
+        defect(defects, f"{path}.branch_id", f"must be {branch_id!r}")
+    if gate.get("status") not in {"pass", "failed"}:
+        defect(defects, f"{path}.status", "must be 'pass' or 'failed'")
+    if gate.get("status") != "pass":
+        defect(defects, f"{path}.status", "must be pass before reviewer launch or accepted review")
+    packet_value = require_string(defects, gate.get("review_packet_id"), f"{path}.review_packet_id")
+    if review_packet_id and packet_value and packet_value != review_packet_id:
+        defect(defects, f"{path}.review_packet_id", f"must be {review_packet_id!r}")
+
+    checks = require_object(defects, gate.get("checks"), f"{path}.checks")
+    required_checks = [
+        "manifest_validation",
+        "status_validation",
+        "tests",
+        "diff_check",
+        "artifacts_fresh",
+        "ownership",
+        "dod_evidence",
+    ]
+    for key in required_checks:
+        check = require_object(defects, checks.get(key), f"{path}.checks.{key}")
+        status = check.get("status")
+        if key == "tests" and status == "skipped":
+            if check.get("skip_allowed") is not True:
+                defect(defects, f"{path}.checks.{key}.skip_allowed", "must be true when tests are skipped")
+            require_string(defects, check.get("reason"), f"{path}.checks.{key}.reason")
+            continue
+        if status != "pass":
+            defect(defects, f"{path}.checks.{key}.status", "must be pass")
+    commands = require_string_list(defects, gate.get("commands_run"), f"{path}.commands_run", min_items=1)
+    manifest = load_json_artifact(defects, manifest_path, f"{path}.manifest")
+    validate_base_range_diff_check(defects, commands, f"{path}.commands_run", manifest)
+    dod = require_object(defects, checks.get("dod_evidence"), f"{path}.checks.dod_evidence")
+    require_string_list(defects, dod.get("items"), f"{path}.checks.dod_evidence.items", min_items=1)
+    input_hashes = relative_hashes(defects, gate.get("input_hashes"), f"{path}.input_hashes", root_dir=manifest_path.parent)
+    for rel_path in required_input_paths or []:
+        if rel_path not in input_hashes:
+            defect(defects, f"{path}.input_hashes", f"must include current input hash for {rel_path}")
+    validate_reuse_policy(defects, gate.get("reuse_policy"), f"{path}.reuse_policy")
+    return gate
 
 
 def validate_lite_source_files(

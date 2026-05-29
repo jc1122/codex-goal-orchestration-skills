@@ -87,6 +87,11 @@ require_string_list = STATUS_VALIDATION.require_string_list
 is_absolute_path = STATUS_VALIDATION.is_absolute_path
 validate_base_range_diff_check = STATUS_VALIDATION.validate_base_range_diff_check
 validate_telemetry_artifact = STATUS_VALIDATION.validate_telemetry_artifact
+validate_scheduler_artifact = STATUS_VALIDATION.validate_scheduler_artifact
+validate_scheduler_rollup = STATUS_VALIDATION.validate_scheduler_rollup
+validate_pre_review_gate_artifact = STATUS_VALIDATION.validate_pre_review_gate_artifact
+relative_hashes = STATUS_VALIDATION.relative_hashes
+validate_reuse_policy = STATUS_VALIDATION.validate_reuse_policy
 
 
 def is_repo_relative_path(value: str) -> bool:
@@ -530,6 +535,100 @@ def expected_worker_packet_roles(defects: list[str], branch_entry: dict, branch_
     return roles
 
 
+def expected_worker_dependencies(branch_entry: dict, branch_id: str) -> dict[str, list[str]]:
+    dependencies: dict[str, list[str]] = {}
+    work_items = branch_entry.get("work_items")
+    if not isinstance(work_items, list):
+        return dependencies
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("id")
+        packet_id = item.get("packet_id")
+        if not isinstance(item_id, str) or not isinstance(packet_id, str):
+            continue
+        if packet_id != f"{branch_id}-{item_id}":
+            continue
+        deps = item.get("depends_on", [])
+        dependencies[packet_id] = [
+            f"{branch_id}-{dep}"
+            for dep in deps
+            if isinstance(dep, str) and dep.strip()
+        ] if isinstance(deps, list) else []
+    return dependencies
+
+
+def required_pre_review_input_paths(branch_entry: dict, branch_id: str) -> list[str]:
+    paths = [
+        "job.manifest.json",
+        str(branch_entry.get("prompt", "")),
+        CONTRACT.worker_scheduler_path(branch_id),
+    ]
+    work_items = branch_entry.get("work_items")
+    if isinstance(work_items, list):
+        for item in work_items:
+            if not isinstance(item, dict):
+                continue
+            packet_id = item.get("packet_id")
+            if not isinstance(packet_id, str) or not packet_id.strip():
+                continue
+            worker_type = item.get("worker_type", "worker")
+            if worker_type == "research":
+                worker_type = "research-worker"
+            if worker_type == "research-worker":
+                paths.append(f"research/{packet_id}/research.json")
+                paths.append(f"research/{packet_id}/telemetry.json")
+            else:
+                paths.append(f"workers/{packet_id}/status.json")
+                paths.append(f"workers/{packet_id}/route.json")
+                paths.append(f"workers/{packet_id}/telemetry.json")
+    return [path for path in paths if isinstance(path, str) and path.strip()]
+
+
+def validate_worker_scheduler(
+    defects: list[str],
+    root: dict,
+    branch_entry: dict,
+    *,
+    manifest_path: Path,
+    branch_id: str,
+    status: object,
+) -> None:
+    manifest_max_workers = branch_entry.get("max_active_worker_packets")
+    max_workers = manifest_max_workers if is_strict_int(manifest_max_workers) else MAX_WORKER_PACKETS_PER_BRANCH
+    expected_path = CONTRACT.worker_scheduler_path(branch_id)
+    worker_parallelism = branch_entry.get("worker_parallelism")
+    if isinstance(worker_parallelism, dict) and worker_parallelism.get("scheduler_path") != expected_path:
+        defect(defects, "manifest.branch.worker_parallelism.scheduler_path", f"must be {expected_path!r}")
+    expected_ids = expected_worker_packet_ids(defects, branch_entry, branch_id)
+    dependencies = expected_worker_dependencies(branch_entry, branch_id)
+    summary = validate_scheduler_artifact(
+        defects,
+        manifest_path.parent / expected_path,
+        "$.worker_parallelism.scheduler_path",
+        scheduler_kind="branch-worker-pool",
+        expected_path=expected_path,
+        expected_ids=expected_ids,
+        dependencies=dependencies,
+        capacity=max_workers,
+        manifest_path=manifest_path,
+        require_all_launched=status in {"pass", "partial"},
+    )
+    validate_scheduler_rollup(
+        defects,
+        root.get("worker_parallelism"),
+        "$.worker_parallelism",
+        expected_path=expected_path,
+        summary=summary,
+        max_capacity=MAX_WORKER_PACKETS_PER_BRANCH,
+    )
+    runtime_parallelism = root.get("worker_parallelism")
+    if isinstance(runtime_parallelism, dict):
+        observed = runtime_parallelism.get("max_observed_active_worker_packets")
+        if is_strict_int(observed) and observed != summary.get("max_observed_active"):
+            defect(defects, "$.worker_parallelism.max_observed_active_worker_packets", "must match scheduler ledger reconstruction exactly")
+
+
 def validate_manifest_branch_contract(
     defects: list[str],
     root: dict,
@@ -566,6 +665,14 @@ def validate_manifest_branch_contract(
         and worker_parallelism.get("max_active_worker_packets") != manifest_max_workers
     ):
         defect(defects, "$.worker_parallelism.max_active_worker_packets", "must match manifest max_active_worker_packets")
+    expected_scheduler_path = CONTRACT.worker_scheduler_path(branch_id)
+    branch_worker_parallelism = branch_entry.get("worker_parallelism")
+    if isinstance(branch_worker_parallelism, dict) and branch_worker_parallelism.get("scheduler_path") != expected_scheduler_path:
+        defect(defects, "manifest.branch.worker_parallelism.scheduler_path", f"must be {expected_scheduler_path!r}")
+    pre_review_gate_path = branch_entry.get("pre_review_gate_path")
+    expected_gate_path = CONTRACT.pre_review_gate_path(branch_id)
+    if pre_review_gate_path != expected_gate_path:
+        defect(defects, "manifest.branch.pre_review_gate_path", f"must be {expected_gate_path!r}")
 
     expected_ids = set(expected_worker_packet_ids(defects, branch_entry, branch_id))
     expected_roles = expected_worker_packet_roles(defects, branch_entry, branch_id)
@@ -602,12 +709,19 @@ def validate_manifest_branch_contract(
 def validate_worker_parallelism(defects: list[str], value: object, path: str, *, worker_count: int) -> None:
     data = require_object(defects, value, path)
     required = [
+        "scheduler_path",
         "max_worker_packets_per_branch",
         "max_active_worker_packets",
         "max_observed_active_worker_packets",
+        "max_observed_active",
         "concurrent_launch_default",
         "rolling_refill_default",
         "scheduling_mode",
+        "launched_ids",
+        "finished_ids",
+        "active_ids",
+        "blocked_ids",
+        "deferred_ids",
         "serialized_workers",
         "deferred_workers",
         "serial_reasons",
@@ -626,6 +740,12 @@ def validate_worker_parallelism(defects: list[str], value: object, path: str, *,
         defect(defects, f"{path}.max_observed_active_worker_packets", "must be an integer from 0 to 4")
     if is_strict_int(max_active) and is_strict_int(observed) and observed > max_active:
         defect(defects, f"{path}.max_observed_active_worker_packets", "must not exceed max_active_worker_packets")
+    require_string(defects, data.get("scheduler_path"), f"{path}.scheduler_path")
+    for key in ["launched_ids", "finished_ids", "active_ids", "blocked_ids", "deferred_ids"]:
+        require_string_list(defects, data.get(key), f"{path}.{key}")
+    max_observed_active = data.get("max_observed_active")
+    if not is_strict_int(max_observed_active) or max_observed_active < 0 or max_observed_active > MAX_WORKER_PACKETS_PER_BRANCH:
+        defect(defects, f"{path}.max_observed_active", "must be an integer from 0 to 4")
     if data.get("concurrent_launch_default") is not True:
         defect(defects, f"{path}.concurrent_launch_default", "must be true")
     if data.get("rolling_refill_default") is not True:
@@ -675,6 +795,8 @@ def validate_review_artifact(
     *,
     manifest: object,
     branch_id: str | None,
+    manifest_path: Path | None = None,
+    expected_input_hashes: dict[str, str] | None = None,
 ) -> None:
     data = require_object(defects, value, path)
     required = CONTRACT.REVIEW_REQUIRED
@@ -699,6 +821,13 @@ def validate_review_artifact(
     if verdict == "mergeable" and verification_gaps:
         defect(defects, f"{path}.verification_gaps", "must be empty when verdict is mergeable")
     require_string_list(defects, data.get("residual_risks"), f"{path}.residual_risks")
+    if manifest_path is not None:
+        input_hashes = relative_hashes(defects, data.get("input_hashes"), f"{path}.input_hashes", root_dir=manifest_path.parent)
+        if expected_input_hashes is not None and input_hashes != expected_input_hashes:
+            defect(defects, f"{path}.input_hashes", "must match pre_review_gate.json input_hashes exactly")
+    elif "input_hashes" in data and not isinstance(data.get("input_hashes"), dict):
+        defect(defects, f"{path}.input_hashes", "must be an object")
+    validate_reuse_policy(defects, data.get("reuse_policy"), f"{path}.reuse_policy")
     require_string(defects, data.get("summary"), f"{path}.summary")
 
 
@@ -721,15 +850,39 @@ def validate_review_artifact_for_branch(
             defect(defects, "$.review_status", f"review artifact does not exist: {review_artifact}")
         return
     review_data = load_json_artifact(defects, review_artifact, "$.review_status")
+    packet_id = review_data.get("packet_id") if isinstance(review_data, dict) else None
+    branch_id = branch_entry.get("id") if isinstance(branch_entry.get("id"), str) else None
+    expected_input_hashes = None
+    if branch_id:
+        gate_path_value = branch_entry.get("pre_review_gate_path")
+        expected_gate_path = CONTRACT.pre_review_gate_path(branch_id)
+        if gate_path_value != expected_gate_path:
+            defect(defects, "$.review_status.pre_review_gate_path", f"must be {expected_gate_path!r}")
+        gate = validate_pre_review_gate_artifact(
+            defects,
+            manifest_path.parent / expected_gate_path,
+            "$.review_status.pre_review_gate",
+            manifest_path=manifest_path,
+            branch_id=branch_id,
+            review_packet_id=packet_id if isinstance(packet_id, str) else None,
+            required_input_paths=required_pre_review_input_paths(branch_entry, branch_id),
+        )
+        if isinstance(gate.get("input_hashes"), dict):
+            expected_input_hashes = {
+                key: value
+                for key, value in gate["input_hashes"].items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
     validate_review_artifact(
         defects,
         review_data,
         str(review_status),
         "$.review_status",
         manifest=manifest,
-        branch_id=str(branch_entry.get("id", "")) or None,
+        branch_id=branch_id,
+        manifest_path=manifest_path,
+        expected_input_hashes=expected_input_hashes,
     )
-    packet_id = review_data.get("packet_id") if isinstance(review_data, dict) else None
     review_packet_dir = (
         manifest_path.parent / "reviewers" / packet_id
         if isinstance(packet_id, str) and packet_id.strip()
@@ -824,6 +977,15 @@ def validate_branch_status(
         status_path=status_path,
         require_all_workers=status in {"pass", "partial"},
     )
+    if branch_entry and root_branch_id:
+        validate_worker_scheduler(
+            defects,
+            root,
+            branch_entry,
+            manifest_path=manifest_path,
+            branch_id=root_branch_id,
+            status=status,
+        )
     review_status = root.get("review_status")
     if review_status not in REVIEW_STATUSES:
         defect(defects, "$.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")

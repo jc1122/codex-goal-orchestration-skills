@@ -73,6 +73,15 @@ def ensure_bucket(groups: dict[str, dict[str, Any]], key: str) -> dict[str, Any]
     return groups[key]
 
 
+def zero_premium_bucket() -> dict[str, Any]:
+    return {
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "accepted_attempts": 0,
+        "known_usage": zero_usage(),
+    }
+
+
 def compact_usage(usage: dict[str, int]) -> dict[str, int]:
     return {key: usage.get(key, 0) for key in USAGE_KEYS if usage.get(key, 0)}
 
@@ -127,6 +136,10 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
     }
     by_role: dict[str, dict[str, Any]] = {}
     by_attempt: dict[str, dict[str, Any]] = {}
+    premium_usage = {
+        "audit_gpt_5_5": zero_premium_bucket(),
+        "reviewer_gpt_5_5": zero_premium_bucket(),
+    }
     packets = []
     defects = []
 
@@ -183,6 +196,19 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
                             add_number(bucket, "event_log_chars", log.get("chars"))
                             add_number(bucket, "event_log_bytes", log.get("bytes"))
             add_usage(bucket["known_usage"], attempt.get("usage"))
+            premium_key = None
+            if role == "prompt-auditor" and (attempt.get("alias") == "gpt-5.5" or attempt.get("model") == "gpt-5.5"):
+                premium_key = "audit_gpt_5_5"
+            elif role == "reviewer" and (attempt.get("alias") == "gpt-5.5" or attempt.get("model") == "gpt-5.5"):
+                premium_key = "reviewer_gpt_5_5"
+            if premium_key:
+                premium_bucket = premium_usage[premium_key]
+                premium_bucket["attempts_declared"] += 1
+                if attempt.get("called") is True:
+                    premium_bucket["attempts_called"] += 1
+                if attempt.get("accepted") is True:
+                    premium_bucket["accepted_attempts"] += 1
+                add_usage(premium_bucket["known_usage"], attempt.get("usage"))
             packet_attempts.append(
                 {
                     "alias": attempt.get("alias"),
@@ -219,6 +245,13 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
             attempt_group_row(key, by_attempt[key])
             for key in sorted(by_attempt)
         ],
+        "premium_usage": {
+            key: {
+                **{field: value for field, value in bucket.items() if field != "known_usage"},
+                "known_usage": compact_usage(bucket.get("known_usage", {})),
+            }
+            for key, bucket in premium_usage.items()
+        },
         "packets": sorted(packets, key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]))),
     }
 

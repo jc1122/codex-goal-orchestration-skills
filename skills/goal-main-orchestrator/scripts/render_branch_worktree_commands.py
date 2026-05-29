@@ -186,10 +186,17 @@ def validate_branch_worker_contract(branch: dict) -> None:
         raise SystemExit(f"branch {bid} worker_parallelism.parallelism_default must be true")
     if worker_parallelism.get("scheduling_mode") != "rolling":
         raise SystemExit(f"branch {bid} worker_parallelism.scheduling_mode must be 'rolling'")
+    if worker_parallelism.get("scheduler_path") != CONTRACT.worker_scheduler_path(str(bid)):
+        raise SystemExit(f"branch {bid} worker_parallelism.scheduler_path must be {CONTRACT.worker_scheduler_path(str(bid))!r}")
     if worker_parallelism.get("max_active_worker_packets") != max_workers:
         raise SystemExit(f"branch {bid} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
     if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} worker_parallelism.max_worker_packets_per_branch must be 4")
+    if "serial_reason" in worker_parallelism:
+        raise SystemExit(f"branch {bid} worker_parallelism.serial_reason is obsolete; use serial_reasons")
+    serial_reasons = worker_parallelism.get("serial_reasons")
+    if not isinstance(serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in serial_reasons):
+        raise SystemExit(f"branch {bid} worker_parallelism.serial_reasons must be an array of non-empty strings")
     if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism["parallelization_rationale"].strip():
         raise SystemExit(f"branch {bid} worker_parallelism.parallelization_rationale must be non-empty")
     dependency_policy = worker_parallelism.get("dependency_policy", "")
@@ -337,23 +344,28 @@ def main() -> int:
         raise SystemExit("manifest parallelization.max_waves must be 5")
     if parallelization.get("scheduling_mode") != "rolling":
         raise SystemExit("manifest parallelization.scheduling_mode must be 'rolling'")
+    if parallelization.get("scheduler_path") != CONTRACT.MAIN_SCHEDULER_PATH:
+        raise SystemExit(f"manifest parallelization.scheduler_path must be {CONTRACT.MAIN_SCHEDULER_PATH!r}")
     dependency_policy = parallelization.get("dependency_policy", "")
     if not isinstance(dependency_policy, str) or not dependency_policy.strip():
         raise SystemExit("manifest parallelization.dependency_policy must be non-empty")
     wave_execution = parallelization.get("wave_execution", "")
     if not isinstance(wave_execution, str) or "saturat" not in wave_execution.lower() or "depends_on" not in wave_execution:
         raise SystemExit("manifest parallelization.wave_execution must describe rolling saturation and depends_on deferral")
-    serial_reason = parallelization.get("serial_reason", "")
+    if "serial_reason" in parallelization:
+        raise SystemExit("manifest parallelization.serial_reason is obsolete; use serial_reasons")
+    serial_reasons = parallelization.get("serial_reasons", [])
+    if not isinstance(serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in serial_reasons):
+        raise SystemExit("manifest parallelization.serial_reasons must be an array of non-empty strings")
     parallelization_rationale = parallelization.get("parallelization_rationale", "")
     has_parallelization_reason = (
-        isinstance(serial_reason, str)
-        and bool(serial_reason.strip())
+        bool(serial_reasons)
     ) or (
         isinstance(parallelization_rationale, str)
         and bool(parallelization_rationale.strip())
     )
     if max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
-        raise SystemExit("max_active_branch_agents below 4 requires serial_reason or parallelization_rationale")
+        raise SystemExit("max_active_branch_agents below 4 requires serial_reasons or parallelization_rationale")
 
     waves = manifest.get("waves") or []
     if len(waves) > MAX_WAVES:
@@ -365,8 +377,8 @@ def main() -> int:
     manifest_branch_ids = [branch.get("id") for branch in manifest_branches]
     if len(manifest_branch_ids) > MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES:
         raise SystemExit("manifest must not contain more than 20 branches")
-    if len(manifest_branch_ids) == 1 and not (isinstance(serial_reason, str) and serial_reason.strip()):
-        raise SystemExit("single-branch manifests require parallelization.serial_reason")
+    if len(manifest_branch_ids) == 1 and not serial_reasons:
+        raise SystemExit("single-branch manifests require parallelization.serial_reasons")
     if len(manifest_branch_ids) != len(set(manifest_branch_ids)):
         raise SystemExit("manifest branch ids must be unique")
     wave_branch_ids = []
@@ -387,12 +399,15 @@ def main() -> int:
     for branch in manifest_branches:
         if not isinstance(branch, dict):
             raise SystemExit("manifest branch entries must be objects")
-        for key in ["prompt", "status_path", "review_path", "worktree_path", "branch_name"]:
+        for key in ["prompt", "status_path", "review_path", "pre_review_gate_path", "worktree_path", "branch_name"]:
             if key not in branch:
                 raise SystemExit(f"branch {branch.get('id')} missing {key}")
         require_relative_path(branch["prompt"], "prompt")
         require_relative_path(branch["status_path"], "status_path")
         require_relative_path(branch["review_path"], "review_path")
+        require_relative_path(branch["pre_review_gate_path"], "pre_review_gate_path")
+        if branch["pre_review_gate_path"] != CONTRACT.pre_review_gate_path(str(branch.get("id", ""))):
+            raise SystemExit(f"branch {branch.get('id')} pre_review_gate_path must be {CONTRACT.pre_review_gate_path(str(branch.get('id', '')))!r}")
         require_relative_path(branch["worktree_path"], "worktree_path")
         prompt_path = resolve(manifest_dir, branch["prompt"])
         if not prompt_path.exists():

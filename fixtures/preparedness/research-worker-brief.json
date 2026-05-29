@@ -2,7 +2,9 @@
   "job_id": "preparedness-research-worker-fixture",
   "base_ref": "main",
   "max_active_branch_agents": 1,
-  "serial_reason": "Single-branch fixture for research-worker preparedness checks.",
+  "serial_reasons": [
+    "Single-branch fixture for research-worker preparedness checks."
+  ],
   "branches": [
     {
       "id": "B01",
@@ -11,7 +13,9 @@
       "branch_name": "preparedness-research-fixture",
       "worktree_path": ".",
       "max_active_worker_packets": 1,
-      "worker_serial_reason": "Single static fixture packet.",
+      "worker_serial_reasons": [
+        "Single static fixture packet."
+      ],
       "work_items": [
         {
           "id": "W01",

@@ -10,8 +10,12 @@ plans/orchestration/<job-id>/
   preflight.lint.json
   PREFLIGHT_REPORT.md
   telemetry.summary.json        # runtime-created before final pass
+  schedulers/
+    main.scheduler.json         # runtime-created branch scheduler ledger
+    B01.worker.scheduler.json   # runtime-created worker scheduler ledger
   branches/
     B01.prompt.md
+    B01.pre_review_gate.json    # runtime-created before reviewer launch
   workers/
   research/
   reviewers/
@@ -21,7 +25,7 @@ plans/orchestration/<job-id>/
 
 ## Manifest
 
-Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, and `review_path` are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, and `review_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime normal worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths. Runtime research-worker artifacts must resolve to manifest-owned `research/<packet_id>/research.json` paths. Reviewer packet ids must belong to the reviewed branch.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, `review_path`, `pre_review_gate_path`, and scheduler paths are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, `review_path`, and `pre_review_gate_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime normal worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths. Runtime research-worker artifacts must resolve to manifest-owned `research/<packet_id>/research.json` paths. Reviewer packet ids must belong to the reviewed branch.
 
 Preflight script entry paths are absolute only: `--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir`/`--repo-root` must not depend on the caller's current working directory.
 
@@ -41,7 +45,8 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "max_branches_per_wave": 4,
     "max_waves": 5,
     "scheduling_mode": "rolling",
-    "serial_reason": "",
+    "scheduler_path": "schedulers/main.scheduler.json",
+    "serial_reasons": [],
     "parallelization_rationale": "Keep up to 4 branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
     "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
     "dependency_policy": "Branch depends_on entries are explicit prior-branch dependencies; branches without unresolved depends_on entries are eligible whenever capacity is available."
@@ -70,6 +75,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       "worktree_path": ".worktrees/phaseX-B01",
       "status_path": "branches/B01.status.json",
       "review_path": "branches/B01.review.json",
+      "pre_review_gate_path": "branches/B01.pre_review_gate.json",
       "depends_on": [],
       "max_active_worker_packets": 4,
       "work_items": [
@@ -86,9 +92,10 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       "worker_parallelism": {
         "parallelism_default": true,
         "scheduling_mode": "rolling",
+        "scheduler_path": "schedulers/B01.worker.scheduler.json",
         "max_active_worker_packets": 4,
         "max_worker_packets_per_branch": 4,
-        "serial_reason": "",
+        "serial_reasons": [],
         "parallelization_rationale": "Launch independent worker packets as a rolling saturated pool up to 4 active worker packets.",
         "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
         "dependency_policy": "Work item depends_on entries are explicit prior-worker dependencies; workers without unresolved depends_on entries are eligible whenever capacity is available.",
@@ -132,4 +139,5 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, optional `worker_type` values of `worker` or `research-worker`, and branch prompts list those packet ids.
 - Work-item `depends_on` entries reference only prior work item ids and are the only reason to defer an otherwise eligible worker.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch as a rolling saturated pool up to that active cap.
-- Single-branch bundles include `parallelization.serial_reason`.
+- Single-branch bundles include `parallelization.serial_reasons`.
+- Generated prompts name `schedulers/main.scheduler.json`, `schedulers/<branch-id>.worker.scheduler.json`, and branch-local `pre_review_gate.json`; runtime validators require current ledgers/gates before pass claims.

@@ -51,8 +51,13 @@ require_string = STATUS_VALIDATION.require_string
 require_string_list = STATUS_VALIDATION.require_string_list
 validate_base_range_diff_check = STATUS_VALIDATION.validate_base_range_diff_check
 validate_telemetry_artifact = STATUS_VALIDATION.validate_telemetry_artifact
+validate_scheduler_artifact = STATUS_VALIDATION.validate_scheduler_artifact
+validate_scheduler_rollup = STATUS_VALIDATION.validate_scheduler_rollup
+relative_hashes = STATUS_VALIDATION.relative_hashes
+validate_reuse_policy = STATUS_VALIDATION.validate_reuse_policy
 is_repo_relative_path = STATUS_VALIDATION.is_repo_relative_path
 is_absolute_path = STATUS_VALIDATION.is_absolute_path
+is_strict_int = STATUS_VALIDATION.is_strict_int
 
 
 def validate_lite_advice_entries(defects: list[str], value: object, path: str, *, manifest_path: Path) -> None:
@@ -142,6 +147,17 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
         defect(defects, "$.telemetry_summary.telemetry_files", "must be an array")
     elif require_artifacts and not telemetry_files:
         defect(defects, "$.telemetry_summary.telemetry_files", "must contain packet telemetry files")
+    elif isinstance(telemetry_files, list):
+        summary_mtime = summary_path.stat().st_mtime_ns
+        for index, rel_path in enumerate(telemetry_files):
+            if not isinstance(rel_path, str) or not rel_path.strip() or not is_repo_relative_path(rel_path):
+                defect(defects, f"$.telemetry_summary.telemetry_files[{index}]", "must be a bundle-relative path without traversal")
+                continue
+            telemetry_file = manifest_path.parent / rel_path
+            if not telemetry_file.exists():
+                defect(defects, f"$.telemetry_summary.telemetry_files[{index}]", f"telemetry file does not exist: {telemetry_file}")
+            elif telemetry_file.stat().st_mtime_ns > summary_mtime:
+                defect(defects, f"$.telemetry_summary.telemetry_files[{index}]", "telemetry.summary.json is stale relative to this telemetry artifact")
     totals = require_object(defects, summary.get("totals"), "$.telemetry_summary.totals")
     for key in ["packet_count", "attempts_declared", "attempts_called", "prompt_chars", "output_chars", "event_log_chars"]:
         value = totals.get(key)
@@ -149,6 +165,14 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
             defect(defects, f"$.telemetry_summary.totals.{key}", "must be a non-negative integer")
     if require_artifacts and isinstance(telemetry_files, list) and totals.get("packet_count") != len(telemetry_files):
         defect(defects, "$.telemetry_summary.totals.packet_count", "must match telemetry_files length")
+    premium_usage = require_object(defects, summary.get("premium_usage"), "$.telemetry_summary.premium_usage")
+    for key in ["audit_gpt_5_5", "reviewer_gpt_5_5"]:
+        bucket = require_object(defects, premium_usage.get(key), f"$.telemetry_summary.premium_usage.{key}")
+        for metric in ["attempts_declared", "attempts_called", "accepted_attempts"]:
+            value = bucket.get(metric)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                defect(defects, f"$.telemetry_summary.premium_usage.{key}.{metric}", "must be a non-negative integer")
+        STATUS_VALIDATION.validate_usage(defects, bucket.get("known_usage"), f"$.telemetry_summary.premium_usage.{key}.known_usage")
 
 
 def load_branch_status_validator(defects: list[str]):
@@ -215,8 +239,54 @@ def expected_branches_from_manifest(defects: list[str], manifest: object) -> dic
                 "status_path": status_path,
                 "review_path": review_path,
                 "branch_name": branch_name,
+                "depends_on": branch_data.get("depends_on", []),
             }
     return expected
+
+
+def validate_main_scheduler(
+    defects: list[str],
+    root: dict,
+    expected: dict[str, dict[str, object]],
+    *,
+    manifest: object,
+    manifest_path: Path,
+    status: object,
+) -> None:
+    manifest_root = require_object(defects, manifest, "manifest")
+    max_active = manifest_root.get("max_active_branch_agents")
+    if not is_strict_int(max_active) or max_active < 1 or max_active > CONTRACT.MAX_ACTIVE_BRANCH_AGENTS:
+        defect(defects, "manifest.max_active_branch_agents", "must be an integer from 1 to 4")
+        max_active = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
+    parallelization = require_object(defects, manifest_root.get("parallelization"), "manifest.parallelization")
+    scheduler_path_value = parallelization.get("scheduler_path")
+    if scheduler_path_value != CONTRACT.MAIN_SCHEDULER_PATH:
+        defect(defects, "manifest.parallelization.scheduler_path", f"must be {CONTRACT.MAIN_SCHEDULER_PATH!r}")
+    expected_ids = list(expected.keys())
+    dependencies = {}
+    for branch_id, entry in expected.items():
+        deps = entry.get("depends_on")
+        dependencies[branch_id] = [item for item in deps if isinstance(item, str)] if isinstance(deps, list) else []
+    summary = validate_scheduler_artifact(
+        defects,
+        manifest_path.parent / CONTRACT.MAIN_SCHEDULER_PATH,
+        "$.branch_parallelism.scheduler_path",
+        scheduler_kind="main-branch-pool",
+        expected_path=CONTRACT.MAIN_SCHEDULER_PATH,
+        expected_ids=expected_ids,
+        dependencies=dependencies,
+        capacity=max_active,
+        manifest_path=manifest_path,
+        require_all_launched=status in {"pass", "partial"},
+    )
+    validate_scheduler_rollup(
+        defects,
+        root.get("branch_parallelism"),
+        "$.branch_parallelism",
+        expected_path=CONTRACT.MAIN_SCHEDULER_PATH,
+        summary=summary,
+        max_capacity=CONTRACT.MAX_ACTIVE_BRANCH_AGENTS,
+    )
 
 
 def validate_manifest_branch_coverage(defects: list[str], root: dict, expected: dict[str, dict[str, str]]) -> None:
@@ -259,6 +329,7 @@ def validate_review_artifact(
     *,
     manifest: object,
     branch_id: str | None,
+    manifest_path: Path | None = None,
 ) -> None:
     review = require_object(defects, data, path)
     required = CONTRACT.REVIEW_REQUIRED
@@ -283,6 +354,11 @@ def validate_review_artifact(
     if verdict == "mergeable" and verification_gaps:
         defect(defects, f"{path}.verification_gaps", "must be empty when verdict is mergeable")
     require_string_list(defects, review.get("residual_risks"), f"{path}.residual_risks")
+    if manifest_path is not None:
+        relative_hashes(defects, review.get("input_hashes"), f"{path}.input_hashes", root_dir=manifest_path.parent)
+    elif "input_hashes" in review and not isinstance(review.get("input_hashes"), dict):
+        defect(defects, f"{path}.input_hashes", "must be an object")
+    validate_reuse_policy(defects, review.get("reuse_policy"), f"{path}.reuse_policy")
     require_string(defects, review.get("summary"), f"{path}.summary")
 
 
@@ -348,6 +424,7 @@ def validate_branch_artifacts(
                 f"{item_path}.review_path",
                 manifest=manifest,
                 branch_id=branch_id,
+                manifest_path=manifest_path,
             )
 
 
@@ -387,6 +464,14 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
                 if isinstance(item, dict) and item.get("status") != "pass":
                     defect(defects, f"$.branch_statuses[{index}].status", "must be pass when main status is pass")
     validate_manifest_branch_coverage(defects, root, expected_branches)
+    validate_main_scheduler(
+        defects,
+        root,
+        expected_branches,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        status=status,
+    )
     validate_branch_artifacts(
         defects,
         root,

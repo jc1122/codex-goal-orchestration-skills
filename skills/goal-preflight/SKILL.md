@@ -23,7 +23,7 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
    - merge and cleanup policy;
    - artifact preservation policy;
    - branch list or independent branch decomposition that maximizes safe rolling parallelism;
-   - `serial_reason` when the job cannot be split into at least two branches;
+   - `serial_reasons` when the job cannot be split into at least two branches;
    - 1 to 4 bounded worker-sized work items per branch;
    - falsifiable DoD and evidence requirements.
 5. Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
@@ -95,8 +95,8 @@ Parallelism is the default. When the source material does not define branches/wo
 - make independent work items parallel by default so branch orchestrators dispatch them as a rolling saturated worker pool up to the branch worker cap;
 - include the hard runtime rule that at most 4 branch orchestrator agents may be active, slots should stay saturated with eligible branches, and finished agents must be closed before launching replacements;
 - require prompt-audit, worker, research-worker, reviewer, and Lite packet `telemetry.json` plus a final `telemetry.summary.json`;
-- require `serial_reason` for a single-branch bundle;
-- require `parallelization_rationale` or `serial_reason` for any `max_active_branch_agents` below 4.
+- require `serial_reasons` for a single-branch bundle;
+- require `parallelization_rationale` or `serial_reasons` for any `max_active_branch_agents` below 4.
 
 Read `references/parallelization-rules.md` for branch decomposition guidance.
 

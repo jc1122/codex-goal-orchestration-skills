@@ -93,7 +93,7 @@ Workers must fit the smallest intended worker context across the fixed fallback 
 - a falsifiable worker DoD;
 - required JSON status output.
 
-Parallel worker packets are the default for independent work items. Use separate child worktrees for normal workers that can proceed without sharing writable files. A branch uses 1 to 4 prepared worker packets total, including research-worker packets. Launch independent worker packets as a rolling saturated pool up to the branch prompt's `max_active_worker_packets` value. That value is a hard cap and must never exceed 4. When any worker launcher exits, collect and integrate its status/diff or research findings, remove it from the active set, and launch the next eligible worker immediately if capacity is available. Defer a worker only while one of its manifest work-item `depends_on` ids is incomplete. If branch work must run serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons` rather than silently serializing it.
+Parallel worker packets are the default for independent work items. Use separate child worktrees for normal workers that can proceed without sharing writable files. A branch uses 1 to 4 prepared worker packets total, including research-worker packets. Launch independent worker packets as a rolling saturated pool up to the branch prompt's `max_active_worker_packets` value. That value is a hard cap and must never exceed 4. Record scheduler events in `schedulers/<branch-id>.worker.scheduler.json`: `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` as applicable. When any worker launcher exits, collect and integrate its status/diff or research findings, remove it from the active set, record `finish`/`close`, record `refill` when capacity frees with eligible workers waiting, and launch the next eligible worker immediately if capacity is available. Defer a worker only while one of its manifest work-item `depends_on` ids is incomplete or with a structured contention reason. If branch work must run serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons` and in scheduler `defer`/`under_capacity` evidence rather than silently serializing it.
 
 Use `scripts/render_worker_schedule.py` to list currently ready worker packet ids as active workers start/finish:
 
@@ -154,7 +154,7 @@ After launching worker packets, wait for the next launcher process to finish. If
 
 ## Reviewer Packet
 
-After integrating worker results and running branch-level checks, dispatch a read-only reviewer:
+After integrating worker results and running branch-level checks, write a passing `pre_review_gate.json` at the manifest `pre_review_gate_path`. The gate records validator/test/diff/ownership/DoD checks, current input hashes, and reviewer reuse policy. Then dispatch a read-only reviewer:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py" \
@@ -163,10 +163,12 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
   --branch <branch-name> \
   --worktree /absolute/path/to/.worktrees/<branch-name> \
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/reviewers \
+  --manifest /absolute/path/to/plans/orchestration/<job-id>/job.manifest.json \
+  --pre-review-gate /absolute/path/to/plans/orchestration/<job-id>/branches/B01.pre_review_gate.json \
   --context-file /absolute/path/to/plans/orchestration/<job-id>/branches/B01.prompt.md
 ```
 
-Reviewer launchers use `gpt-5.5` first and fall back to `gpt-5.4`, read-only, and write packet-local `telemetry.json` on every terminal path.
+Reviewer packet generation fails closed if `pre_review_gate.json` is missing or failed. Reviewer launchers use `gpt-5.5` first and fall back to `gpt-5.4`, read-only, and write packet-local `telemetry.json` on every terminal path. Reviewer output must copy the gate `input_hashes` exactly and may accept reuse only when all recorded hashes match.
 
 After launching a reviewer packet, wait for the reviewer launcher to finish. If it is still active, do not poll `events-*.jsonl`, process tables, or `review.json`; a quiet read-only reviewer is not evidence of a stall. Inspect reviewer artifacts only after the launcher exits, returns nonzero, or the user explicitly enters debug mode.
 
@@ -183,7 +185,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_stat
   --worktree /absolute/path/to/.worktrees/<branch-name>
 ```
 
-If validation fails, fix the status artifact or return `blocked`; do not claim `pass` with an invalid branch status. A passing or partial branch status must include exactly one worker status for every manifest work item packet id and no extra worker packet ids. Normal worker statuses are backed by manifest-owned `workers/<packet_id>/status.json`; research-worker statuses are backed by manifest-owned `research/<packet_id>/research.json`. A passing branch status must include only `pass` worker/research-worker statuses with same-packet `telemetry.json`, `review_status: "mergeable"` backed by the manifest review artifact and reviewer `telemetry.json`, reviewer packet ids for the same branch, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a `lite_advice` array (empty only when no relevant branch Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty DoD checklist, and no blockers.
+If validation fails, fix the status artifact or return `blocked`; do not claim `pass` with an invalid branch status. A passing or partial branch status must include exactly one worker status for every manifest work item packet id and no extra worker packet ids. Normal worker statuses are backed by manifest-owned `workers/<packet_id>/status.json`; research-worker statuses are backed by manifest-owned `research/<packet_id>/research.json`. A passing branch status must include only `pass` worker/research-worker statuses with same-packet `telemetry.json`, a current `worker_parallelism.scheduler_path` ledger proving worker saturation/refill/deferral, a passing `pre_review_gate.json`, `review_status: "mergeable"` backed by the manifest review artifact and reviewer `telemetry.json`, reviewer packet ids for the same branch, reviewer `input_hashes` matching the gate exactly, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, a `lite_advice` array (empty only when no relevant branch Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty DoD checklist, and no blockers.
 
 ## Completion Gate
 

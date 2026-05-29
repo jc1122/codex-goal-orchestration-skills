@@ -31,7 +31,7 @@ Use `max_active_branch_agents` as the real concurrency cap and keep slots satura
 - waves are scheduling/order groups, not implicit dependency barriers;
 - defer a branch only while one of its explicit manifest `depends_on` branch ids is incomplete.
 
-Single-branch bundles are serialized and must include `serial_reason`. A `max_active_branch_agents` value below 4 must include `parallelization_rationale` or `serial_reason`.
+Single-branch bundles are serialized and must include `serial_reasons`. A `max_active_branch_agents` value below 4 must include `parallelization_rationale` or `serial_reasons`.
 
 Use branch-level `depends_on` only for true prior-branch dependencies. A dependency must reference an earlier branch id in the manifest order; use it for cases like final audits, integration branches, or branches that need evidence produced by another branch. Do not use waves alone to express dependency.
 
@@ -50,6 +50,6 @@ Use normal `worker` work items for code, config, test, and documentation changes
 
 If a work item needs more than roughly 80k-100k tokens of context, split it.
 
-When two work items in the same branch own disjoint files and have independent verification commands, the branch prompt should direct the branch orchestrator to launch them as parallel worker packets in separate child worktrees.
+When two work items in the same branch own disjoint files and have independent verification commands, the branch prompt should direct the branch orchestrator to launch them as parallel worker packets in separate child worktrees. If work items or branches own overlapping paths, they must be explicitly serialized with `depends_on` or carry a contention reason.
 
-Each branch uses 1 to 4 worker packets total and at most 4 active worker packets. Launch independent worker packets as a rolling saturated pool up to the active cap. When a worker launcher exits, the branch orchestrator collects and integrates its status/diff, frees that active slot, and launches the next eligible worker immediately if capacity is available. Defer a worker only while one of its explicit prior work-item `depends_on` ids is incomplete. If more than 4 worker packets would be needed, split the branch or record why the source material cannot be safely decomposed before generating the bundle. Serial or under-capacity worker execution requires a recorded reason.
+Each branch uses 1 to 4 worker packets total and at most 4 active worker packets. Launch independent worker packets as a rolling saturated pool up to the active cap. When a worker launcher exits, the branch orchestrator collects and integrates its status/diff, frees that active slot, records scheduler `finish`/`close` plus `refill` when eligible workers are waiting, and launches the next eligible worker immediately if capacity is available. Defer a worker only while one of its explicit prior work-item `depends_on` ids is incomplete or while a recorded contention reason applies. If more than 4 worker packets would be needed, split the branch or record why the source material cannot be safely decomposed before generating the bundle. Serial or under-capacity worker execution requires a recorded reason.

@@ -1,6 +1,6 @@
 {
   "name": "codex-goal-orchestration-skills",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "Codex skills for goal preflight, main orchestration, and branch orchestration.",
   "license": "MIT",
   "bin": {
