@@ -34,6 +34,6 @@ The prompt auditor is a read-only heavy-model agent launched before branch creat
 
 `pass` means orchestration may start. A pass audit must have `can_start=true`, non-empty `checked_files`, non-empty `commands_run`, no critical or major defects, and no missing DoD items. Any missing, ambiguous, or non-actionable contract is `failed` or `blocked`, and main must not create branches.
 
-The auditor returns only JSON matching `prompt-audit.schema.json`. The schema pins the exact absolute `manifest` and `repo_root` values, and downstream branch worktree rendering must reject an audit artifact whose identity does not match the current command inputs.
+The auditor returns only JSON matching `prompt-audit.schema.json`. The schema pins the exact absolute `manifest` and `repo_root` values. Validate it with `scripts/validate_prompt_audit.py --require-pass` before branch scheduling; downstream branch worktree rendering must reject an audit artifact whose identity does not match the current command inputs.
 
 If both audit model attempts fail without a valid audit artifact, the launcher writes a terminal blocked `prompt-audit.json` with `can_start=false` and telemetry that records the failed declared/called audit attempts. Passing audit telemetry must identify exactly one accepted attempt and preserve prompt/output/log character and byte counts plus any token usage exposed in event logs.

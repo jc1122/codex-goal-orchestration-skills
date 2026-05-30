@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Plan Amender"
+  short_description: "Propose route-bound safe future-work amendments for /goal runs."
+  default_prompt: "Use $goal-plan-amender after goal-main-orchestrator validates terminal branch evidence to create a route-bound adaptation packet with telemetry, validate amendment proposals for unstarted future work, and apply accepted manifest/prompt amendments without mutating active or terminal branch artifacts."

@@ -16,9 +16,12 @@ REQUIRED_FILES = {
         "SKILL.md",
         "scripts/create_goal_bundle.py",
         "scripts/create_lite_advice_packet.py",
+        "scripts/lint_preflight_brief.py",
         "scripts/lint_goal_bundle.py",
         "scripts/render_goal_bootloader.py",
         "scripts/extract_telemetry.py",
+        "scripts/append_scheduler_event.py",
+        "scripts/scheduler_tick.py",
         "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
@@ -28,25 +31,48 @@ REQUIRED_FILES = {
         "scripts/create_lite_advice_packet.py",
         "scripts/render_branch_worktree_commands.py",
         "scripts/extract_telemetry.py",
+        "scripts/append_scheduler_event.py",
+        "scripts/scheduler_tick.py",
         "scripts/summarize_telemetry.py",
+        "scripts/validate_prompt_audit.py",
         "scripts/validate_main_status.py",
         "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
     "goal-branch-orchestrator": [
         "SKILL.md",
+        "scripts/assemble_branch_status.py",
+        "scripts/create_pre_review_gate.py",
         "scripts/create_runtime_packet.py",
         "scripts/create_lite_advice_packet.py",
         "scripts/extract_telemetry.py",
+        "scripts/append_scheduler_event.py",
+        "scripts/scheduler_tick.py",
         "scripts/validate_branch_status.py",
         "scripts/validate_lite_advice.py",
         "scripts/check_goal_skill_availability.py",
     ],
+    "goal-plan-amender": [
+        "SKILL.md",
+        "scripts/amendment_lib.py",
+        "scripts/create_amendment_decision.py",
+        "scripts/create_adaptation_packet.py",
+        "scripts/extract_telemetry.py",
+        "scripts/append_scheduler_event.py",
+        "scripts/scheduler_tick.py",
+        "scripts/recommend_amendment_decision.py",
+        "scripts/validate_amender_packet.py",
+        "scripts/validate_manifest_amendment.py",
+        "scripts/apply_manifest_amendment.py",
+        "scripts/check_goal_skill_availability.py",
+    ],
 }
 REQUIRED_SUPPORT_FILES = [
+    "_goal_shared/scripts/append_scheduler_event.py",
     "_goal_shared/scripts/create_lite_advice_packet.py",
     "_goal_shared/scripts/extract_telemetry.py",
     "_goal_shared/scripts/orchestration_contract.py",
+    "_goal_shared/scripts/scheduler_tick.py",
     "_goal_shared/scripts/validate_lite_advice.py",
     "_goal_shared/scripts/path_rules.py",
     "_goal_shared/scripts/status_validation.py",
@@ -180,7 +206,7 @@ def main() -> int:
     }
 
     if args.json:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(f"status={result['status']}")
         for skill, data in skills.items():

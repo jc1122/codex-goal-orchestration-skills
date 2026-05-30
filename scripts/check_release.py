@@ -20,6 +20,7 @@ INSTALLER = ROOT / "bin" / "install-goal-skills.js"
 EXPECTED_SKILLS = [
     "goal-branch-orchestrator",
     "goal-main-orchestrator",
+    "goal-plan-amender",
     "goal-preflight",
 ]
 EXPECTED_SUPPORT_DIRS = ["_goal_shared"]
@@ -40,10 +41,23 @@ REQUIRED_PACKAGE_FILES = {
     "scripts/check_release.py",
     "scripts/sync_goal_shared.py",
     "skills/_goal_shared/scripts/orchestration_contract.py",
+    "skills/_goal_shared/scripts/scheduler_tick.py",
     "skills/_goal_shared/scripts/status_validation.py",
     "skills/goal-branch-orchestrator/SKILL.md",
+    "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+    "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
     "skills/goal-main-orchestrator/SKILL.md",
+    "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+    "skills/goal-plan-amender/SKILL.md",
+    "skills/goal-plan-amender/scripts/amendment_lib.py",
+    "skills/goal-plan-amender/scripts/apply_manifest_amendment.py",
+    "skills/goal-plan-amender/scripts/create_amendment_decision.py",
+    "skills/goal-plan-amender/scripts/create_adaptation_packet.py",
+    "skills/goal-plan-amender/scripts/recommend_amendment_decision.py",
+    "skills/goal-plan-amender/scripts/validate_amender_packet.py",
+    "skills/goal-plan-amender/scripts/validate_manifest_amendment.py",
     "skills/goal-preflight/SKILL.md",
+    "skills/goal-preflight/scripts/lint_preflight_brief.py",
 }
 REQUIRED_PACKAGE_FILES_ENTRIES = {
     "bin/",

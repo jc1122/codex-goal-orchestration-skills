@@ -48,6 +48,7 @@ MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
 MAX_WAVES = CONTRACT.MAX_WAVES
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
+TERMINAL_STATUSES = {"pass", "partial", "blocked", "failed"}
 
 
 def git_ok(repo_root: Path, *args: str) -> bool:
@@ -235,6 +236,112 @@ def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> Non
         raise SystemExit(f"manifest research_worker_policy is missing required boundary phrase(s): {', '.join(missing)}")
 
 
+def branch_status_path(manifest_path: Path, branch: dict) -> Path:
+    branch_id = branch.get("id")
+    status_path = branch.get("status_path")
+    if not isinstance(status_path, str) or not status_path.strip():
+        raise SystemExit(f"branch {branch_id} missing status_path")
+    return resolve(manifest_path.parent, require_relative_path(status_path, f"branch {branch_id}.status_path"))
+
+
+def artifact_status(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    data = load_json(path)
+    status = data.get("status")
+    if status not in TERMINAL_STATUSES:
+        raise SystemExit(f"status artifact {path} must contain a terminal status")
+    return str(status)
+
+
+def validate_completed_branch_statuses(
+    manifest_path: Path,
+    branches: list[dict],
+    completed: set[str],
+    scheduler_passed: set[str],
+) -> None:
+    branch_by_id = {str(branch["id"]): branch for branch in branches if isinstance(branch.get("id"), str)}
+    for branch_id in sorted(completed - scheduler_passed):
+        status_path = branch_status_path(manifest_path, branch_by_id[branch_id])
+        status = artifact_status(status_path)
+        if status is None:
+            raise SystemExit(f"--completed-branch {branch_id} requires a passing status artifact or scheduler pass evidence: {status_path}")
+        if status != "pass":
+            raise SystemExit(f"--completed-branch {branch_id} points to non-pass status artifact {status_path}: {status}")
+
+
+def scheduler_state_from_ledger(
+    manifest_path: Path,
+    ordered_branch_ids: list[str],
+    max_active: int,
+) -> tuple[set[str], set[str], set[str]]:
+    scheduler_path = manifest_path.parent / CONTRACT.MAIN_SCHEDULER_PATH
+    if not scheduler_path.exists():
+        return set(), set(), set()
+    ledger = load_json(scheduler_path)
+    if ledger.get("schema_version") != 2:
+        raise SystemExit(f"main scheduler ledger schema_version must be 2: {scheduler_path}")
+    if ledger.get("scheduler_kind") != "main-branch-pool":
+        raise SystemExit(f"main scheduler ledger kind mismatch: {scheduler_path}")
+    if ledger.get("scheduler_path") != CONTRACT.MAIN_SCHEDULER_PATH:
+        raise SystemExit(f"main scheduler ledger path mismatch: {scheduler_path}")
+    if ledger.get("capacity") != max_active:
+        raise SystemExit(f"main scheduler ledger capacity is stale: {scheduler_path}")
+    ledger_ids = ledger.get("item_ids")
+    if not isinstance(ledger_ids, list) or any(not isinstance(item, str) for item in ledger_ids):
+        raise SystemExit(f"main scheduler ledger item_ids must be an array of strings: {scheduler_path}")
+    events = ledger.get("events")
+    if not isinstance(events, list):
+        raise SystemExit(f"main scheduler ledger events must be an array: {scheduler_path}")
+
+    known = set(ordered_branch_ids)
+    active: set[str] = set()
+    finished_status: dict[str, str] = {}
+    terminal_status: dict[str, str] = {}
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            raise SystemExit(f"main scheduler events[{index}] must be an object: {scheduler_path}")
+        name = event.get("event")
+        event_id = event.get("id")
+        if name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
+            if not isinstance(event_id, str):
+                raise SystemExit(f"main scheduler events[{index}].id must be a string: {scheduler_path}")
+            if event_id not in known:
+                continue
+        if name == "launch":
+            if event_id in active:
+                raise SystemExit(f"main scheduler events[{index}] duplicates active launch for {event_id}")
+            if len(active) >= max_active:
+                raise SystemExit(f"main scheduler events[{index}] would exceed branch capacity")
+            if terminal_status.get(str(event_id)) == "pass":
+                raise SystemExit(f"main scheduler events[{index}] relaunches already-passing branch {event_id}")
+            active.add(str(event_id))
+            terminal_status.pop(str(event_id), None)
+            finished_status.pop(str(event_id), None)
+        elif name == "finish":
+            status = event.get("status")
+            if status not in TERMINAL_STATUSES:
+                raise SystemExit(f"main scheduler events[{index}].status must be terminal")
+            if event_id not in active:
+                raise SystemExit(f"main scheduler events[{index}] finishes inactive branch {event_id}")
+            finished_status[str(event_id)] = str(status)
+        elif name == "close":
+            if event_id not in active:
+                raise SystemExit(f"main scheduler events[{index}] closes inactive branch {event_id}")
+            if event_id not in finished_status:
+                raise SystemExit(f"main scheduler events[{index}] closes unfinished branch {event_id}")
+            active.discard(str(event_id))
+            terminal_status[str(event_id)] = finished_status[str(event_id)]
+        elif name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
+            continue
+        else:
+            raise SystemExit(f"main scheduler events[{index}].event is unsupported: {name!r}")
+
+    passed = {branch_id for branch_id, status in terminal_status.items() if status == "pass"}
+    non_pass = {branch_id for branch_id, status in terminal_status.items() if status != "pass"}
+    return active, passed, non_pass
+
+
 def require_unique_manifest_values(branches: list[dict]) -> None:
     for field in ["id", "branch_name", "worktree_path"]:
         seen: dict[str, str] = {}
@@ -420,7 +527,8 @@ def main() -> int:
             print(f"{wave.get('id')}: {', '.join(wave.get('branches', []))}")
         return 0
 
-    known_ids = set(manifest_branch_ids)
+    ordered_branch_ids = [branch["id"] for branch in manifest_branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)]
+    known_ids = set(ordered_branch_ids)
     completed = set()
     for value in args.completed_branch:
         if value not in known_ids:
@@ -431,6 +539,23 @@ def main() -> int:
         if value not in known_ids:
             raise SystemExit(f"--active-branch references unknown branch id: {value}")
         active.add(value)
+    scheduler_active, scheduler_passed, scheduler_non_pass = scheduler_state_from_ledger(manifest_path, ordered_branch_ids, max_active)
+    if completed & scheduler_non_pass:
+        raise SystemExit("--completed-branch includes branch ids whose scheduler status is non-pass: " + ", ".join(sorted(completed & scheduler_non_pass)))
+    if completed & scheduler_active:
+        raise SystemExit("--completed-branch includes scheduler-active branch ids: " + ", ".join(sorted(completed & scheduler_active)))
+    if active & scheduler_passed:
+        raise SystemExit("--active-branch includes scheduler-passed branch ids: " + ", ".join(sorted(active & scheduler_passed)))
+    if active & scheduler_non_pass:
+        raise SystemExit("--active-branch includes non-pass closed branch ids; record a scheduler relaunch first: " + ", ".join(sorted(active & scheduler_non_pass)))
+    validate_completed_branch_statuses(
+        manifest_path,
+        [branch for branch in manifest_branches if isinstance(branch, dict)],
+        completed,
+        scheduler_passed,
+    )
+    completed |= scheduler_passed
+    active |= scheduler_active
     if completed & active:
         raise SystemExit("--completed-branch and --active-branch must not overlap")
     if args.limit is not None and args.limit < 1:
@@ -447,7 +572,7 @@ def main() -> int:
         ready = []
         for branch in manifest_branches:
             bid = branch.get("id")
-            if bid in completed or bid in active:
+            if bid in completed or bid in active or bid in scheduler_non_pass:
                 continue
             deps = branch_dependencies.get(bid, [])
             if all(dep in completed for dep in deps):
@@ -468,6 +593,12 @@ def main() -> int:
             unresolved = [dep for dep in deps if dep not in completed]
             if unresolved:
                 raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
+            if bid in completed:
+                raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
+            if bid in active:
+                raise SystemExit(f"branch {bid} is already scheduler-active")
+            if bid in scheduler_non_pass:
+                raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
             selected_ids.add(bid)
     elif waves and not args.wave:
         raise SystemExit("manifest has waves; pass --branch <branch-id>, --list-ready, or --wave <wave-id>")
@@ -482,6 +613,12 @@ def main() -> int:
                 unresolved = [dep for dep in deps if dep not in completed]
                 if unresolved:
                     raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
+                if bid in completed:
+                    raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
+                if bid in active:
+                    raise SystemExit(f"branch {bid} is already scheduler-active")
+                if bid in scheduler_non_pass:
+                    raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
     if selected_ids is not None and len(active) + len(selected_ids) > max_active:
         raise SystemExit("selected branches plus active branches would exceed max_active_branch_agents")
 

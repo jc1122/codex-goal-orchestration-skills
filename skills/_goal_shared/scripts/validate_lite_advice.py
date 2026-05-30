@@ -25,6 +25,8 @@ ALL_PURPOSES = {
     "preflight-decomposition",
     "lint-repair",
     "audit-defect-summary",
+    "amendment-summary",
+    "amendment-defect-summary",
     "branch-packet-planning",
     "context-pack",
     "worker-summary",
@@ -40,6 +42,7 @@ SKILL_PURPOSES = {
         "worker-summary",
         "blocked-triage",
     },
+    "goal-plan-amender": {"amendment-summary", "amendment-defect-summary"},
 }
 RISK_LABELS = {"unsupported", "unresolved", "negative", "weakened", "probe-only", "blocked"}
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -114,7 +117,7 @@ def prompt_for(
         f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
         for item in sources
     )
-    example_sources = json.dumps(sources, indent=2)
+    example_sources = json.dumps(sources, indent=2, sort_keys=True)
     command = advice_command(gemini_path)
     return f"""# Lite Advisory Packet {packet_id}
 

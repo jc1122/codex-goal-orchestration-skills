@@ -69,6 +69,8 @@ def relative_path_defect(value: object, field: str, *, include_value: bool = Fal
     suffix = f": {value!r}" if include_value else ""
     if not isinstance(value, str) or not value:
         return f"{field} must be a non-empty relative path"
+    if value == ".":
+        return f"{field} must not be '.'{suffix}"
     if "\\" in value:
         return f"{field} must use POSIX '/' separators, not backslashes{suffix}"
     if "//" in value:
@@ -97,7 +99,7 @@ def repo_relative_path(path: Path, base_dir: Path, field: str) -> str:
         raise SystemExit(f"{field} must be inside --base-dir: {path}") from exc
     text = relative.as_posix()
     parts = PurePosixPath(text).parts
-    if not text or any(part in {"", ".", ".."} for part in parts):
+    if not text or text == "." or any(part in {"", ".", ".."} for part in parts):
         raise SystemExit(f"{field} resolved to an unsafe relative path: {text!r}")
     return text
 

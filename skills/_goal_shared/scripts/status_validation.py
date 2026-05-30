@@ -29,6 +29,7 @@ LITE_DISPOSITIONS = {"unused", "used", "ignored"}
 LITE_VALIDATION_STATUSES = {"pass", "failed"}
 SAFE_PACKET_RE = PATH_RULES.SAFE_PACKET_LABEL_RE
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
 is_strict_int = PATH_RULES.is_strict_int
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 
@@ -309,18 +310,41 @@ def validate_reuse_policy(defects: list[str], value: object, path: str) -> None:
         defect(defects, f"{path}.mode", "must be 'new' or 'reuse'")
     if not isinstance(data.get("accepted"), bool):
         defect(defects, f"{path}.accepted", "must be a boolean")
-    if not isinstance(data.get("input_hashes_match"), bool):
-        defect(defects, f"{path}.input_hashes_match", "must be a boolean")
+    hashes_match = data.get("semantic_hashes_match", data.get("input_hashes_match"))
+    if not isinstance(hashes_match, bool):
+        defect(defects, f"{path}.semantic_hashes_match", "must be a boolean")
     source = data.get("source_review_path")
     if source is not None and (not isinstance(source, str) or not source.strip()):
         defect(defects, f"{path}.source_review_path", "must be null or a non-empty string")
+    source_telemetry = data.get("source_telemetry_path")
+    if source_telemetry is not None and (not isinstance(source_telemetry, str) or not source_telemetry.strip()):
+        defect(defects, f"{path}.source_telemetry_path", "must be null or a non-empty string")
     if data.get("accepted") is True:
         if mode != "reuse":
             defect(defects, f"{path}.mode", "must be 'reuse' when accepted is true")
-        if data.get("input_hashes_match") is not True:
-            defect(defects, f"{path}.input_hashes_match", "must be true when reviewer reuse is accepted")
+        if hashes_match is not True:
+            defect(defects, f"{path}.semantic_hashes_match", "must be true when reviewer reuse is accepted")
         if not isinstance(source, str) or not source.strip():
             defect(defects, f"{path}.source_review_path", "must identify the reused review artifact when accepted is true")
+        if not isinstance(source_telemetry, str) or not source_telemetry.strip():
+            defect(defects, f"{path}.source_telemetry_path", "must identify the reused reviewer telemetry artifact when accepted is true")
+
+
+def validate_pre_review_volatile_inputs(defects: list[str], value: object, path: str) -> None:
+    if value in (None, {}):
+        return
+    data = require_object(defects, value, path)
+    head = data.get("worktree_head")
+    if head is not None:
+        if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head):
+            defect(defects, f"{path}.worktree_head", "must be a 40- or 64-character git commit hash")
+    for key in ["diff_name_status_sha256", "diff_binary_sha256"]:
+        digest = data.get(key)
+        if digest is not None and (not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
+            defect(defects, f"{path}.{key}", "must be sha256:<64 lowercase hex chars>")
+    commands = data.get("commands_run")
+    if commands is not None:
+        require_string_list(defects, commands, f"{path}.commands_run", min_items=1)
 
 
 def _ordered_subset(values: set[str], order: list[str]) -> list[str]:
@@ -330,6 +354,30 @@ def _ordered_subset(values: set[str], order: list[str]) -> list[str]:
 def _event_reason(defects: list[str], event: dict, path: str) -> str:
     reason = require_string(defects, event.get("reason"), f"{path}.reason")
     return reason
+
+
+def _event_reason_code(defects: list[str], event: dict, path: str, *, required: bool) -> str:
+    code = event.get("reason_code")
+    allowed = {
+        "artifact_invalid",
+        "capacity_limit",
+        "contention",
+        "dependency_failed",
+        "dependency_pending",
+        "launcher_failed",
+        "native_agent_unreachable",
+        "no_ready_work",
+        "operator_requested",
+        "process_exited_blocked",
+        "stale_active",
+        "timeout",
+    }
+    if code is None and not required:
+        return ""
+    if code not in allowed:
+        defect(defects, f"{path}.reason_code", f"must be one of {sorted(allowed)}")
+        return ""
+    return str(code)
 
 
 def validate_scheduler_ledger(
@@ -346,8 +394,8 @@ def validate_scheduler_ledger(
     require_all_launched: bool = False,
 ) -> dict[str, list[str] | int]:
     root = require_object(defects, ledger_value, path)
-    if root.get("schema_version") != 1:
-        defect(defects, f"{path}.schema_version", "must be 1")
+    if root.get("schema_version") != 2:
+        defect(defects, f"{path}.schema_version", "must be 2")
     if root.get("scheduler_kind") != scheduler_kind:
         defect(defects, f"{path}.scheduler_kind", f"must be {scheduler_kind!r}")
     if root.get("scheduler_path") != expected_path:
@@ -374,30 +422,55 @@ def validate_scheduler_ledger(
     ready_seen: set[str] = set()
     launched: set[str] = set()
     finished: set[str] = set()
+    finished_status: dict[str, str] = {}
     closed: set[str] = set()
     deferred: dict[str, str] = {}
+    deferred_reason_codes: dict[str, str] = {}
     blocked: dict[str, str] = {}
+    blocked_reason_codes: dict[str, str] = {}
     under_capacity: dict[str, str] = {}
+    under_capacity_reason_codes: dict[str, str] = {}
+    deferred_excuses: set[str] = set()
+    blocked_excuses: set[str] = set()
+    under_capacity_excuses: set[str] = set()
     max_observed = 0
     refill_required = False
 
     def eligible_ids() -> list[str]:
         eligible = []
         for item_id in expected_ids:
-            if item_id in launched:
+            if item_id in active:
                 continue
+            if item_id in launched:
+                if item_id not in closed or finished_status.get(item_id) == "pass" or scheduler_kind != "branch-worker-pool":
+                    continue
             deps = dependencies.get(item_id, [])
-            if all(dep in closed for dep in deps):
+            if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
                 eligible.append(item_id)
         return eligible
 
+    def failed_dependency_ids(item_id: str) -> list[str]:
+        failed = []
+        for dep in dependencies.get(item_id, []):
+            status = finished_status.get(dep)
+            if dep in closed and status in {"partial", "blocked", "failed"}:
+                failed.append(dep)
+        return failed
+
     def unexcused_eligible() -> list[str]:
-        excused = set(deferred) | set(blocked) | set(under_capacity)
+        excused = deferred_excuses | blocked_excuses | under_capacity_excuses
         return [item_id for item_id in eligible_ids() if item_id not in excused]
 
     for index, raw_event in enumerate(events):
         event_path = f"{path}.events[{index}]"
         event = require_object(defects, raw_event, event_path)
+        seq = event.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool) or seq != index + 1:
+            defect(defects, f"{event_path}.seq", f"must be ordered integer {index + 1}")
+        timestamp = event.get("timestamp")
+        if not isinstance(timestamp, str) or not timestamp.strip() or TIMESTAMP_RE.search(timestamp) is None:
+            defect(defects, f"{event_path}.timestamp", "must be an ISO-like timestamp string")
+        require_string(defects, event.get("runtime_ref"), f"{event_path}.runtime_ref")
         event_name = event.get("event")
         if event_name not in {
             "ready",
@@ -411,6 +484,14 @@ def validate_scheduler_ledger(
         }:
             defect(defects, f"{event_path}.event", "must be a supported scheduler event")
             continue
+        if event.get("reason") is not None and event_name not in {"defer", "under_capacity", "blocked"}:
+            defect(defects, f"{event_path}.reason", "is allowed only on defer, under_capacity, or blocked events")
+        _event_reason_code(
+            defects,
+            event,
+            event_path,
+            required=event_name in {"defer", "under_capacity", "blocked"},
+        )
 
         before_eligible = eligible_ids()
         before_unexcused = unexcused_eligible()
@@ -463,18 +544,36 @@ def validate_scheduler_ledger(
             continue
 
         if event_name == "launch":
-            if event_id in launched:
+            repair_relaunch = bool(
+                scheduler_kind == "branch-worker-pool"
+                and event_id
+                and event_id in launched
+                and event_id in closed
+                and finished_status.get(str(event_id)) != "pass"
+            )
+            if event_id in launched and not repair_relaunch:
                 defect(defects, f"{event_path}.id", "duplicates launch event")
             if event_id and event_id not in before_eligible:
-                defect(defects, f"{event_path}.id", "cannot launch before dependencies are closed")
+                failed_deps = failed_dependency_ids(str(event_id))
+                if failed_deps:
+                    defect(defects, f"{event_path}.id", "cannot launch after dependency finished non-pass: " + ", ".join(failed_deps))
+                else:
+                    defect(defects, f"{event_path}.id", "cannot launch before dependencies pass")
             if len(active) >= capacity:
                 defect(defects, event_path, "active scheduler count would exceed capacity")
             if event_id:
                 launched.add(str(event_id))
                 active.add(str(event_id))
+                if repair_relaunch:
+                    finished.discard(str(event_id))
+                    closed.discard(str(event_id))
+                    finished_status.pop(str(event_id), None)
                 under_capacity.pop(str(event_id), None)
                 deferred.pop(str(event_id), None)
                 blocked.pop(str(event_id), None)
+                under_capacity_excuses.discard(str(event_id))
+                deferred_excuses.discard(str(event_id))
+                blocked_excuses.discard(str(event_id))
                 max_observed = max(max_observed, len(active))
             continue
 
@@ -488,6 +587,8 @@ def validate_scheduler_ledger(
                 defect(defects, f"{event_path}.status", "must be one of ['blocked', 'failed', 'partial', 'pass']")
             if event_id:
                 finished.add(str(event_id))
+                if isinstance(status, str):
+                    finished_status[str(event_id)] = status
             continue
 
         if event_name == "close":
@@ -500,24 +601,35 @@ def validate_scheduler_ledger(
             if event_id:
                 active.discard(str(event_id))
                 closed.add(str(event_id))
+                if finished_status.get(str(event_id)) != "pass":
+                    under_capacity_excuses.discard(str(event_id))
+                    deferred_excuses.discard(str(event_id))
+                    blocked_excuses.discard(str(event_id))
             if unexcused_eligible() and len(active) < capacity:
                 refill_required = True
             continue
 
         if event_name == "defer":
             reason = _event_reason(defects, event, event_path)
+            reason_code = _event_reason_code(defects, event, event_path, required=True)
             if event_id:
                 deferred[str(event_id)] = reason
+                deferred_reason_codes[str(event_id)] = reason_code
+                deferred_excuses.add(str(event_id))
             continue
 
         if event_name == "blocked":
             reason = _event_reason(defects, event, event_path)
+            reason_code = _event_reason_code(defects, event, event_path, required=True)
             if event_id:
                 blocked[str(event_id)] = reason
+                blocked_reason_codes[str(event_id)] = reason_code
+                blocked_excuses.add(str(event_id))
             continue
 
         if event_name == "under_capacity":
             reason = _event_reason(defects, event, event_path)
+            reason_code = _event_reason_code(defects, event, event_path, required=True)
             eligible_values = event.get("eligible_ids")
             if not isinstance(eligible_values, list) or not eligible_values:
                 defect(defects, f"{event_path}.eligible_ids", "must list idle eligible items")
@@ -527,7 +639,17 @@ def validate_scheduler_ledger(
                     defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
                     continue
                 under_capacity[value] = reason
+                under_capacity_reason_codes[value] = reason_code
+                under_capacity_excuses.add(value)
 
+    final_unexcused = unexcused_eligible()
+    if final_unexcused and len(active) < capacity:
+        defect(
+            defects,
+            path,
+            "final scheduler state leaves eligible items idle below capacity without launch, refill, defer, under_capacity, or blocked evidence: "
+            + ", ".join(final_unexcused),
+        )
     for item_id in _ordered_subset(launched - finished, expected_ids):
         defect(defects, path, f"launched item is missing a finish event: {item_id}")
     for item_id in _ordered_subset(launched - closed, expected_ids):
@@ -538,6 +660,19 @@ def validate_scheduler_ledger(
     if require_all_launched and missing_launches:
         defect(defects, path, "must launch every manifest scheduler item for pass/partial status: " + ", ".join(missing_launches))
     for item_id in missing_launches:
+        failed_deps = failed_dependency_ids(item_id)
+        if failed_deps:
+            reason_code = (
+                blocked_reason_codes.get(item_id)
+                or deferred_reason_codes.get(item_id)
+                or under_capacity_reason_codes.get(item_id)
+            )
+            if reason_code != "dependency_failed":
+                defect(
+                    defects,
+                    path,
+                    f"unlaunched item with non-pass dependency must record dependency_failed reason_code: {item_id} depends on {', '.join(failed_deps)}",
+                )
         if item_id not in deferred and item_id not in blocked and item_id not in under_capacity:
             defect(defects, path, f"unlaunched manifest item lacks structured defer/under_capacity/blocked reason: {item_id}")
 
@@ -547,6 +682,7 @@ def validate_scheduler_ledger(
         "active": _ordered_subset(active, expected_ids),
         "blocked": _ordered_subset(set(blocked), expected_ids),
         "deferred": _ordered_subset(set(deferred) | set(under_capacity), expected_ids),
+        "finished_status": {item_id: finished_status[item_id] for item_id in expected_ids if item_id in finished_status},
         "max_observed_active": max_observed,
     }
 
@@ -572,6 +708,7 @@ def validate_scheduler_artifact(
             "active": [],
             "blocked": [],
             "deferred": [],
+            "finished_status": {},
             "max_observed_active": 0,
         }
     ledger = load_json_artifact(defects, scheduler_path, path)
@@ -647,8 +784,8 @@ def validate_pre_review_gate_artifact(
         defect(defects, path, f"pre-review gate artifact does not exist: {gate_path}")
         return {}
     gate = require_object(defects, load_json_artifact(defects, gate_path, path), path)
-    if gate.get("schema_version") != 1:
-        defect(defects, f"{path}.schema_version", "must be 1")
+    if gate.get("schema_version") != 2:
+        defect(defects, f"{path}.schema_version", "must be 2")
     if gate.get("branch_id") != branch_id:
         defect(defects, f"{path}.branch_id", f"must be {branch_id!r}")
     if gate.get("status") not in {"pass", "failed"}:
@@ -684,10 +821,16 @@ def validate_pre_review_gate_artifact(
     validate_base_range_diff_check(defects, commands, f"{path}.commands_run", manifest)
     dod = require_object(defects, checks.get("dod_evidence"), f"{path}.checks.dod_evidence")
     require_string_list(defects, dod.get("items"), f"{path}.checks.dod_evidence.items", min_items=1)
-    input_hashes = relative_hashes(defects, gate.get("input_hashes"), f"{path}.input_hashes", root_dir=manifest_path.parent)
+    semantic_hashes = relative_hashes(
+        defects,
+        gate.get("semantic_input_hashes"),
+        f"{path}.semantic_input_hashes",
+        root_dir=manifest_path.parent,
+    )
+    validate_pre_review_volatile_inputs(defects, gate.get("volatile_input_hashes", {}), f"{path}.volatile_input_hashes")
     for rel_path in required_input_paths or []:
-        if rel_path not in input_hashes:
-            defect(defects, f"{path}.input_hashes", f"must include current input hash for {rel_path}")
+        if rel_path not in semantic_hashes:
+            defect(defects, f"{path}.semantic_input_hashes", f"must include current semantic input hash for {rel_path}")
     validate_reuse_policy(defects, gate.get("reuse_policy"), f"{path}.reuse_policy")
     return gate
 

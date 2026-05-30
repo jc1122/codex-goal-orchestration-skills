@@ -34,7 +34,7 @@ The runtime owner is `goal-main-orchestrator`; this skill must produce files com
 
 ## Skill Availability Bootstrap
 
-Every run starts by confirming the three goal skills are installed in the same discoverable skills root and that their required scripts exist. Resolve the skills root once:
+Every run starts by confirming the four goal skills are installed in the same discoverable skills root and that their required scripts exist. Resolve the skills root once:
 
 ```bash
 GOAL_SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
@@ -45,7 +45,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/check_goal_skill_availability.
   --skills-root "$GOAL_SKILLS_ROOT" \
   --require goal-preflight \
   --require goal-main-orchestrator \
-  --require goal-branch-orchestrator
+  --require goal-branch-orchestrator \
+  --require goal-plan-amender
 ```
 
 If this fails, stop before writing prompt files and tell the user to install or repair the skills package.
@@ -94,7 +95,8 @@ Parallelism is the default. When the source material does not define branches/wo
 - use 1 to 4 work items per branch, and make every work item worker-sized: one objective, narrow ownership, short context list, exact verification commands, falsifiable DoD;
 - make independent work items parallel by default so branch orchestrators dispatch them as a rolling saturated worker pool up to the branch worker cap;
 - include the hard runtime rule that at most 4 branch orchestrator agents may be active, slots should stay saturated with eligible branches, and finished agents must be closed before launching replacements;
-- require prompt-audit, worker, research-worker, reviewer, and Lite packet `telemetry.json` plus a final `telemetry.summary.json`;
+- require prompt-audit, worker, research-worker, reviewer, any plan-amender, and Lite packet `telemetry.json` plus a final `telemetry.summary.json`;
+- include the amendment policy for `goal-main-orchestrator` to launch route-bound `goal-plan-amender` packets only after terminal branch validation and only for future unstarted manifest work;
 - require `serial_reasons` for a single-branch bundle;
 - require `parallelization_rationale` or `serial_reasons` for any `max_active_branch_agents` below 4.
 
@@ -102,7 +104,17 @@ Read `references/parallelization-rules.md` for branch decomposition guidance.
 
 ## Bundle Generation
 
-Create a structured brief JSON and run:
+Create a structured brief JSON and lint it before bundle generation:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_preflight_brief.py" \
+  --brief /absolute/path/to/brief.json \
+  --repo-root /absolute/path/to/repo
+```
+
+The brief linter catches missing concrete top-level `goal`, `source_summary`, `required_evidence`, and `final_dod`, plus placeholders, unsafe or missing context paths, vague DoD items, missing exact verification commands, and policies that do not preserve partial/blocked/failed or unresolved/negative/probe-only states. Omitted artifact/cleanup policies are checked after deterministic defaults are applied.
+
+Then run:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
@@ -112,7 +124,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
 
 `--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir`/`--repo-root` must be absolute paths with no `..` traversal. The scripts reject cwd-relative entry paths.
 
-Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, worktree paths are relative to the repository root, and work item `owned_paths`/`context_files` are repo-relative. Do not use absolute paths, backslashes, or `..` in the brief.
+Manifest-owned paths must be reproducible POSIX-relative paths: prompt/status/review paths are relative to the bundle root, worktree paths are relative to the repository root, branch `owned_paths` are derived from work item ownership, and work item `owned_paths`/`context_files` are repo-relative. Do not use absolute paths, backslashes, or `..` in the brief.
 
 Generated `goal-bootloader.md` is location-bound: it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, rerun this skill or run `render_goal_bootloader.py --repo-root /absolute/path/to/repo --write`; do not hand-edit bootloader paths.
 

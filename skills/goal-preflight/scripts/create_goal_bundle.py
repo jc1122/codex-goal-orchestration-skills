@@ -56,7 +56,10 @@ MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
+AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 RESEARCH_WORKER_POLICY = CONTRACT.RESEARCH_WORKER_POLICY
+REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
+ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
 
 
 def require_agent_limit(value: object) -> int:
@@ -215,6 +218,33 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
     return normalized
 
 
+def derived_owned_paths(work_items: list[dict]) -> list[str]:
+    paths: list[str] = []
+    seen: set[str] = set()
+    for item in work_items:
+        for value in item.get("owned_paths", []):
+            if isinstance(value, str) and value not in seen:
+                seen.add(value)
+                paths.append(value)
+    return paths
+
+
+def ready_width(items: list[dict]) -> int:
+    return len([item for item in items if not item.get("depends_on")])
+
+
+def longest_work_item_chain(items: list[dict]) -> int:
+    lengths: dict[str, int] = {}
+    for item in items:
+        item_id = item.get("id")
+        if not isinstance(item_id, str):
+            continue
+        deps = item.get("depends_on", [])
+        dep_lengths = [lengths.get(dep, 1) for dep in deps if isinstance(dep, str)]
+        lengths[item_id] = 1 + (max(dep_lengths) if dep_lengths else 0)
+    return max(lengths.values(), default=0)
+
+
 def normalize_branch_dependencies(branches: list[dict]) -> None:
     order = {branch["id"]: index for index, branch in enumerate(branches)}
     for index, branch in enumerate(branches):
@@ -302,12 +332,22 @@ def normalize_brief(brief: dict) -> dict:
         worker_serial_reasons = normalize_reason_list(original.get("worker_serial_reasons"), worker_serial_reason)
         worker_parallelization_rationale = nonempty_text(original.get("worker_parallelization_rationale"))
         work_items = normalize_work_items(original.get("work_items", []), bid)
+        owned_paths = derived_owned_paths(work_items)
+        if max_workers < MAX_WORKER_PACKETS_PER_BRANCH and not worker_serial_reasons:
+            raise SystemExit(f"branch {bid} max_active_worker_packets below 4 requires worker_serial_reasons")
+        if len(work_items) == 1 and max_workers > 1 and not worker_serial_reasons:
+            raise SystemExit(f"branch {bid} has one worker but max_active_worker_packets > 1; add worker_serial_reasons or lower the cap")
+        if ready_width(work_items) < min(max_workers, len(work_items)) and not worker_serial_reasons:
+            raise SystemExit(f"branch {bid} worker dependency topology underfills ready width; add worker_serial_reasons")
+        if len(work_items) > 2 and longest_work_item_chain(work_items) >= len(work_items) - 1 and not worker_serial_reasons:
+            raise SystemExit(f"branch {bid} worker dependency chain serializes most work; add worker_serial_reasons")
         branch = {
             **original,
             "work_items": work_items,
             "id": bid,
             "branch_name": branch_name,
             "worktree_path": worktree_path,
+            "owned_paths": owned_paths,
             "prompt": require_relative_path(original.get("prompt") or f"branches/{bid}.prompt.md", "prompt"),
             "status_path": require_relative_path(original.get("status_path") or f"branches/{bid}.status.json", "status_path"),
             "review_path": require_relative_path(original.get("review_path") or f"branches/{bid}.review.json", "review_path"),
@@ -335,8 +375,8 @@ def normalize_brief(brief: dict) -> dict:
         raise SystemExit(f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}")
     if len(branches) == 1 and not serial_reasons:
         raise SystemExit("single-branch bundles are serialized and require brief.serial_reasons or brief.serial_reason")
-    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not (serial_reasons or parallelization_rationale):
-        raise SystemExit("max_active_branch_agents below 4 requires serial_reasons, serial_reason, or parallelization_rationale")
+    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not serial_reasons:
+        raise SystemExit("max_active_branch_agents below 4 requires serial_reasons or serial_reason")
     preflight_lite_advice = brief.get("preflight_lite_advice", [])
     if not isinstance(preflight_lite_advice, list):
         raise SystemExit("preflight_lite_advice must be an array when supplied")
@@ -372,6 +412,16 @@ def normalize_brief(brief: dict) -> dict:
         branch["wave"] = wave_by_branch[branch["id"]]
     normalize_branch_dependencies(branches)
 
+    initial_ready = len([branch for branch in branches if not branch.get("depends_on")])
+    if initial_ready < min(max_active, len(branches)) and not serial_reasons:
+        raise SystemExit("initial ready branch count underfills max_active_branch_agents; add serial_reasons")
+    branch_chain_lengths: dict[str, int] = {}
+    for branch in branches:
+        dep_lengths = [branch_chain_lengths.get(dep, 1) for dep in branch.get("depends_on", [])]
+        branch_chain_lengths[branch["id"]] = 1 + (max(dep_lengths) if dep_lengths else 0)
+    if len(branches) > 2 and max(branch_chain_lengths.values(), default=0) >= len(branches) - 1 and not serial_reasons:
+        raise SystemExit("branch dependency chain serializes most work; add serial_reasons")
+
     return {
         **brief,
         "job_id": job_id,
@@ -405,6 +455,12 @@ def write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def ensure_bundle_dirs(bundle_dir: Path) -> None:
+    bundle_dir.mkdir(parents=True, exist_ok=True)
+    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments"]:
+        (bundle_dir / dirname).mkdir(exist_ok=True)
+
+
 def render_branch_waves(waves: list[dict]) -> str:
     lines = []
     for wave in waves:
@@ -420,15 +476,8 @@ def render_branch_dependencies(branches: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
-    brief = normalize_brief(brief)
-
-    bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
-    bundle_dir.mkdir(parents=True, exist_ok=True)
-    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers"]:
-        (bundle_dir / dirname).mkdir(exist_ok=True)
-
-    manifest = {
+def manifest_from_normalized_brief(brief: dict) -> dict:
+    return {
         "job_id": brief["job_id"],
         "main_prompt": "main.prompt.md",
         "base_ref": brief["base_ref"],
@@ -436,8 +485,12 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         "cleanup_policy": brief["cleanup_policy"],
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
+        "adaptation_policy": CONTRACT.ADAPTATION_POLICY,
         "worker_model_policy": WORKER_MODEL_POLICY,
+        "amender_model_policy": AMENDER_MODEL_POLICY,
         "research_worker_policy": RESEARCH_WORKER_POLICY,
+        "review_model_policy": REVIEW_MODEL_POLICY,
+        "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
         "branches": [
             {
@@ -450,6 +503,7 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
                 "review_path": branch["review_path"],
                 "pre_review_gate_path": branch["pre_review_gate_path"],
                 "depends_on": branch["depends_on"],
+                "owned_paths": branch["owned_paths"],
                 "work_items": branch["work_items"],
                 "max_active_worker_packets": branch["max_active_worker_packets"],
                 "worker_parallelism": branch["worker_parallelism"],
@@ -458,57 +512,93 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
         ],
         "waves": brief["waves"],
     }
-    write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2) + "\n")
 
+
+def render_main_prompt_text(brief: dict) -> str:
     main_prompt = (Path(__file__).resolve().parents[1] / "assets" / "main.prompt.template.md").read_text(encoding="utf-8")
-    write(
-        bundle_dir / "main.prompt.md",
-        main_prompt.format(
-            title=brief.get("title", brief["job_id"]),
-            job_id=brief["job_id"],
-            base_ref=brief["base_ref"],
-            goal=brief.get("goal", "Goal not supplied."),
-            source_summary=brief.get("source_summary", "Source summary not supplied."),
-            branch_waves=render_branch_waves(brief["waves"]),
-            branch_dependencies=render_branch_dependencies(brief["branches"]),
-            max_active_branch_agents=brief["max_active_branch_agents"],
-            main_scheduler_path=CONTRACT.MAIN_SCHEDULER_PATH,
-            parallelization_rationale=brief["parallelization"]["parallelization_rationale"],
-            merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
-            cleanup_policy=brief["cleanup_policy"],
-            artifact_policy=brief["artifact_policy"],
-            required_evidence=bullets(brief.get("required_evidence", [])),
-            final_dod=bullets(brief.get("final_dod", [])),
-        ),
+    return main_prompt.format(
+        title=brief.get("title", brief["job_id"]),
+        job_id=brief["job_id"],
+        base_ref=brief["base_ref"],
+        goal=brief.get("goal", "Goal not supplied."),
+        source_summary=brief.get("source_summary", "Source summary not supplied."),
+        branch_waves=render_branch_waves(brief["waves"]),
+        branch_dependencies=render_branch_dependencies(brief["branches"]),
+        max_active_branch_agents=brief["max_active_branch_agents"],
+        main_scheduler_path=CONTRACT.MAIN_SCHEDULER_PATH,
+        parallelization_rationale=brief["parallelization"]["parallelization_rationale"],
+        merge_policy=brief.get("merge_policy", "Report mergeability only unless explicitly authorized to merge."),
+        cleanup_policy=brief["cleanup_policy"],
+        artifact_policy=brief["artifact_policy"],
+        required_evidence=bullets(brief.get("required_evidence", [])),
+        final_dod=bullets(brief.get("final_dod", [])),
     )
 
+
+def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     branch_template = (Path(__file__).resolve().parents[1] / "assets" / "branch.prompt.template.md").read_text(encoding="utf-8")
+    return branch_template.format(
+        branch_id=branch["id"],
+        title=branch.get("title", branch.get("objective", branch["id"])),
+        base_ref=brief["base_ref"],
+        branch_name=branch["branch_name"],
+        worktree_path=branch["worktree_path"],
+        wave=branch["wave"],
+        depends_on=bullets(branch.get("depends_on", [])),
+        max_active_worker_packets=branch["max_active_worker_packets"],
+        worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
+        pre_review_gate_path=branch["pre_review_gate_path"],
+        worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
+        default_worker_ladder=CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER),
+        allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
+        objective=branch.get("objective", "Objective not supplied."),
+        scope=branch.get("scope", "Scope not supplied."),
+        owned_paths=bullets(branch.get("owned_paths", [])),
+        work_items=format_work_items(branch["id"], branch.get("work_items", [])),
+        tests=bullets(branch.get("tests", [])),
+        stop_conditions=bullets(branch.get("stop_conditions", [])),
+        dod=bullets(branch.get("dod", [])),
+    )
+
+
+def write_bundle_prompts(
+    brief: dict,
+    bundle_dir: Path,
+    *,
+    branch_ids: set[str] | None = None,
+    write_main: bool = True,
+) -> None:
+    if write_main:
+        write(bundle_dir / "main.prompt.md", render_main_prompt_text(brief))
     for branch in brief["branches"]:
-        write(
-            bundle_dir / branch["prompt"],
-            branch_template.format(
-                branch_id=branch["id"],
-                title=branch.get("title", branch.get("objective", branch["id"])),
-                base_ref=brief["base_ref"],
-                branch_name=branch["branch_name"],
-                worktree_path=branch["worktree_path"],
-                wave=branch["wave"],
-                depends_on=bullets(branch.get("depends_on", [])),
-                max_active_worker_packets=branch["max_active_worker_packets"],
-                worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
-                pre_review_gate_path=branch["pre_review_gate_path"],
-                worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
-                default_worker_ladder=CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER),
-                allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
-                objective=branch.get("objective", "Objective not supplied."),
-                scope=branch.get("scope", "Scope not supplied."),
-                owned_paths=bullets(branch.get("owned_paths", [])),
-                work_items=format_work_items(branch["id"], branch.get("work_items", [])),
-                tests=bullets(branch.get("tests", [])),
-                stop_conditions=bullets(branch.get("stop_conditions", [])),
-                dod=bullets(branch.get("dod", [])),
-            ),
-        )
+        if branch_ids is not None and branch["id"] not in branch_ids:
+            continue
+        write(bundle_dir / branch["prompt"], render_branch_prompt_text(brief, branch))
+
+
+def lint_bundle(bundle_dir: Path, *, write_output: bool = True) -> dict:
+    path = Path(__file__).resolve().parent / "lint_goal_bundle.py"
+    spec = importlib.util.spec_from_file_location("goal_preflight_lint_goal_bundle", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load bundle linter: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    data = module.lint(bundle_dir)
+    if write_output:
+        write(bundle_dir / "preflight.lint.json", json.dumps(data, indent=2, sort_keys=True) + "\n")
+    return data
+
+
+def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
+    brief = normalize_brief(brief)
+
+    bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
+    ensure_bundle_dirs(bundle_dir)
+
+    manifest = manifest_from_normalized_brief(brief)
+    write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+    write_bundle_prompts(brief, bundle_dir)
 
     bootloader = render_bootloader(bundle_dir.resolve(), repo_root.resolve())
     write(bundle_dir / "goal-bootloader.md", bootloader)

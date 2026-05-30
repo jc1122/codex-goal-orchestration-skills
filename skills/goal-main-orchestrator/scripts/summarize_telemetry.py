@@ -16,7 +16,7 @@ USAGE_KEYS = (
     "cached_input_tokens",
     "total_tokens",
 )
-TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite")
+TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendments")
 
 
 def zero_usage() -> dict[str, int]:
@@ -138,6 +138,7 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
     by_attempt: dict[str, dict[str, Any]] = {}
     premium_usage = {
         "audit_gpt_5_5": zero_premium_bucket(),
+        "amender_gpt_5_5": zero_premium_bucket(),
         "reviewer_gpt_5_5": zero_premium_bucket(),
     }
     packets = []
@@ -199,6 +200,8 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
             premium_key = None
             if role == "prompt-auditor" and (attempt.get("alias") == "gpt-5.5" or attempt.get("model") == "gpt-5.5"):
                 premium_key = "audit_gpt_5_5"
+            elif role == "plan_amender" and (attempt.get("alias") == "gpt-5.5" or attempt.get("model") == "gpt-5.5"):
+                premium_key = "amender_gpt_5_5"
             elif role == "reviewer" and (attempt.get("alias") == "gpt-5.5" or attempt.get("model") == "gpt-5.5"):
                 premium_key = "reviewer_gpt_5_5"
             if premium_key:

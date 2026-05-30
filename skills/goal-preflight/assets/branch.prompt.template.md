@@ -32,13 +32,13 @@ Parallel worker packets are the default for independent work items. This branch 
 
 Worker scheduler ledger: {worker_scheduler_path}
 
-Record `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` events in that scheduler ledger. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Final validation reconstructs active worker counts from this ledger and rejects duplicate launches, launches above cap, missing finishes/closes, missing refill events, and eligible-idle gaps even if status prose claims saturation.
+Record schema v2 `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` events in that scheduler ledger. Every scheduler event must include ordered `seq`, `timestamp`, and `runtime_ref`; `defer`, `under_capacity`, and `blocked` must also include enum `reason_code` plus `reason`. Use `append_scheduler_event.py` rather than hand-editing the ledger when possible. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Final validation reconstructs active worker counts from this ledger and rejects duplicate launches, launches above cap, missing finishes/closes, missing refill events, dependency launches after non-pass dependencies, and eligible-idle gaps even if status prose claims saturation.
 
 Worker parallelization rationale: {worker_parallelization_rationale}
 
 Use `render_worker_schedule.py --list-ready` with the current completed and active worker packet ids before initial launch and after every worker completion.
 
-Use the listed Worker packet id for each worker packet. A `pass` or `partial` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. Branch `pass` requires every normal worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json` plus same-packet `telemetry.json`.
+Use the listed Worker packet id for each worker packet. A `pass` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. A `partial` branch status means some work completed and every unlaunched or blocked remainder is explained by scheduler v2 terminal evidence. Branch `pass` requires every normal worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json` plus same-packet `telemetry.json`.
 
 If a work item lists `Worker type: research-worker`, create it with `create_runtime_packet.py --role research-worker`, put the packet under manifest-owned `research/<packet_id>/`, and use it only for outside information gathering. Research workers run `codex --search exec --ephemeral -s read-only` without user-config suppression, so they may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, read-only local file access, and configured tool/skill documentation when relevant. They must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. Branch `pass` requires every research-worker status to be `pass` and backed by `research/<packet_id>/research.json` plus same-packet `telemetry.json`.
 
@@ -64,9 +64,11 @@ Optional Lite advisors are context routers only. After required start checks pas
 
 ## Reviewer Requirement
 
-Before reviewer packet generation, write `{pre_review_gate_path}` with `status: "pass"`, current input hashes, validator/test/diff/ownership/DoD gate results, and reviewer reuse policy. Dispatch a read-only heavy-model reviewer only after that deterministic pre-review gate passes. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact and same-packet `telemetry.json` exist, reviewer input hashes match `{pre_review_gate_path}` exactly, reviewer reuse is accepted only when all recorded hashes match, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
+Before reviewer packet generation, write schema v2 `{pre_review_gate_path}` with `status: "pass"`, current `semantic_input_hashes`, optional `volatile_input_hashes`, validator/test/diff/ownership/DoD gate results, and reviewer reuse policy. Reviewer packet generation writes `reviewers/<packet_id>/route.json` from the manifest `review_model_policy`: light routes `gpt-5.4-mini -> gpt-5.4`, standard routes `gpt-5.4 -> gpt-5.5`, and heavy routes `gpt-5.5 -> gpt-5.4` for public API, scheduler/validator contract, security, migration, scientific/claim-boundary, large-diff, or prior-reviewer-blocker work. Dispatch a read-only reviewer only after that deterministic pre-review gate passes. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact exists, reviewer `semantic_input_hashes` match `{pre_review_gate_path}` exactly, fresh reviewer telemetry aliases match `route.json`, accepted reuse proves matching semantic hashes plus existing source review and source telemetry without a fresh model call, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
 
 After reviewer dispatch, wait for the reviewer launcher; do not poll active reviewer event logs, process tables, or review files unless the user explicitly enters debug mode or the launcher exits without a valid review.
+
+If the reviewer returns `mergeable_after_fixes`, `blocked`, or `reject` with actionable findings that fit a manifest work item's owned paths, launch a repair attempt for that same worker packet id with `create_runtime_packet.py --replace`, preserving the previous packet under `attempts/`, and append scheduler v2 repair evidence by closing the non-pass attempt, refilling the freed slot, and relaunching the same manifest worker id. Do not invent undeclared worker ids. If the findings require broader scope than the manifest worker set, return `partial` or `blocked` with the reviewer findings preserved.
 
 ## Bootstrap Requirement
 
@@ -84,10 +86,10 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - Research-worker packets, when present, used broad read-only information retrieval, recorded `tools_used` and source URLs, passed read-only security validation, and wrote same-packet `telemetry.json`.
 - Packet telemetry records positive `timeout_seconds` for every declared model attempt.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
-- `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with explicit refill/deferral evidence.
+- `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
-- `{pre_review_gate_path}` passed before reviewer launch; the reviewer artifact exists, is `mergeable`, records matching reviewer input hashes and reuse policy, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
+- `{pre_review_gate_path}` passed before reviewer launch; reviewer `route.json` exists; the reviewer artifact exists, is `mergeable`, records matching `semantic_input_hashes` and reuse policy, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/research-worker/reviewer launchers were waited on rather than polled.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
 - `lite_advice` records are present, even when empty; every relevant branch Lite packet directory is recorded, validated, and treated only as advisory context routing.

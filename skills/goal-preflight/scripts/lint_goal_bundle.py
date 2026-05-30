@@ -54,7 +54,10 @@ MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
 MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.worker_ladder_list()
+AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
+REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
+ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
 
 
 def load_json(path: Path) -> dict:
@@ -112,6 +115,34 @@ def has_contention_reason(*values: object) -> bool:
         if isinstance(value, list) and any(isinstance(item, str) and item.strip() for item in value):
             return True
     return False
+
+
+def ready_branch_count(branches: list[dict]) -> int:
+    return len([branch for branch in branches if isinstance(branch, dict) and not branch.get("depends_on")])
+
+
+def longest_branch_chain(branches: list[dict]) -> int:
+    lengths: dict[str, int] = {}
+    for branch in branches:
+        if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
+            continue
+        deps = branch.get("depends_on", []) if isinstance(branch.get("depends_on"), list) else []
+        lengths[branch["id"]] = 1 + max([lengths.get(dep, 1) for dep in deps if isinstance(dep, str)] or [0])
+    return max(lengths.values(), default=0)
+
+
+def ready_worker_count(work_items: list[dict]) -> int:
+    return len([item for item in work_items if isinstance(item, dict) and not item.get("depends_on")])
+
+
+def longest_worker_chain(work_items: list[dict]) -> int:
+    lengths: dict[str, int] = {}
+    for item in work_items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        deps = item.get("depends_on", []) if isinstance(item.get("depends_on"), list) else []
+        lengths[item["id"]] = 1 + max([lengths.get(dep, 1) for dep in deps if isinstance(dep, str)] or [0])
+    return max(lengths.values(), default=0)
 
 
 def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) -> None:
@@ -271,7 +302,7 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
         return result(defects)
 
-    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers"]:
+    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments"]:
         if not (bundle_dir / dirname).is_dir():
             defect(dirname + "/", "critical", f"required bundle directory is missing: {dirname}/")
 
@@ -285,7 +316,11 @@ def lint(bundle_dir: Path) -> dict:
         "waves",
         "max_active_branch_agents",
         "parallelization",
+        "adaptation_policy",
         "worker_model_policy",
+        "amender_model_policy",
+        "review_model_policy",
+        "orchestration_watchdog",
         "preflight_lite_advice",
     ]:
         if key not in manifest:
@@ -327,12 +362,10 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "parallelization.serial_reasons must be an array of non-empty strings")
         serial_reasons = []
     parallelization_rationale = parallelization.get("parallelization_rationale", "")
-    has_parallelization_reason = (
-        bool(serial_reasons)
-    ) or (
-        isinstance(parallelization_rationale, str)
-        and bool(parallelization_rationale.strip())
-    )
+    has_serial_reason = bool(serial_reasons)
+
+    if manifest.get("adaptation_policy") != CONTRACT.ADAPTATION_POLICY:
+        defect("job.manifest.json", "critical", "adaptation_policy must match the shared amendment proposal policy")
 
     branches = manifest.get("branches", [])
     if not branches:
@@ -341,15 +374,15 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "more than 20 branches exceeds 5 waves of 4")
     if len(branches) == 1 and not serial_reasons:
         defect("job.manifest.json", "critical", "single-branch bundles require parallelization.serial_reasons")
-    if is_strict_int(max_active) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
-        defect("job.manifest.json", "critical", "max_active_branch_agents below 4 requires serial_reasons or parallelization_rationale")
+    if is_strict_int(max_active) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_serial_reason:
+        defect("job.manifest.json", "critical", "max_active_branch_agents below 4 requires parallelization.serial_reasons")
     if (
         is_strict_int(max_active)
         and isinstance(branches, list)
-        and len([branch for branch in branches if isinstance(branch, dict) and not branch.get("depends_on")]) < min(max_active, len(branches))
-        and not has_parallelization_reason
+        and ready_branch_count(branches) < min(max_active, len(branches))
+        and not has_serial_reason
     ):
-        defect("job.manifest.json", "critical", "too few initially eligible branches under max_active_branch_agents requires serial_reasons or parallelization_rationale")
+        defect("job.manifest.json", "critical", "too few initially eligible branches under max_active_branch_agents requires parallelization.serial_reasons")
 
     worker_model_policy = manifest.get("worker_model_policy", {})
     if not isinstance(worker_model_policy, dict):
@@ -365,6 +398,18 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "worker_model_policy.selection_reason_required must be true")
     if not isinstance(worker_model_policy.get("ordering_rule"), str) or not worker_model_policy.get("ordering_rule", "").strip():
         defect("job.manifest.json", "critical", "worker_model_policy.ordering_rule must be non-empty")
+
+    review_model_policy = manifest.get("review_model_policy", {})
+    if review_model_policy != REVIEW_MODEL_POLICY:
+        defect("job.manifest.json", "critical", "review_model_policy must match the shared deterministic review router policy")
+
+    amender_model_policy = manifest.get("amender_model_policy", {})
+    if amender_model_policy != AMENDER_MODEL_POLICY:
+        defect("job.manifest.json", "critical", "amender_model_policy must match the shared deterministic plan-amender router policy")
+
+    watchdog = manifest.get("orchestration_watchdog", {})
+    if watchdog != ORCHESTRATION_WATCHDOG:
+        defect("job.manifest.json", "critical", "orchestration_watchdog must match shared watchdog defaults")
 
     research_worker_policy = manifest.get("research_worker_policy")
     if research_worker_policy is not None:
@@ -445,16 +490,10 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "branch ids must not appear in more than one wave")
     if set(wave_branch_ids) != set(ids):
         defect("job.manifest.json", "critical", "waves must cover exactly the manifest branch ids")
-    if isinstance(branches, list) and not has_parallelization_reason:
-        longest_chain: dict[str, int] = {}
-        for branch in branches:
-            if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
-                continue
-            bid = branch["id"]
-            deps = branch.get("depends_on", []) if isinstance(branch.get("depends_on"), list) else []
-            longest_chain[bid] = 1 + max([longest_chain.get(dep, 1) for dep in deps if isinstance(dep, str)] or [0])
-        if longest_chain and max(longest_chain.values()) >= 3:
-            defect("job.manifest.json", "critical", "long serial branch dependency chains require parallelization.serial_reasons or parallelization_rationale")
+    if isinstance(branches, list) and not has_serial_reason:
+        chain = longest_branch_chain(branches)
+        if len(branches) > 2 and chain >= len(branches) - 1:
+            defect("job.manifest.json", "critical", "long serial branch dependency chains require parallelization.serial_reasons")
 
     main_prompt_value = manifest.get("main_prompt", "main.prompt.md")
     main_path_error = relative_path_defect(main_prompt_value, "main_prompt")
@@ -522,7 +561,7 @@ def lint(bundle_dir: Path) -> dict:
             "never exceed 4",
             "branch orchestrator slots saturated",
             "depends_on",
-            "waves are scheduling/order groups",
+            "Waves are scheduling/order groups",
             "1 to 4 worker packets",
             "rolling saturated pool",
         ]:
@@ -539,6 +578,7 @@ def lint(bundle_dir: Path) -> dict:
         "review_path",
         "pre_review_gate_path",
         "depends_on",
+        "owned_paths",
         "work_items",
         "max_active_worker_packets",
         "worker_parallelism",
@@ -570,6 +610,10 @@ def lint(bundle_dir: Path) -> dict:
         max_workers = branch.get("max_active_worker_packets")
         if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets must be an integer from 1 to 4")
+        branch_owned_paths_value = branch.get("owned_paths", [])
+        if not isinstance(branch_owned_paths_value, list) or any(not isinstance(item, str) or not item.strip() for item in branch_owned_paths_value):
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} owned_paths must be a derived array of non-empty strings")
+            branch_owned_paths_value = []
         work_items = branch.get("work_items", [])
         if not isinstance(work_items, list) or len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets")
@@ -663,6 +707,13 @@ def lint(bundle_dir: Path) -> dict:
                     ):
                         overlap_text = ", ".join(f"{left_path} vs {right_path}" for left_path, right_path in overlaps)
                         defect("job.manifest.json", "critical", f"branch {branch.get('id')} work item owned_paths overlap without dependency or contention_reason: {left_id} and {right_id}: {overlap_text}")
+            derived_branch_owned = []
+            for item in work_items:
+                for value in item.get("owned_paths", []):
+                    if isinstance(value, str) and value not in derived_branch_owned:
+                        derived_branch_owned.append(value)
+            if branch_owned_paths_value != derived_branch_owned:
+                defect("job.manifest.json", "critical", f"branch {branch.get('id')} owned_paths must equal the ordered union of work item owned_paths")
         worker_parallelism = branch.get("worker_parallelism", {})
         if not isinstance(worker_parallelism, dict):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism must be an object")
@@ -686,13 +737,24 @@ def lint(bundle_dir: Path) -> dict:
             worker_serial_reasons = []
         if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism.get("parallelization_rationale", "").strip():
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelization_rationale must be non-empty")
+        if is_strict_int(max_workers) and max_workers < MAX_WORKER_PACKETS_PER_BRANCH and not worker_serial_reasons:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets below 4 requires worker_parallelism.serial_reasons")
+        if is_strict_int(max_workers) and isinstance(work_items, list) and len(work_items) == 1 and max_workers > 1 and not worker_serial_reasons:
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} has one worker while max_active_worker_packets > 1 without worker_parallelism.serial_reasons")
         if (
             is_strict_int(max_workers)
             and isinstance(work_items, list)
-            and len([item for item in work_items if isinstance(item, dict) and not item.get("depends_on")]) < min(max_workers, len(work_items))
-            and not has_contention_reason(worker_serial_reasons, worker_parallelism.get("parallelization_rationale"))
+            and ready_worker_count(work_items) < min(max_workers, len(work_items))
+            and not worker_serial_reasons
         ):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} has too few initially eligible worker items under max_active_worker_packets without serial_reasons or parallelization_rationale")
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} has too few initially eligible worker items under max_active_worker_packets without worker_parallelism.serial_reasons")
+        if (
+            isinstance(work_items, list)
+            and len(work_items) > 2
+            and longest_worker_chain(work_items) >= len(work_items) - 1
+            and not worker_serial_reasons
+        ):
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker dependency chain serializes most work without worker_parallelism.serial_reasons")
         dependency_policy = worker_parallelism.get("dependency_policy", "")
         if not isinstance(dependency_policy, str) or "depends_on" not in dependency_policy:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.dependency_policy must mention depends_on")
@@ -746,7 +808,7 @@ def lint(bundle_dir: Path) -> dict:
             "Stop Conditions",
             "git diff --check",
             "pre_review_gate.json",
-            "reviewer input hashes",
+            "semantic_input_hashes",
             "do not poll active",
         ]:
             if phrase.lower() not in text.lower():
@@ -769,12 +831,7 @@ def lint(bundle_dir: Path) -> dict:
         bid = branch["id"]
         branch_deps[bid] = branch.get("depends_on", []) if isinstance(branch.get("depends_on"), list) else []
         branch_contention[bid] = branch.get("contention_reason")
-        owned: list[str] = []
-        work_items = branch.get("work_items", [])
-        if isinstance(work_items, list):
-            for item in work_items:
-                if isinstance(item, dict) and isinstance(item.get("owned_paths"), list):
-                    owned.extend(path for path in item["owned_paths"] if isinstance(path, str))
+        owned = [path for path in branch.get("owned_paths", []) if isinstance(path, str)] if isinstance(branch.get("owned_paths"), list) else []
         branch_owned_paths[bid] = owned
     branch_ids_for_overlap = list(branch_owned_paths)
     for left_index, left_id in enumerate(branch_ids_for_overlap):
@@ -816,14 +873,14 @@ def main() -> int:
     if args.no_write:
         if args.output:
             raise SystemExit("--no-write cannot be combined with --output")
-        print(json.dumps(data, indent=2))
+        print(json.dumps(data, indent=2, sort_keys=True))
         return 0 if data["status"] == "pass" else 1
     output_path = (
         resolve_absolute_path(args.output, "--output", must_exist=False)
         if args.output
         else bundle_dir / "preflight.lint.json"
     )
-    output_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(output_path)
     return 0 if data["status"] == "pass" else 1
 

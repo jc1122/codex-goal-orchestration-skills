@@ -15,10 +15,13 @@ SKILLS = (
     "goal-preflight",
     "goal-main-orchestrator",
     "goal-branch-orchestrator",
+    "goal-plan-amender",
 )
 SHARED_SCRIPTS = (
+    "append_scheduler_event.py",
     "create_lite_advice_packet.py",
     "extract_telemetry.py",
+    "scheduler_tick.py",
     "validate_lite_advice.py",
     "check_goal_skill_availability.py",
 )

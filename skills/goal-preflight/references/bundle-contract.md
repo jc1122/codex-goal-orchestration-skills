@@ -21,13 +21,14 @@ plans/orchestration/<job-id>/
   reviewers/
   audit/
   lite/
+  amendments/
 ```
 
 ## Manifest
 
-Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, `review_path`, `pre_review_gate_path`, and scheduler paths are relative to the manifest directory. `worktree_path` is relative to the repository root. Work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, `review_path`, and `pre_review_gate_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime normal worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths. Runtime research-worker artifacts must resolve to manifest-owned `research/<packet_id>/research.json` paths. Reviewer packet ids must belong to the reviewed branch.
+Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, branch `prompt`, `status_path`, `review_path`, `pre_review_gate_path`, and scheduler paths are relative to the manifest directory. `worktree_path` is relative to the repository root. Branch `owned_paths` are derived from work item ownership; work item `owned_paths` and `context_files` are repo-relative paths. Numeric limits such as `max_active_branch_agents` and `max_active_worker_packets` must be JSON integers, not booleans or strings. Absolute paths, backslashes, empty path segments, `.`, and `..` are invalid. Branch `prompt`, `status_path`, `review_path`, and `pre_review_gate_path` values must be collision-free across all branches and must not reuse reserved bundle files such as `job.manifest.json`, `main.prompt.md`, `goal-bootloader.md`, `PREFLIGHT_REPORT.md`, or `preflight.lint.json`; branch `worktree_path` values must also be unique. Runtime normal worker artifacts must resolve to manifest-owned `workers/<packet_id>/status.json` paths. Runtime research-worker artifacts must resolve to manifest-owned `research/<packet_id>/research.json` paths. Reviewer packet ids must belong to the reviewed branch, and reviewer telemetry must match manifest-owned `reviewers/<packet_id>/route.json` unless accepted reuse points to existing source review and source telemetry.
 
-Preflight script entry paths are absolute only: `--brief`, `--repo-root`, optional `--out-dir`, lint `--bundle-dir`, lint `--output`, and bootloader render `--bundle-dir`/`--repo-root` must not depend on the caller's current working directory.
+Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief/--repo-root/--output`, `create_goal_bundle.py --brief/--repo-root/--out-dir`, bundle lint `--bundle-dir/--output`, and bootloader render `--bundle-dir/--repo-root` must not depend on the caller's current working directory. The brief linter rejects missing concrete top-level `goal`, `source_summary`, `required_evidence`, and `final_dod`, placeholders, unsafe or missing context paths, vague DoD, missing verification commands, and policies that do not preserve partial/blocked/failed or unresolved/negative/probe-only states before bundle generation. Omitted artifact/cleanup policies are linted after deterministic defaults are applied.
 
 `goal-bootloader.md` is location-bound because it embeds absolute bundle and repository roots. If the bundle or repository checkout moves, regenerate the bootloader from the preflight skill or with `render_goal_bootloader.py --repo-root /absolute/path/to/repo --write` instead of editing those paths manually.
 
@@ -51,6 +52,22 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
     "dependency_policy": "Branch depends_on entries are explicit prior-branch dependencies; branches without unresolved depends_on entries are eligible whenever capacity is available."
   },
+  "adaptation_policy": {
+    "enabled": true,
+    "mode": "amendment_proposals",
+    "launcher": "goal-main-orchestrator",
+    "may_modify_active_or_terminal_branches": false,
+    "allowed_operations": ["add_branch", "split_unstarted_branch", "replace_unstarted_branch", "add_dependency_to_unstarted_branch", "add_work_item_to_unstarted_branch", "mark_unstarted_branch_obsolete"]
+  },
+  "amender_model_policy": {
+    "default_ladder": ["gpt-5.4", "gpt-5.4-mini"],
+    "allowed_routes": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+    "launcher": "goal-main-orchestrator",
+    "selection_reason_required": true,
+    "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
+    "sandbox": "read-only",
+    "timeout_seconds": 1200
+  },
   "worker_model_policy": {
     "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
     "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
@@ -65,6 +82,19 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
     "network_scope": "Broad read-only information retrieval is allowed through Codex native web search, configured CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands. State-changing, destructive, credential, posting, purchasing, and file-editing actions are prohibited.",
     "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files."
   },
+  "review_model_policy": {
+    "router": "deterministic-v1",
+    "default_tier": "standard",
+    "routes": {
+      "light": ["gpt-5.4-mini", "gpt-5.4"],
+      "standard": ["gpt-5.4", "gpt-5.5"],
+      "heavy": ["gpt-5.5", "gpt-5.4"]
+    }
+  },
+  "orchestration_watchdog": {
+    "main_no_completion_wait_limit": 3,
+    "branch_no_completion_wait_limit": 3
+  },
   "preflight_lite_advice": [],
   "branches": [
     {
@@ -77,6 +107,7 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
       "review_path": "branches/B01.review.json",
       "pre_review_gate_path": "branches/B01.pre_review_gate.json",
       "depends_on": [],
+      "owned_paths": ["src/example.py"],
       "max_active_worker_packets": 4,
       "work_items": [
         {
@@ -123,6 +154,8 @@ Preflight script entry paths are absolute only: `--brief`, `--repo-root`, option
 - Branch manifest `depends_on` entries reference only prior branch ids; a branch is deferred only while one of those explicit dependencies is incomplete.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
 - `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
+- `job.manifest.json` contains `adaptation_policy` and `amender_model_policy`; main may invoke `goal-plan-amender` only after terminal branch validation and only for future unstarted work.
+- Plan-amender packets live under `amendments/Axxx.packet/`, select an allowed amender model ladder in `route.json`, write `telemetry.json`, and write proposals to the sibling `amendments/Axxx.proposal.json`.
 - `main.prompt.md` requires `summarize_telemetry.py --bundle-dir <bundle>` before final validation and requires `telemetry.summary.json` for pass.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
 - `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.

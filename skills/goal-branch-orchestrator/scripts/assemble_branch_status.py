@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""Assemble a conservative branch status artifact from manifest-owned runtime artifacts."""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import shlex
+import subprocess
+from pathlib import Path
+
+
+def _load_module(name: str, path: Path):
+    if not path.exists():
+        raise SystemExit(f"missing required module: {path}")
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load required module: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+SKILLS_ROOT = SCRIPT_DIR.parents[1]
+SHARED_SCRIPTS = SKILLS_ROOT / "_goal_shared" / "scripts"
+
+CONTRACT = _load_module("goal_shared_orchestration_contract", SHARED_SCRIPTS / "orchestration_contract.py")
+PATH_RULES = _load_module("goal_shared_path_rules", SHARED_SCRIPTS / "path_rules.py")
+STATUS_VALIDATION = _load_module("goal_shared_status_validation", SHARED_SCRIPTS / "status_validation.py")
+BRANCH_VALIDATOR = _load_module("goal_branch_validate_branch_status", SCRIPT_DIR / "validate_branch_status.py")
+
+resolve_absolute_path = PATH_RULES.resolve_absolute_path
+is_repo_relative_path = PATH_RULES.is_repo_relative_path
+require_safe_label = PATH_RULES.require_safe_packet_label
+
+
+def read_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise SystemExit(f"expected JSON object at {path}")
+    return data
+
+
+def write_json(path: Path, data: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def run_shell(command: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=cwd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+
+
+def branch_entry(manifest: dict, branch_id: str) -> dict:
+    branches = manifest.get("branches")
+    if not isinstance(branches, list):
+        raise SystemExit("manifest branches must be an array")
+    matches = [branch for branch in branches if isinstance(branch, dict) and branch.get("id") == branch_id]
+    if len(matches) != 1:
+        raise SystemExit(f"manifest must contain exactly one branch {branch_id!r}")
+    return matches[0]
+
+
+def safe_bundle_path(bundle_dir: Path, value: object, field: str) -> Path:
+    if not isinstance(value, str) or not value.strip() or not is_repo_relative_path(value):
+        raise SystemExit(f"{field} must be a safe bundle-relative path")
+    return (bundle_dir / value).resolve()
+
+
+def worker_role(item: dict) -> str:
+    role = item.get("worker_type", "worker")
+    if role == "research":
+        role = "research-worker"
+    return role if role in CONTRACT.WORK_ITEM_ROLES else "worker"
+
+
+def collect_worker_statuses(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[list[dict], list[str]]:
+    statuses: list[dict] = []
+    blockers: list[str] = []
+    work_items = branch.get("work_items")
+    if not isinstance(work_items, list):
+        return statuses, [f"manifest branch {branch_id} does not declare work_items"]
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        packet_id = item.get("packet_id")
+        if not isinstance(packet_id, str) or not packet_id.strip():
+            item_id = item.get("id")
+            packet_id = f"{branch_id}-{item_id}" if isinstance(item_id, str) else ""
+        if not packet_id:
+            blockers.append(f"manifest branch {branch_id} has work item without packet_id")
+            continue
+        role = worker_role(item)
+        artifact_path = (
+            bundle_dir / "research" / packet_id / "research.json"
+            if role == "research-worker"
+            else bundle_dir / "workers" / packet_id / "status.json"
+        )
+        if not artifact_path.exists():
+            blockers.append(f"missing {role} artifact for {packet_id}: {artifact_path}")
+            continue
+        status = read_json(artifact_path)
+        if role == "worker":
+            status.setdefault("role", "worker")
+        status["status_path"] = artifact_path.resolve().as_posix()
+        statuses.append(status)
+        if status.get("status") != "pass":
+            blockers.append(f"{packet_id} finished {status.get('status')!r}, not pass")
+    return statuses, blockers
+
+
+def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple[dict, list[str]]:
+    bundle_dir = manifest_path.parent
+    expected_path = CONTRACT.worker_scheduler_path(branch_id)
+    expected_ids = BRANCH_VALIDATOR.expected_worker_packet_ids([], branch, branch_id)
+    dependencies = BRANCH_VALIDATOR.expected_worker_dependencies(branch, branch_id)
+    max_active = branch.get("max_active_worker_packets")
+    capacity = max_active if isinstance(max_active, int) and not isinstance(max_active, bool) else CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+    defects: list[str] = []
+    scheduler_file = bundle_dir / expected_path
+    summary = STATUS_VALIDATION.validate_scheduler_artifact(
+        defects,
+        scheduler_file,
+        "$.worker_parallelism.scheduler_path",
+        scheduler_kind="branch-worker-pool",
+        expected_path=expected_path,
+        expected_ids=expected_ids,
+        dependencies=dependencies,
+        capacity=capacity,
+        manifest_path=manifest_path,
+        require_all_launched=False,
+    )
+    refill_events = []
+    if scheduler_file.exists():
+        try:
+            scheduler_data = read_json(scheduler_file)
+            for event in scheduler_data.get("events", []):
+                if isinstance(event, dict) and event.get("event") == "refill":
+                    seq = event.get("seq")
+                    eligible = event.get("eligible_ids", [])
+                    suffix = ",".join(item for item in eligible if isinstance(item, str)) if isinstance(eligible, list) else ""
+                    refill_events.append(f"seq:{seq}:{suffix}" if isinstance(seq, int) else suffix)
+        except Exception as exc:  # noqa: BLE001
+            defects.append(f"could not read scheduler refill events: {exc}")
+    worker_parallelism = {
+        "scheduler_path": expected_path,
+        "max_worker_packets_per_branch": CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH,
+        "max_active_worker_packets": capacity,
+        "max_observed_active_worker_packets": summary.get("max_observed_active", 0),
+        "max_observed_active": summary.get("max_observed_active", 0),
+        "concurrent_launch_default": True,
+        "rolling_refill_default": True,
+        "scheduling_mode": "rolling",
+        "launched_ids": summary.get("launched", []),
+        "finished_ids": summary.get("finished", []),
+        "active_ids": summary.get("active", []),
+        "blocked_ids": summary.get("blocked", []),
+        "deferred_ids": summary.get("deferred", []),
+        "serialized_workers": [],
+        "deferred_workers": summary.get("deferred", []),
+        "serial_reasons": branch.get("worker_parallelism", {}).get("serial_reasons", [])
+        if isinstance(branch.get("worker_parallelism"), dict)
+        else branch.get("worker_serial_reasons", []),
+        "refill_events": refill_events,
+    }
+    return worker_parallelism, defects
+
+
+def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
+    lite_dir = bundle_dir / "lite"
+    if not lite_dir.is_dir():
+        return []
+    records = []
+    for packet_dir in sorted(path for path in lite_dir.iterdir() if path.is_dir() and path.name.startswith(f"{branch_id}-L")):
+        advice_path = packet_dir / "advice.json"
+        inputs_path = packet_dir / "input-files.json"
+        if not advice_path.exists() or not inputs_path.exists():
+            continue
+        inputs = read_json(inputs_path)
+        advice = read_json(advice_path)
+        command = STATUS_VALIDATION.lite_validation_command(SCRIPT_DIR, advice_path.resolve(), inputs_path.resolve())
+        result = subprocess.run(
+            shlex.split(command),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        defects = [
+            line.removeprefix("- ").strip()
+            for line in result.stdout.splitlines()
+            if line.startswith("- ")
+        ]
+        source_files = [
+            {
+                "path": item.get("path"),
+                "sha256": item.get("sha256"),
+                "size_bytes": item.get("size_bytes"),
+                "reason": item.get("reason"),
+            }
+            for item in inputs.get("source_files", [])
+            if isinstance(item, dict)
+        ] if isinstance(inputs.get("source_files"), list) else []
+        records.append(
+            {
+                "packet_id": packet_dir.name,
+                "purpose": advice.get("purpose", inputs.get("purpose")),
+                "status": advice.get("status", "blocked"),
+                "disposition": "ignored",
+                "advice_path": advice_path.resolve().as_posix(),
+                "inputs_path": inputs_path.resolve().as_posix(),
+                "source_files": source_files,
+                "validation_command": command,
+                "validation_status": "pass" if result.returncode == 0 else "failed",
+                "validation_defects": defects,
+                "reason": "Assembled branch status records Lite advice as advisory context only.",
+            }
+        )
+    return records
+
+
+def changed_files_from_git(worktree: Path, base_ref: str) -> list[str]:
+    result = run_shell(f"git diff --name-only {base_ref}...HEAD", cwd=worktree)
+    if result.returncode != 0:
+        return []
+    return [
+        line.strip()
+        for line in result.stdout.splitlines()
+        if line.strip() and is_repo_relative_path(line.strip(), reject_porcelain=True)
+    ]
+
+
+def review_status(bundle_dir: Path, branch: dict) -> tuple[str, list[str]]:
+    review_path = safe_bundle_path(bundle_dir, branch.get("review_path"), "manifest branch review_path")
+    if not review_path.exists():
+        return "missing", [f"review artifact is missing: {review_path}"]
+    review = read_json(review_path)
+    verdict = review.get("verdict")
+    if verdict not in CONTRACT.REVIEW_STATUSES:
+        return "missing", [f"review artifact has invalid verdict: {verdict!r}"]
+    if verdict != "mergeable":
+        return str(verdict), [f"review verdict is {verdict!r}, not mergeable"]
+    return "mergeable", []
+
+
+def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
+    manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+    worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
+    bundle_dir = manifest_path.parent
+    manifest = read_json(manifest_path)
+    branch_id = require_safe_label(args.branch_id, "--branch-id")
+    branch = branch_entry(manifest, branch_id)
+    branch_name = branch.get("branch_name")
+    if not isinstance(branch_name, str) or not branch_name.strip():
+        raise SystemExit(f"manifest branch {branch_id} is missing branch_name")
+    output_path = (
+        resolve_absolute_path(args.output, "--output", must_exist=False)
+        if args.output
+        else safe_bundle_path(bundle_dir, branch.get("status_path"), "manifest branch status_path")
+    )
+    if output_path.exists() and not args.replace:
+        raise SystemExit(f"branch status already exists; pass --replace to recreate: {output_path}")
+
+    worker_statuses, worker_blockers = collect_worker_statuses(bundle_dir, branch, branch_id)
+    worker_parallelism, scheduler_defects = scheduler_rollup(manifest_path, branch, branch_id)
+    inferred_review_status, review_blockers = review_status(bundle_dir, branch)
+    base_ref = str(manifest.get("base_ref", "main"))
+    diff_command = f"git diff --check {base_ref}...HEAD"
+    diff_result = run_shell(diff_command, cwd=worktree)
+    changed_files = list(args.changed_file) if args.changed_file else changed_files_from_git(worktree, base_ref)
+    dod_items = [item for item in args.dod_item if item.strip()]
+    if not dod_items:
+        dod = branch.get("dod")
+        if isinstance(dod, list):
+            dod_items = [item for item in dod if isinstance(item, str) and item.strip()]
+    blockers = list(args.blocker)
+    blockers.extend(worker_blockers)
+    blockers.extend(scheduler_defects)
+    blockers.extend(review_blockers)
+    if diff_result.returncode != 0:
+        blockers.append(f"diff check failed: {diff_result.stdout.strip()}")
+    if not dod_items:
+        blockers.append("DoD checklist is missing")
+
+    all_workers_pass = bool(worker_statuses) and not worker_blockers
+    can_pass = args.allow_pass and all_workers_pass and inferred_review_status == "mergeable" and diff_result.returncode == 0 and not blockers
+    if args.status:
+        status = args.status
+    elif can_pass:
+        status = "pass"
+    elif worker_statuses:
+        status = "partial"
+    else:
+        status = "blocked"
+    if status != "pass" and not blockers:
+        blockers.append("Branch status assembled conservatively without explicit pass evidence.")
+    tests = list(args.test_evidence)
+    commands_run = [diff_command]
+    branch_status = {
+        "branch_id": branch_id,
+        "status": status,
+        "branch": branch_name,
+        "worktree": worktree.as_posix(),
+        "worker_statuses": worker_statuses,
+        "worker_parallelism": worker_parallelism,
+        "lite_advice": collect_lite_advice(bundle_dir, branch_id),
+        "review_status": inferred_review_status,
+        "changed_files": changed_files,
+        "commands_run": commands_run,
+        "tests": tests,
+        "dod_checklist": dod_items,
+        "blockers": blockers if status != "pass" else [],
+        "handoff": args.handoff or "Branch status assembled from manifest-owned runtime artifacts.",
+    }
+    write_json(output_path, branch_status)
+
+    validation_defects = BRANCH_VALIDATOR.validate_branch_status(
+        branch_status,
+        branch_id=branch_id,
+        branch=branch_name,
+        worktree=worktree.as_posix(),
+        manifest=manifest,
+        manifest_path=manifest_path,
+        status_path=output_path,
+    )
+    return output_path, branch_status, validation_defects
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--manifest", required=True)
+    parser.add_argument("--branch-id", required=True)
+    parser.add_argument("--worktree", required=True)
+    parser.add_argument("--output")
+    parser.add_argument("--status", choices=list(CONTRACT.STATUSES))
+    parser.add_argument("--allow-pass", action="store_true")
+    parser.add_argument("--changed-file", action="append", default=[])
+    parser.add_argument("--test-evidence", action="append", default=[])
+    parser.add_argument("--dod-item", action="append", default=[])
+    parser.add_argument("--blocker", action="append", default=[])
+    parser.add_argument("--handoff")
+    parser.add_argument("--replace", action="store_true")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    output_path, status, defects = assemble(args)
+    result = {
+        "status": "pass" if not defects else "failed",
+        "status_path": output_path.as_posix(),
+        "branch_status": status.get("status"),
+        "review_status": status.get("review_status"),
+        "defects": defects,
+    }
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(output_path)
+        for defect in defects:
+            print(defect)
+    return 0 if not defects else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

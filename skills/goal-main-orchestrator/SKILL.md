@@ -32,10 +32,11 @@ fi
 python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_goal_skill_availability.py" \
   --skills-root "$GOAL_SKILLS_ROOT" \
   --require goal-main-orchestrator \
-  --require goal-branch-orchestrator
+  --require goal-branch-orchestrator \
+  --require goal-plan-amender
 ```
 
-If this fails, stop immediately and return `blocked` with the missing skill/script names. Do not run prompt audit or create worktrees until bootstrap passes.
+If this fails, stop immediately and return `blocked` with the missing skill/script names. Do not run prompt audit, create worktrees, or apply amendments until bootstrap passes.
 
 ## Mandatory Start
 
@@ -52,7 +53,15 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/create_audit_packet.py
   --out-dir /absolute/path/to/plans/orchestration/<job-id>/audit
 ```
 
-Then run the generated `launch.sh`. The audit packet uses exactly `gpt-5.5`, then `gpt-5.4`; no model overrides are accepted. The packet schema pins the exact manifest path and repository root. The launcher always writes packet-local `telemetry.json` with declared/called/accepted model aliases, model ids, prompt/output/log character and byte counts, and best-effort token usage when provider logs expose it. If both audit attempts fail without producing a valid `prompt-audit.json`, the launcher writes a terminal blocked `prompt-audit.json`.
+Then run the generated `launch.sh`. The audit packet uses exactly `gpt-5.5`, then `gpt-5.4`; no model overrides are accepted. The packet schema pins the exact manifest path and repository root. The launcher always writes packet-local `telemetry.json` with declared/called/accepted model aliases, model ids, prompt/output/log character and byte counts, and best-effort token usage when provider logs expose it. If both audit attempts fail without producing a valid `prompt-audit.json`, the launcher writes a terminal blocked `prompt-audit.json`. Validate the artifact before branch scheduling:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_prompt_audit.py" \
+  --audit /absolute/path/to/plans/orchestration/<job-id>/audit/prompt-audit.json \
+  --manifest /absolute/path/to/job.manifest.json \
+  --repo-root /absolute/path/to/repo \
+  --require-pass
+```
 
 Read `references/prompt-audit-contract.md` if the audit fails or if the prepared bundle shape is unclear.
 
@@ -115,7 +124,19 @@ If any target branch or worktree already exists, stop and report `blocked` unles
 
 ## Branch Orchestrator Dispatch
 
-Launch branch orchestrators as a rolling saturated pool. Parallelism is the default: keep up to `max_active_branch_agents` branch orchestrators active whenever eligible branches remain. Respect `max_active_branch_agents`; it must be treated as a hard limit and must not exceed 4. Record branch scheduler events in `schedulers/main.scheduler.json`: `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` as applicable. Do not wait for a whole wave to finish. When any branch finishes and is validated/closed, record `finish`/`close`, record `refill` when capacity frees with eligible branches waiting, and launch the next eligible branch immediately. Defer a branch only while one of its manifest `depends_on` branch ids is incomplete or with a structured contention/blocked reason; waves are scheduling/order groups, not implicit dependency barriers. Each branch orchestrator must use the `goal-branch-orchestrator` skill and receive:
+Launch branch orchestrators as a rolling saturated pool. Parallelism is the default: keep up to `max_active_branch_agents` branch orchestrators active whenever eligible branches remain. Respect `max_active_branch_agents`; it must be treated as a hard limit and must not exceed 4. Record schema v2 branch scheduler events in `schedulers/main.scheduler.json`: `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` as applicable. Every event must include ordered `seq`, `timestamp`, and `runtime_ref`; `defer`, `under_capacity`, and `blocked` must include enum `reason_code` plus `reason`. Use `scheduler_tick.py` for normal ready/launch/finish/close/refill bookkeeping, and reserve `append_scheduler_event.py` for unusual explicit events. For example:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py" \
+  --manifest /absolute/path/to/job.manifest.json \
+  --scope main \
+  --runtime-ref goal-main-orchestrator \
+  --init \
+  --record-ready \
+  --launch B01
+```
+
+Do not wait for a whole wave to finish. When any branch finishes with `pass` and is validated/closed, record `finish`/`close` through `scheduler_tick.py`; it records `refill` when capacity frees with eligible branches waiting, then launch the next eligible branch immediately. Branches that depend on `partial`, `blocked`, or `failed` branches must be blocked or deferred with `reason_code: "dependency_failed"` evidence. Defer a branch only while one of its manifest `depends_on` branch ids is incomplete or with a structured contention/blocked reason; waves are scheduling/order groups, not implicit dependency barriers. Each branch orchestrator must use the `goal-branch-orchestrator` skill and receive:
 
 - the branch id;
 - branch prompt path;
@@ -134,9 +155,26 @@ The main orchestrator should not implement branch work itself and should not ins
 
 Do not open or read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Treat that skill as a branch-session launch target: verify it exists during bootstrap, then dispatch a branch orchestrator session that loads and follows it with the inputs above. If branch-session launch is impossible, return `blocked` instead of absorbing the branch runtime instructions into main.
 
-After dispatch, use the native agent wait mechanism with the longest practical timeout. If a wait returns with no completed branch agents, do not poll branch worktrees, worker packets, research-worker packets, reviewer packets, process tables, or status files, and do not send status-check nudges. Continue waiting unless the user explicitly enters debug mode or a branch agent returns `blocked`/`failed`/`partial`.
+After dispatch, use the native agent wait mechanism with the longest practical timeout. If a wait returns with no completed branch agents, do not poll branch worktrees, worker packets, research-worker packets, reviewer packets, process tables, or status files, and do not send status-check nudges. After 3 consecutive no-completion waits, inspect only native agent/process state, then close unreachable or stale work as structured `blocked` evidence and refill capacity. Continue waiting unless the user explicitly enters debug mode or a branch agent returns `blocked`/`failed`/`partial`.
 
 Track active branch orchestrator agent ids/processes. As each branch finishes, collect its status/review artifacts, validate them, then close or turn off the finished branch orchestrator. If capacity is freed and an eligible unstarted branch remains, create its worktree and launch it immediately. If a finished branch orchestrator cannot be closed and capacity cannot be freed, stop and return `blocked` instead of exceeding the active-agent limit.
+
+## Plan Amendments
+
+After every branch reaches terminal status, its branch status passed `validate_branch_status.py`, and the finished branch orchestrator has been closed, run `goal-plan-amender/scripts/recommend_amendment_decision.py` for the deterministic cases. It can write the decision artifact directly for no eligible branch, dependency-blocked downstream work, eligible work remaining, active work still pending, or all-pass/no-adaptation cases:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-plan-amender/scripts/recommend_amendment_decision.py" \
+  --manifest /absolute/path/to/job.manifest.json \
+  --amendment-id A001 \
+  --write-decision
+```
+
+If the recommender cannot cover the semantic case, record a deterministic amendment decision with `goal-plan-amender/scripts/create_amendment_decision.py`. The decision is either `skip` when no adaptation is needed or `launch` when no manifest branch is eligible, blockers would stall downstream work, remaining unstarted work no longer covers the main DoD, or finalization is impossible but plausible recovery work can be added safely.
+
+The amender may create `amendments/Axxx.packet/`, `Axxx.packet/packet.validation.json`, `Axxx.proposal.json`, `Axxx.validation.json`, `Axxx.accepted.json`, and archived manifest copies. Launch it with a selected ordered amender model ladder from `amender_model_policy.allowed_routes`; the packet must write `route.json` and `telemetry.json` under `amendments/Axxx.packet/`, then pass `validate_amender_packet.py` before proposal validation or apply. It must not launch branches, edit scheduler ledgers, inspect active branch internals, mutate active or terminal branch prompts/status/review/worktree paths, or mark the run `pass`. If validation fails, preserve the defects and continue with any still-eligible existing work. If no work remains, return `partial` or `blocked` with the amendment failure evidence.
+
+Accepted amendments update only `job.manifest.json` future work and changed future branch prompts, then rerun preflight lint. Treat the updated manifest as the live scheduling source after acceptance.
 
 ## Status Validation
 
@@ -165,7 +203,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.p
   --job-id <job-id>
 ```
 
-If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker/research-worker artifacts and same-branch reviewer artifacts backing those claims, prompt-audit/worker/research-worker/reviewer/Lite `telemetry.json` artifacts, bundle `telemetry.summary.json`, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers.
+If either validator fails, return `blocked` or `partial`; do not claim `pass`. A passing main status must include `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, all branch summaries as `status: "pass"`, passing branch summaries with `review_status: "mergeable"`, manifest-owned worker/research-worker artifacts and same-branch reviewer artifacts backing those claims, prompt-audit/worker/research-worker/reviewer/Lite `telemetry.json` artifacts, `amendment_decisions` records covering every terminal branch summary with launch decisions pointing to passing packet validations, bundle `telemetry.summary.json`, exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, no mergeable reviewer verification gaps, a `lite_advice` array (empty only when no relevant main Lite packet exists; manifest-owned auditable records otherwise, with `validation_status` and `validation_defects` matching actual validation), a non-empty command list, a non-empty DoD checklist, and no blockers. A partial main status may omit unlaunched branch artifacts only when schema v2 scheduler evidence explains every omitted branch id with terminal structured evidence.
 
 ## Completion Gate
 
@@ -173,12 +211,13 @@ Before returning `pass`, verify:
 
 - skill availability bootstrap passed for `goal-main-orchestrator` and `goal-branch-orchestrator`;
 - prompt audit passed;
-- prompt audit, worker, research-worker, reviewer, and used/ignored Lite packets wrote `telemetry.json`;
+- prompt audit, worker, research-worker, reviewer, used/ignored Lite packets, and any plan-amender packets wrote `telemetry.json`;
 - `summarize_telemetry.py --bundle-dir <bundle>` wrote `telemetry.summary.json`;
 - manifest cleanup and artifact policies are present and are not contradicted by `main.prompt.md`;
 - every branch listed in the manifest has a status file;
 - every branch requiring review has a review file;
 - every branch status passed manifest-bound `validate_branch_status.py`;
+- every terminal branch summary has a recorded amender launch or skip decision;
 - every branch summary in `main.status.json` is `pass` with `review_status: "mergeable"`;
 - every mergeable review has empty verification gaps and base-range whitespace evidence;
 - branch statuses satisfy the main prompt DoD;

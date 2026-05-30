@@ -10,12 +10,6 @@ import os
 from pathlib import Path
 
 
-AUDIT_MODEL = "gpt-5.5"
-AUDIT_FALLBACK_MODEL = "gpt-5.4"
-AUDIT_ATTEMPT_TIMEOUT_SECONDS = 1200
-TIMEOUT_KILL_AFTER_SECONDS = 30
-
-
 def _load_contract():
     path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
     if not path.exists():
@@ -30,31 +24,19 @@ def _load_contract():
 
 CONTRACT = _load_contract()
 shell_quote = CONTRACT.shell_quote
+AUDIT_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.5"]
+AUDIT_FALLBACK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.4"]
+AUDIT_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.AUDIT_ATTEMPT_TIMEOUT_SECONDS
+TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
 
 
 def audit_telemetry_attempts() -> list[dict]:
-    return [
-        {
-            "alias": "gpt-5.5",
-            "provider": "codex",
-            "model": AUDIT_MODEL,
-            "effort": "",
-            "command": f"codex exec --ephemeral -m {AUDIT_MODEL} -s read-only",
-            "timeout_seconds": AUDIT_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["events-primary.jsonl"],
-            "probe_logs": [],
-        },
-        {
-            "alias": "gpt-5.4",
-            "provider": "codex",
-            "model": AUDIT_FALLBACK_MODEL,
-            "effort": "",
-            "command": f"codex exec --ephemeral -m {AUDIT_FALLBACK_MODEL} -s read-only",
-            "timeout_seconds": AUDIT_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["events-fallback.jsonl"],
-            "probe_logs": [],
-        },
-    ]
+    return CONTRACT.codex_telemetry_attempts(
+        ["gpt-5.5", "gpt-5.4"],
+        timeout_seconds=AUDIT_ATTEMPT_TIMEOUT_SECONDS,
+        sandbox="read-only",
+        event_labels=["primary", "fallback"],
+    )
 
 
 def telemetry_function() -> str:
@@ -99,6 +81,29 @@ def resolve_repo_path(repo_root: Path, value: object, field: str) -> Path:
 def load_manifest(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
+    if not packet_dir.exists():
+        return
+    if packet_dir.is_dir() and not any(packet_dir.iterdir()):
+        return
+    if not replace:
+        raise SystemExit(f"audit packet already exists; pass --replace to archive and recreate: {packet_dir}")
+    attempts_dir = packet_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+    next_index = 1
+    for child in sorted(attempts_dir.iterdir()):
+        if child.is_dir() and child.name.startswith("attempt-"):
+            suffix = child.name.removeprefix("attempt-")
+            if suffix.isdigit():
+                next_index = max(next_index, int(suffix) + 1)
+    archive_dir = attempts_dir / f"attempt-{next_index:03d}"
+    archive_dir.mkdir()
+    for child in sorted(packet_dir.iterdir()):
+        if child.name == "attempts":
+            continue
+        child.rename(archive_dir / child.name)
 
 
 def exact_string_schema(value: str) -> dict:
@@ -204,7 +209,7 @@ Branch prompt entries:
 
 Max active branch agents: {max_active}
 Waves:
-{json.dumps(waves, indent=2)}
+{json.dumps(waves, indent=2, sort_keys=True)}
 
 Run only non-mutating inspection commands as needed, starting with:
 
@@ -387,7 +392,7 @@ data = {{
     "summary": message + " Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
 }}
 with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, indent=2)
+    json.dump(data, handle, indent=2, sort_keys=True)
     handle.write("\\n")
 PY
 }}
@@ -425,6 +430,7 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir", required=True)
+    parser.add_argument("--replace", action="store_true", help="Archive an existing audit packet under attempts/ and recreate it.")
     args = parser.parse_args()
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
@@ -432,9 +438,10 @@ def main() -> int:
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     manifest = load_manifest(manifest_path)
 
+    archive_existing_packet_dir(out_dir, replace=args.replace)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / "prompt-audit.schema.json").write_text(
-        json.dumps(audit_schema(manifest_path, repo_root), indent=2) + "\n",
+        json.dumps(audit_schema(manifest_path, repo_root), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     (out_dir / "prompt.md").write_text(

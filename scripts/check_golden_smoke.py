@@ -43,7 +43,7 @@ def skill_script(skill: str, script: str) -> str:
 def install_temp_skills(tmp_path: Path) -> Path:
     skills_root = tmp_path / "skills"
     run(["node", (CHECKOUT_ROOT / "bin" / "install-goal-skills.js").as_posix(), "--dest", skills_root.as_posix(), "--force"])
-    for name in ["_goal_shared", "goal-preflight", "goal-main-orchestrator", "goal-branch-orchestrator"]:
+    for name in ["_goal_shared", "goal-preflight", "goal-main-orchestrator", "goal-branch-orchestrator", "goal-plan-amender"]:
         if not (skills_root / name).is_dir():
             raise SystemExit(f"temp skill install missing {name}: {skills_root}")
     return skills_root.resolve()
@@ -78,60 +78,75 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
+def scheduler_event(seq: int, event: str, **kwargs) -> dict:
+    return {
+        "seq": seq,
+        "timestamp": f"2026-05-29T00:00:{seq:02d}Z",
+        "runtime_ref": "golden-offline-smoke",
+        "event": event,
+        **kwargs,
+    }
+
+
 def write_scheduler_ledgers(bundle: Path) -> None:
-    manifest_sha = sha256_file(bundle / "job.manifest.json")
-    write_json(
-        bundle / "schedulers" / "B01.worker.scheduler.json",
-        {
-            "schema_version": 1,
-            "scheduler_kind": "branch-worker-pool",
-            "scheduler_path": "schedulers/B01.worker.scheduler.json",
-            "manifest_sha256": manifest_sha,
-            "capacity": 4,
-            "item_ids": [WORKER_PACKET, RESEARCH_PACKET],
-            "events": [
-                {"event": "ready", "id": WORKER_PACKET},
-                {"event": "ready", "id": RESEARCH_PACKET},
-                {"event": "launch", "id": WORKER_PACKET},
-                {"event": "launch", "id": RESEARCH_PACKET},
-                {"event": "finish", "id": WORKER_PACKET, "status": "pass"},
-                {"event": "close", "id": WORKER_PACKET},
-                {"event": "finish", "id": RESEARCH_PACKET, "status": "pass"},
-                {"event": "close", "id": RESEARCH_PACKET},
-            ],
-        },
+    run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "scheduler_tick.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--scope",
+            "worker",
+            "--branch-id",
+            BRANCH_ID,
+            "--runtime-ref",
+            "golden-offline-smoke",
+            "--timestamp",
+            "2026-05-29T00:00:01Z",
+            "--init",
+            "--record-ready",
+            "--launch",
+            WORKER_PACKET,
+            "--launch",
+            RESEARCH_PACKET,
+            "--finish",
+            WORKER_PACKET,
+            "--finish",
+            RESEARCH_PACKET,
+            "--status",
+            "pass",
+            "--close",
+            WORKER_PACKET,
+            "--close",
+            RESEARCH_PACKET,
+            "--validate-final",
+        ]
     )
-    write_json(
-        bundle / "schedulers" / "main.scheduler.json",
-        {
-            "schema_version": 1,
-            "scheduler_kind": "main-branch-pool",
-            "scheduler_path": "schedulers/main.scheduler.json",
-            "manifest_sha256": manifest_sha,
-            "capacity": 1,
-            "item_ids": [BRANCH_ID],
-            "events": [
-                {"event": "ready", "id": BRANCH_ID},
-                {"event": "launch", "id": BRANCH_ID},
-                {"event": "finish", "id": BRANCH_ID, "status": "pass"},
-                {"event": "close", "id": BRANCH_ID},
-            ],
-        },
+    run(
+        [
+            "python3",
+            skill_script("goal-main-orchestrator", "scheduler_tick.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--scope",
+            "main",
+            "--runtime-ref",
+            "golden-offline-smoke",
+            "--timestamp",
+            "2026-05-29T00:00:01Z",
+            "--init",
+            "--record-ready",
+            "--launch",
+            BRANCH_ID,
+            "--finish",
+            BRANCH_ID,
+            "--status",
+            "pass",
+            "--close",
+            BRANCH_ID,
+            "--validate-final",
+        ]
     )
-
-
-def review_input_hashes(bundle: Path) -> dict[str, str]:
-    rel_paths = [
-        "job.manifest.json",
-        "branches/B01.prompt.md",
-        "schedulers/B01.worker.scheduler.json",
-        f"workers/{WORKER_PACKET}/status.json",
-        f"workers/{WORKER_PACKET}/route.json",
-        f"workers/{WORKER_PACKET}/telemetry.json",
-        f"research/{RESEARCH_PACKET}/research.json",
-        f"research/{RESEARCH_PACKET}/telemetry.json",
-    ]
-    return {rel_path: sha256_file(bundle / rel_path) for rel_path in rel_paths}
 
 
 def telemetry(packet_id: str, role: str, output_name: str, *, accepted_alias: str | None, attempts: list[dict]) -> dict:
@@ -157,6 +172,64 @@ def telemetry(packet_id: str, role: str, output_name: str, *, accepted_alias: st
             "event_log_bytes": 0,
             "known_usage": None,
         },
+    }
+
+
+def create_amendment_decision(
+    bundle: Path,
+    amendment_id: str,
+    *,
+    decision: str,
+    reason_code: str,
+    reason: str,
+    terminal: list[str] | None = None,
+) -> dict:
+    command = [
+        "python3",
+        skill_script("goal-plan-amender", "create_amendment_decision.py"),
+        "--manifest",
+        (bundle / "job.manifest.json").as_posix(),
+        "--amendment-id",
+        amendment_id,
+        "--decision",
+        decision,
+        "--reason-code",
+        reason_code,
+        "--reason",
+        reason,
+    ]
+    for branch_id in terminal or [BRANCH_ID]:
+        command.extend(["--terminal-branch", branch_id])
+    run(command)
+    return {
+        "amendment_id": amendment_id,
+        "decision": decision,
+        "decision_path": f"amendments/{amendment_id}.decision.json",
+        "packet_validation_path": f"amendments/{amendment_id}.packet/packet.validation.json" if decision == "launch" else None,
+    }
+
+
+def recommend_amendment_decision(bundle: Path, amendment_id: str) -> dict:
+    result = run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "recommend_amendment_decision.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--amendment-id",
+            amendment_id,
+            "--write-decision",
+            "--json",
+        ]
+    )
+    recommendation = json.loads(result.stdout)
+    return {
+        "amendment_id": amendment_id,
+        "decision": recommendation["decision"],
+        "decision_path": f"amendments/{amendment_id}.decision.json",
+        "packet_validation_path": f"amendments/{amendment_id}.packet/packet.validation.json"
+        if recommendation["decision"] == "launch"
+        else None,
     }
 
 
@@ -190,8 +263,18 @@ def golden_brief() -> dict:
     return {
         "job_id": JOB_ID,
         "base_ref": "main",
+        "goal": "Validate the complete golden offline orchestration path with deterministic synthetic artifacts.",
+        "source_summary": "Golden smoke uses a temporary repository, README context, static packet outputs, and generated telemetry artifacts.",
+        "required_evidence": [
+            "audit, worker, research-worker, reviewer, Lite, scheduler, and telemetry artifacts validate offline"
+        ],
+        "final_dod": [
+            "golden smoke bundle passes deterministic lint and status validators without launching live model CLIs"
+        ],
         "max_active_branch_agents": 1,
         "serial_reasons": ["Single-branch golden smoke keeps the offline gate small."],
+        "artifact_policy": "Preserve partial, blocked, failed, and pass smoke artifacts for deterministic fixture inspection.",
+        "cleanup_policy": "Preserve unresolved, negative, partial, blocked, and failed runtime evidence until the fixture completes.",
         "branches": [
             {
                 "id": BRANCH_ID,
@@ -306,6 +389,7 @@ def write_audit(bundle: Path) -> None:
     audit_dir = bundle / "audit"
     audit = {
         "manifest": (bundle / "job.manifest.json").as_posix(),
+        "repo_root": REPO_ROOT.as_posix(),
         "status": "pass",
         "can_start": True,
         "checked_files": ["job.manifest.json", "main.prompt.md", "branches/B01.prompt.md"],
@@ -457,43 +541,60 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
     return worker, research
 
 
-def write_pre_review_gate(bundle: Path, input_hashes: dict[str, str]) -> None:
-    write_json(
-        bundle / "branches" / "B01.pre_review_gate.json",
-        {
-            "schema_version": 1,
-            "branch_id": BRANCH_ID,
-            "status": "pass",
-            "review_packet_id": REVIEW_PACKET,
-            "commands_run": ["git diff --check main...HEAD"],
-            "checks": {
-                "manifest_validation": {"status": "pass", "command": "python3 lint_goal_bundle.py --bundle-dir <bundle> --no-write"},
-                "status_validation": {"status": "pass", "command": "python3 validate_branch_status.py --manifest <manifest> --status <pre-review-status>"},
-                "tests": {"status": "pass", "commands": ["bash -n generated launchers", "installed validators passed"]},
-                "diff_check": {"status": "pass", "command": "git diff --check main...HEAD"},
-                "artifacts_fresh": {"status": "pass", "artifacts": sorted(input_hashes)},
-                "ownership": {"status": "pass", "changed_files": []},
-                "dod_evidence": {
-                    "status": "pass",
-                    "items": [
-                        "normal worker artifact validates",
-                        "research-worker artifact validates",
-                        "scheduler ledger validates",
-                    ],
-                },
-            },
-            "input_hashes": input_hashes,
-            "reuse_policy": {
-                "mode": "new",
-                "accepted": False,
-                "input_hashes_match": False,
-                "source_review_path": None,
-            },
-        },
+def write_pre_review_gate(bundle: Path) -> dict[str, str]:
+    run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "create_pre_review_gate.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            BRANCH_ID,
+            "--worktree",
+            REPO_ROOT.as_posix(),
+            "--review-packet-id",
+            REVIEW_PACKET,
+            "--test-evidence",
+            "bash -n generated launchers",
+            "--test-evidence",
+            "installed validators passed",
+            "--dod-item",
+            "normal worker artifact validates",
+            "--dod-item",
+            "research-worker artifact validates",
+            "--dod-item",
+            "scheduler ledger validates",
+        ]
     )
+    gate = read_json(bundle / "branches" / "B01.pre_review_gate.json")
+    semantic_hashes = gate.get("semantic_input_hashes")
+    if not isinstance(semantic_hashes, dict):
+        raise SystemExit("pre-review gate did not write semantic_input_hashes")
+    return {key: value for key, value in semantic_hashes.items() if isinstance(key, str) and isinstance(value, str)}
 
 
 def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
+    route = read_json(bundle / "reviewers" / REVIEW_PACKET / "route.json")
+    selected_ladder = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else ["gpt-5.4", "gpt-5.5"]
+    model_by_alias = {
+        "gpt-5.4-mini": "gpt-5.4-mini",
+        "gpt-5.4": "gpt-5.4",
+        "gpt-5.5": "gpt-5.5",
+    }
+    reviewer_attempts = [
+        attempt(
+            alias=str(alias),
+            provider="codex",
+            model=model_by_alias[str(alias)],
+            command=f"codex exec --ephemeral -m {model_by_alias[str(alias)]} -s read-only",
+            timeout_seconds=1800,
+            called=index == 0,
+            accepted=index == 0,
+        )
+        for index, alias in enumerate(selected_ladder)
+        if str(alias) in model_by_alias
+    ]
+    accepted_alias = reviewer_attempts[0]["alias"] if reviewer_attempts else None
     review = {
         "packet_id": REVIEW_PACKET,
         "role": "reviewer",
@@ -502,12 +603,13 @@ def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
         "commands_run": ["git diff --check main...HEAD"],
         "verification_gaps": [],
         "residual_risks": ["Synthetic smoke does not exercise live model CLIs."],
-        "input_hashes": input_hashes,
+        "semantic_input_hashes": input_hashes,
         "reuse_policy": {
             "mode": "new",
             "accepted": False,
-            "input_hashes_match": False,
+            "semantic_hashes_match": False,
             "source_review_path": None,
+            "source_telemetry_path": None,
         },
         "summary": "Synthetic reviewer pass for golden offline smoke.",
     }
@@ -519,32 +621,13 @@ def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
             REVIEW_PACKET,
             "reviewer",
             "review.json",
-            accepted_alias="gpt-5.5",
-            attempts=[
-                attempt(
-                    alias="gpt-5.5",
-                    provider="codex",
-                    model="gpt-5.5",
-                    command="codex exec --ephemeral -m gpt-5.5 -s read-only",
-                    timeout_seconds=1800,
-                    called=True,
-                    accepted=True,
-                ),
-                attempt(
-                    alias="gpt-5.4",
-                    provider="codex",
-                    model="gpt-5.4",
-                    command="codex exec --ephemeral -m gpt-5.4 -s read-only",
-                    timeout_seconds=1800,
-                    called=False,
-                    accepted=False,
-                ),
-            ],
+            accepted_alias=accepted_alias,
+            attempts=reviewer_attempts,
         ),
     )
 
 
-def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lite_record: dict) -> None:
+def write_pre_review_branch_status(bundle: Path, worker: dict, research: dict, lite_record: dict) -> None:
     worker_rollup = {
         **worker,
         "status_path": (bundle / "workers" / WORKER_PACKET / "status.json").as_posix(),
@@ -557,7 +640,7 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
         bundle / "branches" / "B01.status.json",
         {
             "branch_id": BRANCH_ID,
-            "status": "pass",
+            "status": "partial",
             "branch": BRANCH_NAME,
             "worktree": REPO_ROOT.as_posix(),
             "worker_statuses": [worker_rollup, research_rollup],
@@ -581,20 +664,51 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
                 "refill_events": [],
             },
             "lite_advice": [lite_record],
-            "review_status": "mergeable",
+            "review_status": "missing",
             "changed_files": [],
             "commands_run": ["git diff --check main...HEAD"],
             "tests": ["bash -n generated launchers", "installed validators passed"],
             "dod_checklist": [
                 "normal worker artifact validates",
                 "research-worker artifact validates",
-                "reviewer artifact validates",
                 "Lite artifact envelope validates",
             ],
-            "blockers": [],
-            "handoff": "Golden offline smoke branch status.",
+            "blockers": ["Reviewer has not run yet; pre-review status is intentionally partial."],
+            "handoff": "Golden offline smoke pre-review branch status.",
         },
     )
+
+
+def write_branch_and_main_status(bundle: Path) -> None:
+    run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "assemble_branch_status.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            BRANCH_ID,
+            "--worktree",
+            REPO_ROOT.as_posix(),
+            "--allow-pass",
+            "--replace",
+            "--test-evidence",
+            "bash -n generated launchers",
+            "--test-evidence",
+            "installed validators passed",
+            "--dod-item",
+            "normal worker artifact validates",
+            "--dod-item",
+            "research-worker artifact validates",
+            "--dod-item",
+            "reviewer artifact validates",
+            "--dod-item",
+            "Lite artifact envelope validates",
+            "--handoff",
+            "Golden offline smoke branch status.",
+        ]
+    )
+    amendment_decisions = [recommend_amendment_decision(bundle, "A000")]
     write_json(
         bundle / "main.status.json",
         {
@@ -619,6 +733,7 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
                     "review_status": "mergeable",
                 }
             ],
+            "amendment_decisions": amendment_decisions,
             "lite_advice": [],
             "commands_run": ["git diff --check main...HEAD", "installed validators passed"],
             "dod_checklist": ["golden offline smoke validates main, branch, packet, Lite, and telemetry artifacts"],
@@ -626,6 +741,362 @@ def write_branch_and_main_status(bundle: Path, worker: dict, research: dict, lit
             "summary": "Golden offline smoke main status.",
         },
     )
+
+
+def validate_branch(bundle: Path, *, expect: int = 0) -> subprocess.CompletedProcess[str]:
+    return run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "validate_branch_status.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--status",
+            (bundle / "branches" / "B01.status.json").as_posix(),
+            "--branch-id",
+            BRANCH_ID,
+            "--branch",
+            BRANCH_NAME,
+            "--worktree",
+            REPO_ROOT.as_posix(),
+            "--json",
+        ],
+        expect=expect,
+    )
+
+
+def rewrite_copied_branch_paths(bundle: Path) -> None:
+    status_path = bundle / "branches" / "B01.status.json"
+    if not status_path.exists():
+        return
+    status = read_json(status_path)
+    for item in status.get("worker_statuses", []):
+        if not isinstance(item, dict) or not isinstance(item.get("packet_id"), str):
+            continue
+        packet_id = item["packet_id"]
+        if item.get("role") == "research-worker":
+            item["status_path"] = (bundle / "research" / packet_id / "research.json").as_posix()
+        else:
+            item["status_path"] = (bundle / "workers" / packet_id / "status.json").as_posix()
+    for item in status.get("lite_advice", []):
+        if not isinstance(item, dict) or item.get("packet_id") != LITE_PACKET:
+            continue
+        advice = bundle / "lite" / LITE_PACKET / "advice.json"
+        inputs = bundle / "lite" / LITE_PACKET / "input-files.json"
+        item["advice_path"] = advice.as_posix()
+        item["inputs_path"] = inputs.as_posix()
+        item["validation_command"] = shlex.join(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "validate_lite_advice.py"),
+                "--advice",
+                advice.as_posix(),
+                "--inputs",
+                inputs.as_posix(),
+            ]
+        )
+    write_json(status_path, status)
+
+
+def make_reuse_bundle(source_bundle: Path, target_bundle: Path, input_hashes: dict[str, str]) -> None:
+    shutil.copytree(source_bundle, target_bundle)
+    rewrite_copied_branch_paths(target_bundle)
+    source_review_dir = target_bundle / "reviewers" / "B01-R00"
+    source_review_dir.mkdir(parents=True, exist_ok=True)
+    source_review = read_json(target_bundle / "branches" / "B01.review.json")
+    source_review["packet_id"] = "B01-R00"
+    write_json(source_review_dir / "review.json", source_review)
+    source_telemetry = read_json(target_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json")
+    source_telemetry["packet_id"] = "B01-R00"
+    write_json(source_review_dir / "telemetry.json", source_telemetry)
+
+    review = read_json(target_bundle / "branches" / "B01.review.json")
+    review["semantic_input_hashes"] = input_hashes
+    review["reuse_policy"] = {
+        "mode": "reuse",
+        "accepted": True,
+        "semantic_hashes_match": True,
+        "source_review_path": "reviewers/B01-R00/review.json",
+        "source_telemetry_path": "reviewers/B01-R00/telemetry.json",
+    }
+    write_json(target_bundle / "branches" / "B01.review.json", review)
+    write_json(target_bundle / "reviewers" / REVIEW_PACKET / "review.json", review)
+    (target_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json").unlink()
+
+
+def make_partial_branch_bundle(source_bundle: Path, target_bundle: Path, worker: dict) -> None:
+    shutil.copytree(source_bundle, target_bundle)
+    rewrite_copied_branch_paths(target_bundle)
+    manifest_sha = sha256_file(target_bundle / "job.manifest.json")
+    write_json(
+        target_bundle / "schedulers" / "B01.worker.scheduler.json",
+        {
+            "schema_version": 2,
+            "scheduler_kind": "branch-worker-pool",
+            "scheduler_path": "schedulers/B01.worker.scheduler.json",
+            "manifest_sha256": manifest_sha,
+            "capacity": 4,
+            "item_ids": [WORKER_PACKET, RESEARCH_PACKET],
+            "events": [
+                scheduler_event(1, "ready", id=WORKER_PACKET),
+                scheduler_event(2, "ready", id=RESEARCH_PACKET),
+                scheduler_event(3, "launch", id=WORKER_PACKET),
+                scheduler_event(4, "blocked", id=RESEARCH_PACKET, reason_code="operator_requested", reason="Partial fixture leaves research packet unlaunched with structured evidence."),
+                scheduler_event(5, "finish", id=WORKER_PACKET, status="pass"),
+                scheduler_event(6, "close", id=WORKER_PACKET),
+            ],
+        },
+    )
+    worker_rollup = {
+        **worker,
+        "status_path": (target_bundle / "workers" / WORKER_PACKET / "status.json").as_posix(),
+    }
+    branch_status = read_json(target_bundle / "branches" / "B01.status.json")
+    branch_status.update(
+        {
+            "status": "partial",
+            "worker_statuses": [worker_rollup],
+            "worker_parallelism": {
+                **branch_status["worker_parallelism"],
+                "launched_ids": [WORKER_PACKET],
+                "finished_ids": [WORKER_PACKET],
+                "blocked_ids": [RESEARCH_PACKET],
+                "max_observed_active_worker_packets": 1,
+                "max_observed_active": 1,
+            },
+            "review_status": "missing",
+            "blockers": ["Partial fixture intentionally leaves B01-W02 unlaunched with scheduler evidence."],
+            "handoff": "Partial branch fixture.",
+        }
+    )
+    write_json(target_bundle / "branches" / "B01.status.json", branch_status)
+    (target_bundle / "branches" / "B01.review.json").unlink()
+
+
+def make_refill_assembly_bundle(source_bundle: Path, target_bundle: Path) -> None:
+    shutil.copytree(source_bundle, target_bundle)
+    rewrite_copied_branch_paths(target_bundle)
+    manifest = read_json(target_bundle / "job.manifest.json")
+    branch = manifest["branches"][0]
+    branch["max_active_worker_packets"] = 1
+    branch["worker_parallelism"]["max_active_worker_packets"] = 1
+    branch["worker_parallelism"]["serial_reasons"] = ["Golden smoke serializes workers to exercise refill status assembly."]
+    write_json(target_bundle / "job.manifest.json", manifest)
+    manifest_sha = sha256_file(target_bundle / "job.manifest.json")
+    write_json(
+        target_bundle / "schedulers" / "B01.worker.scheduler.json",
+        {
+            "schema_version": 2,
+            "scheduler_kind": "branch-worker-pool",
+            "scheduler_path": "schedulers/B01.worker.scheduler.json",
+            "manifest_sha256": manifest_sha,
+            "capacity": 1,
+            "item_ids": [WORKER_PACKET, RESEARCH_PACKET],
+            "events": [
+                scheduler_event(1, "ready", id=WORKER_PACKET),
+                scheduler_event(2, "ready", id=RESEARCH_PACKET),
+                scheduler_event(3, "launch", id=WORKER_PACKET),
+                scheduler_event(4, "finish", id=WORKER_PACKET, status="pass"),
+                scheduler_event(5, "close", id=WORKER_PACKET),
+                scheduler_event(6, "refill", eligible_ids=[RESEARCH_PACKET]),
+                scheduler_event(7, "launch", id=RESEARCH_PACKET),
+                scheduler_event(8, "finish", id=RESEARCH_PACKET, status="pass"),
+                scheduler_event(9, "close", id=RESEARCH_PACKET),
+            ],
+        },
+    )
+    (target_bundle / "branches" / "B01.review.json").unlink()
+    run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "assemble_branch_status.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            BRANCH_ID,
+            "--worktree",
+            REPO_ROOT.as_posix(),
+            "--replace",
+            "--test-evidence",
+            "refill assembly fixture validates",
+            "--dod-item",
+            "assembler records scheduler refill events",
+            "--handoff",
+            "Refill assembly fixture.",
+        ]
+    )
+    status = read_json(target_bundle / "branches" / "B01.status.json")
+    refill_events = status.get("worker_parallelism", {}).get("refill_events")
+    if refill_events != ["seq:6:B01-W02"]:
+        raise SystemExit(f"assembler did not copy scheduler refill events, got {refill_events!r}")
+
+
+def golden_amendment_branch() -> dict:
+    return {
+        "id": "B02",
+        "title": "Golden Amendment Follow-up",
+        "objective": "Validate accepted amendment scheduling from the amended manifest.",
+        "scope": "Future unstarted smoke work only.",
+        "branch_name": "golden-offline-smoke-b02",
+        "worktree_path": ".worktrees/golden-offline-smoke-b02",
+        "depends_on": ["B01"],
+        "max_active_worker_packets": 1,
+        "worker_serial_reasons": ["Single amended smoke packet."],
+        "work_items": [
+            {
+                "id": "W01",
+                "objective": "Static amended worker item.",
+                "owned_paths": ["docs/golden-amendment.md"],
+                "context_files": ["README.md"],
+                "verification": ["git diff --check main...HEAD"],
+                "dod": ["amended smoke item is schedulable"],
+            }
+        ],
+        "tests": ["git diff --check main...HEAD"],
+        "dod": ["amended branch prompt is generated and linted"],
+    }
+
+
+def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
+    shutil.copytree(source_bundle, target_bundle)
+    rewrite_copied_branch_paths(target_bundle)
+    audit = read_json(target_bundle / "audit" / "prompt-audit.json")
+    audit["manifest"] = (target_bundle / "job.manifest.json").as_posix()
+    audit["repo_root"] = REPO_ROOT.as_posix()
+    write_json(target_bundle / "audit" / "prompt-audit.json", audit)
+    create_amendment_decision(
+        target_bundle,
+        "A001",
+        decision="launch",
+        reason_code="remaining_work_dod_gap",
+        reason="Golden smoke adds one future branch after validated terminal evidence.",
+    )
+
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "create_adaptation_packet.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--main-prompt",
+            (target_bundle / "main.prompt.md").as_posix(),
+            "--repo-root",
+            REPO_ROOT.as_posix(),
+            "--amendment-id",
+            "A001",
+            "--terminal-branch",
+            BRANCH_ID,
+        ]
+    )
+    packet_dir = target_bundle / "amendments" / "A001.packet"
+    assert_shell_syntax(packet_dir / "launch.sh")
+    route = read_json(packet_dir / "route.json")
+    if route.get("selected_ladder") != ["gpt-5.4", "gpt-5.4-mini"]:
+        raise SystemExit("golden amender packet did not record the default route")
+    proposal = {
+        "schema_version": 1,
+        "amendment_id": "A001",
+        "job_id": JOB_ID,
+        "rationale": "Golden smoke adds one future branch after validated terminal evidence.",
+        "operations": [{"op": "add_branch", "branch": golden_amendment_branch()}],
+    }
+    proposal_path = target_bundle / "amendments" / "A001.proposal.json"
+    validation_path = target_bundle / "amendments" / "A001.validation.json"
+    write_json(proposal_path, proposal)
+    write_json(
+        packet_dir / "telemetry.json",
+        telemetry(
+            "A001",
+            "plan_amender",
+            "../A001.proposal.json",
+            accepted_alias="gpt-5.4",
+            attempts=[
+                attempt(
+                    alias="gpt-5.4",
+                    provider="codex",
+                    model="gpt-5.4",
+                    command="codex exec --ephemeral -m gpt-5.4 -s read-only",
+                    timeout_seconds=1200,
+                    called=True,
+                    accepted=True,
+                ),
+                attempt(
+                    alias="gpt-5.4-mini",
+                    provider="codex",
+                    model="gpt-5.4-mini",
+                    command="codex exec --ephemeral -m gpt-5.4-mini -s read-only",
+                    timeout_seconds=1200,
+                    called=False,
+                    accepted=False,
+                ),
+            ],
+        ),
+    )
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "validate_amender_packet.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--amendment-id",
+            "A001",
+            "--json",
+        ]
+    )
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "validate_manifest_amendment.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--proposal",
+            proposal_path.as_posix(),
+            "--output",
+            validation_path.as_posix(),
+            "--terminal-branch",
+            BRANCH_ID,
+        ]
+    )
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "apply_manifest_amendment.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--proposal",
+            proposal_path.as_posix(),
+            "--validation",
+            validation_path.as_posix(),
+        ]
+    )
+    for rel_path in [
+        "amendments/A001.accepted.json",
+        "amendments/A001.job.manifest.before.json",
+        "branches/B02.prompt.md",
+    ]:
+        if not (target_bundle / rel_path).exists():
+            raise SystemExit(f"amendment smoke missing {rel_path}")
+    run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
+    ready = run(
+        [
+            "python3",
+            skill_script("goal-main-orchestrator", "render_branch_worktree_commands.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            REPO_ROOT.as_posix(),
+            "--audit",
+            (target_bundle / "audit" / "prompt-audit.json").as_posix(),
+            "--list-ready",
+            "--completed-branch",
+            BRANCH_ID,
+        ]
+    )
+    if "B02" not in ready.stdout.splitlines():
+        raise SystemExit("amended golden smoke did not continue scheduling from amended manifest")
+    run(["python3", skill_script("goal-main-orchestrator", "summarize_telemetry.py"), "--bundle-dir", target_bundle.as_posix()])
+    summary = read_json(target_bundle / "telemetry.summary.json")
+    if "amendments/A001.packet/telemetry.json" not in summary.get("telemetry_files", []):
+        raise SystemExit("amended golden smoke telemetry summary omitted plan-amender telemetry")
 
 
 def assert_shell_syntax(path: Path) -> None:
@@ -656,6 +1127,16 @@ def main() -> int:
         write_json(brief, golden_brief())
         task_file.write_text("Golden offline smoke task.\n", encoding="utf-8")
 
+        run(
+            [
+                "python3",
+                skill_script("goal-preflight", "lint_preflight_brief.py"),
+                "--brief",
+                brief.as_posix(),
+                "--repo-root",
+                REPO_ROOT.as_posix(),
+            ]
+        )
         run(
             [
                 "python3",
@@ -758,10 +1239,23 @@ def main() -> int:
 
         lite_record = write_lite_advice(bundle / "lite" / LITE_PACKET)
         write_audit(bundle)
+        run(
+            [
+                "python3",
+                skill_script("goal-main-orchestrator", "validate_prompt_audit.py"),
+                "--audit",
+                (bundle / "audit" / "prompt-audit.json").as_posix(),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                REPO_ROOT.as_posix(),
+                "--require-pass",
+            ]
+        )
         worker, research = write_worker_artifacts(bundle)
         write_scheduler_ledgers(bundle)
-        input_hashes = review_input_hashes(bundle)
-        write_pre_review_gate(bundle, input_hashes)
+        write_pre_review_branch_status(bundle, worker, research, lite_record)
+        input_hashes = write_pre_review_gate(bundle)
         run(
             [
                 "python3",
@@ -790,25 +1284,9 @@ def main() -> int:
         )
         assert_shell_syntax(bundle / "reviewers" / REVIEW_PACKET / "launch.sh")
         write_review(bundle, input_hashes)
-        write_branch_and_main_status(bundle, worker, research, lite_record)
+        write_branch_and_main_status(bundle)
 
-        run(
-            [
-                "python3",
-                skill_script("goal-branch-orchestrator", "validate_branch_status.py"),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--status",
-                (bundle / "branches" / "B01.status.json").as_posix(),
-                "--branch-id",
-                BRANCH_ID,
-                "--branch",
-                BRANCH_NAME,
-                "--worktree",
-                REPO_ROOT.as_posix(),
-                "--json",
-            ]
-        )
+        validate_branch(bundle)
         run(
             [
                 "python3",
@@ -834,8 +1312,9 @@ def main() -> int:
 
         mismatch_bundle = tmp_path / "reviewer-hash-mismatch"
         shutil.copytree(bundle, mismatch_bundle)
+        rewrite_copied_branch_paths(mismatch_bundle)
         mismatch_review = read_json(mismatch_bundle / "branches" / "B01.review.json")
-        mismatch_review["input_hashes"]["branches/B01.prompt.md"] = "sha256:" + "1" * 64
+        mismatch_review["semantic_input_hashes"]["branches/B01.prompt.md"] = "sha256:" + "1" * 64
         write_json(mismatch_bundle / "branches" / "B01.review.json", mismatch_review)
         write_json(mismatch_bundle / "reviewers" / REVIEW_PACKET / "review.json", mismatch_review)
         mismatch_result = run(
@@ -856,11 +1335,68 @@ def main() -> int:
             ],
             expect=1,
         )
-        if "input_hashes" not in mismatch_result.stdout:
-            raise SystemExit("reviewer reuse/hash mismatch fixture did not fail on input_hashes")
+        if "semantic_input_hashes" not in mismatch_result.stdout:
+            raise SystemExit("reviewer reuse/hash mismatch fixture did not fail on semantic_input_hashes")
+
+        route_mismatch_bundle = tmp_path / "reviewer-route-telemetry-mismatch"
+        shutil.copytree(bundle, route_mismatch_bundle)
+        rewrite_copied_branch_paths(route_mismatch_bundle)
+        telemetry_data = read_json(route_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json")
+        telemetry_data["attempts"][0]["alias"] = "gpt-5.5"
+        telemetry_data["accepted_alias"] = "gpt-5.5"
+        write_json(route_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json", telemetry_data)
+        route_mismatch_result = validate_branch(route_mismatch_bundle, expect=1)
+        if "route.json selected_ladder" not in route_mismatch_result.stdout and "must be one of" not in route_mismatch_result.stdout:
+            raise SystemExit("reviewer route/telemetry mismatch fixture did not fail on route aliases")
+
+        reuse_bundle = tmp_path / "reviewer-reuse-valid"
+        make_reuse_bundle(bundle, reuse_bundle, input_hashes)
+        validate_branch(reuse_bundle)
+
+        missing_reuse_source_bundle = tmp_path / "reviewer-reuse-missing-source-telemetry"
+        shutil.copytree(reuse_bundle, missing_reuse_source_bundle)
+        rewrite_copied_branch_paths(missing_reuse_source_bundle)
+        (missing_reuse_source_bundle / "reviewers" / "B01-R00" / "telemetry.json").unlink()
+        missing_reuse_result = validate_branch(missing_reuse_source_bundle, expect=1)
+        if "source_telemetry_path" not in missing_reuse_result.stdout:
+            raise SystemExit("reviewer reuse missing telemetry fixture did not fail on source_telemetry_path")
+
+        partial_branch_bundle = tmp_path / "partial-branch-subset"
+        make_partial_branch_bundle(bundle, partial_branch_bundle, worker)
+        validate_branch(partial_branch_bundle)
+        partial_gate_result = run(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "create_pre_review_gate.py"),
+                "--manifest",
+                (partial_branch_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                BRANCH_ID,
+                "--worktree",
+                REPO_ROOT.as_posix(),
+                "--review-packet-id",
+                REVIEW_PACKET,
+                "--replace",
+                "--test-evidence",
+                "partial branch fixture should not reach reviewer",
+                "--dod-item",
+                "partial worker evidence is rejected before reviewer launch",
+                "--json",
+            ],
+            expect=1,
+        )
+        if "before reviewer launch" not in partial_gate_result.stdout:
+            raise SystemExit("partial worker evidence fixture did not fail the pre-review gate")
+
+        refill_bundle = tmp_path / "assembler-refill-events"
+        make_refill_assembly_bundle(bundle, refill_bundle)
+
+        amendment_bundle = tmp_path / "amended-plan"
+        run_amendment_smoke(bundle, amendment_bundle)
 
         stale_bundle = tmp_path / "stale-telemetry-summary"
         shutil.copytree(bundle, stale_bundle)
+        rewrite_copied_branch_paths(stale_bundle)
         os.utime(stale_bundle / "workers" / WORKER_PACKET / "telemetry.json", None)
         stale_result = run(
             [
@@ -878,6 +1414,15 @@ def main() -> int:
         )
         if "stale" not in stale_result.stdout:
             raise SystemExit("stale telemetry fixture did not fail on stale summary evidence")
+
+        freshness_bundle = tmp_path / "worktree-freshness-stale"
+        shutil.copytree(bundle, freshness_bundle)
+        rewrite_copied_branch_paths(freshness_bundle)
+        original_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
+        (REPO_ROOT / "README.md").write_text(original_readme + "\nUnreviewed freshness fixture change.\n", encoding="utf-8")
+        freshness_result = validate_branch(freshness_bundle, expect=1)
+        if "worktree_freshness" not in freshness_result.stdout:
+            raise SystemExit("worktree freshness fixture did not fail on changed current file content")
 
     print("status=pass")
     return 0

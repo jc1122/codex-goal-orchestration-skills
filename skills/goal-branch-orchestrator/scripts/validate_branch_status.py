@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
+import os
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -92,6 +95,18 @@ validate_scheduler_rollup = STATUS_VALIDATION.validate_scheduler_rollup
 validate_pre_review_gate_artifact = STATUS_VALIDATION.validate_pre_review_gate_artifact
 relative_hashes = STATUS_VALIDATION.relative_hashes
 validate_reuse_policy = STATUS_VALIDATION.validate_reuse_policy
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
+
+
+def sha256_text(text: str) -> str:
+    return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def is_repo_relative_path(value: str) -> bool:
@@ -205,6 +220,41 @@ def validate_worker_route_artifact(
         defect(defects, f"{path}.selected_ladder", "must match worker selected_ladder")
     if route.get("selection_reason") != worker.get("selection_reason"):
         defect(defects, f"{path}.selection_reason", "must match worker selection_reason")
+
+
+def validate_reviewer_route_artifact(
+    defects: list[str],
+    route_value: object,
+    path: str,
+    *,
+    packet_id: str,
+    manifest: object,
+) -> list[str]:
+    route = require_object(defects, route_value, path)
+    for key in ["schema_version", "packet_id", "role", "tier", "selected_ladder", "selection_reason", "policy_router"]:
+        if key not in route:
+            defect(defects, path, f"missing key: {key}")
+    if route.get("schema_version") != 1:
+        defect(defects, f"{path}.schema_version", "must be 1")
+    if route.get("packet_id") != packet_id:
+        defect(defects, f"{path}.packet_id", "must match review packet_id")
+    if route.get("role") != "reviewer":
+        defect(defects, f"{path}.role", "must be 'reviewer'")
+    tier = route.get("tier")
+    if tier not in CONTRACT.REVIEW_ROUTE_TIERS:
+        defect(defects, f"{path}.tier", f"must be one of {list(CONTRACT.REVIEW_ROUTE_TIERS)}")
+    selected = require_string_list(defects, route.get("selected_ladder"), f"{path}.selected_ladder", min_items=1)
+    manifest_root = require_object(defects, manifest, "manifest")
+    policy = manifest_root.get("review_model_policy")
+    if policy != CONTRACT.REVIEW_MODEL_POLICY:
+        defect(defects, "manifest.review_model_policy", "must match shared deterministic review router policy")
+    expected = CONTRACT.review_route_for_tier(str(tier)) if tier in CONTRACT.REVIEW_ROUTE_TIERS else []
+    if selected and expected and selected != expected:
+        defect(defects, f"{path}.selected_ladder", f"must match review_model_policy route for tier {tier!r}")
+    require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
+    if route.get("policy_router") != CONTRACT.REVIEW_MODEL_POLICY["router"]:
+        defect(defects, f"{path}.policy_router", f"must be {CONTRACT.REVIEW_MODEL_POLICY['router']!r}")
+    return selected
 
 
 def validate_worker_status(defects: list[str], value: object, path: str) -> None:
@@ -558,11 +608,16 @@ def expected_worker_dependencies(branch_entry: dict, branch_id: str) -> dict[str
     return dependencies
 
 
+def worktree_freshness_path(branch_id: str) -> str:
+    return f"branches/{branch_id}.worktree_freshness.json"
+
+
 def required_pre_review_input_paths(branch_entry: dict, branch_id: str) -> list[str]:
     paths = [
         "job.manifest.json",
         str(branch_entry.get("prompt", "")),
         CONTRACT.worker_scheduler_path(branch_id),
+        worktree_freshness_path(branch_id),
     ]
     work_items = branch_entry.get("work_items")
     if isinstance(work_items, list):
@@ -583,6 +638,174 @@ def required_pre_review_input_paths(branch_entry: dict, branch_id: str) -> list[
                 paths.append(f"workers/{packet_id}/route.json")
                 paths.append(f"workers/{packet_id}/telemetry.json")
     return [path for path in paths if isinstance(path, str) and path.strip()]
+
+
+def run_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        command,
+        cwd=cwd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+
+
+def git_stdout(defects: list[str], command: list[str], *, cwd: Path, path: str, label: str) -> str:
+    result = run_git(command, cwd=cwd)
+    if result.returncode != 0:
+        defect(defects, path, f"{label} failed ({result.returncode}): {result.stdout.strip()}")
+        return ""
+    return result.stdout
+
+
+def git_paths(defects: list[str], command: list[str], *, cwd: Path, path: str, label: str) -> list[str]:
+    stdout = git_stdout(defects, command, cwd=cwd, path=path, label=label)
+    paths: list[str] = []
+    for line in stdout.splitlines():
+        rel_path = line.strip()
+        if not rel_path:
+            continue
+        if not is_repo_relative_path(rel_path):
+            defect(defects, path, f"{label} returned unsafe path: {rel_path!r}")
+            continue
+        if rel_path not in paths:
+            paths.append(rel_path)
+    return paths
+
+
+def current_file_state(worktree: Path, rel_path: str) -> str:
+    target = (worktree / rel_path).resolve()
+    try:
+        target.relative_to(worktree.resolve())
+    except ValueError:
+        return "outside-worktree"
+    if target.is_symlink():
+        return "symlink:" + sha256_text(os.readlink(target)).removeprefix("sha256:")
+    if not target.exists():
+        return "missing"
+    if not target.is_file():
+        return "non-file"
+    return sha256_file(target)
+
+
+def expected_worktree_freshness(
+    defects: list[str],
+    *,
+    worktree: Path,
+    base_ref: str,
+    branch_id: str,
+    branch_status: dict,
+    path: str,
+) -> dict:
+    head = git_stdout(defects, ["git", "rev-parse", "HEAD"], cwd=worktree, path=path, label="git rev-parse HEAD").strip()
+    merge_base = git_stdout(defects, ["git", "merge-base", base_ref, "HEAD"], cwd=worktree, path=path, label=f"git merge-base {base_ref} HEAD").strip()
+    name_status = git_stdout(
+        defects,
+        ["git", "diff", "--name-status", "--find-renames", f"{base_ref}...HEAD"],
+        cwd=worktree,
+        path=path,
+        label=f"git diff --name-status --find-renames {base_ref}...HEAD",
+    )
+    base_paths = git_paths(defects, ["git", "diff", "--name-only", f"{base_ref}...HEAD"], cwd=worktree, path=path, label=f"git diff --name-only {base_ref}...HEAD")
+    unstaged_paths = git_paths(defects, ["git", "diff", "--name-only", "HEAD"], cwd=worktree, path=path, label="git diff --name-only HEAD")
+    staged_paths = git_paths(defects, ["git", "diff", "--cached", "--name-only", "HEAD"], cwd=worktree, path=path, label="git diff --cached --name-only HEAD")
+    untracked_paths = git_paths(defects, ["git", "ls-files", "--others", "--exclude-standard"], cwd=worktree, path=path, label="git ls-files --others --exclude-standard")
+    status_paths = [
+        item
+        for item in branch_status.get("changed_files", [])
+        if isinstance(item, str) and item.strip() and is_repo_relative_path(item)
+    ] if isinstance(branch_status.get("changed_files"), list) else []
+    current_paths: list[str] = []
+    for rel_path in [*status_paths, *base_paths, *unstaged_paths, *staged_paths, *untracked_paths]:
+        if rel_path not in current_paths:
+            current_paths.append(rel_path)
+    return {
+        "schema_version": 1,
+        "branch_id": branch_id,
+        "worktree": worktree.as_posix(),
+        "base_ref": base_ref,
+        "worktree_head": head.splitlines()[0] if head else "",
+        "merge_base": merge_base.splitlines()[0] if merge_base else "",
+        "diff_name_status_sha256": sha256_text(name_status),
+        "base_range_changed_files": base_paths,
+        "current_changed_files": current_paths,
+        "current_file_hashes": {rel_path: current_file_state(worktree, rel_path) for rel_path in current_paths},
+        "commands_run": [
+            "git rev-parse HEAD",
+            f"git merge-base {base_ref} HEAD",
+            f"git diff --name-status --find-renames {base_ref}...HEAD",
+            f"git diff --name-only {base_ref}...HEAD",
+            "git diff --name-only HEAD",
+            "git diff --cached --name-only HEAD",
+            "git ls-files --others --exclude-standard",
+        ],
+    }
+
+
+def validate_worktree_freshness_artifact(
+    defects: list[str],
+    gate: dict,
+    path: str,
+    *,
+    manifest: object,
+    manifest_path: Path,
+    branch_id: str,
+    branch_status: dict,
+) -> None:
+    rel_path = worktree_freshness_path(branch_id)
+    semantic_hashes = gate.get("semantic_input_hashes") if isinstance(gate.get("semantic_input_hashes"), dict) else {}
+    if rel_path not in semantic_hashes:
+        defect(defects, f"{path}.semantic_input_hashes", f"must include worktree freshness artifact {rel_path}")
+    artifact_path = manifest_path.parent / rel_path
+    if not artifact_path.exists():
+        defect(defects, path, f"worktree freshness artifact does not exist: {artifact_path}")
+        return
+    artifact = require_object(defects, load_json_artifact(defects, artifact_path, path), path)
+    manifest_root = require_object(defects, manifest, "manifest")
+    base_ref = require_string(defects, manifest_root.get("base_ref"), "manifest.base_ref")
+    worktree_value = require_string(defects, branch_status.get("worktree"), "$.worktree")
+    if not base_ref or not worktree_value:
+        return
+    expected = expected_worktree_freshness(
+        defects,
+        worktree=Path(worktree_value).resolve(),
+        base_ref=base_ref,
+        branch_id=branch_id,
+        branch_status=branch_status,
+        path=path,
+    )
+    for key in [
+        "schema_version",
+        "branch_id",
+        "worktree",
+        "base_ref",
+        "worktree_head",
+        "merge_base",
+        "diff_name_status_sha256",
+        "base_range_changed_files",
+        "current_changed_files",
+        "current_file_hashes",
+    ]:
+        if artifact.get(key) != expected.get(key):
+            defect(defects, f"{path}.{key}", "must match the current branch worktree freshness snapshot")
+
+
+def scheduler_refill_events(scheduler_path: Path) -> list[str]:
+    if not scheduler_path.exists():
+        return []
+    data = load_json(scheduler_path)
+    if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+        return []
+    refill_events: list[str] = []
+    for event in data["events"]:
+        if not isinstance(event, dict) or event.get("event") != "refill":
+            continue
+        seq = event.get("seq")
+        eligible = event.get("eligible_ids", [])
+        suffix = ",".join(item for item in eligible if isinstance(item, str)) if isinstance(eligible, list) else ""
+        refill_events.append(f"seq:{seq}:{suffix}" if isinstance(seq, int) else suffix)
+    return refill_events
 
 
 def validate_worker_scheduler(
@@ -612,7 +835,7 @@ def validate_worker_scheduler(
         dependencies=dependencies,
         capacity=max_workers,
         manifest_path=manifest_path,
-        require_all_launched=status in {"pass", "partial"},
+        require_all_launched=status == "pass",
     )
     validate_scheduler_rollup(
         defects,
@@ -627,6 +850,24 @@ def validate_worker_scheduler(
         observed = runtime_parallelism.get("max_observed_active_worker_packets")
         if is_strict_int(observed) and observed != summary.get("max_observed_active"):
             defect(defects, "$.worker_parallelism.max_observed_active_worker_packets", "must match scheduler ledger reconstruction exactly")
+        try:
+            expected_refill_events = scheduler_refill_events(manifest_path.parent / expected_path)
+        except Exception as exc:  # noqa: BLE001
+            defect(defects, "$.worker_parallelism.refill_events", f"could not reconstruct scheduler refill events: {exc}")
+            expected_refill_events = []
+        actual_refill_events = runtime_parallelism.get("refill_events")
+        if isinstance(actual_refill_events, list) and all(isinstance(item, str) for item in actual_refill_events):
+            if actual_refill_events != expected_refill_events:
+                defect(defects, "$.worker_parallelism.refill_events", "must match scheduler ledger refill events exactly")
+    finished_status = summary.get("finished_status") if isinstance(summary.get("finished_status"), dict) else {}
+    worker_statuses = root.get("worker_statuses")
+    if isinstance(worker_statuses, list):
+        for index, item in enumerate(worker_statuses):
+            if not isinstance(item, dict):
+                continue
+            packet_id = item.get("packet_id")
+            if isinstance(packet_id, str) and packet_id in finished_status and item.get("status") != finished_status[packet_id]:
+                defect(defects, f"$.worker_statuses[{index}].status", "must match scheduler finish status for the packet")
 
 
 def validate_manifest_branch_contract(
@@ -796,7 +1037,7 @@ def validate_review_artifact(
     manifest: object,
     branch_id: str | None,
     manifest_path: Path | None = None,
-    expected_input_hashes: dict[str, str] | None = None,
+    expected_semantic_hashes: dict[str, str] | None = None,
 ) -> None:
     data = require_object(defects, value, path)
     required = CONTRACT.REVIEW_REQUIRED
@@ -822,13 +1063,81 @@ def validate_review_artifact(
         defect(defects, f"{path}.verification_gaps", "must be empty when verdict is mergeable")
     require_string_list(defects, data.get("residual_risks"), f"{path}.residual_risks")
     if manifest_path is not None:
-        input_hashes = relative_hashes(defects, data.get("input_hashes"), f"{path}.input_hashes", root_dir=manifest_path.parent)
-        if expected_input_hashes is not None and input_hashes != expected_input_hashes:
-            defect(defects, f"{path}.input_hashes", "must match pre_review_gate.json input_hashes exactly")
-    elif "input_hashes" in data and not isinstance(data.get("input_hashes"), dict):
-        defect(defects, f"{path}.input_hashes", "must be an object")
+        semantic_hashes = relative_hashes(
+            defects,
+            data.get("semantic_input_hashes"),
+            f"{path}.semantic_input_hashes",
+            root_dir=manifest_path.parent,
+        )
+        if expected_semantic_hashes is not None and semantic_hashes != expected_semantic_hashes:
+            defect(defects, f"{path}.semantic_input_hashes", "must match pre_review_gate.json semantic_input_hashes exactly")
+    elif "semantic_input_hashes" in data and not isinstance(data.get("semantic_input_hashes"), dict):
+        defect(defects, f"{path}.semantic_input_hashes", "must be an object")
     validate_reuse_policy(defects, data.get("reuse_policy"), f"{path}.reuse_policy")
     require_string(defects, data.get("summary"), f"{path}.summary")
+
+
+def resolve_reuse_source_path(bundle_root: Path, value: object) -> Path | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    candidate = Path(value)
+    if candidate.is_absolute():
+        return candidate.resolve()
+    if not STATUS_VALIDATION.is_repo_relative_path(value):
+        return None
+    return (bundle_root / value).resolve()
+
+
+def validate_review_reuse_sources(
+    defects: list[str],
+    review_data: object,
+    path: str,
+    *,
+    manifest: object,
+    manifest_path: Path,
+    expected_semantic_hashes: dict[str, str] | None,
+) -> bool:
+    if not isinstance(review_data, dict):
+        return False
+    reuse_policy = review_data.get("reuse_policy")
+    if not isinstance(reuse_policy, dict) or reuse_policy.get("accepted") is not True:
+        return False
+    source_review = resolve_reuse_source_path(manifest_path.parent, reuse_policy.get("source_review_path"))
+    source_telemetry = resolve_reuse_source_path(manifest_path.parent, reuse_policy.get("source_telemetry_path"))
+    if source_review is None:
+        defect(defects, f"{path}.reuse_policy.source_review_path", "must be an absolute path or safe bundle-relative path")
+        return True
+    if source_telemetry is None:
+        defect(defects, f"{path}.reuse_policy.source_telemetry_path", "must be an absolute path or safe bundle-relative path")
+        return True
+    if not source_review.exists():
+        defect(defects, f"{path}.reuse_policy.source_review_path", f"source review does not exist: {source_review}")
+        return True
+    if not source_telemetry.exists():
+        defect(defects, f"{path}.reuse_policy.source_telemetry_path", f"source telemetry does not exist: {source_telemetry}")
+        return True
+    source_data = load_json_artifact(defects, source_review, f"{path}.reuse_policy.source_review_path")
+    if isinstance(source_data, dict):
+        source_hashes = relative_hashes(
+            defects,
+            source_data.get("semantic_input_hashes"),
+            f"{path}.reuse_policy.source_review_path.semantic_input_hashes",
+            root_dir=manifest_path.parent,
+        )
+        if expected_semantic_hashes is not None and source_hashes != expected_semantic_hashes:
+            defect(defects, f"{path}.reuse_policy.source_review_path.semantic_input_hashes", "must match current semantic input hashes for accepted reuse")
+        source_verdict = source_data.get("verdict")
+        if source_verdict not in REVIEW_STATUSES - {"missing"}:
+            defect(defects, f"{path}.reuse_policy.source_review_path.verdict", "must be a valid reviewer verdict")
+    validate_telemetry_artifact(
+        defects,
+        source_telemetry,
+        f"{path}.reuse_policy.source_telemetry_path",
+        role="reviewer",
+        allowed_aliases=("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
+        require_called=True,
+    )
+    return True
 
 
 def validate_review_artifact_for_branch(
@@ -837,6 +1146,7 @@ def validate_review_artifact_for_branch(
     review_status: object,
     branch_status: object,
     *,
+    branch_status_root: dict,
     manifest: object,
     manifest_path: Path,
 ) -> None:
@@ -852,7 +1162,7 @@ def validate_review_artifact_for_branch(
     review_data = load_json_artifact(defects, review_artifact, "$.review_status")
     packet_id = review_data.get("packet_id") if isinstance(review_data, dict) else None
     branch_id = branch_entry.get("id") if isinstance(branch_entry.get("id"), str) else None
-    expected_input_hashes = None
+    expected_semantic_hashes = None
     if branch_id:
         gate_path_value = branch_entry.get("pre_review_gate_path")
         expected_gate_path = CONTRACT.pre_review_gate_path(branch_id)
@@ -867,10 +1177,19 @@ def validate_review_artifact_for_branch(
             review_packet_id=packet_id if isinstance(packet_id, str) else None,
             required_input_paths=required_pre_review_input_paths(branch_entry, branch_id),
         )
-        if isinstance(gate.get("input_hashes"), dict):
-            expected_input_hashes = {
+        validate_worktree_freshness_artifact(
+            defects,
+            gate,
+            "$.review_status.pre_review_gate.worktree_freshness",
+            manifest=manifest,
+            manifest_path=manifest_path,
+            branch_id=branch_id,
+            branch_status=branch_status_root,
+        )
+        if isinstance(gate.get("semantic_input_hashes"), dict):
+            expected_semantic_hashes = {
                 key: value
-                for key, value in gate["input_hashes"].items()
+                for key, value in gate["semantic_input_hashes"].items()
                 if isinstance(key, str) and isinstance(value, str)
             }
     validate_review_artifact(
@@ -881,22 +1200,76 @@ def validate_review_artifact_for_branch(
         manifest=manifest,
         branch_id=branch_id,
         manifest_path=manifest_path,
-        expected_input_hashes=expected_input_hashes,
+        expected_semantic_hashes=expected_semantic_hashes,
     )
     review_packet_dir = (
         manifest_path.parent / "reviewers" / packet_id
         if isinstance(packet_id, str) and packet_id.strip()
         else review_artifact.parent
     )
-    validate_telemetry_artifact(
+    reuse_accepted = validate_review_reuse_sources(
         defects,
-        review_packet_dir / "telemetry.json",
+        review_data,
+        "$.review_status",
+        manifest=manifest,
+        manifest_path=manifest_path,
+        expected_semantic_hashes=expected_semantic_hashes,
+    )
+    route_path = review_packet_dir / "route.json"
+    route_aliases: list[str] = []
+    if not route_path.exists():
+        defect(defects, "$.review_status.route_path", f"route artifact does not exist: {route_path}")
+    else:
+        route_aliases = validate_reviewer_route_artifact(
+            defects,
+            load_json_artifact(defects, route_path, "$.review_status.route_path"),
+            "$.review_status.route_path",
+            packet_id=packet_id if isinstance(packet_id, str) else "",
+            manifest=manifest,
+        )
+    telemetry_path = review_packet_dir / "telemetry.json"
+    if reuse_accepted:
+        if telemetry_path.exists():
+            telemetry = validate_telemetry_artifact(
+                defects,
+                telemetry_path,
+                "$.review_status.telemetry_path",
+                packet_id=packet_id if isinstance(packet_id, str) else None,
+                role="reviewer",
+                allowed_aliases=route_aliases or ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
+                require_called=False,
+            )
+            called = [
+                attempt for attempt in telemetry.get("attempts", [])
+                if isinstance(attempt, dict) and attempt.get("called") is True
+            ] if isinstance(telemetry.get("attempts"), list) else []
+            if called:
+                defect(defects, "$.review_status.telemetry_path.attempts", "accepted reviewer reuse must not record a fresh called model attempt")
+        return
+    telemetry = validate_telemetry_artifact(
+        defects,
+        telemetry_path,
         "$.review_status.telemetry_path",
         packet_id=packet_id if isinstance(packet_id, str) else None,
         role="reviewer",
-        allowed_aliases=("gpt-5.5", "gpt-5.4"),
+        allowed_aliases=route_aliases or ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
         require_called=True,
     )
+    telemetry_attempts = telemetry.get("attempts") if isinstance(telemetry.get("attempts"), list) else []
+    telemetry_aliases = [
+        attempt.get("alias")
+        for attempt in telemetry_attempts
+        if isinstance(attempt, dict) and isinstance(attempt.get("alias"), str)
+    ]
+    if route_aliases and telemetry_aliases and telemetry_aliases != route_aliases:
+        defect(defects, "$.review_status.telemetry_path.attempts", "declared reviewer telemetry attempts must match route.json selected_ladder exactly")
+    called_aliases = [
+        attempt.get("alias")
+        for attempt in telemetry_attempts
+        if isinstance(attempt, dict) and attempt.get("called") is True and isinstance(attempt.get("alias"), str)
+    ]
+    if route_aliases and called_aliases and called_aliases != route_aliases[: len(called_aliases)]:
+        defect(defects, "$.review_status.telemetry_path.attempts", "called reviewer attempts must be a prefix of route.json selected_ladder")
 
 
 def validate_branch_status(
@@ -975,7 +1348,7 @@ def validate_branch_status(
         manifest,
         manifest_path=manifest_path,
         status_path=status_path,
-        require_all_workers=status in {"pass", "partial"},
+        require_all_workers=status == "pass",
     )
     if branch_entry and root_branch_id:
         validate_worker_scheduler(
@@ -997,6 +1370,7 @@ def validate_branch_status(
             branch_entry,
             review_status,
             status,
+            branch_status_root=root,
             manifest=manifest,
             manifest_path=manifest_path,
         )
@@ -1040,7 +1414,7 @@ def main() -> int:
     )
     result = {"status": "pass" if not defects else "failed", "status_path": status_path.as_posix(), "defects": defects}
     if args.json:
-        print(json.dumps(result, indent=2))
+        print(json.dumps(result, indent=2, sort_keys=True))
     else:
         print(f"status={result['status']}")
         for item in defects:

@@ -41,6 +41,7 @@ resolve_absolute_path = PATH_RULES.resolve_absolute_path
 require_relative_path = PATH_RULES.require_relative_path
 MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
 WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
+TERMINAL_STATUSES = {"pass", "partial", "blocked", "failed"}
 
 
 def is_strict_int(value: object) -> bool:
@@ -148,6 +149,109 @@ def normalize_packet_ids(values: list[str], known: set[str], field: str) -> set[
     return result
 
 
+def worker_status_path(manifest_path: Path, item: dict) -> Path:
+    packet_id = str(item["packet_id"])
+    if item.get("worker_type", "worker") == "research-worker":
+        return manifest_path.parent / "research" / packet_id / "research.json"
+    return manifest_path.parent / "workers" / packet_id / "status.json"
+
+
+def artifact_status(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    data = load_json(path)
+    status = data.get("status")
+    if status not in TERMINAL_STATUSES:
+        raise SystemExit(f"status artifact {path} must contain a terminal status")
+    return str(status)
+
+
+def validate_completed_worker_statuses(
+    manifest_path: Path,
+    work_items: list[dict],
+    completed: set[str],
+    scheduler_passed: set[str],
+) -> None:
+    item_by_packet = {str(item["packet_id"]): item for item in work_items}
+    for packet_id in sorted(completed - scheduler_passed):
+        status_path = worker_status_path(manifest_path, item_by_packet[packet_id])
+        status = artifact_status(status_path)
+        if status is None:
+            raise SystemExit(f"--completed-worker {packet_id} requires a passing status artifact or scheduler pass evidence: {status_path}")
+        if status != "pass":
+            raise SystemExit(f"--completed-worker {packet_id} points to non-pass status artifact {status_path}: {status}")
+
+
+def scheduler_state_from_ledger(
+    manifest_path: Path,
+    branch_id: str,
+    ordered_packets: list[str],
+    max_active: int,
+) -> tuple[set[str], set[str], set[str]]:
+    scheduler_path = manifest_path.parent / CONTRACT.worker_scheduler_path(branch_id)
+    if not scheduler_path.exists():
+        return set(), set(), set()
+    ledger = load_json(scheduler_path)
+    if ledger.get("schema_version") != 2:
+        raise SystemExit(f"worker scheduler ledger schema_version must be 2: {scheduler_path}")
+    if ledger.get("scheduler_kind") != "branch-worker-pool":
+        raise SystemExit(f"worker scheduler ledger kind mismatch: {scheduler_path}")
+    if ledger.get("scheduler_path") != CONTRACT.worker_scheduler_path(branch_id):
+        raise SystemExit(f"worker scheduler ledger path mismatch: {scheduler_path}")
+    if ledger.get("capacity") != max_active:
+        raise SystemExit(f"worker scheduler ledger capacity is stale: {scheduler_path}")
+    if ledger.get("item_ids") != ordered_packets:
+        raise SystemExit(f"worker scheduler ledger item_ids are stale: {scheduler_path}")
+    events = ledger.get("events")
+    if not isinstance(events, list):
+        raise SystemExit(f"worker scheduler ledger events must be an array: {scheduler_path}")
+
+    known = set(ordered_packets)
+    active: set[str] = set()
+    finished_status: dict[str, str] = {}
+    terminal_status: dict[str, str] = {}
+    for index, event in enumerate(events):
+        if not isinstance(event, dict):
+            raise SystemExit(f"worker scheduler events[{index}] must be an object: {scheduler_path}")
+        name = event.get("event")
+        event_id = event.get("id")
+        if name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
+            if not isinstance(event_id, str) or event_id not in known:
+                raise SystemExit(f"worker scheduler events[{index}].id is not a manifest worker packet id: {scheduler_path}")
+        if name == "launch":
+            if event_id in active:
+                raise SystemExit(f"worker scheduler events[{index}] duplicates active launch for {event_id}")
+            if len(active) >= max_active:
+                raise SystemExit(f"worker scheduler events[{index}] would exceed worker capacity")
+            if terminal_status.get(str(event_id)) == "pass":
+                raise SystemExit(f"worker scheduler events[{index}] relaunches already-passing packet {event_id}")
+            active.add(str(event_id))
+            terminal_status.pop(str(event_id), None)
+            finished_status.pop(str(event_id), None)
+        elif name == "finish":
+            status = event.get("status")
+            if status not in TERMINAL_STATUSES:
+                raise SystemExit(f"worker scheduler events[{index}].status must be terminal")
+            if event_id not in active:
+                raise SystemExit(f"worker scheduler events[{index}] finishes inactive packet {event_id}")
+            finished_status[str(event_id)] = str(status)
+        elif name == "close":
+            if event_id not in active:
+                raise SystemExit(f"worker scheduler events[{index}] closes inactive packet {event_id}")
+            if event_id not in finished_status:
+                raise SystemExit(f"worker scheduler events[{index}] closes unfinished packet {event_id}")
+            active.discard(str(event_id))
+            terminal_status[str(event_id)] = finished_status[str(event_id)]
+        elif name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
+            continue
+        else:
+            raise SystemExit(f"worker scheduler events[{index}].event is unsupported: {name!r}")
+
+    passed = {packet_id for packet_id, status in terminal_status.items() if status == "pass"}
+    non_pass = {packet_id for packet_id, status in terminal_status.items() if status != "pass"}
+    return active, passed, non_pass
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
@@ -163,11 +267,24 @@ def main() -> int:
     branch_id = require_safe_id(args.branch_id.upper(), "--branch-id")
     branch = branch_entry(manifest, branch_id)
     work_items, max_active = validate_work_items(branch, branch_id)
+    ordered_packets = [str(item["packet_id"]) for item in work_items]
     packet_to_item = {item["packet_id"]: item["id"] for item in work_items}
     known_packets = set(packet_to_item)
 
     completed = normalize_packet_ids(args.completed_worker, known_packets, "--completed-worker")
     active = normalize_packet_ids(args.active_worker, known_packets, "--active-worker")
+    scheduler_active, scheduler_passed, scheduler_non_pass = scheduler_state_from_ledger(manifest_path, branch_id, ordered_packets, max_active)
+    if completed & scheduler_non_pass:
+        raise SystemExit("--completed-worker includes packet ids whose scheduler status is non-pass: " + ", ".join(sorted(completed & scheduler_non_pass)))
+    if completed & scheduler_active:
+        raise SystemExit("--completed-worker includes scheduler-active packet ids: " + ", ".join(sorted(completed & scheduler_active)))
+    if active & scheduler_passed:
+        raise SystemExit("--active-worker includes scheduler-passed packet ids: " + ", ".join(sorted(active & scheduler_passed)))
+    if active & scheduler_non_pass:
+        raise SystemExit("--active-worker includes non-pass closed packet ids; record a scheduler relaunch first: " + ", ".join(sorted(active & scheduler_non_pass)))
+    validate_completed_worker_statuses(manifest_path, work_items, completed, scheduler_passed)
+    completed |= scheduler_passed
+    active |= scheduler_active
     if completed & active:
         raise SystemExit("--completed-worker and --active-worker must not overlap")
     if len(active) > max_active:

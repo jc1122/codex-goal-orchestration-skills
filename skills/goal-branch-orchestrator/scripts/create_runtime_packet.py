@@ -49,18 +49,19 @@ COPILOT_PROBE_MODEL = "gpt-5-mini"
 COPILOT_PROBE_REASONING_EFFORT = "low"
 COPILOT_PROBE_TIMEOUT_SECONDS = 20
 COPILOT_PROBE_PROMPT = "Return exactly: COPILOT_MODEL_PROBE_OK"
-SPARK_MODEL = "gpt-5.3-codex-spark"
-MINI_MODEL = "gpt-5.4-mini"
-RESEARCH_MODEL = "gpt-5.4"
-RESEARCH_FALLBACK_MODEL = "gpt-5.4-mini"
+SPARK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-spark"]
+MINI_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-mini"]
+RESEARCH_MODEL = CONTRACT.CODEX_ROUTE_MODELS[CONTRACT.RESEARCH_ALIASES[0]]
+RESEARCH_FALLBACK_MODEL = CONTRACT.CODEX_ROUTE_MODELS[CONTRACT.RESEARCH_ALIASES[1]]
 RESEARCH_ALIAS = CONTRACT.RESEARCH_ALIASES[0]
 RESEARCH_FALLBACK_ALIAS = CONTRACT.RESEARCH_ALIASES[1]
-REVIEWER_MODEL = "gpt-5.5"
-REVIEWER_FALLBACK_MODEL = "gpt-5.4"
-WORKER_ATTEMPT_TIMEOUT_SECONDS = 3600
-RESEARCH_ATTEMPT_TIMEOUT_SECONDS = 1200
-REVIEWER_ATTEMPT_TIMEOUT_SECONDS = 1800
-TIMEOUT_KILL_AFTER_SECONDS = 30
+REVIEWER_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.5"]
+REVIEWER_FALLBACK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.4"]
+REVIEWER_MINI_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.4-mini"]
+WORKER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.WORKER_ATTEMPT_TIMEOUT_SECONDS
+RESEARCH_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.RESEARCH_ATTEMPT_TIMEOUT_SECONDS
+REVIEWER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.REVIEWER_ATTEMPT_TIMEOUT_SECONDS
+TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
 MAX_EMBEDDED_CONTEXT_CHARS = 120000
@@ -86,6 +87,11 @@ WORKER_ROUTE_EVENT_LABELS = {
     "codex-spark": "spark",
     "copilot-gpt-5.4": "copilot",
     "codex-mini": "mini",
+}
+REVIEW_ROUTE_MODELS = {
+    alias: CONTRACT.CODEX_ROUTE_MODELS[alias]
+    for route in CONTRACT.REVIEW_MODEL_ROUTES.values()
+    for alias in route
 }
 
 
@@ -224,54 +230,22 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
     return attempts
 
 
-def reviewer_telemetry_attempts() -> list[dict]:
-    return [
-        {
-            "alias": "gpt-5.5",
-            "provider": "codex",
-            "model": REVIEWER_MODEL,
-            "effort": "",
-            "command": f"codex exec --ephemeral -m {REVIEWER_MODEL} -s read-only",
-            "timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["events-primary.jsonl"],
-            "probe_logs": [],
-        },
-        {
-            "alias": "gpt-5.4",
-            "provider": "codex",
-            "model": REVIEWER_FALLBACK_MODEL,
-            "effort": "",
-            "command": f"codex exec --ephemeral -m {REVIEWER_FALLBACK_MODEL} -s read-only",
-            "timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["events-fallback.jsonl"],
-            "probe_logs": [],
-        },
-    ]
+def reviewer_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
+    return CONTRACT.codex_telemetry_attempts(
+        selected_ladder,
+        timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
+        sandbox="read-only",
+    )
 
 
 def research_telemetry_attempts() -> list[dict]:
-    return [
-        {
-            "alias": RESEARCH_ALIAS,
-            "provider": "codex",
-            "model": RESEARCH_MODEL,
-            "effort": "",
-            "command": f"codex --search exec --ephemeral -m {RESEARCH_MODEL} -s read-only",
-            "timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["events-primary.jsonl"],
-            "probe_logs": [],
-        },
-        {
-            "alias": RESEARCH_FALLBACK_ALIAS,
-            "provider": "codex",
-            "model": RESEARCH_FALLBACK_MODEL,
-            "effort": "",
-            "command": f"codex --search exec --ephemeral -m {RESEARCH_FALLBACK_MODEL} -s read-only",
-            "timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["events-fallback.jsonl"],
-            "probe_logs": [],
-        },
-    ]
+    return CONTRACT.codex_telemetry_attempts(
+        [RESEARCH_ALIAS, RESEARCH_FALLBACK_ALIAS],
+        timeout_seconds=RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
+        sandbox="read-only",
+        event_labels=["primary", "fallback"],
+        search=True,
+    )
 
 
 def telemetry_function(role: str, packet_id: str, output_name: str, attempts: list[dict]) -> str:
@@ -335,7 +309,7 @@ def review_schema(packet_id: str) -> dict:
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "verification_gaps": {"type": "array", "items": nonempty_string},
             "residual_risks": {"type": "array", "items": nonempty_string},
-            "input_hashes": {
+            "semantic_input_hashes": {
                 "type": "object",
             },
             "reuse_policy": {
@@ -429,6 +403,119 @@ def load_task(path: Path | None) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def load_json(path: Path) -> dict:
+    with path.open("r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    if not isinstance(data, dict):
+        raise SystemExit(f"expected JSON object at {path}")
+    return data
+
+
+def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
+    if not packet_dir.exists():
+        return
+    if packet_dir.is_dir() and not any(packet_dir.iterdir()):
+        return
+    if not replace:
+        raise SystemExit(f"runtime packet already exists; pass --replace to archive and recreate: {packet_dir}")
+    attempts_dir = packet_dir / "attempts"
+    attempts_dir.mkdir(parents=True, exist_ok=True)
+    next_index = 1
+    for child in sorted(attempts_dir.iterdir()):
+        if child.is_dir() and child.name.startswith("attempt-"):
+            suffix = child.name.removeprefix("attempt-")
+            if suffix.isdigit():
+                next_index = max(next_index, int(suffix) + 1)
+    archive_dir = attempts_dir / f"attempt-{next_index:03d}"
+    archive_dir.mkdir()
+    for child in sorted(packet_dir.iterdir()):
+        if child.name == "attempts":
+            continue
+        child.rename(archive_dir / child.name)
+
+
+def branch_entry(manifest: dict, branch_id: str) -> dict:
+    branches = manifest.get("branches")
+    if not isinstance(branches, list):
+        return {}
+    matches = [item for item in branches if isinstance(item, dict) and item.get("id") == branch_id]
+    return matches[0] if len(matches) == 1 else {}
+
+
+def review_changed_paths(gate: dict, branch: dict) -> list[str]:
+    paths: list[str] = []
+    checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
+    ownership = checks.get("ownership") if isinstance(checks.get("ownership"), dict) else {}
+    for source in [
+        gate.get("changed_paths"),
+        gate.get("changed_files"),
+        ownership.get("changed_files"),
+        branch.get("owned_paths"),
+    ]:
+        if not isinstance(source, list):
+            continue
+        for value in source:
+            if isinstance(value, str) and value.strip() and value not in paths:
+                paths.append(value)
+    return paths
+
+
+def explicit_review_tier(value: object) -> str:
+    if isinstance(value, str) and value in CONTRACT.REVIEW_ROUTE_TIERS:
+        return value
+    return ""
+
+
+def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, list[str]]:
+    explicit = explicit_review_tier(gate.get("review_tier")) or explicit_review_tier(branch.get("review_tier"))
+    if explicit:
+        return explicit, [f"explicit {explicit} review tier"]
+    changed_paths = review_changed_paths(gate, branch)
+    trigger_hits: list[str] = []
+    lower_paths = " ".join(changed_paths).lower()
+    for pattern in CONTRACT.REVIEW_HEAVY_TRIGGER_PATTERNS:
+        if pattern in lower_paths.replace("-", "_") or pattern in lower_paths:
+            trigger_hits.append(pattern)
+    diff_stats = gate.get("diff_stats") if isinstance(gate.get("diff_stats"), dict) else {}
+    files_changed = diff_stats.get("files_changed")
+    lines_changed = diff_stats.get("lines_changed")
+    if isinstance(files_changed, int) and not isinstance(files_changed, bool) and files_changed >= 20:
+        trigger_hits.append("large-diff")
+    if isinstance(lines_changed, int) and not isinstance(lines_changed, bool) and lines_changed >= 800:
+        trigger_hits.append("large-diff")
+    if gate.get("prior_reviewer_blockers"):
+        trigger_hits.append("reviewer-blocker")
+    if trigger_hits:
+        return "heavy", sorted(set(trigger_hits))
+    docs_like = changed_paths and all(
+        path.endswith((".md", ".txt", ".rst")) or path.startswith(("docs/", "README", "CHANGELOG"))
+        for path in changed_paths
+    )
+    if docs_like and len(changed_paths) <= 3:
+        return "light", ["small documentation-only review surface"]
+    policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
+    default_tier = policy.get("default_tier") if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS else "standard"
+    return str(default_tier), ["default deterministic review tier"]
+
+
+def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id: str) -> dict:
+    branch = branch_entry(manifest, branch_id)
+    tier, reasons = infer_review_tier(manifest, gate, branch)
+    route = CONTRACT.review_route_for_tier(tier)
+    return {
+        "schema_version": 1,
+        "packet_id": packet_id,
+        "role": "reviewer",
+        "tier": tier,
+        "selected_ladder": route,
+        "selection_reason": "; ".join(reasons),
+        "policy_router": CONTRACT.REVIEW_MODEL_POLICY["router"],
+        "policy_routes": CONTRACT.REVIEW_MODEL_POLICY["routes"],
+        "heavy_triggers": [reason for reason in reasons if reason in CONTRACT.REVIEW_HEAVY_TRIGGER_PATTERNS],
+        "changed_paths": review_changed_paths(gate, branch),
+    }
+
+
 def prompt_for(
     role: str,
     packet_id: str,
@@ -461,7 +548,7 @@ git diff --check HEAD
 
 Review the branch against its prompt, worker status files, diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible.
 
-The branch orchestrator must have supplied a passing `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `input_hashes` exactly into the final review JSON, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every recorded input hash matches exactly; otherwise produce a fresh review.
+The branch orchestrator must have supplied a passing schema v2 `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `semantic_input_hashes` exactly into the final review JSON as `semantic_input_hashes`, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every semantic input hash matches exactly and both the source review and source telemetry are present; otherwise produce a fresh review.
 
 Determine the branch base ref from the branch prompt or manifest context. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
@@ -660,6 +747,9 @@ def launch_for(
     output_name: str,
     selected_ladder: list[str] | None,
     selection_reason: str,
+    review_route: dict | None = None,
+    review_semantic_hashes: dict[str, str] | None = None,
+    review_reuse_policy: dict | None = None,
 ) -> str:
     sandbox = "read-only" if role == "reviewer" else "workspace-write"
     if role == "research-worker":
@@ -717,7 +807,7 @@ data = {{
     "blockers": [message, "Inspect research-worker event logs in this packet directory for the underlying CLI or schema error."],
     "handoff": message + " Inspect research-worker event logs in this packet directory for the underlying CLI or schema error.",
 }}
-output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
 }}
 
@@ -763,7 +853,46 @@ exit 1
 """
 
     if role == "reviewer":
-        reviewer_telemetry = telemetry_function("reviewer", packet_id, output_name, reviewer_telemetry_attempts())
+        review_route = review_route or {
+            "selected_ladder": CONTRACT.review_route_for_tier("standard"),
+            "selection_reason": "Default standard reviewer route.",
+        }
+        reviewer_ladder = [
+            item for item in review_route.get("selected_ladder", [])
+            if isinstance(item, str) and item in REVIEW_ROUTE_MODELS
+        ] or CONTRACT.review_route_for_tier("standard")
+        reviewer_telemetry = telemetry_function("reviewer", packet_id, output_name, reviewer_telemetry_attempts(reviewer_ladder))
+        reviewer_commands = [
+            f"codex exec --ephemeral -m {REVIEW_ROUTE_MODELS[alias]} -s read-only"
+            for alias in reviewer_ladder
+        ]
+        reviewer_attempt_lines = []
+        for alias in reviewer_ladder:
+            label = CONTRACT.codex_event_label(alias)
+            model = REVIEW_ROUTE_MODELS[alias]
+            reviewer_attempt_lines.extend(
+                [
+                    f"if run_model {shell_quote(label)} {shell_quote(model)}; then",
+                    "  write_telemetry",
+                    "  exit 0",
+                    "fi",
+                    "",
+                    "if [ -s \"$output_path\" ]; then",
+                    "  write_telemetry",
+                    "  exit 1",
+                    "fi",
+                    "",
+                ]
+            )
+        reviewer_attempt_script = "\n".join(reviewer_attempt_lines)
+        terminal_semantic_hashes = review_semantic_hashes or {}
+        terminal_reuse_policy = review_reuse_policy or {
+            "mode": "new",
+            "accepted": False,
+            "semantic_hashes_match": False,
+            "source_review_path": None,
+            "source_telemetry_path": None,
+        }
         return f"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -775,7 +904,7 @@ packet_dir="$(pwd)"
 output_path="$packet_dir/{output_name}"
 attempt_timeout_seconds={REVIEWER_ATTEMPT_TIMEOUT_SECONDS}
 timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
-rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl" "$packet_dir/telemetry.json"
+rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir/telemetry.json"
 
 run_with_timeout() {{
   local seconds="$1"
@@ -802,15 +931,14 @@ data = {{
     "role": "reviewer",
     "verdict": "blocked",
     "findings": [message],
-    "commands_run": [
-        "codex exec --ephemeral -m {REVIEWER_MODEL} -s read-only",
-        "codex exec --ephemeral -m {REVIEWER_FALLBACK_MODEL} -s read-only",
-    ],
+    "commands_run": {json.dumps(reviewer_commands)},
     "verification_gaps": [message, "Inspect reviewer event logs in this packet directory for the underlying CLI or schema error."],
     "residual_risks": [],
+    "semantic_input_hashes": {json.dumps(terminal_semantic_hashes, sort_keys=True)},
+    "reuse_policy": {json.dumps(terminal_reuse_policy, sort_keys=True)},
     "summary": message,
 }}
-output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
 }}
 
@@ -830,25 +958,7 @@ run_model() {{
     > "$(pwd)/events-${{label}}.jsonl" 2>&1
 }}
 
-if run_model primary {shell_quote(REVIEWER_MODEL)}; then
-  write_telemetry
-  exit 0
-fi
-
-if [ -s "$(pwd)/{output_name}" ]; then
-  write_telemetry
-  exit 1
-fi
-
-if run_model fallback {shell_quote(REVIEWER_FALLBACK_MODEL)}; then
-  write_telemetry
-  exit 0
-fi
-
-if [ -s "$output_path" ]; then
-  write_telemetry
-  exit 1
-fi
+{reviewer_attempt_script}
 
 write_terminal_review "Reviewer primary and fallback failed without producing {output_name}."
 write_telemetry
@@ -961,7 +1071,7 @@ data = {{
     "blockers": [message, "Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error."],
     "handoff": message + " Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error.",
 }}
-output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
 }}
 
@@ -1087,7 +1197,7 @@ for source_name, source_text in sources:
     except Exception as exc:
         source_errors.append(f"{{source_name}}: invalid marked worker status JSON: {{exc}}")
         continue
-    output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+    output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
     raise SystemExit(0)
 
 for message in source_errors:
@@ -1305,6 +1415,7 @@ def main() -> int:
         help="Allowed worker route alias. Repeat to choose a non-empty ordered subsequence of the standard ladder.",
     )
     parser.add_argument("--selection-reason", help="Required when --worker-route is supplied; recorded in route.json and worker status.")
+    parser.add_argument("--replace", action="store_true", help="Archive an existing packet directory under attempts/ and recreate it.")
     args = parser.parse_args()
 
     packet_id = require_safe_label(args.packet_id, "packet-id")
@@ -1321,6 +1432,9 @@ def main() -> int:
     )
     if args.role in {"research-worker", "reviewer"} and (args.worker_route or args.selection_reason):
         raise SystemExit("research-worker and reviewer packets must not set worker route options")
+    review_route: dict | None = None
+    review_semantic_hashes: dict[str, str] | None = None
+    review_reuse_policy: dict | None = None
     if args.role == "reviewer":
         if not args.manifest:
             raise SystemExit("reviewer packets require --manifest")
@@ -1328,6 +1442,8 @@ def main() -> int:
             raise SystemExit("reviewer packets require --pre-review-gate")
         manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
         gate_path = resolve_absolute_path(args.pre_review_gate, "--pre-review-gate", must_exist=True)
+        manifest = load_json(manifest_path)
+        gate = load_json(gate_path)
         branch_id = packet_id.split("-R", 1)[0] if "-R" in packet_id else ""
         defects: list[str] = []
         STATUS_VALIDATION.validate_pre_review_gate_artifact(
@@ -1340,6 +1456,22 @@ def main() -> int:
         )
         if defects:
             raise SystemExit("pre-review gate failed; refusing reviewer packet generation:\n" + "\n".join(defects))
+        review_route = select_review_route(manifest, gate, branch_id=branch_id, packet_id=packet_id)
+        review_semantic_hashes = {
+            key: value
+            for key, value in gate.get("semantic_input_hashes", {}).items()
+            if isinstance(key, str) and isinstance(value, str)
+        } if isinstance(gate.get("semantic_input_hashes"), dict) else {}
+        gate_reuse_policy = gate.get("reuse_policy") if isinstance(gate.get("reuse_policy"), dict) else {}
+        review_reuse_policy = {
+            "mode": "new",
+            "accepted": False,
+            "semantic_hashes_match": False,
+            "source_review_path": None,
+            "source_telemetry_path": None,
+        }
+        if gate_reuse_policy.get("accepted") is True:
+            review_reuse_policy = dict(gate_reuse_policy)
     selected_ladder: list[str] | None = None
     selection_reason = ""
     if args.role == "worker":
@@ -1355,6 +1487,7 @@ def main() -> int:
 
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     packet_dir = out_dir / packet_id
+    archive_existing_packet_dir(packet_dir, replace=args.replace)
     packet_dir.mkdir(parents=True, exist_ok=True)
 
     if args.role == "reviewer":
@@ -1370,7 +1503,7 @@ def main() -> int:
         output_name = "status.json"
         schema = status_schema(packet_id, branch, str(worktree))
 
-    (packet_dir / schema_name).write_text(json.dumps(schema, indent=2) + "\n", encoding="utf-8")
+    (packet_dir / schema_name).write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (packet_dir / "prompt.md").write_text(
         prompt_for(
             args.role,
@@ -1395,7 +1528,9 @@ def main() -> int:
             "default_ladder": list(DEFAULT_WORKER_LADDER),
             "allowed_aliases": list(DEFAULT_WORKER_LADDER),
         }
-        (packet_dir / "route.json").write_text(json.dumps(route, indent=2) + "\n", encoding="utf-8")
+        (packet_dir / "route.json").write_text(json.dumps(route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    elif args.role == "reviewer" and review_route is not None:
+        (packet_dir / "route.json").write_text(json.dumps(review_route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(
         launch_for(
@@ -1407,6 +1542,9 @@ def main() -> int:
             output_name,
             selected_ladder,
             selection_reason,
+            review_route=review_route,
+            review_semantic_hashes=review_semantic_hashes,
+            review_reuse_policy=review_reuse_policy,
         ),
         encoding="utf-8",
     )

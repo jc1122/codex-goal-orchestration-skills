@@ -15,10 +15,11 @@ The main runtime may create execution artifacts:
 - `main.status.json`
 - `telemetry.summary.json`
 - optional Lite advisory artifacts under `lite/`
+- optional route-bound amendment artifacts and telemetry under `amendments/`
 - branch integration branches/worktrees
 - branch worker, research-worker, status, and review artifacts produced by branch orchestrators
 
-It must not create or rewrite the bootloader, main prompt, branch prompts, or manifest.
+It must not create or rewrite the bootloader or main prompt. It may invoke `goal-plan-amender` after validated terminal branch results to update only future unstarted manifest work and changed future branch prompts through accepted amendment artifacts.
 
 ## Manifest Shape
 
@@ -43,6 +44,22 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
     "parallelization_rationale": "Keep up to 4 branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
     "wave_execution": "Use waves as scheduling/order groups only. Keep branch orchestrator slots saturated up to max_active_branch_agents; when a branch finishes and capacity is freed, launch the next eligible branch whose depends_on branch ids are complete.",
     "dependency_policy": "Branch depends_on entries are explicit prior-branch dependencies; branches without unresolved depends_on entries are eligible whenever capacity is available."
+  },
+  "adaptation_policy": {
+    "enabled": true,
+    "mode": "amendment_proposals",
+    "launcher": "goal-main-orchestrator",
+    "may_modify_active_or_terminal_branches": false,
+    "allowed_operations": ["add_branch", "split_unstarted_branch", "replace_unstarted_branch", "add_dependency_to_unstarted_branch", "add_work_item_to_unstarted_branch", "mark_unstarted_branch_obsolete"]
+  },
+  "amender_model_policy": {
+    "default_ladder": ["gpt-5.4", "gpt-5.4-mini"],
+    "allowed_routes": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+    "launcher": "goal-main-orchestrator",
+    "selection_reason_required": true,
+    "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
+    "sandbox": "read-only",
+    "timeout_seconds": 1200
   },
   "worker_model_policy": {
     "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
@@ -131,6 +148,14 @@ Return/write status with these fields:
 	      "review_status": "mergeable|mergeable_after_fixes|blocked|reject|missing"
 	    }
 	  ],
+	  "amendment_decisions": [
+	    {
+	      "amendment_id": "A001",
+	      "decision": "launch|skip",
+	      "decision_path": "amendments/A001.decision.json",
+	      "packet_validation_path": "amendments/A001.packet/packet.validation.json"
+	    }
+	  ],
 	  "lite_advice": [
 	    {
 	      "packet_id": "M01-L01",
@@ -162,9 +187,17 @@ Return/write status with these fields:
 
 `lite_advice` must be present, even when empty. Any recorded main Lite packet must point to existing manifest-owned `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json`, match source hashes exactly, and have exact validation command plus `validation_status`/`validation_defects` matching actual `validate_lite_advice.py` output. Any relevant main Lite packet directory under manifest-owned `lite/` must be recorded, so an empty `lite_advice` array is valid only when no main Lite packet exists.
 
-Run `scripts/summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` before final validation so `telemetry.summary.json` reflects the current audit, worker, research-worker, reviewer, and Lite packet telemetry, including separate `gpt-5.5` audit and reviewer attempt totals under `premium_usage`. Write the main scheduler ledger at `schedulers/main.scheduler.json`; it must include `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` events as applicable, plus the current manifest sha256. Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also validates prompt-audit telemetry, opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to use manifest-owned `lite/<packet_id>/` paths, validates every Lite advice artifact, live input/task/prompt hashes, and Lite telemetry, checks the captured Gemini path/version/binary sha for non-blocked Lite advice, requires recorded validation command/status/defects to match actual validation, scans manifest-owned `lite/` for unrecorded main Lite packets, validates branch scheduler reconstruction in `branch_parallelism`, rejects duplicate branch launches, missing finishes/closes, active counts above cap, missing refill events, and eligible-idle gaps without structured reasons, and for `pass` requires every normal worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every research-worker artifact to live at the manifest-owned `research/<packet_id>/research.json`, every worker/research-worker/reviewer packet to have same-packet `telemetry.json`, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, a current `telemetry.summary.json` file, a current `schedulers/main.scheduler.json` ledger, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Non-pass main status must include at least one blocker.
+Run `scripts/summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` before final validation so `telemetry.summary.json` reflects the current audit, worker, research-worker, reviewer, Lite, and plan-amender packet telemetry, including separate `gpt-5.5` audit and reviewer attempt totals under `premium_usage`. Write the schema v2 main scheduler ledger at `schedulers/main.scheduler.json` with `scripts/scheduler_tick.py` for normal ready/launch/finish/close/refill bookkeeping; it must include `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` events as applicable, plus the current manifest sha256, ordered `seq`, `timestamp`, `runtime_ref`, and enum `reason_code` for defer/under_capacity/blocked events. Dependencies unlock downstream branches only when they finish with `pass`; non-pass dependencies require `dependency_failed` evidence. Validate every branch status with `goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /absolute/path/to/job.manifest.json` before accepting it. Validate the final main status with `scripts/validate_main_status.py --manifest /absolute/path/to/job.manifest.json` before reporting `pass`; this validator opens every listed manifest-referenced branch status artifact, validates it, and fails if it is missing, invalid, or inconsistent with `main.status.json`. It also validates prompt-audit telemetry, opens review artifacts whenever `review_status` is not `missing`, requires every recorded Lite packet to use manifest-owned `lite/<packet_id>/` paths, validates every Lite advice artifact, live input/task/prompt hashes, and Lite telemetry, checks the captured Gemini path/version/binary sha for non-blocked Lite advice, requires recorded validation command/status/defects to match actual validation, scans manifest-owned `lite/` for unrecorded main Lite packets, validates amendment launch/skip decision artifacts for every terminal branch summary, requires every discovered amender packet to have `packet.validation.json`, validates branch scheduler reconstruction in `branch_parallelism`, rejects duplicate branch launches, missing finishes/closes, active counts above cap, non-pass dependency launches, missing refill events, vague reason text, and eligible-idle gaps without structured reasons, and for `pass` requires every normal worker artifact to live at the manifest-owned `workers/<packet_id>/status.json`, every research-worker artifact to live at the manifest-owned `research/<packet_id>/research.json`, every worker/research-worker/reviewer packet to have same-packet telemetry or accepted reviewer source telemetry reuse, every plan-amender packet to have route-bound telemetry when amendments were attempted, every review artifact to use a same-branch reviewer packet id, contain exact base-range whitespace command evidence from `git diff --check <base-ref>...HEAD`, and have no verification gaps when `mergeable`. Main `pass` requires `audit_status: "pass"`, exactly the manifest branch summary set with manifest-matching status/review paths, every branch summary status `pass`, every passing branch summary review status `mergeable`, recorded `amendment_decisions` covering every terminal branch summary, a current `telemetry.summary.json` file, a current `schedulers/main.scheduler.json` ledger, a `lite_advice` array, a non-empty command list, a non-empty DoD checklist, and no blockers. Main `partial` may omit unlaunched branch artifacts only when scheduler v2 explains every omitted id with terminal structured evidence. Non-pass main status must include at least one blocker.
 
-Every prompt-audit, worker, research-worker, reviewer, and Lite telemetry attempt must include a positive `timeout_seconds`. Default full-attempt limits are 1200 seconds for prompt audit, 3600 seconds for normal worker route attempts, 1200 seconds for research workers, 1800 seconds for reviewers, and 600 seconds for Lite advisors, each with a 30-second kill-after window. Timeout is a failed attempt and never authorizes polling active branch or worker artifacts.
+If a plan-amender route includes `gpt-5.5`, the summary records it under `premium_usage.amender_gpt_5_5`.
+
+## Amendment Policy
+
+Main records an amendment decision after every terminal branch result has passed branch status validation and the branch orchestrator is closed. The decision is `skip` when no adaptation is needed and `launch` only when no manifest branch is eligible, a non-pass dependency would stall downstream work, remaining unstarted work no longer covers the main DoD, finalization cannot pass but recovery work is plausible, or the operator explicitly requests recovery planning.
+
+The amender writes `amendments/Axxx.decision.json`, `Axxx.packet/route.json`, `Axxx.packet/telemetry.json`, `Axxx.packet/packet.validation.json`, `Axxx.proposal.json`, `Axxx.validation.json`, optional `Axxx.accepted.json`, and prior-manifest archives. Main selects an ordered amender model ladder from `amender_model_policy.allowed_routes` and records a non-empty selection reason; the packet uses read-only Codex attempts and a bounded timeout. It may add, split, replace, or obsolete unstarted branches, add dependencies to unstarted branches, or add work items to unstarted branches. It must not mutate active or terminal branch ids, prompts, worktrees, status paths, review paths, dependencies, owned paths, worker sets, scheduler ledgers, or runtime artifacts. It must not inspect active branch internals. Accepted amendments update the live manifest and changed future branch prompts through preflight helpers, rerun lint, and preserve prompt-audit/main DoD boundaries. Invalid amendments leave the live manifest unchanged and become blocker evidence if no existing work can continue.
+
+Every prompt-audit, worker, research-worker, reviewer, plan-amender, and Lite telemetry attempt must include a positive `timeout_seconds`. Default full-attempt limits are 1200 seconds for prompt audit, 3600 seconds for normal worker route attempts, 1200 seconds for research workers, 1800 seconds for reviewers, 1200 seconds for plan-amenders, and 600 seconds for Lite advisors, each with a 30-second kill-after window. Timeout is a failed attempt and never authorizes polling active branch or worker artifacts.
 
 ## Context Conservation
 
@@ -216,6 +249,7 @@ Return `blocked` if:
 - prompt-audit telemetry is missing or inconsistent;
 - manifest branch metadata is missing;
 - manifest cleanup or artifact policy is missing or contradicted by `main.prompt.md`;
+- manifest adaptation policy is missing or contradicted by an attempted amendment;
 - `max_active_branch_agents` is missing, non-numeric, or greater than 4;
 - the manifest is missing the fixed `worker_model_policy`;
 - the manifest contains a `research-worker` work item but is missing a research-worker policy requiring `codex --search exec --ephemeral -s read-only` without user-config suppression, broad read-only information retrieval through configured CLI/MCP/connector/browser/search tools and shell/network inspection commands, and no file edits or state-changing actions;

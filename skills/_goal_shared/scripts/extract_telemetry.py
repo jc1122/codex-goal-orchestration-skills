@@ -131,6 +131,10 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
         and output.get("findings") == ["Research worker primary and fallback failed without producing research.json."]
     ):
         return None
+    if role == "plan_amender":
+        operations = output.get("operations")
+        if not isinstance(operations, list) or not operations:
+            return None
     if role == "lite_advisor" and output.get("status") == "blocked":
         blockers = output.get("blockers", [])
         blocker_text = " ".join(item for item in blockers if isinstance(item, str))
@@ -223,7 +227,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--packet-dir", required=True)
     parser.add_argument("--packet-id", required=True)
-    parser.add_argument("--role", choices=["worker", "research-worker", "reviewer", "prompt-auditor", "lite_advisor"], required=True)
+    parser.add_argument("--role", choices=["worker", "research-worker", "reviewer", "prompt-auditor", "plan_amender", "lite_advisor"], required=True)
     parser.add_argument("--output-name", required=True)
     parser.add_argument("--prompt-name", default="prompt.md")
     parser.add_argument("--attempt-json", action="append", default=[])

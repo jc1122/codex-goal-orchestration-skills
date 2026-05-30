@@ -19,6 +19,7 @@ Scripts enforce the purpose allowlist for the skill they live under:
 - `goal-preflight`: `preflight-decomposition`, `lint-repair`.
 - `goal-main-orchestrator`: `audit-defect-summary`, `main-summary`.
 - `goal-branch-orchestrator`: `branch-packet-planning`, `context-pack`, `worker-summary`, `blocked-triage`.
+- `goal-plan-amender`: `amendment-summary`, `amendment-defect-summary`.
 
 ## Invocation
 

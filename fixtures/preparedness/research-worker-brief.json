@@ -1,6 +1,14 @@
 {
   "job_id": "preparedness-research-worker-fixture",
   "base_ref": "main",
+  "goal": "Validate research-worker preparedness contracts with deterministic fixture artifacts.",
+  "source_summary": "This fixture uses repository-local documentation to validate broad read-only research-worker status and telemetry artifacts.",
+  "required_evidence": [
+    "The generated bundle validates research-worker artifacts with source URLs tools used and read-only command evidence."
+  ],
+  "final_dod": [
+    "The preparedness fixture passes branch status validation without launching live model CLIs."
+  ],
   "max_active_branch_agents": 1,
   "serial_reasons": [
     "Single-branch fixture for research-worker preparedness checks."
@@ -11,7 +19,7 @@
       "title": "Research Worker Preparedness Fixture",
       "objective": "Validate broad read-only research-worker artifacts without launching live model CLIs.",
       "branch_name": "preparedness-research-fixture",
-      "worktree_path": ".",
+      "worktree_path": ".worktrees/preparedness-research-fixture",
       "max_active_worker_packets": 1,
       "worker_serial_reasons": [
         "Single static fixture packet."

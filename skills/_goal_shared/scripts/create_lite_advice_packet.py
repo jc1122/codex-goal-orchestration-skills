@@ -33,6 +33,10 @@ SKILL_PURPOSES = {
         "worker-summary",
         "blocked-triage",
     },
+    "goal-plan-amender": {
+        "amendment-summary",
+        "amendment-defect-summary",
+    },
 }
 
 
@@ -185,7 +189,7 @@ def prompt_for(
         f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
         for item in sources
     )
-    example_sources = json.dumps(sources, indent=2)
+    example_sources = json.dumps(sources, indent=2, sort_keys=True)
     command = advice_command(gemini_path)
     return f"""# Lite Advisory Packet {packet_id}
 
@@ -307,7 +311,7 @@ data = {{
         f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
     ],
 }}
-output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
 }}
 
@@ -499,7 +503,7 @@ if finish <= start:
     raise SystemExit(1)
 candidate = text[start:finish].strip()
 data = json.loads(candidate)
-output_path.write_text(json.dumps(data, indent=2) + "\\n", encoding="utf-8")
+output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
 PY
 }}
 
@@ -628,7 +632,7 @@ def main() -> int:
         "source_files": sources,
     }
 
-    (packet_dir / "input-files.json").write_text(json.dumps(inputs, indent=2) + "\n", encoding="utf-8")
+    (packet_dir / "input-files.json").write_text(json.dumps(inputs, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     (packet_dir / "prompt.md").write_text(
         prompt_text,
         encoding="utf-8",
