@@ -361,7 +361,6 @@ def lint(bundle_dir: Path) -> dict:
     if not isinstance(serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in serial_reasons):
         defect("job.manifest.json", "critical", "parallelization.serial_reasons must be an array of non-empty strings")
         serial_reasons = []
-    parallelization_rationale = parallelization.get("parallelization_rationale", "")
     has_serial_reason = bool(serial_reasons)
 
     if manifest.get("adaptation_policy") != CONTRACT.ADAPTATION_POLICY:

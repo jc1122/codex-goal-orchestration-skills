@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -36,9 +37,14 @@ REQUIRED_PACKAGE_FILES = {
     "package.json",
     "bin/install-goal-skills.js",
     "fixtures/preparedness/research-worker-brief.json",
+    "maintenance/AGENT_MAINTENANCE.md",
+    "maintenance/dependency-policy.json",
+    "maintenance/size-budget.json",
+    "scripts/check_dependency_policy.py",
     "scripts/check_golden_smoke.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
+    "scripts/check_size_budget.py",
     "scripts/sync_goal_shared.py",
     "skills/_goal_shared/scripts/orchestration_contract.py",
     "skills/_goal_shared/scripts/scheduler_tick.py",
@@ -63,9 +69,14 @@ REQUIRED_PACKAGE_FILES = {
 REQUIRED_PACKAGE_FILES_ENTRIES = {
     "bin/",
     "fixtures/",
+    "maintenance/AGENT_MAINTENANCE.md",
+    "maintenance/dependency-policy.json",
+    "maintenance/size-budget.json",
+    "scripts/check_dependency_policy.py",
     "scripts/check_golden_smoke.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
+    "scripts/check_size_budget.py",
     "scripts/sync_goal_shared.py",
     "skills/",
     "README.md",
@@ -73,7 +84,19 @@ REQUIRED_PACKAGE_FILES_ENTRIES = {
 
 
 def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    env = os.environ.copy()
+    npm_cache = str(Path(tempfile.gettempdir()) / "codex-goal-npm-cache")
+    env["npm_config_cache"] = npm_cache
+    env["NPM_CONFIG_CACHE"] = npm_cache
+    result = subprocess.run(
+        command,
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+        env=env,
+    )
     if result.returncode != expect:
         print(f"command failed with {result.returncode}, expected {expect}: {' '.join(command)}", file=sys.stderr)
         if result.stdout:
@@ -120,7 +143,7 @@ def check_metadata(package: dict) -> str:
     require(not missing_file_entries, f"package.json files is missing entries: {', '.join(missing_file_entries)}")
     scripts = package.get("scripts")
     require(isinstance(scripts, dict), "package.json scripts must be an object")
-    for script in ("check:shared", "check:fixtures", "check:golden", "check:release"):
+    for script in ("check", "check:shared", "check:fixtures", "check:golden", "check:release", "check:maintenance"):
         require(script in scripts, f"package.json scripts missing {script}")
     return version
 
@@ -132,8 +155,9 @@ def check_readme(version: str) -> None:
         "npm run check:fixtures",
         "npm run check:golden",
         "npm run check:release",
+        "npm run check:maintenance",
         "Release",
-        f"package.json` version",
+        "package.json` version",
     ]:
         require(phrase in text, f"README.md missing release/check phrase: {phrase}")
     require(version in load_package().get("version", ""), "internal version readback failed")

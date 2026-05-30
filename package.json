@@ -8,18 +8,30 @@
     "install-codex-goal-skills": "./bin/install-goal-skills.js"
   },
   "scripts": {
+    "check": "npm run check:shared && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
     "check:shared": "python3 scripts/sync_goal_shared.py",
     "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
     "check:golden": "python3 scripts/check_golden_smoke.py",
-    "check:release": "python3 scripts/check_release.py"
+    "check:release": "python3 scripts/check_release.py",
+    "check:maintenance": "python3 scripts/check_size_budget.py && python3 scripts/check_dependency_policy.py",
+    "check:maintenance:size": "python3 scripts/check_size_budget.py",
+    "check:maintenance:deps": "python3 scripts/check_dependency_policy.py",
+    "check:quality": "ruff check . && pyright",
+    "lint:ruff": "ruff check .",
+    "typecheck": "pyright"
   },
   "files": [
     "bin/",
     "fixtures/",
     "scripts/check_golden_smoke.py",
+    "scripts/check_dependency_policy.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
+    "scripts/check_size_budget.py",
     "scripts/sync_goal_shared.py",
+    "maintenance/AGENT_MAINTENANCE.md",
+    "maintenance/dependency-policy.json",
+    "maintenance/size-budget.json",
     "skills/",
     "!**/__pycache__/**",
     "!**/*.pyc",
@@ -32,5 +44,8 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "devDependencies": {
+    "pyright": "1.1.391"
   }
 }

@@ -7,7 +7,7 @@ import argparse
 import json
 from pathlib import Path
 
-from amendment_lib import CONTRACT, ensure_amendment_id, load_json_object, resolve_absolute_path, sha256_file, write_json
+from amendment_lib import CONTRACT, ensure_amendment_id, resolve_absolute_path, sha256_file, write_json
 
 
 def defect(defects: list[str], path: str, message: str) -> None:

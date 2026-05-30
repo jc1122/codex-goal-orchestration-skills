@@ -1,0 +1,15 @@
+{
+  "include": [
+    "scripts",
+    "skills"
+  ],
+  "exclude": [
+    "**/__pycache__",
+    "maintenance/reports",
+    "node_modules"
+  ],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "off",
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": "none"
+}

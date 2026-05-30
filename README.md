@@ -51,10 +51,12 @@ npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 ## Maintainer Checks
 
 ```bash
+npm run check
 npm run check:shared
 npm run check:fixtures
 npm run check:golden
 npm run check:release
+npm run check:maintenance
 ```
 
 `check:fixtures` validates the preparedness fixture bundle without launching live model CLIs. It covers timeout-wrapped launcher generation, valid broad-access research-worker artifacts, preflight brief linting, schema v2 scheduler refill/under-capacity/stuck-worker/stuck-branch/dependency-failed/watchdog closeout fixtures, deterministic pre-review gate creation, conservative branch status assembly, review router tiers including premium escalation, failed pre-review gate blocking reviewer launch, topology lint failures, amendment validation/apply fixtures, rejection of old self-reported saturation without a ledger, rejection of obsolete narrow research policy text, and rejection of unsafe research-worker command evidence.
@@ -63,14 +65,37 @@ npm run check:release
 
 `check:release` validates release metadata, installer `--list`/`--version`, temp install parity, and `npm pack --dry-run --json` package contents.
 
+`check:maintenance` runs warning-first repository guardrails. It reports tracked file counts, lines, characters, approximate tokens, per-skill size, runtime dependency policy, and Dependabot coverage. The size budget is stored in `maintenance/size-budget.json` and uses `git ls-files`, so ignored caches and untracked scratch files do not count. Refresh the budget only for intentional growth:
+
+```bash
+python3 scripts/check_size_budget.py --update
+```
+
+Machine-readable maintenance reports are available with:
+
+```bash
+python3 scripts/check_size_budget.py --json
+python3 scripts/check_dependency_policy.py --json
+```
+
+Optional quality tooling is pinned separately from runtime code:
+
+```bash
+npm ci
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements-dev.txt
+npm run check:quality
+```
+
+Agent-assisted maintenance should follow `maintenance/AGENT_MAINTENANCE.md`: read deterministic reports first, prefer consolidation over new prose, and leave size-budget updates explicit.
+
 ## Release
 
 Before creating a production candidate tag:
 
 ```bash
-npm run check:shared
-npm run check:fixtures
-npm run check:golden
+npm run check
 npm run check:release -- --require-clean
 git tag v<package.json version>
 git push origin main v<package.json version>

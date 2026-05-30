@@ -1,5 +1,8 @@
 node_modules/
+.venv/
 npm-debug.log*
 *.tgz
 __pycache__/
 *.py[cod]
+.ruff_cache/
+maintenance/reports/

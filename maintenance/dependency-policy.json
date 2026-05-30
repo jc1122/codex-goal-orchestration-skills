@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "runtime_npm_dependency_allowlist": [],
+  "required_manifests": [
+    "package.json",
+    "package-lock.json",
+    "requirements-dev.txt"
+  ],
+  "required_dependabot_updates": [
+    {
+      "package_ecosystem": "github-actions",
+      "directory": "/"
+    },
+    {
+      "package_ecosystem": "npm",
+      "directory": "/"
+    },
+    {
+      "package_ecosystem": "pip",
+      "directory": "/"
+    }
+  ]
+}
