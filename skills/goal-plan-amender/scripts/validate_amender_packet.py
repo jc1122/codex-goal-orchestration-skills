@@ -155,11 +155,17 @@ def validate_telemetry(defects: list[str], telemetry: dict, *, amendment_id: str
     called_aliases = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("called") is True]
     if called_aliases != selected[: len(called_aliases)]:
         defect(defects, "$.telemetry.attempts", "called aliases must be a prefix of route.json selected_ladder")
+    if not called_aliases:
+        defect(defects, "$.telemetry.attempts", "must record at least one called plan-amender attempt")
     accepted = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("accepted") is True]
-    if len(accepted) > 1:
-        defect(defects, "$.telemetry.attempts", "must mark at most one accepted attempt")
+    if len(accepted) != 1:
+        defect(defects, "$.telemetry.attempts", "must mark exactly one accepted plan-amender attempt")
+    elif accepted[0] not in called_aliases:
+        defect(defects, "$.telemetry.attempts", "accepted plan-amender attempt must have been called")
     if telemetry.get("accepted_alias") is not None and telemetry.get("accepted_alias") not in accepted:
         defect(defects, "$.telemetry.accepted_alias", "must match the accepted attempt alias")
+    if telemetry.get("accepted_alias") is None and accepted:
+        defect(defects, "$.telemetry.accepted_alias", "must be set when a plan-amender attempt is accepted")
     for index, item in enumerate(attempts):
         attempt = require_object(defects, item, f"$.telemetry.attempts[{index}]")
         if attempt.get("timeout_seconds") != CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS:

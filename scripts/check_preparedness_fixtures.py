@@ -738,6 +738,26 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         ),
     )
     write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
+    missing_accepted_telemetry = json.loads((packet_dir / "telemetry.json").read_text(encoding="utf-8"))
+    missing_accepted_telemetry["accepted_alias"] = None
+    for attempt_item in missing_accepted_telemetry.get("attempts", []):
+        if isinstance(attempt_item, dict):
+            attempt_item["accepted"] = False
+    write_json(packet_dir / "telemetry.json", missing_accepted_telemetry)
+    missing_accepted = run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/validate_amender_packet.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--amendment-id",
+            "A001",
+            "--json",
+        ],
+        expect=1,
+    )
+    assert_contains(missing_accepted.stdout, "accepted plan-amender attempt", "amender telemetry accepted attempt fixture")
+    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
     run(
         [
             "python3",
