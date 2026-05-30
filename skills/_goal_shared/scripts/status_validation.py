@@ -803,6 +803,7 @@ def validate_pre_review_gate_artifact(
         "tests",
         "diff_check",
         "artifacts_fresh",
+        "worker_evidence",
         "ownership",
         "dod_evidence",
     ]

@@ -1349,6 +1349,16 @@ def main() -> int:
         if "route.json selected_ladder" not in route_mismatch_result.stdout and "must be one of" not in route_mismatch_result.stdout:
             raise SystemExit("reviewer route/telemetry mismatch fixture did not fail on route aliases")
 
+        missing_worker_gate_bundle = tmp_path / "pre-review-gate-missing-worker-evidence"
+        shutil.copytree(bundle, missing_worker_gate_bundle)
+        rewrite_copied_branch_paths(missing_worker_gate_bundle)
+        missing_worker_gate = read_json(missing_worker_gate_bundle / "branches" / "B01.pre_review_gate.json")
+        missing_worker_gate["checks"].pop("worker_evidence", None)
+        write_json(missing_worker_gate_bundle / "branches" / "B01.pre_review_gate.json", missing_worker_gate)
+        missing_worker_gate_result = validate_branch(missing_worker_gate_bundle, expect=1)
+        if "worker_evidence" not in missing_worker_gate_result.stdout:
+            raise SystemExit("pre-review gate fixture did not fail when worker_evidence was missing")
+
         reuse_bundle = tmp_path / "reviewer-reuse-valid"
         make_reuse_bundle(bundle, reuse_bundle, input_hashes)
         validate_branch(reuse_bundle)
