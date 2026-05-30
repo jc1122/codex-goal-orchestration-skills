@@ -14,7 +14,9 @@ For amendment id `A001`, artifacts live under the bundle `amendments/` directory
 - `A001.accepted.json`: immutable acceptance record written by the apply script.
 - `A001.job.manifest.before.json`: archived copy of the prior live manifest.
 
-`goal-main-orchestrator` must record either a launch or skip decision for each terminal branch checkpoint. Use `scripts/recommend_amendment_decision.py` for deterministic cases such as eligible work remaining, all-pass/no-adaptation, no eligible branch, or non-pass dependencies stalling downstream work; use `scripts/create_amendment_decision.py` for semantic/operator decisions. Launch decisions are valid only for enumerated launch reasons such as `no_eligible_branch`, `blocker_stalls_downstream`, `remaining_work_dod_gap`, `recovery_plausible_before_finalization`, or `operator_requested`.
+`goal-main-orchestrator` must record either a launch or skip decision for each terminal branch checkpoint. Use `scripts/recommend_amendment_decision.py` for deterministic cases such as eligible work remaining, all-pass/no-adaptation, no eligible branch, or non-pass dependencies stalling downstream work; use `scripts/create_amendment_decision.py` for semantic/operator decisions. Launch decisions are valid only for enumerated launch reasons such as `no_eligible_branch`, `blocker_stalls_downstream`, `remaining_work_dod_gap`, `recovery_plausible_before_finalization`, `terminal_blocker_repair`, or `operator_requested`.
+
+When a terminal branch is blocked by missing local files, the main orchestrator may create a deterministic blocker-repair packet with `scripts/create_blocker_repair_packet.py`. That packet uses local status-artifact parsing rather than a model route, writes deterministic telemetry with alias `deterministic-blocker-repair`, and proposes new repair branches. It still applies through the same proposal validation and apply gates.
 
 ## Proposal Shape
 
@@ -65,6 +67,8 @@ Main selects an ordered amender model ladder from manifest `amender_model_policy
 ## Immutability
 
 Active and terminal branch ids are protected. A valid proposal must not replace, split, obsolete, add dependencies to, add work items to, or otherwise modify those branches. Applying an accepted proposal must leave their prompts, status paths, review paths, worktrees, dependencies, owned paths, and runtime artifacts untouched.
+
+Blocker repair is modeled as new future work, not mutation of terminal branches. A repair branch must use `recovers_from` to cite the terminal branch evidence. If it needs to touch a path that overlaps prior protected ownership, it must declare a concrete `contention_reason`; the protected branch artifact itself remains immutable.
 
 ## Validation
 

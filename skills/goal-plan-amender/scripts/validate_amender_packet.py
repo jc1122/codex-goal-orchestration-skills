@@ -70,6 +70,10 @@ def validate_decision(defects: list[str], decision: dict, *, amendment_id: str, 
     require_string_list(defects, decision.get("terminal_branch_ids"), "$.decision.terminal_branch_ids", min_items=1)
 
 
+def deterministic_mode(route: dict) -> bool:
+    return route.get("mode") == "deterministic_blocker_repair"
+
+
 def validate_route(defects: list[str], route: dict, *, amendment_id: str) -> list[str]:
     if route.get("schema_version") != 1:
         defect(defects, "$.route.schema_version", "must be 1")
@@ -77,19 +81,24 @@ def validate_route(defects: list[str], route: dict, *, amendment_id: str) -> lis
         defect(defects, "$.route.packet_id", f"must be {amendment_id!r}")
     if route.get("role") != CONTRACT.AMENDER_ROLE:
         defect(defects, "$.route.role", f"must be {CONTRACT.AMENDER_ROLE!r}")
-    selected = require_string_list(defects, route.get("selected_ladder"), "$.route.selected_ladder", min_items=1)
-    try:
-        normalized = CONTRACT.normalize_route_ladder(
-            selected,
-            default_ladder=CONTRACT.DEFAULT_AMENDER_LADDER,
-            allowed_routes=CONTRACT.ALLOWED_AMENDER_ROUTES,
-            route_name="amender",
-        )
-    except ValueError as exc:
-        defect(defects, "$.route.selected_ladder", str(exc))
-        normalized = selected
-    if selected and normalized != selected:
-        defect(defects, "$.route.selected_ladder", "must preserve allowed route order exactly")
+    if deterministic_mode(route):
+        selected = require_string_list(defects, route.get("selected_ladder"), "$.route.selected_ladder", min_items=0)
+        if selected:
+            defect(defects, "$.route.selected_ladder", "must be empty for deterministic blocker-repair mode")
+    else:
+        selected = require_string_list(defects, route.get("selected_ladder"), "$.route.selected_ladder", min_items=1)
+        try:
+            normalized = CONTRACT.normalize_route_ladder(
+                selected,
+                default_ladder=CONTRACT.DEFAULT_AMENDER_LADDER,
+                allowed_routes=CONTRACT.ALLOWED_AMENDER_ROUTES,
+                route_name="amender",
+            )
+        except ValueError as exc:
+            defect(defects, "$.route.selected_ladder", str(exc))
+            normalized = selected
+        if selected and normalized != selected:
+            defect(defects, "$.route.selected_ladder", "must preserve allowed route order exactly")
     require_string(defects, route.get("selection_reason"), "$.route.selection_reason")
     if route.get("policy") != CONTRACT.AMENDER_MODEL_POLICY:
         defect(defects, "$.route.policy", "must match shared amender_model_policy")
@@ -148,6 +157,30 @@ def validate_telemetry(defects: list[str], telemetry: dict, *, amendment_id: str
     selected = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else []
     if not isinstance(attempts, list):
         defect(defects, "$.telemetry.attempts", "must be an array")
+        return
+    if deterministic_mode(route):
+        if len(attempts) != 1:
+            defect(defects, "$.telemetry.attempts", "must contain exactly one deterministic blocker-repair attempt")
+            return
+        attempt = require_object(defects, attempts[0], "$.telemetry.attempts[0]")
+        alias = getattr(CONTRACT, "DETERMINISTIC_AMENDER_ALIAS", "deterministic-blocker-repair")
+        if attempt.get("alias") != alias:
+            defect(defects, "$.telemetry.attempts[0].alias", f"must be {alias!r}")
+        if attempt.get("provider") != "local-script":
+            defect(defects, "$.telemetry.attempts[0].provider", "must be 'local-script'")
+        if attempt.get("model") != "goal-plan-amender.deterministic-blocker-repair":
+            defect(defects, "$.telemetry.attempts[0].model", "must be 'goal-plan-amender.deterministic-blocker-repair'")
+        if attempt.get("timeout_seconds") != 1:
+            defect(defects, "$.telemetry.attempts[0].timeout_seconds", "must be 1")
+        if attempt.get("called") is not True or attempt.get("accepted") is not True:
+            defect(defects, "$.telemetry.attempts[0]", "deterministic attempt must be called and accepted")
+        if telemetry.get("accepted_alias") != alias:
+            defect(defects, "$.telemetry.accepted_alias", f"must be {alias!r}")
+        totals = require_object(defects, telemetry.get("totals"), "$.telemetry.totals")
+        if totals.get("attempts_declared") != 1:
+            defect(defects, "$.telemetry.totals.attempts_declared", "must be 1")
+        if totals.get("attempts_called") != 1:
+            defect(defects, "$.telemetry.totals.attempts_called", "must be 1")
         return
     aliases = [item.get("alias") for item in attempts if isinstance(item, dict)]
     if aliases != selected:

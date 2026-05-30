@@ -61,6 +61,9 @@ PROTECTED_BRANCH_KEYS = (
     "work_items",
     "max_active_worker_packets",
     "worker_parallelism",
+    "recovers_from",
+    "contention_reason",
+    "worker_contention_reason",
 )
 NONPASS_TERMINAL_STATUSES = {"partial", "blocked", "failed"}
 

@@ -95,6 +95,8 @@ validate_scheduler_rollup = STATUS_VALIDATION.validate_scheduler_rollup
 validate_pre_review_gate_artifact = STATUS_VALIDATION.validate_pre_review_gate_artifact
 relative_hashes = STATUS_VALIDATION.relative_hashes
 validate_reuse_policy = STATUS_VALIDATION.validate_reuse_policy
+archived_manifest_hashes_by_rel_path = STATUS_VALIDATION.archived_manifest_hashes_by_rel_path
+archived_manifest_sha256s = STATUS_VALIDATION.archived_manifest_sha256s
 
 
 def sha256_file(path: Path) -> str:
@@ -816,6 +818,7 @@ def validate_worker_scheduler(
     manifest_path: Path,
     branch_id: str,
     status: object,
+    allow_archived_manifest_hashes: bool = False,
 ) -> None:
     manifest_max_workers = branch_entry.get("max_active_worker_packets")
     max_workers = manifest_max_workers if is_strict_int(manifest_max_workers) else MAX_WORKER_PACKETS_PER_BRANCH
@@ -835,6 +838,7 @@ def validate_worker_scheduler(
         dependencies=dependencies,
         capacity=max_workers,
         manifest_path=manifest_path,
+        allowed_manifest_sha256s=archived_manifest_sha256s(manifest_path) if allow_archived_manifest_hashes else None,
         require_all_launched=status == "pass",
     )
     validate_scheduler_rollup(
@@ -1038,6 +1042,7 @@ def validate_review_artifact(
     branch_id: str | None,
     manifest_path: Path | None = None,
     expected_semantic_hashes: dict[str, str] | None = None,
+    allowed_hashes_by_rel_path: dict[str, set[str]] | None = None,
 ) -> None:
     data = require_object(defects, value, path)
     required = CONTRACT.REVIEW_REQUIRED
@@ -1068,6 +1073,7 @@ def validate_review_artifact(
             data.get("semantic_input_hashes"),
             f"{path}.semantic_input_hashes",
             root_dir=manifest_path.parent,
+            allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
         )
         if expected_semantic_hashes is not None and semantic_hashes != expected_semantic_hashes:
             defect(defects, f"{path}.semantic_input_hashes", "must match pre_review_gate.json semantic_input_hashes exactly")
@@ -1096,6 +1102,7 @@ def validate_review_reuse_sources(
     manifest: object,
     manifest_path: Path,
     expected_semantic_hashes: dict[str, str] | None,
+    allowed_hashes_by_rel_path: dict[str, set[str]] | None = None,
 ) -> bool:
     if not isinstance(review_data, dict):
         return False
@@ -1123,6 +1130,7 @@ def validate_review_reuse_sources(
             source_data.get("semantic_input_hashes"),
             f"{path}.reuse_policy.source_review_path.semantic_input_hashes",
             root_dir=manifest_path.parent,
+            allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
         )
         if expected_semantic_hashes is not None and source_hashes != expected_semantic_hashes:
             defect(defects, f"{path}.reuse_policy.source_review_path.semantic_input_hashes", "must match current semantic input hashes for accepted reuse")
@@ -1149,6 +1157,7 @@ def validate_review_artifact_for_branch(
     branch_status_root: dict,
     manifest: object,
     manifest_path: Path,
+    allow_archived_manifest_hashes: bool = False,
 ) -> None:
     review_path = branch_entry.get("review_path")
     if not isinstance(review_path, str) or not review_path.strip():
@@ -1163,6 +1172,7 @@ def validate_review_artifact_for_branch(
     packet_id = review_data.get("packet_id") if isinstance(review_data, dict) else None
     branch_id = branch_entry.get("id") if isinstance(branch_entry.get("id"), str) else None
     expected_semantic_hashes = None
+    allowed_hashes_by_rel_path = archived_manifest_hashes_by_rel_path(manifest_path) if allow_archived_manifest_hashes else None
     if branch_id:
         gate_path_value = branch_entry.get("pre_review_gate_path")
         expected_gate_path = CONTRACT.pre_review_gate_path(branch_id)
@@ -1176,6 +1186,7 @@ def validate_review_artifact_for_branch(
             branch_id=branch_id,
             review_packet_id=packet_id if isinstance(packet_id, str) else None,
             required_input_paths=required_pre_review_input_paths(branch_entry, branch_id),
+            allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
         )
         validate_worktree_freshness_artifact(
             defects,
@@ -1201,6 +1212,7 @@ def validate_review_artifact_for_branch(
         branch_id=branch_id,
         manifest_path=manifest_path,
         expected_semantic_hashes=expected_semantic_hashes,
+        allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
     )
     review_packet_dir = (
         manifest_path.parent / "reviewers" / packet_id
@@ -1214,6 +1226,7 @@ def validate_review_artifact_for_branch(
         manifest=manifest,
         manifest_path=manifest_path,
         expected_semantic_hashes=expected_semantic_hashes,
+        allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
     )
     route_path = review_packet_dir / "route.json"
     route_aliases: list[str] = []
@@ -1281,6 +1294,7 @@ def validate_branch_status(
     manifest: object,
     manifest_path: Path,
     status_path: Path,
+    allow_archived_manifest_hashes: bool = False,
 ) -> list[str]:
     defects: list[str] = []
     root = require_object(defects, data, "$")
@@ -1358,6 +1372,7 @@ def validate_branch_status(
             manifest_path=manifest_path,
             branch_id=root_branch_id,
             status=status,
+            allow_archived_manifest_hashes=allow_archived_manifest_hashes,
         )
     review_status = root.get("review_status")
     if review_status not in REVIEW_STATUSES:
@@ -1373,6 +1388,7 @@ def validate_branch_status(
             branch_status_root=root,
             manifest=manifest,
             manifest_path=manifest_path,
+            allow_archived_manifest_hashes=allow_archived_manifest_hashes,
         )
     validate_path_list(defects, root.get("changed_files"), "$.changed_files")
     if status == "pass":
@@ -1397,6 +1413,7 @@ def main() -> int:
     parser.add_argument("--branch-id")
     parser.add_argument("--branch")
     parser.add_argument("--worktree")
+    parser.add_argument("--allow-archived-manifest-hashes", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 
@@ -1411,6 +1428,7 @@ def main() -> int:
         manifest=load_json(manifest_path),
         manifest_path=manifest_path,
         status_path=status_path,
+        allow_archived_manifest_hashes=args.allow_archived_manifest_hashes,
     )
     result = {"status": "pass" if not defects else "failed", "status_path": status_path.as_posix(), "defects": defects}
     if args.json:

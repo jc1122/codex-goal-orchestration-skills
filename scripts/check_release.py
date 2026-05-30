@@ -53,6 +53,7 @@ REQUIRED_PACKAGE_FILES = {
     "skills/goal-plan-amender/scripts/apply_manifest_amendment.py",
     "skills/goal-plan-amender/scripts/create_amendment_decision.py",
     "skills/goal-plan-amender/scripts/create_adaptation_packet.py",
+    "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py",
     "skills/goal-plan-amender/scripts/recommend_amendment_decision.py",
     "skills/goal-plan-amender/scripts/validate_amender_packet.py",
     "skills/goal-plan-amender/scripts/validate_manifest_amendment.py",

@@ -56,6 +56,7 @@ validate_scheduler_artifact = STATUS_VALIDATION.validate_scheduler_artifact
 validate_scheduler_rollup = STATUS_VALIDATION.validate_scheduler_rollup
 relative_hashes = STATUS_VALIDATION.relative_hashes
 validate_reuse_policy = STATUS_VALIDATION.validate_reuse_policy
+archived_manifest_hashes_by_rel_path = STATUS_VALIDATION.archived_manifest_hashes_by_rel_path
 is_repo_relative_path = STATUS_VALIDATION.is_repo_relative_path
 is_absolute_path = STATUS_VALIDATION.is_absolute_path
 is_strict_int = STATUS_VALIDATION.is_strict_int
@@ -255,7 +256,7 @@ def validate_packet_validation_artifact(defects: list[str], data: object, path: 
             f"{path}.telemetry",
             packet_id=amendment_id,
             role=CONTRACT.AMENDER_ROLE,
-            allowed_aliases=CONTRACT.ALLOWED_AMENDER_ROUTES,
+            allowed_aliases=getattr(CONTRACT, "ALLOWED_AMENDER_TELEMETRY_ALIASES", CONTRACT.ALLOWED_AMENDER_ROUTES),
             require_called=True,
         )
     validation_defects = validation.get("defects")
@@ -536,6 +537,7 @@ def validate_review_artifact(
     manifest: object,
     branch_id: str | None,
     manifest_path: Path | None = None,
+    allowed_hashes_by_rel_path: dict[str, set[str]] | None = None,
 ) -> None:
     review = require_object(defects, data, path)
     required = CONTRACT.REVIEW_REQUIRED
@@ -561,7 +563,13 @@ def validate_review_artifact(
         defect(defects, f"{path}.verification_gaps", "must be empty when verdict is mergeable")
     require_string_list(defects, review.get("residual_risks"), f"{path}.residual_risks")
     if manifest_path is not None:
-        relative_hashes(defects, review.get("semantic_input_hashes"), f"{path}.semantic_input_hashes", root_dir=manifest_path.parent)
+        relative_hashes(
+            defects,
+            review.get("semantic_input_hashes"),
+            f"{path}.semantic_input_hashes",
+            root_dir=manifest_path.parent,
+            allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
+        )
     elif "semantic_input_hashes" in review and not isinstance(review.get("semantic_input_hashes"), dict):
         defect(defects, f"{path}.semantic_input_hashes", "must be an object")
     validate_reuse_policy(defects, review.get("reuse_policy"), f"{path}.reuse_policy")
@@ -581,6 +589,7 @@ def validate_branch_artifacts(
     if not isinstance(branch_statuses, list):
         return
     branch_validator = None
+    allowed_hashes_by_rel_path = archived_manifest_hashes_by_rel_path(manifest_path)
     for index, item in enumerate(branch_statuses):
         if not isinstance(item, dict):
             continue
@@ -609,6 +618,7 @@ def validate_branch_artifacts(
                     manifest=manifest,
                     manifest_path=manifest_path,
                     status_path=status_artifact,
+                    allow_archived_manifest_hashes=True,
                 )
                 for branch_defect in branch_defects:
                     defect(defects, f"{item_path}.status_path", f"invalid branch status artifact: {branch_defect}")
@@ -631,6 +641,7 @@ def validate_branch_artifacts(
                 manifest=manifest,
                 branch_id=branch_id,
                 manifest_path=manifest_path,
+                allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
             )
 
 

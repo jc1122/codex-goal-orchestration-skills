@@ -183,6 +183,7 @@ def create_amendment_decision(
     reason_code: str,
     reason: str,
     terminal: list[str] | None = None,
+    replace: bool = False,
 ) -> dict:
     command = [
         "python3",
@@ -200,6 +201,8 @@ def create_amendment_decision(
     ]
     for branch_id in terminal or [BRANCH_ID]:
         command.extend(["--terminal-branch", branch_id])
+    if replace:
+        command.append("--replace")
     run(command)
     return {
         "amendment_id": amendment_id,
@@ -965,6 +968,14 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
     write_json(target_bundle / "audit" / "prompt-audit.json", audit)
     create_amendment_decision(
         target_bundle,
+        "A000",
+        decision="skip",
+        reason_code="no_adaptation_needed",
+        reason="Copied golden smoke terminal pass checkpoint is current to this bundle.",
+        replace=True,
+    )
+    a001_decision = create_amendment_decision(
+        target_bundle,
         "A001",
         decision="launch",
         reason_code="remaining_work_dod_gap",
@@ -1093,10 +1104,209 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
     )
     if "B02" not in ready.stdout.splitlines():
         raise SystemExit("amended golden smoke did not continue scheduling from amended manifest")
+
+    strict_branch = run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "validate_branch_status.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--status",
+            (target_bundle / "branches" / "B01.status.json").as_posix(),
+            "--branch-id",
+            BRANCH_ID,
+            "--branch",
+            BRANCH_NAME,
+            "--worktree",
+            REPO_ROOT.as_posix(),
+            "--json",
+        ],
+        expect=1,
+    )
+    if "manifest_sha256" not in strict_branch.stdout and "semantic_input_hashes.job.manifest.json" not in strict_branch.stdout:
+        raise SystemExit("strict branch validation did not fail on stale manifest evidence after amendment")
+    run(
+        [
+            "python3",
+            skill_script("goal-branch-orchestrator", "validate_branch_status.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--status",
+            (target_bundle / "branches" / "B01.status.json").as_posix(),
+            "--branch-id",
+            BRANCH_ID,
+            "--branch",
+            BRANCH_NAME,
+            "--worktree",
+            REPO_ROOT.as_posix(),
+            "--allow-archived-manifest-hashes",
+            "--json",
+        ]
+    )
+
+    scheduler_path = target_bundle / "schedulers" / "main.scheduler.json"
+    scheduler = read_json(scheduler_path)
+    scheduler["manifest_sha256"] = sha256_file(target_bundle / "job.manifest.json")
+    scheduler["item_ids"] = [BRANCH_ID, "B02"]
+    scheduler["events"].append(scheduler_event(5, "refill", eligible_ids=["B02"]))
+    scheduler["events"].append(
+        scheduler_event(
+            6,
+            "under_capacity",
+            eligible_ids=["B02"],
+            reason_code="operator_requested",
+            reason="Golden smoke leaves amended branch unlaunched while validating archived terminal evidence.",
+        )
+    )
+    write_json(scheduler_path, scheduler)
+    main_status = read_json(target_bundle / "main.status.json")
+    main_status["status"] = "partial"
+    main_status["branch_parallelism"] = {
+        "scheduler_path": "schedulers/main.scheduler.json",
+        "launched_ids": [BRANCH_ID],
+        "finished_ids": [BRANCH_ID],
+        "active_ids": [],
+        "blocked_ids": [],
+        "deferred_ids": ["B02"],
+        "max_observed_active": 1,
+    }
+    main_status["amendment_decisions"] = [*main_status.get("amendment_decisions", []), a001_decision]
+    main_status["blockers"] = ["B02 was added by A001 and intentionally left unlaunched in this smoke fixture."]
+    main_status["summary"] = "Golden offline smoke validates archived terminal evidence after amendment."
+    write_json(target_bundle / "main.status.json", main_status)
+    run(
+        [
+            "python3",
+            skill_script("goal-main-orchestrator", "summarize_telemetry.py"),
+            "--bundle-dir",
+            target_bundle.as_posix(),
+        ]
+    )
+    run(
+        [
+            "python3",
+            skill_script("goal-main-orchestrator", "validate_main_status.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--status",
+            (target_bundle / "main.status.json").as_posix(),
+            "--job-id",
+            JOB_ID,
+            "--json",
+        ]
+    )
     run(["python3", skill_script("goal-main-orchestrator", "summarize_telemetry.py"), "--bundle-dir", target_bundle.as_posix()])
     summary = read_json(target_bundle / "telemetry.summary.json")
     if "amendments/A001.packet/telemetry.json" not in summary.get("telemetry_files", []):
         raise SystemExit("amended golden smoke telemetry summary omitted plan-amender telemetry")
+
+
+def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
+    shutil.copytree(source_bundle, target_bundle)
+    rewrite_copied_branch_paths(target_bundle)
+    audit = read_json(target_bundle / "audit" / "prompt-audit.json")
+    audit["manifest"] = (target_bundle / "job.manifest.json").as_posix()
+    audit["repo_root"] = REPO_ROOT.as_posix()
+    write_json(target_bundle / "audit" / "prompt-audit.json", audit)
+
+    status_path = target_bundle / "branches" / f"{BRANCH_ID}.status.json"
+    status = read_json(status_path)
+    status["status"] = "blocked"
+    status["review_status"] = "missing"
+    status["blockers"] = [
+        "B01-W01 is blocked: required verification test files tests/test_golden_missing.py are absent from the integration branch and outside W01 owned paths.",
+        "B01-W01 is blocked: API tests require unowned runtime dependency `marketnn.golden_missing` that is absent from this branch.",
+    ]
+    write_json(status_path, status)
+
+    create_amendment_decision(
+        target_bundle,
+        "A002",
+        decision="launch",
+        reason_code="terminal_blocker_repair",
+        reason="Golden smoke deterministically repairs terminal missing-file blockers.",
+    )
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "create_blocker_repair_packet.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--main-prompt",
+            (target_bundle / "main.prompt.md").as_posix(),
+            "--repo-root",
+            REPO_ROOT.as_posix(),
+            "--amendment-id",
+            "A002",
+            "--terminal-branch",
+            BRANCH_ID,
+        ]
+    )
+    packet_dir = target_bundle / "amendments" / "A002.packet"
+    assert_shell_syntax(packet_dir / "launch.sh")
+    run([str(packet_dir / "launch.sh")])
+    proposal = read_json(target_bundle / "amendments" / "A002.proposal.json")
+    operations = proposal.get("operations")
+    if not isinstance(operations, list) or len(operations) != 1:
+        raise SystemExit("deterministic blocker repair should create one repair branch operation")
+    branch = operations[0].get("branch") if isinstance(operations[0], dict) else None
+    if not isinstance(branch, dict):
+        raise SystemExit("deterministic blocker repair operation did not include a branch")
+    owned_paths = []
+    for work_item in branch.get("work_items", []):
+        if isinstance(work_item, dict):
+            owned_paths.extend(path for path in work_item.get("owned_paths", []) if isinstance(path, str))
+    if "src/marketnn/golden_missing.py" not in owned_paths or "tests/test_golden_missing.py" not in owned_paths:
+        raise SystemExit(f"deterministic repair branch missed expected blocker paths: {owned_paths!r}")
+    if branch.get("recovers_from") != [BRANCH_ID]:
+        raise SystemExit("deterministic repair branch must cite recovers_from terminal branch")
+    route = read_json(packet_dir / "route.json")
+    if route.get("mode") != "deterministic_blocker_repair":
+        raise SystemExit("deterministic repair packet route did not record deterministic mode")
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "validate_amender_packet.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--amendment-id",
+            "A002",
+            "--json",
+        ]
+    )
+    validation_path = target_bundle / "amendments" / "A002.validation.json"
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "validate_manifest_amendment.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--proposal",
+            (target_bundle / "amendments" / "A002.proposal.json").as_posix(),
+            "--output",
+            validation_path.as_posix(),
+            "--terminal-branch",
+            BRANCH_ID,
+        ]
+    )
+    run(
+        [
+            "python3",
+            skill_script("goal-plan-amender", "apply_manifest_amendment.py"),
+            "--manifest",
+            (target_bundle / "job.manifest.json").as_posix(),
+            "--proposal",
+            (target_bundle / "amendments" / "A002.proposal.json").as_posix(),
+            "--validation",
+            validation_path.as_posix(),
+        ]
+    )
+    accepted = read_json(target_bundle / "amendments" / "A002.accepted.json")
+    if accepted.get("changed_branch_ids") != ["B02"]:
+        raise SystemExit(f"deterministic repair should add B02, got {accepted.get('changed_branch_ids')!r}")
+    if not (target_bundle / "branches" / "B02.prompt.md").exists():
+        raise SystemExit("deterministic blocker repair did not regenerate B02 prompt")
+    run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
 
 
 def assert_shell_syntax(path: Path) -> None:
@@ -1403,6 +1613,8 @@ def main() -> int:
 
         amendment_bundle = tmp_path / "amended-plan"
         run_amendment_smoke(bundle, amendment_bundle)
+        blocker_repair_bundle = tmp_path / "blocker-repair-plan"
+        run_blocker_repair_smoke(bundle, blocker_repair_bundle)
 
         stale_bundle = tmp_path / "stale-telemetry-summary"
         shutil.copytree(bundle, stale_bundle)

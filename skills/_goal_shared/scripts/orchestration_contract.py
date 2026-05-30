@@ -133,6 +133,7 @@ AMENDMENT_DECISION_REASON_CODES = (
     "recovery_plausible_before_finalization",
     "remaining_work_covers_dod",
     "remaining_work_dod_gap",
+    "terminal_blocker_repair",
 )
 AMENDMENT_LAUNCH_REASON_CODES = (
     "blocker_stalls_downstream",
@@ -140,6 +141,7 @@ AMENDMENT_LAUNCH_REASON_CODES = (
     "operator_requested",
     "recovery_plausible_before_finalization",
     "remaining_work_dod_gap",
+    "terminal_blocker_repair",
 )
 ADAPTATION_POLICY = {
     "enabled": True,
@@ -168,6 +170,8 @@ ALLOWED_AMENDER_ROUTES = (
     "gpt-5.4",
     "gpt-5.4-mini",
 )
+DETERMINISTIC_AMENDER_ALIAS = "deterministic-blocker-repair"
+ALLOWED_AMENDER_TELEMETRY_ALIASES = ALLOWED_AMENDER_ROUTES + (DETERMINISTIC_AMENDER_ALIAS,)
 
 WORKER_MODEL_POLICY = {
     "default_ladder": list(DEFAULT_WORKER_LADDER),

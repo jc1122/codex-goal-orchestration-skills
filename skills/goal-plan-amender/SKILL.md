@@ -1,6 +1,6 @@
 ---
 name: goal-plan-amender
-description: "Runtime-only plan amender for audited /goal bundles. Use only when goal-main-orchestrator has validated a terminal branch result and needs amendment proposals for future unstarted manifest work; create file-backed adaptation packets, validate safe manifest amendments, and apply accepted amendments without changing active or terminal branch evidence."
+description: "Runtime-only plan amender for audited /goal bundles. Use only when goal-main-orchestrator has validated a terminal branch result and needs amendment proposals or deterministic blocker-repair proposals; create file-backed packets, validate safe manifest amendments, and apply accepted amendments without changing active or terminal branch evidence."
 ---
 
 # Goal Plan Amender
@@ -11,7 +11,7 @@ Act only as an amendment proposer and applier for a prepared `/goal` bundle that
 
 Do not launch branches, create worktrees, dispatch workers or reviewers, edit scheduler ledgers, inspect active branch internals, decide prompt-audit status, decide branch pass/fail, or mark the whole run `pass`.
 
-The main orchestrator owns scheduling. The branch orchestrator owns branch execution. This skill may only propose and apply safe changes to future unstarted work in `job.manifest.json` and regenerate prompts for changed future branches.
+The main orchestrator owns scheduling. The branch orchestrator owns branch execution. This skill may propose and apply safe manifest changes that create future unstarted work, including deterministic repair branches derived from terminal blocker evidence. It must not mutate active or terminal branch evidence; repairs are represented as new schedulable branches.
 
 ## Start Conditions
 
@@ -22,7 +22,7 @@ Use this skill only after `goal-main-orchestrator` has:
 - validated that branch with `goal-branch-orchestrator/scripts/validate_branch_status.py`;
 - closed or otherwise removed that branch from the active set.
 
-Never read active branch worktrees, worker packets, research packets, reviewer packets, event logs, or process state. Active and terminal branch prompt paths, dependencies, owned paths, worktrees, status paths, review paths, and runtime artifacts are immutable.
+Never read active branch worktrees, worker packets, research packets, reviewer packets, event logs, or process state. Active and terminal branch prompt paths, dependencies, owned paths, worktrees, status paths, review paths, and runtime artifacts are immutable. Deterministic blocker repair may read terminal status artifacts already recorded in the manifest and convert missing-file blocker evidence into new repair branches.
 
 ## Workflow
 
@@ -60,6 +60,19 @@ python3 "$GOAL_SKILLS_ROOT/goal-plan-amender/scripts/create_adaptation_packet.py
 ```
 
 The packet writes `route.json`, `input-files.json`, `proposal.schema.json`, `proposal.example.json`, `prompt.md`, `launch.sh`, and later `telemetry.json`. If no route is supplied, the script uses `amender_model_policy.default_ladder`.
+
+For deterministic terminal blocker repair, create a local-script packet instead of a model packet:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-plan-amender/scripts/create_blocker_repair_packet.py" \
+  --manifest /absolute/path/to/job.manifest.json \
+  --main-prompt /absolute/path/to/main.prompt.md \
+  --repo-root /absolute/path/to/repo \
+  --amendment-id A001 \
+  --terminal-branch B02
+```
+
+The generated launcher reads terminal branch status artifacts, extracts missing local module/test file evidence, and writes a deterministic `add_branch` proposal with `recovers_from`, repair-owned paths, contention reasons when needed, route metadata, and local telemetry.
 3. Run `amendments/A001.packet/launch.sh` to write `amendments/A001.proposal.json`. The proposal may use only operations listed in manifest `adaptation_policy.allowed_operations`. The launcher is bounded, read-only, route-bound, and records plan-amender telemetry.
 4. Validate the route-bound packet evidence:
 
@@ -103,7 +116,7 @@ Use only aliases allowed by manifest `amender_model_policy.allowed_routes`. The 
 - `add_work_item_to_unstarted_branch`
 - `mark_unstarted_branch_obsolete`
 
-Every proposed branch or work item must be worker-sized, path-safe, and compatible with the same preflight lint rules as the original bundle. Recovery branches should cite terminal non-pass evidence with `recovers_from` and must not use `depends_on` to wait for a branch that finished `partial`, `blocked`, or `failed`.
+Every proposed branch or work item must be worker-sized, path-safe, and compatible with the same preflight lint rules as the original bundle. Recovery branches should cite terminal non-pass evidence with `recovers_from` and must not use `depends_on` to wait for a branch that finished `partial`, `blocked`, or `failed`. Deterministic blocker-repair branches may intentionally own paths that overlap terminal blocker evidence when they declare a `contention_reason`; protected terminal artifacts still must remain unchanged.
 
 ## Fail Closed
 

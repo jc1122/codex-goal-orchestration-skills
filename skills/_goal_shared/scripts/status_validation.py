@@ -271,7 +271,30 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def relative_hashes(defects: list[str], value: object, path: str, *, root_dir: Path) -> dict[str, str]:
+def archived_manifest_sha256s(manifest_path: Path) -> set[str]:
+    hashes: set[str] = set()
+    if manifest_path.exists() and manifest_path.is_file():
+        hashes.add(sha256_file(manifest_path))
+    amendments_dir = manifest_path.parent / "amendments"
+    if amendments_dir.is_dir():
+        for archived in sorted(amendments_dir.glob("*.job.manifest.before.json")):
+            if archived.is_file():
+                hashes.add(sha256_file(archived))
+    return hashes
+
+
+def archived_manifest_hashes_by_rel_path(manifest_path: Path) -> dict[str, set[str]]:
+    return {manifest_path.name: archived_manifest_sha256s(manifest_path)}
+
+
+def relative_hashes(
+    defects: list[str],
+    value: object,
+    path: str,
+    *,
+    root_dir: Path,
+    allowed_hashes_by_rel_path: dict[str, set[str]] | None = None,
+) -> dict[str, str]:
     if not isinstance(value, dict):
         defect(defects, path, "must be an object mapping relative paths to sha256 digests")
         return {}
@@ -297,7 +320,8 @@ def relative_hashes(defects: list[str], value: object, path: str, *, root_dir: P
             defect(defects, item_path, f"hash target does not exist: {target}")
             continue
         actual = sha256_file(target)
-        if digest != actual:
+        allowed_hashes = allowed_hashes_by_rel_path.get(key, set()) if allowed_hashes_by_rel_path else set()
+        if digest != actual and digest not in allowed_hashes:
             defect(defects, item_path, "must match current file sha256")
         result[key] = digest
     return result
@@ -391,6 +415,7 @@ def validate_scheduler_ledger(
     dependencies: dict[str, list[str]],
     capacity: int,
     manifest_path: Path | None = None,
+    allowed_manifest_sha256s: set[str] | None = None,
     require_all_launched: bool = False,
 ) -> dict[str, list[str] | int]:
     root = require_object(defects, ledger_value, path)
@@ -410,7 +435,8 @@ def validate_scheduler_ledger(
             defect(defects, f"{path}.manifest_sha256", "must be sha256:<64 lowercase hex chars>")
         else:
             actual_manifest_sha = sha256_file(manifest_path)
-            if manifest_sha != actual_manifest_sha:
+            accepted_manifest_shas = allowed_manifest_sha256s or {actual_manifest_sha}
+            if manifest_sha != actual_manifest_sha and manifest_sha not in accepted_manifest_shas:
                 defect(defects, f"{path}.manifest_sha256", "must match current job.manifest.json sha256")
     events = root.get("events")
     if not isinstance(events, list) or not events:
@@ -698,6 +724,7 @@ def validate_scheduler_artifact(
     dependencies: dict[str, list[str]],
     capacity: int,
     manifest_path: Path | None = None,
+    allowed_manifest_sha256s: set[str] | None = None,
     require_all_launched: bool = False,
 ) -> dict[str, list[str] | int]:
     if not scheduler_path.exists():
@@ -722,6 +749,7 @@ def validate_scheduler_artifact(
         dependencies=dependencies,
         capacity=capacity,
         manifest_path=manifest_path,
+        allowed_manifest_sha256s=allowed_manifest_sha256s,
         require_all_launched=require_all_launched,
     )
 
@@ -779,6 +807,7 @@ def validate_pre_review_gate_artifact(
     branch_id: str,
     review_packet_id: str | None = None,
     required_input_paths: list[str] | None = None,
+    allowed_hashes_by_rel_path: dict[str, set[str]] | None = None,
 ) -> dict:
     if not gate_path.exists():
         defect(defects, path, f"pre-review gate artifact does not exist: {gate_path}")
@@ -827,6 +856,7 @@ def validate_pre_review_gate_artifact(
         gate.get("semantic_input_hashes"),
         f"{path}.semantic_input_hashes",
         root_dir=manifest_path.parent,
+        allowed_hashes_by_rel_path=allowed_hashes_by_rel_path,
     )
     validate_pre_review_volatile_inputs(defects, gate.get("volatile_input_hashes", {}), f"{path}.volatile_input_hashes")
     for rel_path in required_input_paths or []:

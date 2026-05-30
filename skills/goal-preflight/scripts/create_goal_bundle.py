@@ -507,6 +507,21 @@ def manifest_from_normalized_brief(brief: dict) -> dict:
                 "work_items": branch["work_items"],
                 "max_active_worker_packets": branch["max_active_worker_packets"],
                 "worker_parallelism": branch["worker_parallelism"],
+                **(
+                    {"recovers_from": branch["recovers_from"]}
+                    if isinstance(branch.get("recovers_from"), list)
+                    else {}
+                ),
+                **(
+                    {"contention_reason": branch["contention_reason"]}
+                    if isinstance(branch.get("contention_reason"), str) and branch["contention_reason"].strip()
+                    else {}
+                ),
+                **(
+                    {"worker_contention_reason": branch["worker_contention_reason"]}
+                    if isinstance(branch.get("worker_contention_reason"), str) and branch["worker_contention_reason"].strip()
+                    else {}
+                ),
             }
             for branch in brief["branches"]
         ],
