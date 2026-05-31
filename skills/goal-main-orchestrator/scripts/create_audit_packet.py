@@ -221,6 +221,11 @@ git diff --check HEAD
 
 Audit `job.manifest.json`, `main.prompt.md`, and every listed branch prompt before any runtime orchestration starts.
 
+Do not emit the final JSON until after the inspection commands have completed and you have read the
+manifest, main prompt, and listed branch prompts. If an intermediate thought or tool issue tempts you
+to return early, continue the read-only inspection first; the last assistant message must be the only
+final JSON object.
+
 Required checks:
 
 - every audit input file exists and is readable: `job.manifest.json`, `main.prompt.md`, and every branch prompt path;
@@ -358,6 +363,111 @@ if data["status"] == "pass":
 PY
 }}
 
+audit_status() {{
+  python3 - "$output_path" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], "r", encoding="utf-8") as handle:
+    data = json.load(handle)
+print(data.get("status", ""))
+PY
+}}
+
+finish_valid_audit() {{
+  write_telemetry
+  if [ "$(audit_status)" = "pass" ]; then
+    exit 0
+  fi
+  exit 1
+}}
+
+recover_audit_from_events() {{
+  local label="$1"
+  python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} "events-${{label}}.jsonl" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+output_path, manifest, repo_root, events_path = sys.argv[1:5]
+path = Path(events_path)
+if not path.exists():
+    raise SystemExit(1)
+
+required = {
+    "manifest",
+    "repo_root",
+    "status",
+    "can_start",
+    "checked_files",
+    "defects",
+    "missing_dod_items",
+    "actionability_verdict",
+    "commands_run",
+    "summary",
+}
+
+
+def valid(data: object) -> bool:
+    if not isinstance(data, dict) or set(data) < required:
+        return False
+    if data.get("manifest") != manifest or data.get("repo_root") != repo_root:
+        return False
+    if data.get("status") not in {"pass", "failed", "blocked"}:
+        return False
+    if not isinstance(data.get("can_start"), bool):
+        return False
+    for key in ["checked_files", "missing_dod_items", "commands_run"]:
+        value = data.get(key)
+        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
+            return False
+    if not data["commands_run"]:
+        return False
+    defects = data.get("defects")
+    if not isinstance(defects, list):
+        return False
+    for item in defects:
+        if not isinstance(item, dict):
+            return False
+        if not isinstance(item.get("file"), str) or not item["file"].strip():
+            return False
+        if item.get("severity") not in {"critical", "major", "minor"}:
+            return False
+        if not isinstance(item.get("message"), str) or not item["message"].strip():
+            return False
+    for key in ["actionability_verdict", "summary"]:
+        if not isinstance(data.get(key), str) or not data[key].strip():
+            return False
+    return True
+
+
+messages: list[str] = []
+for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+    try:
+        event = json.loads(raw)
+    except json.JSONDecodeError:
+        continue
+    item = event.get("item")
+    if isinstance(item, dict) and item.get("type") == "agent_message":
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            messages.append(text.strip())
+
+for text in reversed(messages):
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        continue
+    if valid(data):
+        with open(output_path, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+            handle.write("\\n")
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
+}}
+
 audit_failure_summary() {{
   python3 - <<'PY'
 from pathlib import Path
@@ -427,26 +537,26 @@ with open(output_path, "w", encoding="utf-8") as handle:
 PY
 }}
 
-if run_model primary {shell_quote(AUDIT_MODEL)} && valid_audit; then
-  write_telemetry
-  exit 0
+run_model primary {shell_quote(AUDIT_MODEL)} || true
+recover_audit_from_events primary || true
+if [ -s "$output_path" ] && valid_audit; then
+  finish_valid_audit
 fi
 
 if [ -s "$output_path" ] && valid_audit; then
-  write_telemetry
-  exit 1
+  finish_valid_audit
 fi
 
 rm -f "$output_path"
 
-if run_model fallback {shell_quote(AUDIT_FALLBACK_MODEL)} && valid_audit; then
-  write_telemetry
-  exit 0
+run_model fallback {shell_quote(AUDIT_FALLBACK_MODEL)} || true
+recover_audit_from_events fallback || true
+if [ -s "$output_path" ] && valid_audit; then
+  finish_valid_audit
 fi
 
 if [ -s "$output_path" ] && valid_audit; then
-  write_telemetry
-  exit 1
+  finish_valid_audit
 fi
 
 write_terminal_audit "$(audit_failure_summary)"

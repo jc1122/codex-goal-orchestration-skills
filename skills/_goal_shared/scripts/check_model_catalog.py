@@ -152,12 +152,18 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="Print a concise check result and fail on live catalog mismatches.")
     parser.add_argument("--source", choices=("auto", "live", "bundled"), default="auto", help="Catalog source to inspect.")
     parser.add_argument("--require-codex", action="store_true", help="Fail instead of skipping when the Codex CLI/catalog is unavailable.")
+    parser.add_argument(
+        "--manifest",
+        help="Accepted for runtime command compatibility; model catalog checks are account/CLI scoped and ignore this path.",
+    )
     args = parser.parse_args()
 
     if bool(args.json) == bool(args.check):
         raise SystemExit("choose exactly one of --json or --check")
 
     report = build_report(source=args.source, require_codex=args.require_codex)
+    if args.manifest:
+        report.setdefault("warnings", []).append("--manifest is accepted for compatibility and ignored")
     if args.json:
         print(json.dumps(report, indent=2) + "\n", end="")
     else:

@@ -113,12 +113,12 @@
       "path": "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py"
     },
     {
-      "approx_tokens": 5482,
-      "bytes": 21926,
-      "chars": 21926,
+      "approx_tokens": 5698,
+      "bytes": 22793,
+      "chars": 22793,
       "files": 1,
-      "lines": 649,
-      "path": "skills/_goal_shared/scripts/create_lite_advice_packet.py"
+      "lines": 602,
+      "path": "skills/goal-main-orchestrator/scripts/create_audit_packet.py"
     }
   ],
   "mode": "warn",
@@ -129,11 +129,11 @@
   ],
   "per_skill": {
     "_goal_shared": {
-      "approx_tokens": 50210,
-      "bytes": 200840,
-      "chars": 200840,
+      "approx_tokens": 50286,
+      "bytes": 201146,
+      "chars": 201146,
       "files": 13,
-      "lines": 4858
+      "lines": 4864
     },
     "goal-branch-orchestrator": {
       "approx_tokens": 55132,
@@ -143,11 +143,11 @@
       "lines": 4819
     },
     "goal-main-orchestrator": {
-      "approx_tokens": 38250,
-      "bytes": 153001,
-      "chars": 153001,
+      "approx_tokens": 39108,
+      "bytes": 156430,
+      "chars": 156430,
       "files": 19,
-      "lines": 2999
+      "lines": 3109
     },
     "goal-plan-amender": {
       "approx_tokens": 31991,
@@ -167,32 +167,32 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 237466,
-      "bytes": 949865,
-      "chars": 949865,
+      "approx_tokens": 238400,
+      "bytes": 953600,
+      "chars": 953600,
       "files": 79,
-      "lines": 22300
+      "lines": 22416
     },
     "skill_python": {
-      "approx_tokens": 186518,
-      "bytes": 746073,
-      "chars": 746073,
+      "approx_tokens": 187452,
+      "bytes": 749808,
+      "chars": 749808,
       "files": 70,
-      "lines": 16956
+      "lines": 17072
     },
     "skills": {
-      "approx_tokens": 212998,
-      "bytes": 851990,
-      "chars": 851990,
+      "approx_tokens": 213931,
+      "bytes": 855725,
+      "chars": 855725,
       "files": 92,
-      "lines": 18305
+      "lines": 18421
     },
     "tracked": {
-      "approx_tokens": 278695,
-      "bytes": 1114781,
-      "chars": 1114781,
+      "approx_tokens": 279630,
+      "bytes": 1118520,
+      "chars": 1118520,
       "files": 117,
-      "lines": 25040
+      "lines": 25156
     }
   },
   "skill_docs": {
