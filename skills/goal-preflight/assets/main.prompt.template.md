@@ -16,7 +16,17 @@ Base ref: {base_ref}
 - Use $goal-main-orchestrator. Treat `job.manifest.json` as the contract and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 - Treat manifest paths as bundle-root relative and worktree paths as repo-root relative. Reject absolute paths, backslashes, and `..` traversal.
 - Run availability bootstrap and fresh model-catalog capture before prompt audit. Do not create branches until `prompt-audit.json` pins this manifest and repository root with `status=pass`.
-- Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots and close finished branch orchestrator agents. When capacity opens, run `render_branch_worktree_commands.py --manifest /absolute/path/to/job.manifest.json --repo-root /absolute/path/to/repo --audit /absolute/path/to/bundle/audit/prompt-audit.json --list-ready --limit 4`. Launch the next eligible branch from that output only.
+- Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots and close finished branch orchestrator agents. Set absolute bundle paths and run:
+
+```bash
+B="/absolute/path/to/bundle"
+MANIFEST="$B/job.manifest.json"
+AUDIT="$B/audit/prompt-audit.json"
+
+python3 ${{GOAL_SKILLS_ROOT}}/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest "$MANIFEST" --repo-root /absolute/path/to/repo --audit "$AUDIT" --list-ready --limit 4
+```
+
+Launch the next eligible branch from that output only.
 - Defer only unresolved manifest `depends_on` entries. Treat waves as scheduling/order groups, not barriers; non-pass dependencies require structured `dependency_failed` evidence.
 - Record the scheduler ledger at `{main_scheduler_path}` with schema v2 events. `branch_parallelism.scheduler_path` in `main.status.json` must be `{main_scheduler_path}`.
 - If no branch completes after `orchestration_watchdog.main_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active branches with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
