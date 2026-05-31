@@ -22,7 +22,7 @@ Base ref: {base_ref}
 - If no branch completes after `orchestration_watchdog.main_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active branches with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
 - Outside that watchdog exception, wait for branch agents and do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files.
 - Branch sessions must launch workers as a rolling saturated pool up to each branch cap. Research-worker, reviewer, Lite, and amendment policy lives in `job.manifest.json` and packet validators.
-- Before merge readiness, require `git diff --check {base_ref}...HEAD`; accept branches only after `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
+- Before merge readiness, require `git diff --check {base_ref}...HEAD`; accept each branch after `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
 - Before final pass, run `summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` and require current `telemetry.summary.json` plus `validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json`.
 - Optional Lite advisors are context routers only, never audit/review/mergeability/DoD evidence. Preserve unsupported, unresolved, negative, and probe-only labels.
 
