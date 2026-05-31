@@ -167,11 +167,11 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 263272,
-      "bytes": 1053090,
-      "chars": 1053090,
+      "approx_tokens": 263561,
+      "bytes": 1054244,
+      "chars": 1054244,
       "files": 87,
-      "lines": 24606
+      "lines": 24632
     },
     "skill_python": {
       "approx_tokens": 204645,
@@ -188,11 +188,11 @@
       "lines": 20023
     },
     "tracked": {
-      "approx_tokens": 303614,
-      "bytes": 1214457,
-      "chars": 1214457,
+      "approx_tokens": 303926,
+      "bytes": 1215704,
+      "chars": 1215704,
       "files": 125,
-      "lines": 27363
+      "lines": 27389
     }
   },
   "skill_docs": {

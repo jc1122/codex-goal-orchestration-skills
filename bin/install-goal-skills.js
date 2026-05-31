@@ -9,6 +9,7 @@ const packageRoot = path.resolve(__dirname, "..");
 const packageJson = require(path.join(packageRoot, "package.json"));
 const skillsRoot = path.join(packageRoot, "skills");
 const supportDirNames = ["_goal_shared"];
+const metadataFiles = ["AGENTS.md", "maintenance/agent-context-index.json"];
 
 function usage() {
   return `Install Codex goal orchestration skills.
@@ -127,6 +128,19 @@ function copySupportDir(name, destRoot, dryRun) {
   copyBundledDir(name, destRoot, dryRun, "support");
 }
 
+function copyMetadataFile(relativePath, destRoot, dryRun) {
+  const src = path.join(packageRoot, relativePath);
+  const dest = path.join(destRoot, relativePath);
+  if (dryRun) {
+    console.log(`[dry-run] ${src} -> ${dest}`);
+    return;
+  }
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.rmSync(dest, { force: true });
+  fs.copyFileSync(src, dest);
+  console.log(`installed metadata ${relativePath} -> ${dest}`);
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.help) {
@@ -154,10 +168,15 @@ function main() {
   for (const supportDir of supportDirs) {
     copySupportDir(supportDir, destRoot, args.dryRun);
   }
+  for (const metadataFile of metadataFiles) {
+    copyMetadataFile(metadataFile, destRoot, args.dryRun);
+  }
 
   if (!args.dryRun) {
     const supportLabel = supportDirs.length === 1 ? "support directory" : "support directories";
-    console.log(`Installed ${skills.length} skills and ${supportDirs.length} ${supportLabel}. Restart Codex or start a new session to refresh skill discovery.`);
+    console.log(
+      `Installed ${skills.length} skills, ${supportDirs.length} ${supportLabel}, and ${metadataFiles.length} metadata files. Restart Codex or start a new session to refresh skill discovery.`
+    );
   }
 }
 

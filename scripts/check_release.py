@@ -25,6 +25,7 @@ EXPECTED_SKILLS = [
     "goal-preflight",
 ]
 EXPECTED_SUPPORT_DIRS = ["_goal_shared"]
+EXPECTED_METADATA_FILES = ["AGENTS.md", "maintenance/agent-context-index.json"]
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\."
     r"(0|[1-9]\d*)\."
@@ -203,14 +204,20 @@ def check_installer(version: str) -> None:
     dry_run = run(["node", INSTALLER.as_posix(), "--dest", "/tmp/codex-goal-release-check", "--dry-run"]).stdout
     for name in EXPECTED_SKILLS + EXPECTED_SUPPORT_DIRS:
         require(name in dry_run, f"installer --dry-run output missing {name}")
+    for name in EXPECTED_METADATA_FILES:
+        require(name in dry_run, f"installer --dry-run output missing metadata file {name}")
 
     with tempfile.TemporaryDirectory(prefix="goal-release-install-") as tmp:
         dest = Path(tmp) / "skills"
         run(["node", INSTALLER.as_posix(), "--dest", dest.as_posix(), "--force"])
         for name in EXPECTED_SKILLS + EXPECTED_SUPPORT_DIRS:
             require((dest / name).is_dir(), f"installer did not create {name}")
+        for name in EXPECTED_METADATA_FILES:
+            require((dest / name).is_file(), f"installer did not create metadata file {name}")
         for name in EXPECTED_SKILLS + EXPECTED_SUPPORT_DIRS:
             run(["diff", "-qr", (ROOT / "skills" / name).as_posix(), (dest / name).as_posix()])
+        for name in EXPECTED_METADATA_FILES:
+            run(["diff", "-q", (ROOT / name).as_posix(), (dest / name).as_posix()])
 
 
 def check_pack(version: str) -> None:
