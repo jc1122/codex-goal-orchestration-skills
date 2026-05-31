@@ -65,6 +65,7 @@ REQUIRED_PACKAGE_FILES = {
     "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
     "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py",
     "skills/goal-main-orchestrator/SKILL.md",
+    "skills/goal-main-orchestrator/scripts/assemble_main_status.py",
     "skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py",
     "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py",
     "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",

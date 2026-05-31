@@ -106,7 +106,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "finalize",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py --bundle-dir /abs/bundle && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py --manifest /abs/bundle/job.manifest.json --main-status /abs/bundle/main.status.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py --bundle-dir /abs/bundle && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/assemble_main_status.py --manifest /abs/bundle/job.manifest.json --out /abs/bundle/main.status.json --replace && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/main.status.json",
                 "pass": "main.status.json validates and DoD evidence is complete",
             },
         ],

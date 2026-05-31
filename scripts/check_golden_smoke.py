@@ -798,38 +798,19 @@ def write_branch_and_main_status(bundle: Path) -> None:
             "Golden offline smoke branch status.",
         ]
     )
-    amendment_decisions = [recommend_amendment_decision(bundle, "A000")]
-    write_json(
-        bundle / "main.status.json",
-        {
-            "job_id": JOB_ID,
-            "status": "pass",
-            "audit_status": "pass",
-            "branch_parallelism": {
-                "scheduler_path": "schedulers/main.scheduler.json",
-                "launched_ids": [BRANCH_ID],
-                "finished_ids": [BRANCH_ID],
-                "active_ids": [],
-                "blocked_ids": [],
-                "deferred_ids": [],
-                "max_observed_active": 1,
-            },
-            "branch_statuses": [
-                {
-                    "branch_id": BRANCH_ID,
-                    "status": "pass",
-                    "status_path": "branches/B01.status.json",
-                    "review_path": "branches/B01.review.json",
-                    "review_status": "mergeable",
-                }
-            ],
-            "amendment_decisions": amendment_decisions,
-            "lite_advice": [],
-            "commands_run": ["git diff --check main...HEAD", "installed validators passed"],
-            "dod_checklist": ["golden offline smoke validates main, branch, packet, Lite, and telemetry artifacts"],
-            "blockers": [],
-            "summary": "Golden offline smoke main status.",
-        },
+    recommend_amendment_decision(bundle, "A000")
+    run(
+        [
+            "python3",
+            skill_script("goal-main-orchestrator", "assemble_main_status.py"),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--out",
+            (bundle / "main.status.json").as_posix(),
+            "--replace",
+            "--summary",
+            "Golden offline smoke main status.",
+        ]
     )
 
 

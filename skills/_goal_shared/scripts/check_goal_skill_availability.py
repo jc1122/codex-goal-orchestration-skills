@@ -41,6 +41,7 @@ REQUIRED_FILES = {
         "scripts/extract_telemetry.py",
         "scripts/append_scheduler_event.py",
         "scripts/scheduler_tick.py",
+        "scripts/assemble_main_status.py",
         "scripts/summarize_telemetry.py",
         "scripts/validate_prompt_audit.py",
         "scripts/validate_main_status.py",

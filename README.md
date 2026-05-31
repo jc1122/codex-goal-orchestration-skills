@@ -126,6 +126,8 @@ Generated prompt-audit launchers are compact wrappers too. Runtime agents should
 
 Generated worker packets are compact too: when `create_runtime_packet.py` receives `job.manifest.json`, it writes a deterministic `packet-context.json` branch/work-item slice and removes the full manifest excerpt from `prompt.md`. When it also receives a fresh `--model-catalog`, it prunes unsupported Codex aliases from the default worker ladder before writing `route.json`. Normal worker `launch.sh` files are tiny wrappers; provider attempts, probes, selected route commands, timeout policy, and terminal blocked metadata live in packet-local `launch-config.json`. Gemini worker attempts still pass the full prompt on stdin so process inspection does not expose or re-tokenize the worker prompt.
 
+Main closeout is assembled deterministically too. Runtime agents should run `summarize_telemetry.py`, then `assemble_main_status.py`, then `validate_main_status.py --status`; they should not hand-author `main.status.json` from branch artifacts.
+
 Generated research-worker and reviewer packets use the same wrapper pattern. Runtime attempt policy, telemetry inputs, semantic hashes, and terminal blocked metadata live in packet-local `launch-config.json`, and `runtime_packet_runner.py` performs deterministic execution. Agents should inspect `launch-config.json` and generated artifacts instead of opening launcher implementation source.
 
 Lite advisory launchers use the same compact wrapper pattern: `launch.sh` delegates to `runtime_lite_runner.py`, packet-local `launch-config.json` carries the Gemini command, timeout, telemetry, marker, and terminal-message policy, and the full prompt is passed on stdin rather than exposed in process command lines.

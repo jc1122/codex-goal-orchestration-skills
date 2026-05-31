@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:70a09b5a1809dfeec73d287024ff85ee72dff3a92cf1dc9b14b13e8fa6673807"
+    "source_fingerprint": "sha256:cfacc07a49c0ae6182d63d452d0e532e8f102b6559190d368bf005b22cd8f424"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -103,6 +103,7 @@
       ],
       "assets_on_demand": [],
       "core_scripts": [
+        "skills/goal-main-orchestrator/scripts/assemble_main_status.py",
         "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
         "skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py",
         "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
@@ -256,6 +257,7 @@
       "paths": [
         "skills/goal-main-orchestrator/references/lite-advisor-contract.md",
         "skills/goal-main-orchestrator/scripts/append_scheduler_event.py",
+        "skills/goal-main-orchestrator/scripts/assemble_main_status.py",
         "skills/goal-main-orchestrator/scripts/check_goal_skill_availability.py",
         "skills/goal-main-orchestrator/scripts/check_model_catalog.py",
         "skills/goal-main-orchestrator/scripts/context_pack.py",
