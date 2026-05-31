@@ -158,17 +158,58 @@ def lite_telemetry_attempts(gemini_path: str) -> list[dict]:
     ]
 
 
-def telemetry_function(packet_id: str, gemini_path: str) -> str:
-    script = (current_script_dir() / "extract_telemetry.py").as_posix()
-    return CONTRACT.telemetry_shell_function(
-        script_path=script,
-        packet_dir_expr="$packet_dir",
-        packet_id=packet_id,
-        role="lite_advisor",
-        output_name="advice.json",
-        prompt_name="prompt.md",
-        attempts=lite_telemetry_attempts(gemini_path),
-    )
+def runtime_runner_path() -> Path:
+    return current_script_dir() / "runtime_lite_runner.py"
+
+
+def compact_launch_script() -> str:
+    runner = runtime_runner_path()
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+runner={shell_quote(runner.as_posix())}
+if [[ ! -f "$runner" ]]; then
+  echo "Lite runtime runner missing: $runner" >&2
+  exit 127
+fi
+exec python3 "$runner" --packet-dir "$(pwd)"
+"""
+
+
+def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path: str) -> dict:
+    return {
+        "schema_version": 1,
+        "role": "lite_advisor",
+        "packet_id": packet_id,
+        "purpose": purpose,
+        "base_dir": base_dir.as_posix(),
+        "model": LITE_MODEL,
+        "approval_mode": GEMINI_APPROVAL_MODE,
+        "attempt_timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
+        "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+        "inputs_name": "input-files.json",
+        "prompt_name": "prompt.md",
+        "task_name": "task.md",
+        "output_name": "advice.json",
+        "raw_name": "advice.raw.txt",
+        "telemetry_name": "telemetry.json",
+        "status_begin": LITE_STATUS_BEGIN,
+        "status_end": LITE_STATUS_END,
+        "runner_prompt": "Follow the complete Lite advisory packet instructions provided on stdin.",
+        "validation_script": (current_script_dir() / "validate_lite_advice.py").as_posix(),
+        "telemetry_script": (current_script_dir() / "extract_telemetry.py").as_posix(),
+        "attempts": lite_telemetry_attempts(gemini_path),
+        "terminal_messages": {
+            "gemini_unavailable": f"Gemini CLI command unavailable at packet creation path: {gemini_path}",
+            "inputs_stale": "Lite advisor input files changed or became unavailable after packet creation.",
+            "prompt_stale": "Lite advisor prompt.md changed or became unavailable after packet creation.",
+            "task_stale": "Lite advisor task.md changed or became unavailable after packet creation.",
+            "gemini_stale": "Gemini CLI binary or version changed or could not be verified after packet creation.",
+            "command_failed": "Lite advisor command failed. Inspect advice.raw.txt for CLI, quota, auth, or model errors.",
+            "invalid_output": "Lite advisor did not produce valid advice JSON.",
+        },
+    }
 
 
 def prompt_for(
@@ -242,326 +283,7 @@ Return exactly one JSON object between these marker lines. Do not print any othe
 
 
 def launch_for(packet_id: str, purpose: str, base_dir: Path, gemini_path: str) -> str:
-    telemetry = telemetry_function(packet_id, gemini_path)
-    return f"""#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-
-packet_dir="$(pwd)"
-prompt_path="$packet_dir/prompt.md"
-inputs_path="$packet_dir/input-files.json"
-output_path="$packet_dir/advice.json"
-raw_path="$packet_dir/advice.raw.txt"
-task_path="$packet_dir/task.md"
-gemini_command="$(python3 - "$inputs_path" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-data = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-print(data.get("gemini_path", ""))
-PY
-)"
-lite_model={shell_quote(LITE_MODEL)}
-approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
-base_dir={shell_quote(base_dir.as_posix())}
-attempt_timeout_seconds={LITE_ATTEMPT_TIMEOUT_SECONDS}
-timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
-rm -f "$output_path" "$raw_path" "$packet_dir/telemetry.json"
-
-run_with_timeout() {{
-  local seconds="$1"
-  shift
-  if ! command -v timeout >/dev/null 2>&1; then
-    echo "timeout command not found; refusing unbounded Lite advisor attempt." >&2
-    return 127
-  fi
-  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
-}}
-
-write_terminal_advice() {{
-  local status="$1"
-  local message="$2"
-  python3 - "$output_path" "$inputs_path" {shell_quote(packet_id)} {shell_quote(purpose)} "$status" "$message" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-output_path = Path(sys.argv[1])
-inputs_path = Path(sys.argv[2])
-packet_id = sys.argv[3]
-purpose = sys.argv[4]
-status = sys.argv[5]
-message = sys.argv[6]
-inputs = json.loads(inputs_path.read_text(encoding="utf-8"))
-gemini_path = inputs.get("gemini_path") or "gemini"
-data = {{
-    "packet_id": packet_id,
-    "role": "lite_advisor",
-    "purpose": purpose,
-    "status": status,
-    "source_files": inputs.get("source_files", []),
-    "recommended_reads": [],
-    "risk_flags": [],
-    "advice": {{}},
-    "summary": message,
-    "blockers": [message],
-    "commands_run": [
-        f"{{gemini_path}} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
-    ],
-}}
-output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-PY
-}}
-
-{telemetry}
-
-validate_advice() {{
-  python3 {shell_quote((current_script_dir() / "validate_lite_advice.py").as_posix())} \\
-    --advice "$output_path" \\
-    --inputs "$inputs_path" \\
-    --packet-id {shell_quote(packet_id)} \\
-    --purpose {shell_quote(purpose)} >/dev/null
-}}
-
-verify_inputs_current() {{
-  python3 - "$inputs_path" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-inputs_path = Path(sys.argv[1])
-data = json.loads(inputs_path.read_text(encoding="utf-8"))
-base_dir = Path(data.get("base_dir", ""))
-if not base_dir.is_absolute() or not base_dir.exists():
-    print(f"invalid or missing Lite base_dir: {base_dir}", file=sys.stderr)
-    raise SystemExit(1)
-
-def sha256_file(path):
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return "sha256:" + digest.hexdigest()
-
-for item in data.get("source_files", []):
-    rel = item.get("path", "")
-    path = (base_dir / rel).resolve()
-    try:
-        path.relative_to(base_dir.resolve())
-    except ValueError:
-        print(f"Lite input escaped base_dir: {{rel}}", file=sys.stderr)
-        raise SystemExit(1)
-    if not path.exists():
-        print(f"Lite input missing: {{rel}}", file=sys.stderr)
-        raise SystemExit(1)
-    actual_hash = sha256_file(path)
-    actual_size = path.stat().st_size
-    if actual_hash != item.get("sha256") or actual_size != item.get("size_bytes"):
-        print(
-            f"Lite input stale: {{rel}} expected {{item.get('sha256')}}/{{item.get('size_bytes')}} "
-            f"got {{actual_hash}}/{{actual_size}}",
-            file=sys.stderr,
-        )
-        raise SystemExit(1)
-PY
-}}
-
-verify_prompt_current() {{
-  python3 - "$inputs_path" "$prompt_path" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-inputs_path = Path(sys.argv[1])
-prompt_path = Path(sys.argv[2])
-data = json.loads(inputs_path.read_text(encoding="utf-8"))
-expected = data.get("prompt_sha256")
-if not isinstance(expected, str) or not expected.startswith("sha256:"):
-    print("missing prompt_sha256 in input-files.json", file=sys.stderr)
-    raise SystemExit(1)
-if not prompt_path.exists():
-    print(f"Lite prompt missing: {{prompt_path}}", file=sys.stderr)
-    raise SystemExit(1)
-actual = "sha256:" + hashlib.sha256(prompt_path.read_bytes()).hexdigest()
-if actual != expected:
-    print(f"Lite prompt stale: expected {{expected}} got {{actual}}", file=sys.stderr)
-    raise SystemExit(1)
-PY
-}}
-
-verify_task_current() {{
-  python3 - "$inputs_path" "$task_path" <<'PY'
-import hashlib
-import json
-import sys
-from pathlib import Path
-
-inputs_path = Path(sys.argv[1])
-task_path = Path(sys.argv[2])
-data = json.loads(inputs_path.read_text(encoding="utf-8"))
-expected = data.get("task_sha256")
-if not isinstance(expected, str) or not expected.startswith("sha256:"):
-    print("missing task_sha256 in input-files.json", file=sys.stderr)
-    raise SystemExit(1)
-if not task_path.exists():
-    print(f"Lite task missing: {{task_path}}", file=sys.stderr)
-    raise SystemExit(1)
-actual = "sha256:" + hashlib.sha256(task_path.read_bytes()).hexdigest()
-if actual != expected:
-    print(f"Lite task stale: expected {{expected}} got {{actual}}", file=sys.stderr)
-    raise SystemExit(1)
-PY
-}}
-
-verify_gemini_binary() {{
-  python3 - "$inputs_path" "$gemini_command" <<'PY'
-import hashlib
-import json
-import os
-import re
-import subprocess
-import sys
-from pathlib import Path
-
-inputs_path = Path(sys.argv[1])
-gemini_command = sys.argv[2]
-data = json.loads(inputs_path.read_text(encoding="utf-8"))
-expected_path = data.get("gemini_path")
-if not isinstance(expected_path, str) or not expected_path.strip():
-    print("missing captured Gemini path in input-files.json", file=sys.stderr)
-    raise SystemExit(1)
-if expected_path != gemini_command:
-    print(f"Gemini CLI path changed: expected {{expected_path!r}} got {{gemini_command!r}}", file=sys.stderr)
-    raise SystemExit(1)
-path = Path(gemini_command)
-if not path.is_absolute() or not path.exists() or not os.access(path, os.X_OK):
-    print(f"captured Gemini CLI path is unavailable or not executable: {{gemini_command}}", file=sys.stderr)
-    raise SystemExit(1)
-expected_sha = data.get("gemini_sha256")
-if not isinstance(expected_sha, str) or re.fullmatch(r"sha256:[0-9a-f]{{64}}", expected_sha) is None:
-    print("missing captured Gemini sha256 in input-files.json", file=sys.stderr)
-    raise SystemExit(1)
-digest = hashlib.sha256()
-with path.open("rb") as handle:
-    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-        digest.update(chunk)
-actual_sha = "sha256:" + digest.hexdigest()
-if actual_sha != expected_sha:
-    print(f"Gemini CLI binary changed: expected {{expected_sha}} got {{actual_sha}}", file=sys.stderr)
-    raise SystemExit(1)
-expected = data.get("gemini_version")
-if not isinstance(expected, str) or not expected.strip() or expected == "unavailable":
-    print("missing captured Gemini version in input-files.json", file=sys.stderr)
-    raise SystemExit(1)
-try:
-    completed = subprocess.run(
-        [gemini_command, "--version"],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-except Exception as exc:  # noqa: BLE001
-    print(f"could not recheck Gemini version: {{exc}}", file=sys.stderr)
-    raise SystemExit(1)
-version_lines = (completed.stdout or completed.stderr).strip().splitlines()
-actual = version_lines[0] if version_lines else "version-unavailable"
-if actual != expected:
-    print(f"Gemini CLI version changed: expected {{expected!r}} got {{actual!r}}", file=sys.stderr)
-    raise SystemExit(1)
-PY
-}}
-
-extract_advice_json() {{
-  python3 - "$raw_path" "$output_path" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-raw_path = Path(sys.argv[1])
-output_path = Path(sys.argv[2])
-begin = "{LITE_STATUS_BEGIN}"
-end = "{LITE_STATUS_END}"
-text = raw_path.read_text(encoding="utf-8", errors="replace")
-begin_count = text.count(begin)
-end_count = text.count(end)
-if begin_count != 1 or end_count != 1:
-    print(
-        f"expected exactly one {{begin}} and one {{end}} marker; "
-        f"found {{begin_count}} begin marker(s) and {{end_count}} end marker(s).",
-        file=sys.stderr,
-    )
-    raise SystemExit(1)
-start = text.index(begin) + len(begin)
-finish = text.index(end)
-if finish <= start:
-    print("Lite advice end marker appears before begin marker.", file=sys.stderr)
-    raise SystemExit(1)
-candidate = text[start:finish].strip()
-data = json.loads(candidate)
-output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-PY
-}}
-
-if [[ -z "$gemini_command" || ! -x "$gemini_command" ]]; then
-  write_terminal_advice blocked "Gemini CLI command unavailable at packet creation path: $gemini_command"
-  write_telemetry
-  exit 0
-fi
-
-if ! verify_inputs_current; then
-  write_terminal_advice blocked "Lite advisor input files changed or became unavailable after packet creation."
-  write_telemetry
-  exit 0
-fi
-
-if ! verify_prompt_current; then
-  write_terminal_advice blocked "Lite advisor prompt.md changed or became unavailable after packet creation."
-  write_telemetry
-  exit 0
-fi
-
-if ! verify_task_current; then
-  write_terminal_advice blocked "Lite advisor task.md changed or became unavailable after packet creation."
-  write_telemetry
-  exit 0
-fi
-
-if ! verify_gemini_binary; then
-  write_terminal_advice blocked "Gemini CLI binary or version changed or could not be verified after packet creation."
-  write_telemetry
-  exit 0
-fi
-
-(
-  cd "$base_dir"
-  run_with_timeout "$attempt_timeout_seconds" "$gemini_command" \\
-    --model "$lite_model" \\
-    --approval-mode "$approval_mode" \\
-    --skip-trust \\
-    --output-format text \\
-    -p "Follow the complete Lite advisory packet instructions provided on stdin." < "$prompt_path"
-) > "$raw_path" 2>&1 || {{
-  write_terminal_advice blocked "Lite advisor command failed. Inspect advice.raw.txt for CLI, quota, auth, or model errors."
-  write_telemetry
-  exit 0
-}}
-
-if extract_advice_json; then
-  write_telemetry
-  if validate_advice; then
-    exit 0
-  fi
-fi
-
-write_terminal_advice blocked "Lite advisor did not produce valid advice JSON."
-write_telemetry
-exit 0
-"""
+    return compact_launch_script()
 
 
 def main() -> int:
@@ -638,6 +360,10 @@ def main() -> int:
         encoding="utf-8",
     )
     (packet_dir / "task.md").write_text(extra, encoding="utf-8")
+    (packet_dir / "launch-config.json").write_text(
+        json.dumps(lite_launch_config(packet_id, args.purpose, base_dir, gemini_path), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(launch_for(packet_id, args.purpose, base_dir, gemini_path), encoding="utf-8")
     os.chmod(launch_path, 0o755)

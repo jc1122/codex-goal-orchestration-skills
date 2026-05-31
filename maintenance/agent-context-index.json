@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:b0fd7d32bc703ed83503153bbc8556cb615f449193403db51eaab873f30f945a"
+    "source_fingerprint": "sha256:4c6a237c5a55a2da5429c0bc4daacf8c83a2715a9017bcff8a455c10459d5034"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -185,6 +185,7 @@
         "skills/_goal_shared/scripts/context_pack.py",
         "skills/_goal_shared/scripts/create_lite_advice_packet.py",
         "skills/_goal_shared/scripts/extract_telemetry.py",
+        "skills/_goal_shared/scripts/runtime_lite_runner.py",
         "skills/_goal_shared/scripts/runtime_phase_manifest.py",
         "skills/_goal_shared/scripts/scheduler_tick.py",
         "skills/_goal_shared/scripts/validate_lite_advice.py"
@@ -217,6 +218,7 @@
         "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
         "skills/goal-branch-orchestrator/scripts/extract_telemetry.py",
         "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
+        "skills/goal-branch-orchestrator/scripts/runtime_lite_runner.py",
         "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
         "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
@@ -257,6 +259,7 @@
         "skills/goal-main-orchestrator/scripts/create_lite_advice_packet.py",
         "skills/goal-main-orchestrator/scripts/extract_telemetry.py",
         "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+        "skills/goal-main-orchestrator/scripts/runtime_lite_runner.py",
         "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
         "skills/goal-main-orchestrator/scripts/validate_lite_advice.py",
@@ -300,6 +303,7 @@
         "skills/goal-plan-amender/scripts/context_pack.py",
         "skills/goal-plan-amender/scripts/create_lite_advice_packet.py",
         "skills/goal-plan-amender/scripts/extract_telemetry.py",
+        "skills/goal-plan-amender/scripts/runtime_lite_runner.py",
         "skills/goal-plan-amender/scripts/runtime_phase_manifest.py",
         "skills/goal-plan-amender/scripts/scheduler_tick.py",
         "skills/goal-plan-amender/scripts/validate_lite_advice.py"
@@ -337,6 +341,7 @@
         "skills/goal-preflight/scripts/lint_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_preflight_brief.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py",
+        "skills/goal-preflight/scripts/runtime_lite_runner.py",
         "skills/goal-preflight/scripts/runtime_phase_manifest.py",
         "skills/goal-preflight/scripts/scheduler_tick.py",
         "skills/goal-preflight/scripts/validate_lite_advice.py"

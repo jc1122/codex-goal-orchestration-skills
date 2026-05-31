@@ -6,7 +6,7 @@ Use `tasks.<task>.read` for first context, then run `skills.<skill>.phase_manife
 
 During runtime orchestration, prefer generated JSON artifacts, script `--help`, and validator output. Do not read or search `skills/*/scripts/*.py` with `cat`, `sed`, `head`, `rg`, `grep`, or similar commands unless implementing or debugging those scripts.
 
-For generated runtime packets, inspect packet-local `prompt.md`, `packet-context.json`, `route.json`, `launch-config.json`, status/review/research outputs, and `telemetry.json` before expanding to implementation files.
+For generated runtime packets and Lite advisory packets, inspect packet-local `prompt.md`, `packet-context.json`, `route.json`, `launch-config.json`, status/review/research/advice outputs, and `telemetry.json` before expanding to implementation files.
 
 ```bash
 npm run generate:context

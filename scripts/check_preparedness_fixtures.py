@@ -312,6 +312,46 @@ def assert_compact_runtime_launcher(
     return config
 
 
+def assert_compact_lite_launcher(packet_dir: Path) -> dict:
+    launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
+    assert_shell_syntax(packet_dir / "launch.sh")
+    assert_contains(launch, "runtime_lite_runner.py", "Lite launcher")
+    assert_not_contains(launch, '-p "$(cat "$prompt_path")"', "Lite launcher")
+    if len(launch) > 800:
+        raise SystemExit(f"Lite launcher should stay compact, got {len(launch)} chars")
+    config = read_json(packet_dir / "launch-config.json")
+    if config.get("role") != "lite_advisor":
+        raise SystemExit(f"Lite launch-config role mismatch: {config.get('role')!r}")
+    if config.get("attempt_timeout_seconds") != 600:
+        raise SystemExit(f"Lite launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
+    if config.get("timeout_kill_after_seconds") != 30:
+        raise SystemExit(f"Lite launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
+    if config.get("telemetry_name") != "telemetry.json":
+        raise SystemExit(f"Lite launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
+    if config.get("runner_prompt") != "Follow the complete Lite advisory packet instructions provided on stdin.":
+        raise SystemExit("Lite launch-config should preserve the stdin runner prompt")
+    if not str(config.get("validation_script", "")).endswith("validate_lite_advice.py"):
+        raise SystemExit(f"Lite launch-config validation script mismatch: {config.get('validation_script')!r}")
+    if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
+        raise SystemExit(f"Lite launch-config telemetry script mismatch: {config.get('telemetry_script')!r}")
+    if config.get("status_begin") != "BEGIN_LITE_ADVICE_JSON" or config.get("status_end") != "END_LITE_ADVICE_JSON":
+        raise SystemExit("Lite launch-config marker mismatch")
+    attempts = config.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) != 1:
+        raise SystemExit(f"Lite launch-config should contain exactly one attempt: {attempts!r}")
+    attempt = attempts[0]
+    if attempt.get("alias") != "gemini-lite":
+        raise SystemExit(f"Lite launch-config attempt alias mismatch: {attempt.get('alias')!r}")
+    if attempt.get("event_logs") != ["advice.raw.txt"]:
+        raise SystemExit(f"Lite launch-config event logs mismatch: {attempt.get('event_logs')!r}")
+    if attempt.get("timeout_seconds") != 600:
+        raise SystemExit(f"Lite attempt timeout mismatch: {attempt.get('timeout_seconds')!r}")
+    terminal_messages = config.get("terminal_messages")
+    if not isinstance(terminal_messages, dict) or "invalid_output" not in terminal_messages:
+        raise SystemExit("Lite launch-config terminal messages missing")
+    return config
+
+
 def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None = None, diff_stats: dict | None = None) -> Path:
     gate = json.loads((bundle / "branches" / "B01.pre_review_gate.json").read_text(encoding="utf-8"))
     gate["review_packet_id"] = packet_id
@@ -2172,12 +2212,7 @@ def main() -> int:
                 task_file.as_posix(),
             ]
         )
-        lite_launch = (tmp_path / "lite" / "B01-L01" / "launch.sh").read_text(encoding="utf-8")
-        assert_shell_syntax(tmp_path / "lite" / "B01-L01" / "launch.sh")
-        assert_contains(lite_launch, "timeout --foreground", "Lite launcher")
-        assert_contains(lite_launch, "attempt_timeout_seconds=600", "Lite launcher")
-        assert_contains(lite_launch, "provided on stdin", "Lite launcher")
-        assert_not_contains(lite_launch, '-p "$(cat "$prompt_path")"', "Lite launcher")
+        assert_compact_lite_launcher(tmp_path / "lite" / "B01-L01")
 
         write_valid_research_fixture(bundle)
         write_worker_scheduler(bundle)

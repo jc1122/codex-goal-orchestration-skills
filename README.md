@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.19
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.20
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -126,7 +126,7 @@ Generated worker packets are compact too: when `create_runtime_packet.py` receiv
 
 Generated research-worker and reviewer packets use the same wrapper pattern. Runtime attempt policy, telemetry inputs, semantic hashes, and terminal blocked metadata live in packet-local `launch-config.json`, and `runtime_packet_runner.py` performs deterministic execution. Agents should inspect `launch-config.json` and generated artifacts instead of opening launcher implementation source.
 
-Lite advisory launchers use the same stdin pattern for Gemini prompts and keep the full prompt out of process command lines.
+Lite advisory launchers use the same compact wrapper pattern: `launch.sh` delegates to `runtime_lite_runner.py`, packet-local `launch-config.json` carries the Gemini command, timeout, telemetry, marker, and terminal-message policy, and the full prompt is passed on stdin rather than exposed in process command lines.
 
 Optional quality tooling is pinned separately from runtime code:
 
