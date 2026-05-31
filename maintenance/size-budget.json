@@ -41,11 +41,11 @@
       "path": "skills/_goal_shared/scripts/status_validation.py"
     },
     {
-      "approx_tokens": 12378,
-      "bytes": 49514,
-      "chars": 49514,
+      "approx_tokens": 12453,
+      "bytes": 49811,
+      "chars": 49811,
       "files": 1,
-      "lines": 888,
+      "lines": 894,
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py"
     },
     {
@@ -65,11 +65,11 @@
       "path": "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py"
     },
     {
-      "approx_tokens": 8304,
-      "bytes": 33214,
-      "chars": 33214,
+      "approx_tokens": 8289,
+      "bytes": 33156,
+      "chars": 33156,
       "files": 1,
-      "lines": 671,
+      "lines": 667,
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py"
     },
     {
@@ -113,12 +113,12 @@
       "path": "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py"
     },
     {
-      "approx_tokens": 5702,
-      "bytes": 22809,
-      "chars": 22809,
+      "approx_tokens": 5482,
+      "bytes": 21926,
+      "chars": 21926,
       "files": 1,
-      "lines": 602,
-      "path": "skills/goal-main-orchestrator/scripts/create_audit_packet.py"
+      "lines": 649,
+      "path": "skills/_goal_shared/scripts/create_lite_advice_packet.py"
     }
   ],
   "mode": "warn",
@@ -143,11 +143,11 @@
       "lines": 4819
     },
     "goal-main-orchestrator": {
-      "approx_tokens": 39112,
-      "bytes": 156446,
-      "chars": 156446,
+      "approx_tokens": 38935,
+      "bytes": 155739,
+      "chars": 155739,
       "files": 19,
-      "lines": 3109
+      "lines": 3097
     },
     "goal-plan-amender": {
       "approx_tokens": 31991,
@@ -157,42 +157,42 @@
       "lines": 2911
     },
     "goal-preflight": {
-      "approx_tokens": 37414,
-      "bytes": 149658,
-      "chars": 149658,
+      "approx_tokens": 34764,
+      "bytes": 139057,
+      "chars": 139057,
       "files": 21,
-      "lines": 2718
+      "lines": 2686
     }
   },
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 238404,
-      "bytes": 953616,
-      "chars": 953616,
+      "approx_tokens": 237912,
+      "bytes": 951646,
+      "chars": 951646,
       "files": 79,
-      "lines": 22416
+      "lines": 22405
     },
     "skill_python": {
-      "approx_tokens": 187456,
-      "bytes": 749824,
-      "chars": 749824,
+      "approx_tokens": 186964,
+      "bytes": 747854,
+      "chars": 747854,
       "files": 70,
-      "lines": 17072
+      "lines": 17061
     },
     "skills": {
-      "approx_tokens": 213935,
-      "bytes": 855741,
-      "chars": 855741,
+      "approx_tokens": 211108,
+      "bytes": 844433,
+      "chars": 844433,
       "files": 92,
-      "lines": 18421
+      "lines": 18377
     },
     "tracked": {
-      "approx_tokens": 279635,
-      "bytes": 1118540,
-      "chars": 1118540,
+      "approx_tokens": 276913,
+      "bytes": 1107653,
+      "chars": 1107653,
       "files": 117,
-      "lines": 25156
+      "lines": 25113
     }
   },
   "skill_docs": {

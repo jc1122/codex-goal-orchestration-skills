@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "git_head": "af12226",
-    "source_fingerprint": "sha256:41e4af22777fc65b99f796afbe10f0211862495f8d2ef5cdefe8d4d11b11e1de"
+    "git_head": "ea39dff",
+    "source_fingerprint": "sha256:f5f903b886bbc9a617f503a0bf39f56e2d7a61e458b3f48fb6dcc408fc7da4f7"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -346,7 +346,7 @@
       "source": "goal-preflight",
       "target": "goal-branch-orchestrator",
       "paths": [
-        "skills/goal-preflight/assets/main.prompt.template.md",
+        "skills/goal-preflight/assets/branch.prompt.template.md",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
     },
@@ -366,7 +366,6 @@
       "source": "goal-preflight",
       "target": "goal-plan-amender",
       "paths": [
-        "skills/goal-preflight/assets/main.prompt.template.md",
         "skills/goal-preflight/references/bundle-contract.md",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]

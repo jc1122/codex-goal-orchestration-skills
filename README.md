@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.10
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.11
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -112,6 +112,8 @@ python3 "$CODEX_HOME/skills/goal-branch-orchestrator/scripts/runtime_phase_manif
 ```
 
 Runtime agents should follow those phase tables, script `--help` output, JSON artifacts, and validator defects before opening long references. Python script source is an implementation/debug surface, not normal runtime context.
+
+Generated `main.prompt.md`, branch prompts, prompt-audit packets, and `goal-bootloader.md` are intentionally compact. They carry job-specific data and point runtime agents at `job.manifest.json`, phase manifests, script outputs, and validators instead of repeating long orchestration policy in every prompt. Bundle lint now checks that generated prompts point agents at `runtime_phase_manifest.py --markdown` and explicitly discourage reading skill Python source during normal runtime.
 
 Optional quality tooling is pinned separately from runtime code:
 

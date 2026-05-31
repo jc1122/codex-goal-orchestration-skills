@@ -228,31 +228,18 @@ final JSON object.
 
 Required checks:
 
-- every audit input file exists and is readable: `job.manifest.json`, `main.prompt.md`, and every branch prompt path;
-- status paths, review paths, and worktree paths are expected runtime output/target paths and do not need to exist before prompt audit;
-- manifest branch ids, branch names, worktree paths, status paths, and review paths are present;
-- branch prompt paths, status paths, review paths, and worktree paths are unique and collision-free;
-- every branch declares `max_active_worker_packets` from 1 to 4 and `worker_parallelism.parallelism_default=true`;
-- every branch contains 1 to 4 work items with deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, and branch prompts list those packet ids;
-- work item `worker_type`, when present, is either `worker` or `research-worker`;
-- when any work item is `research-worker`, the manifest includes a research-worker policy requiring `codex --search exec --ephemeral -s read-only` without user-config suppression, broad read-only information retrieval through configured CLI/MCP/connector/browser/search tools plus shell/network inspection commands, and explicit prohibition on file edits or state-changing actions; branch prompts must preserve that boundary;
-- branch prompts require parallel worker dispatch by default;
-- `max_active_branch_agents` is present and <= 4;
-- parallelism is the default, the manifest contains parallelization metadata, and `parallelization.scheduling_mode` is `rolling`;
-- manifest artifact and cleanup policies are present, non-empty, and are repeated or honored by `main.prompt.md`;
-- waves, when present, cover every branch exactly once, no wave has more than 4 branches, and there are no more than 5 waves;
-- branch `depends_on` entries, when present, reference only prior branch ids and are the only reason to defer an otherwise eligible branch;
-- `main.prompt.md` requires saturating branch orchestrator slots up to `max_active_branch_agents`, launching the next eligible branch when capacity is freed, and treating waves as scheduling/order groups rather than dependency barriers;
-- single-branch or otherwise serialized plans include a serial reason or parallelization rationale;
-- `main.prompt.md` defines a falsifiable top-level Definition of Done;
-- every branch prompt defines bounded branch scope and falsifiable Definition of Done;
-- prompts require manifest-bound `validate_branch_status.py` and manifest-bound `validate_main_status.py` before pass;
-- branch prompts are actionable without chat history;
-- prompt files do not require branch creation before audit;
-- merge/cleanup behavior is explicit when expected;
-- `main.prompt.md` requires closing finished branch orchestrator agents before launching replacements;
-- unsupported, unresolved, negative, or probe-only claim labels are preserved.
-- a `pass` audit must have `can_start=true`, no `critical` or `major` defects, and no missing DoD items.
+- `job.manifest.json`, `main.prompt.md`, and every branch prompt exist and are readable.
+- Status, review, and worktree paths are output targets; they do not need to exist before audit.
+- Manifest branch ids, branch names, worktree paths, status paths, review paths, prompt paths, and pre-review-gate paths are present, unique, relative where required, and collision-free.
+- `max_active_branch_agents <= 4`; branch and worker parallelism are default rolling mode; waves cover each branch exactly once and are scheduling/order groups, not dependency barriers.
+- Branch `depends_on` entries reference only prior branch ids; worker `depends_on` entries reference only prior work item ids.
+- Every branch declares 1 to 4 work items, deterministic `<branch_id>-<work_item_id>` packet ids, and `max_active_worker_packets` from 1 to 4.
+- Compact prompts are valid when they list job-specific objectives/scope/work items/DoD and point runtime procedure to the skill phase manifests; full repeated policy may live in the manifest and deterministic scripts.
+- `main.prompt.md` requires skill availability bootstrap, prompt audit, model-catalog capture, branch slot saturation, closing finished branch orchestrators before replacements, manifest-bound branch/main validators, telemetry summary, and no active artifact polling.
+- Branch prompts require branch bootstrap, worker slot saturation, manifest-owned packet artifacts, pre-review gate before reviewer launch, base-range `git diff --check`, telemetry, and manifest-bound branch validation.
+- Research-worker boundaries, review routes, Lite advisor limits, amendment limits, artifact policy, and cleanup policy are present in the manifest and not contradicted by prompts.
+- Prompts are actionable without chat history, do not require branch creation before audit, define falsifiable Definitions of Done, and preserve unsupported/unresolved/negative/probe-only labels.
+- A `pass` audit must have `can_start=true`, no `critical` or `major` defects, and no missing DoD items.
 
 Return only JSON matching `prompt-audit.schema.json`. The JSON must include `manifest` and `repo_root`
 exactly as specified by the schema.

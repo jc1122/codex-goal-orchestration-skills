@@ -149,25 +149,18 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
         chunks.append(
             "\n".join(
                 [
-                    f"### {item_id}: {item.get('title') or item.get('objective') or 'Work item'}",
-                    "",
+                    f"### {item_id}: {item.get('title') or 'Work item'}",
                     f"Worker packet id: {packet_id}",
                     f"Worker type: {item.get('worker_type', 'worker')}",
-                    "",
-                    item.get("objective", "Objective not supplied."),
-                    "",
-                    "Owned files/modules:",
+                    f"Objective: {item.get('objective', 'Objective not supplied.')}",
+                    "Owned paths:",
                     bullets(item.get("owned_paths", [])),
-                    "",
                     "Context files:",
                     bullets(item.get("context_files", [])),
-                    "",
                     "Depends on:",
                     bullets(item.get("depends_on", [])),
-                    "",
                     "Verification commands:",
                     bullets(item.get("verification", [])),
-                    "",
                     "Definition of Done:",
                     bullets(item.get("dod", [])),
                 ]
@@ -562,6 +555,9 @@ def render_main_prompt_text(brief: dict) -> str:
 
 def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     branch_template = (Path(__file__).resolve().parents[1] / "assets" / "branch.prompt.template.md").read_text(encoding="utf-8")
+    scope = branch.get("scope") or (
+        f"Bounded to the owned paths, work items, verification commands, and stop conditions listed for {branch['id']}."
+    )
     return branch_template.format(
         branch_id=branch["id"],
         title=branch.get("title", branch.get("objective", branch["id"])),
@@ -577,7 +573,7 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         default_worker_ladder=CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER),
         allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
         objective=branch.get("objective", "Objective not supplied."),
-        scope=branch.get("scope", "Scope not supplied."),
+        scope=scope,
         owned_paths=bullets(branch.get("owned_paths", [])),
         work_items=format_work_items(branch["id"], branch.get("work_items", [])),
         tests=bullets(branch.get("tests", [])),

@@ -28,21 +28,15 @@ Max worker packets for this branch: 4
 
 ## Worker Parallelism
 
-Parallel worker packets are the default for independent work items. This branch contains 1 to 4 worker packets total. Launch independent workers as a rolling saturated pool in separate child worktrees whenever their owned paths and verification commands do not conflict. Never exceed {max_active_worker_packets} active worker packets for this branch, and never exceed 4 active worker packets under any circumstance. If a work item has a `Depends on` entry, do not launch it until the dependency's output is integrated and available as context. When any worker launcher exits, collect and integrate its status/diff, free its active slot, and launch the next eligible worker immediately if capacity is available. If this branch is executed serially or below the worker cap, record the reason in `worker_parallelism.serial_reasons`.
+Use $goal-branch-orchestrator. Treat `job.manifest.json` as the policy source and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 
-Worker scheduler ledger: {worker_scheduler_path}
+Parallel worker packets are the default. Max active worker packets: {max_active_worker_packets}. Max worker packets for this branch: 4. Never exceed {max_active_worker_packets} active worker packets here or 4 total. Launch ready workers as a rolling saturated pool, using `render_worker_schedule.py --list-ready` before initial launch and after every completion.
 
-Record schema v2 `ready`, `launch`, `finish`, `close`, `refill`, `defer`, `under_capacity`, and `blocked` events in that scheduler ledger. Every scheduler event must include ordered `seq`, `timestamp`, and `runtime_ref`; `defer`, `under_capacity`, and `blocked` must also include enum `reason_code` plus `reason`. Use `append_scheduler_event.py` rather than hand-editing the ledger when possible. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Final validation reconstructs active worker counts from this ledger and rejects duplicate launches, launches above cap, missing finishes/closes, missing refill events, dependency launches after non-pass dependencies, and eligible-idle gaps even if status prose claims saturation.
+Worker scheduler ledger: {worker_scheduler_path}. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Record ready/launch/finish/close/refill/defer/under_capacity/blocked evidence with scheduler scripts.
 
 Worker parallelization rationale: {worker_parallelization_rationale}
 
-Use `render_worker_schedule.py --list-ready` with the current completed and active worker packet ids before initial launch and after every worker completion.
-
-Use the listed Worker packet id for each worker packet. A `pass` branch status must include one worker status for every manifest work item packet id and no extra worker packet ids. A `partial` branch status means some work completed and every unlaunched or blocked remainder is explained by scheduler v2 terminal evidence. Branch `pass` requires every normal worker status to be `pass` and backed by the manifest-owned `workers/<packet_id>/status.json` plus same-packet `telemetry.json`.
-
-If a work item lists `Worker type: research-worker`, create it with `create_runtime_packet.py --role research-worker`, put the packet under manifest-owned `research/<packet_id>/`, and use it only for outside information gathering. Research workers run `codex --search exec --ephemeral -s read-only` without user-config suppression, so they may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, read-only local file access, and configured tool/skill documentation when relevant. They must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. Branch `pass` requires every research-worker status to be `pass` and backed by `research/<packet_id>/research.json` plus same-packet `telemetry.json`.
-
-After worker dispatch, wait for the next active worker launcher to exit; do not poll active worker worktrees, event logs, process tables, or status files unless the user explicitly enters debug mode or a launcher exits without a valid status. After integrating an exited worker, refill capacity from eligible work items rather than waiting for all currently active workers to finish.
+Use each listed Worker packet id exactly once unless replacing a non-pass attempt with `create_runtime_packet.py --replace`. Worker, research-worker, reviewer, and Lite packets must write same-packet `telemetry.json`. After dispatch, wait for launchers; do not poll active worker/reviewer logs, process tables, or status files.
 
 ## Worker Model Routing
 
@@ -50,13 +44,11 @@ Default worker ladder: {default_worker_ladder}
 
 Allowed worker route aliases: {allowed_worker_routes}
 
-Selected worker ladders may be chosen by the branch orchestrator per worker packet when task hardness, context size, quota pressure, or provider availability justify it. A selected ladder must be a non-empty ordered subsequence of the default worker ladder; do not reorder providers, invent model aliases, change model ids, or use reviewer/auditor models for worker packets. Prefer Spark immediately after Gemini Pro and Gemini Flash; Copilot `gpt-5.4` comes only after Spark in the standard ladder.
-
-When creating a worker packet with a non-default route, pass repeated `--worker-route <alias>` values and a non-empty `--selection-reason`. Every worker status and branch rollup must record `selected_ladder` and `selection_reason`, and the final validator must reject route drift from the packet's manifest-owned `route.json` and `telemetry.json`.
+Selected worker ladders must be an ordered non-empty subsequence of the default ladder with a `selection_reason`; do not invent aliases or reorder providers.
 
 ## Lite Advisors
 
-Optional Lite advisors are context routers only. After required start checks pass, the branch may use validated Lite advice for worker packet planning or context packing. After worker launchers finish, the branch may use validated Lite advice for worker summaries or blocked triage. Never launch Lite while worker/research-worker/reviewer launchers are active, and never treat Lite as worker pass, review pass, mergeability, scientific claim, or Definition-of-Done evidence. Branch Lite packet ids must be scoped as `<branch-id>-L<suffix>`. Record `lite_advice: []` only when no relevant branch Lite packet exists; otherwise record each packet with purpose, status, disposition, manifest-owned advice/input paths, source hashes, exact validation command, validation status, validation defects, telemetry, and reason.
+Optional Lite Advisors are context routers only. Use them after bootstrap or completed packets, never while worker/research-worker/reviewer launchers are active, and never as pass/review/mergeability/DoD evidence.
 
 ## Tests And Validators
 
@@ -64,11 +56,7 @@ Optional Lite advisors are context routers only. After required start checks pas
 
 ## Reviewer Requirement
 
-Before reviewer packet generation, write schema v2 `{pre_review_gate_path}` with `status: "pass"`, current `semantic_input_hashes`, optional `volatile_input_hashes`, validator/test/diff/ownership/DoD gate results, and reviewer reuse policy. Reviewer packet generation writes `reviewers/<packet_id>/route.json` from the manifest `review_model_policy`: light routes `gpt-5.4-mini -> gpt-5.4`, standard routes `gpt-5.4 -> gpt-5.5`, and heavy routes `gpt-5.5 -> gpt-5.4` for public API, scheduler/validator contract, security, migration, scientific/claim-boundary, large-diff, or prior-reviewer-blocker work. Dispatch a read-only reviewer only after that deterministic pre-review gate passes. The branch may return pass only if the reviewer verdict is `mergeable`, the reviewer packet id belongs to this branch, the reviewer artifact exists, reviewer `semantic_input_hashes` match `{pre_review_gate_path}` exactly, fresh reviewer telemetry aliases match `route.json`, accepted reuse proves matching semantic hashes plus existing source review and source telemetry without a fresh model call, verification gaps are empty, and exact base-range whitespace evidence from `git diff --check {base_ref}...HEAD` is recorded.
-
-After reviewer dispatch, wait for the reviewer launcher; do not poll active reviewer event logs, process tables, or review files unless the user explicitly enters debug mode or the launcher exits without a valid review.
-
-If the reviewer returns `mergeable_after_fixes`, `blocked`, or `reject` with actionable findings that fit a manifest work item's owned paths, launch a repair attempt for that same worker packet id with `create_runtime_packet.py --replace`, preserving the previous packet under `attempts/`, and append scheduler v2 repair evidence by closing the non-pass attempt, refilling the freed slot, and relaunching the same manifest worker id. Do not invent undeclared worker ids. If the findings require broader scope than the manifest worker set, return `partial` or `blocked` with the reviewer findings preserved.
+Before reviewer launch, create schema v2 `{pre_review_gate_path}` / `pre_review_gate.json` with passing checks and current `semantic_input_hashes`. Dispatch a read-only reviewer only after the gate passes. Pass requires mergeable review, matching hashes, same-branch reviewer artifact, `telemetry.json`, no verification gaps, and `git diff --check {base_ref}...HEAD`.
 
 ## Bootstrap Requirement
 
@@ -81,10 +69,7 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 ## Definition of Done
 
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
-- 1 to 4 worker packets were used for this branch.
-- Worker, research-worker, reviewer, and any Lite packets wrote same-packet `telemetry.json`.
-- Research-worker packets, when present, used broad read-only information retrieval, recorded `tools_used` and source URLs, passed read-only security validation, and wrote same-packet `telemetry.json`.
-- Packet telemetry records positive `timeout_seconds` for every declared model attempt.
+- 1 to 4 worker packets were used for this branch; worker/research-worker/reviewer/Lite packets wrote same-packet `telemetry.json`.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.

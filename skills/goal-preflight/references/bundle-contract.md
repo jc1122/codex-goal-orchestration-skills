@@ -148,6 +148,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - `goal-bootloader.md` invokes `$goal-main-orchestrator`.
 - `goal-bootloader.md` points to the bundle root, repository root, `job.manifest.json`, and `main.prompt.md`.
 - `goal-bootloader.md` is under 4000 characters.
+- Generated prompts and bootloaders stay compact: they point runtime agents at `runtime_phase_manifest.py --markdown`, `job.manifest.json`, script output, and validators instead of copying full policy text.
 - `main.prompt.md` says prompt audit is first and branches cannot be created until audit passes.
 - `main.prompt.md` says no more than 4 branch orchestrator agents may be active.
 - `main.prompt.md` says parallelism is the default, branch orchestrator slots should stay saturated up to `max_active_branch_agents`, and waves are scheduling/order groups rather than implicit dependency barriers.
