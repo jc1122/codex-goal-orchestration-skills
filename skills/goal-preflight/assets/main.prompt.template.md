@@ -16,7 +16,7 @@ Base ref: {base_ref}
 - Use $goal-main-orchestrator. Treat `job.manifest.json` as the contract and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 - Treat manifest paths as bundle-root relative and worktree paths as repository root relative. Reject absolute paths, backslashes, and `..` traversal.
 - Run availability bootstrap and fresh model-catalog capture before prompt audit. Do not create branches until `prompt-audit.json` pins this manifest and repository root with `status=pass`.
-- Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots, close finished branch orchestrator agents, and Launch the next eligible branch when capacity is freed.
+- Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots and close finished branch orchestrator agents. Launch the next eligible branch when capacity opens.
 - Defer only unresolved manifest `depends_on` entries. Treat waves as scheduling/order groups, not barriers; non-pass dependencies require structured `dependency_failed` evidence.
 - Record the scheduler ledger at `{main_scheduler_path}` with schema v2 events. `branch_parallelism.scheduler_path` in `main.status.json` must be `{main_scheduler_path}`.
 - If no branch completes after `orchestration_watchdog.main_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active branches with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
