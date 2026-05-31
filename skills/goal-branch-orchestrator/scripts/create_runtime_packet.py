@@ -726,6 +726,20 @@ def branch_entry(manifest: dict, branch_id: str) -> dict:
     return matches[0] if len(matches) == 1 else {}
 
 
+def branch_entry_for_packet(manifest: dict, branch_value: str, packet_id: str) -> dict:
+    branches = manifest.get("branches")
+    if not isinstance(branches, list):
+        return {}
+    for key in ("id", "branch_name"):
+        matches = [item for item in branches if isinstance(item, dict) and item.get(key) == branch_value]
+        if len(matches) == 1:
+            return matches[0]
+    packet_prefix = packet_id.split("-", 1)[0] if "-" in packet_id else ""
+    if packet_prefix:
+        return branch_entry(manifest, packet_prefix)
+    return {}
+
+
 def review_changed_paths(gate: dict, branch: dict) -> list[str]:
     paths: list[str] = []
     checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
@@ -1189,11 +1203,23 @@ def main() -> int:
     branch = args.branch
     if not safe_branch_name(branch):
         raise SystemExit(f"branch is not a safe git branch name: {branch!r}")
+    manifest_branch_id = branch
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
     owned_files = normalize_owned_paths(args.owned_file)
     context_files = normalize_context_files(args.context_file)
     if args.manifest and args.role == "worker":
         manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+        manifest = load_json(manifest_path)
+        branch_data = branch_entry_for_packet(manifest, branch, packet_id)
+        if branch_data:
+            branch_id_value = branch_data.get("id")
+            branch_name_value = branch_data.get("branch_name")
+            if isinstance(branch_id_value, str) and branch_id_value.strip():
+                manifest_branch_id = branch_id_value
+            if isinstance(branch_name_value, str) and branch_name_value.strip():
+                if not safe_branch_name(branch_name_value):
+                    raise SystemExit(f"manifest branch_name is not a safe git branch name: {branch_name_value!r}")
+                branch = branch_name_value
         manifest_value = manifest_path.as_posix()
         if manifest_value not in context_files:
             context_files.append(manifest_value)
@@ -1303,7 +1329,7 @@ def main() -> int:
     packet_context: dict | None = None
     if args.role == "worker":
         compact_context = compact_worker_context(
-            branch_id=branch,
+            branch_id=manifest_branch_id,
             packet_id=packet_id,
             task_file=task_file,
             task_text=task_text,
@@ -1338,6 +1364,8 @@ def main() -> int:
         route = {
             "packet_id": packet_id,
             "role": "worker",
+            "branch_id": manifest_branch_id,
+            "branch": branch,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
             "default_ladder": list(DEFAULT_WORKER_LADDER),

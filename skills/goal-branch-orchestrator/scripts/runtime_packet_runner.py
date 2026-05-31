@@ -538,7 +538,7 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
     ]
     if role == "research-worker":
         command = ["codex", "--search", "exec", "--ephemeral", "-m", model, "-C", worktree, "-s", string_value(config, "sandbox"), "--json", "--output-schema", schema_path.as_posix(), "-o", output_path.as_posix(), "-"]
-    return run_with_timeout(
+    rc = run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -547,6 +547,11 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
         stdin_data=prompt_path.read_bytes(),
         stdout_path=event_path,
     )
+    if rc != 0:
+        return rc
+    if role == "worker" and not ensure_status_json(packet_dir, schema_path, output_path, event_path, config):
+        return 1
+    return 0
 
 
 def collect_strings(value: Any):
@@ -614,19 +619,61 @@ def validate_instance(instance: Any, schema: dict[str, Any]) -> None:
                         raise ValueError(f"{field} contains item that does not match required pattern")
 
 
+def output_matches_schema(schema_path: Path, output_path: Path) -> bool:
+    if not output_path.exists():
+        return False
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        data = json.loads(output_path.read_text(encoding="utf-8"))
+        if isinstance(data, dict) and data.get("status") == "success":
+            data["status"] = "pass"
+            output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        validate_instance(data, schema)
+    except Exception:
+        return False
+    return True
+
+
+def ensure_status_json(
+    packet_dir: Path,
+    schema_path: Path,
+    output_path: Path,
+    event_path: Path,
+    config: dict[str, Any],
+) -> bool:
+    if output_matches_schema(schema_path, output_path):
+        return True
+    if output_path.exists() and output_path.stat().st_size > 0:
+        raw_copy = packet_dir / f"{output_path.name}.raw"
+        if not raw_copy.exists():
+            shutil.copyfile(output_path, raw_copy)
+    return extract_status_json(packet_dir, schema_path, [output_path, event_path], config)
+
+
 def extract_status_json(
     packet_dir: Path,
     schema_path: Path,
-    raw_path: Path,
+    raw_path: Path | list[Path],
     config: dict[str, Any],
 ) -> bool:
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     marker_block = string_value(config.get("status_markers", {}), "begin") if isinstance(config.get("status_markers"), dict) else WORKER_STATUS_BEGIN
     marker_end = string_value(config.get("status_markers", {}), "end") if isinstance(config.get("status_markers"), dict) else WORKER_STATUS_END
     output_path = packet_dir / string_value(config, "output_name")
-    sources: list[tuple[str, str]] = [("raw output", raw_path.read_text(encoding="utf-8", errors="replace"))]
+    raw_paths = raw_path if isinstance(raw_path, list) else [raw_path]
+    sources: list[tuple[str, str]] = []
+    for path in raw_paths:
+        if path.exists():
+            sources.append((f"raw output {path.name}", path.read_text(encoding="utf-8", errors="replace")))
     jsonl_parts: list[str] = []
-    for line in sources[0][1].splitlines():
+    for _source_name, source_text in sources:
+        for line in source_text.splitlines():
+            try:
+                data = json.loads(line)
+            except Exception:
+                continue
+            jsonl_parts.extend(collect_strings(data))
+    for line in output_path.read_text(encoding="utf-8", errors="replace").splitlines() if output_path.exists() else []:
         try:
             data = json.loads(line)
         except Exception:

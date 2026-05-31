@@ -2410,12 +2410,65 @@ def main() -> int:
                 (bundle / "branches" / "B01.prompt.md").as_posix(),
                 "--manifest",
                 (bundle / "job.manifest.json").as_posix(),
+                "--worker-route",
+                "codex-mini",
+                "--selection-reason",
+                "Fixture exercises marker-wrapped Codex output.",
             ]
         )
-        manifest_worker_prompt = (manifest_packet_root / "B01-W01" / "prompt.md").read_text(encoding="utf-8")
-        if not (manifest_packet_root / "B01-W01" / "packet-context.json").exists():
+        manifest_packet_dir = manifest_packet_root / "B01-W01"
+        manifest_worker_prompt = (manifest_packet_dir / "prompt.md").read_text(encoding="utf-8")
+        manifest_worker_config = read_json(manifest_packet_dir / "launch-config.json")
+        if manifest_worker_config.get("branch") != "preparedness-research-fixture":
+            raise SystemExit(f"worker --manifest did not normalize branch id to branch_name: {manifest_worker_config.get('branch')!r}")
+        manifest_worker_schema = read_json(manifest_packet_dir / "status.schema.json")
+        branch_const = manifest_worker_schema.get("properties", {}).get("branch", {}).get("const")
+        if branch_const != "preparedness-research-fixture":
+            raise SystemExit(f"worker --manifest status schema branch mismatch: {branch_const!r}")
+        if not (manifest_packet_dir / "packet-context.json").exists():
             raise SystemExit("worker --manifest did not create compact packet-context.json")
         assert_contains(manifest_worker_prompt, "Compact Worker Task", "worker --manifest prompt")
+        fake_codex_dir = tmp_path / "fake-codex-worker"
+        fake_codex_dir.mkdir()
+        fake_codex = fake_codex_dir / "codex"
+        fake_codex.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, pathlib, sys\n"
+            "args = sys.argv[1:]\n"
+            "out = pathlib.Path(args[args.index('-o') + 1])\n"
+            "status = {\n"
+            "  'packet_id': 'B01-W01',\n"
+            "  'role': 'worker',\n"
+            "  'status': 'pass',\n"
+            "  'branch': 'preparedness-research-fixture',\n"
+            f"  'worktree': {ROOT.as_posix()!r},\n"
+            "  'selected_ladder': ['codex-mini'],\n"
+            "  'selection_reason': 'Fixture exercises marker-wrapped Codex output.',\n"
+            "  'changed_files': [],\n"
+            "  'commands_run': ['pwd', 'git status --short --branch'],\n"
+            "  'tests': ['fixture fake codex'],\n"
+            "  'blockers': [],\n"
+            "  'handoff': 'fake codex marker-wrapped pass'\n"
+            "}\n"
+            "out.write_text('BEGIN_WORKER_STATUS_JSON\\n' + json.dumps(status) + '\\nEND_WORKER_STATUS_JSON\\n', encoding='utf-8')\n"
+            "print(json.dumps({'usage': {'input_tokens': 321, 'cached_input_tokens': 123, 'output_tokens': 45}}))\n",
+            encoding="utf-8",
+        )
+        fake_codex.chmod(0o755)
+        run(
+            [(manifest_packet_dir / "launch.sh").as_posix()],
+            env={**os.environ, "PATH": fake_codex_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+        )
+        manifest_worker_status = read_json(manifest_packet_dir / "status.json")
+        if manifest_worker_status.get("branch") != "preparedness-research-fixture":
+            raise SystemExit(f"worker runtime did not preserve normalized branch label: {manifest_worker_status!r}")
+        raw_status_text = (manifest_packet_dir / "status.json.raw").read_text(encoding="utf-8")
+        if "BEGIN_WORKER_STATUS_JSON" not in raw_status_text:
+            raise SystemExit("worker runtime did not preserve raw marker-wrapped Codex output")
+        manifest_worker_telemetry = read_json(manifest_packet_dir / "telemetry.json")
+        usage = manifest_worker_telemetry.get("totals", {}).get("known_usage", {})
+        if manifest_worker_telemetry.get("accepted_alias") != "codex-mini" or usage.get("input_tokens") != 321:
+            raise SystemExit(f"worker runtime did not extract accepted Codex telemetry after marker normalization: {manifest_worker_telemetry!r}")
 
         run(
             [
