@@ -131,7 +131,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "worker_packets",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --model-catalog /abs/bundle/branches/Bxx.model-catalog.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
                 "agent_does": "run packet launch.sh; do not inspect active logs while running",
             },
             {

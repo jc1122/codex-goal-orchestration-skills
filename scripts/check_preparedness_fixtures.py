@@ -2249,6 +2249,102 @@ def main() -> int:
             "events-copilot-version.log",
         ]:
             raise SystemExit(f"worker launch-config mixed probe log mismatch: {mixed_probe_logs!r}")
+        worker_model_catalog = tmp_path / "worker-model-catalog.json"
+        write_json(
+            worker_model_catalog,
+            {
+                "schema_version": 1,
+                "status": "pass",
+                "source": "live",
+                "warnings": [],
+                "models": [],
+                "route_models": [
+                    {
+                        "alias": "codex-spark",
+                        "model": "gpt-5.3-codex-spark",
+                        "present": True,
+                        "supported_in_api": False,
+                        "visibility": "list",
+                    },
+                    {
+                        "alias": "codex-mini",
+                        "model": "gpt-5.4-mini",
+                        "present": True,
+                        "supported_in_api": True,
+                        "visibility": "list",
+                    },
+                ],
+                "missing_route_models": [],
+            },
+        )
+        catalog_packet_root = tmp_path / "catalog-packets"
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                "--role",
+                "worker",
+                "--packet-id",
+                "B01-W05",
+                "--branch",
+                "preparedness-research-fixture-W05",
+                "--worktree",
+                ROOT.as_posix(),
+                "--out-dir",
+                catalog_packet_root.as_posix(),
+                "--owned-file",
+                "README.md",
+                "--context-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--task-file",
+                task_file.as_posix(),
+                "--model-catalog",
+                worker_model_catalog.as_posix(),
+            ]
+        )
+        catalog_config = assert_compact_runtime_launcher(catalog_packet_root / "B01-W05", "worker")
+        expected_catalog_ladder = ["gemini-pro", "gemini-flash", "copilot-gpt-5.4", "codex-mini"]
+        if catalog_config.get("selected_ladder") != expected_catalog_ladder:
+            raise SystemExit(f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}")
+        catalog_meta = catalog_config.get("model_catalog", {})
+        filtered_aliases = [
+            item.get("alias")
+            for item in catalog_meta.get("filtered_aliases", [])
+            if isinstance(item, dict)
+        ]
+        if filtered_aliases != ["codex-spark"]:
+            raise SystemExit(f"worker model catalog filtered aliases mismatch: {filtered_aliases!r}")
+        explicit_spark = run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                "--role",
+                "worker",
+                "--packet-id",
+                "B01-W06",
+                "--branch",
+                "preparedness-research-fixture-W06",
+                "--worktree",
+                ROOT.as_posix(),
+                "--out-dir",
+                catalog_packet_root.as_posix(),
+                "--owned-file",
+                "README.md",
+                "--context-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--task-file",
+                task_file.as_posix(),
+                "--worker-route",
+                "codex-spark",
+                "--selection-reason",
+                "Fixture intentionally selects unsupported Spark.",
+                "--model-catalog",
+                worker_model_catalog.as_posix(),
+            ],
+            expect=1,
+        )
+        if "model catalog rejects selected worker route" not in explicit_spark.stdout:
+            raise SystemExit("explicit unsupported Spark route did not fail with model catalog guidance")
         manifest_packet_root = tmp_path / "manifest-packets"
         run(
             [

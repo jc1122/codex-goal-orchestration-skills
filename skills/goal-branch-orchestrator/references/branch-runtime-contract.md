@@ -39,7 +39,7 @@ Worker route aliases are exactly:
 - `copilot-gpt-5.4`
 - `codex-mini`
 
-The branch orchestrator may choose a non-empty ordered subsequence of the default ladder per worker packet when task hardness, context size, quota pressure, or provider availability justifies it. The selected route must preserve the default order; Spark is preferred immediately after Gemini Pro and Gemini Flash, and Copilot comes only after Spark. Runtime packet generation accepts repeated `--worker-route <alias>` values plus a required `--selection-reason` for non-default routes. It writes `route.json`; worker status JSON and branch rollups must copy `selected_ladder` and `selection_reason` exactly.
+The branch orchestrator may choose a non-empty ordered subsequence of the default ladder per worker packet when task hardness, context size, quota pressure, or provider availability justifies it. The selected route must preserve the default order; Spark is preferred immediately after Gemini Pro and Gemini Flash, and Copilot comes only after Spark. Runtime packet generation accepts repeated `--worker-route <alias>` values plus a required `--selection-reason` for non-default routes. Pass the fresh branch `model-catalog.json`; unsupported Codex aliases are pruned from the default ladder and rejected when explicitly selected. It writes `route.json`; worker status JSON and branch rollups must copy `selected_ladder` and `selection_reason` exactly.
 
 Fallback is allowed only when:
 

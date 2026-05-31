@@ -102,6 +102,7 @@ WORKER_ROUTE_EVENT_LABELS = {
     "copilot-gpt-5.4": "copilot",
     "codex-mini": "mini",
 }
+CODEX_WORKER_ROUTES = frozenset({"codex-spark", "codex-mini"})
 WORKER_PACKET_PROMPT = "Follow the complete worker packet instructions provided on stdin."
 REVIEW_ROUTE_MODELS = {
     alias: CONTRACT.CODEX_ROUTE_MODELS[alias]
@@ -174,6 +175,85 @@ def normalize_worker_ladder(values: list[str]) -> list[str]:
             + ", ".join(DEFAULT_WORKER_LADDER)
         )
     return flattened
+
+
+def model_catalog_rows(path: Path) -> tuple[dict, dict[str, dict]]:
+    data = load_json(path)
+    if data.get("schema_version") != 1:
+        raise SystemExit(f"model catalog schema_version must be 1: {path}")
+    if data.get("status") != "pass":
+        raise SystemExit(f"model catalog status must be pass before worker packet generation: {path}")
+    rows = data.get("route_models")
+    if not isinstance(rows, list):
+        raise SystemExit(f"model catalog route_models must be a list: {path}")
+    by_alias: dict[str, dict] = {}
+    for index, row in enumerate(rows):
+        if not isinstance(row, dict):
+            raise SystemExit(f"model catalog route_models[{index}] must be an object: {path}")
+        alias = row.get("alias")
+        if isinstance(alias, str) and alias:
+            by_alias[alias] = row
+    return data, by_alias
+
+
+def apply_model_catalog_to_worker_ladder(
+    selected_ladder: list[str],
+    *,
+    catalog_path: Path | None,
+    explicit_routes: bool,
+) -> tuple[list[str], dict | None]:
+    if catalog_path is None:
+        return selected_ladder, None
+
+    data, rows = model_catalog_rows(catalog_path)
+    retained: list[str] = []
+    filtered: list[dict] = []
+    defects: list[str] = []
+    checked_aliases = [alias for alias in selected_ladder if alias in CODEX_WORKER_ROUTES]
+    for alias in selected_ladder:
+        if alias not in CODEX_WORKER_ROUTES:
+            retained.append(alias)
+            continue
+        row = rows.get(alias)
+        if row is None:
+            defects.append(f"{alias}: missing from model catalog route_models")
+            continue
+        present = row.get("present")
+        supported = row.get("supported_in_api")
+        if present is True and supported is True:
+            retained.append(alias)
+            continue
+        detail = {
+            "alias": alias,
+            "model": row.get("model"),
+            "present": present,
+            "supported_in_api": supported,
+            "reason": "not present" if present is not True else "not supported_in_api",
+        }
+        if explicit_routes:
+            defects.append(
+                f"{alias}: model={detail['model']} present={present} supported_in_api={supported}"
+            )
+        else:
+            filtered.append(detail)
+
+    if defects:
+        raise SystemExit(
+            "model catalog rejects selected worker route(s); choose a supported route or omit explicit routes:\n"
+            + "\n".join(f"- {item}" for item in defects)
+        )
+    if not retained:
+        raise SystemExit(
+            "model catalog removed every selected worker route; choose a supported worker route explicitly"
+        )
+    metadata = {
+        "path": catalog_path.as_posix(),
+        "source": data.get("source"),
+        "status": data.get("status"),
+        "checked_aliases": checked_aliases,
+        "filtered_aliases": filtered,
+    }
+    return retained, metadata
 
 
 def worker_route_commands(selected_ladder: list[str]) -> list[str]:
@@ -976,6 +1056,7 @@ def compact_launch_config(
     output_name: str,
     selected_ladder: list[str] | None = None,
     selection_reason: str = "",
+    model_catalog: dict | None = None,
     review_route: dict | None = None,
     review_semantic_hashes: dict[str, str] | None = None,
     review_reuse_policy: dict | None = None,
@@ -1003,6 +1084,7 @@ def compact_launch_config(
             },
             "attempts": worker_telemetry_attempts(selected_ladder),
             "selected_commands": worker_route_commands(selected_ladder),
+            "model_catalog": model_catalog or {},
             "telemetry_script": telemetry_script,
             "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
             "copilot_probe_model": COPILOT_PROBE_MODEL,
@@ -1088,6 +1170,13 @@ def main() -> int:
         default=[],
         help="Allowed worker route alias. Repeat to choose a non-empty ordered subsequence of the standard ladder.",
     )
+    parser.add_argument(
+        "--model-catalog",
+        help=(
+            "Optional fresh check_model_catalog.py --json output. For worker packets, unsupported Codex "
+            "route aliases are pruned from the default ladder and rejected when explicitly selected."
+        ),
+    )
     parser.add_argument("--selection-reason", help="Required when --worker-route is supplied; recorded in route.json and worker status.")
     parser.add_argument("--replace", action="store_true", help="Archive an existing packet directory under attempts/ and recreate it.")
     args = parser.parse_args()
@@ -1113,6 +1202,8 @@ def main() -> int:
     )
     if args.role in {"research-worker", "reviewer"} and (args.worker_route or args.selection_reason):
         raise SystemExit("research-worker and reviewer packets must not set worker route options")
+    if args.model_catalog and args.role != "worker":
+        raise SystemExit("--model-catalog is only valid for worker packets")
     review_route: dict | None = None
     review_semantic_hashes: dict[str, str] | None = None
     review_reuse_policy: dict | None = None
@@ -1155,6 +1246,7 @@ def main() -> int:
             review_reuse_policy = dict(gate_reuse_policy)
     selected_ladder: list[str] | None = None
     selection_reason = ""
+    model_catalog: dict | None = None
     if args.role == "worker":
         normalized_worker_routes: list[str] = []
         for item in args.worker_route:
@@ -1163,6 +1255,16 @@ def main() -> int:
             else:
                 normalized_worker_routes.extend(item)
         selected_ladder = normalize_worker_ladder(normalized_worker_routes)
+        catalog_path = (
+            resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
+            if args.model_catalog
+            else None
+        )
+        selected_ladder, model_catalog = apply_model_catalog_to_worker_ladder(
+            selected_ladder,
+            catalog_path=catalog_path,
+            explicit_routes=bool(normalized_worker_routes),
+        )
         selection_reason = nonempty_text(args.selection_reason)
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
@@ -1171,6 +1273,9 @@ def main() -> int:
                 "Default standard worker ladder selected: Gemini Pro, Gemini Flash, "
                 "Codex Spark, GitHub Copilot gpt-5.4 high effort, Codex mini."
             )
+        if model_catalog and model_catalog.get("filtered_aliases"):
+            aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
+            selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
 
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     packet_dir = out_dir / packet_id
@@ -1233,6 +1338,7 @@ def main() -> int:
             "selection_reason": selection_reason,
             "default_ladder": list(DEFAULT_WORKER_LADDER),
             "allowed_aliases": list(DEFAULT_WORKER_LADDER),
+            "model_catalog": model_catalog or {},
         }
         (packet_dir / "route.json").write_text(json.dumps(route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     elif args.role == "reviewer" and review_route is not None:
@@ -1246,6 +1352,7 @@ def main() -> int:
         output_name,
         selected_ladder=selected_ladder,
         selection_reason=selection_reason,
+        model_catalog=model_catalog,
         review_route=review_route,
         review_semantic_hashes=review_semantic_hashes,
         review_reuse_policy=review_reuse_policy,
