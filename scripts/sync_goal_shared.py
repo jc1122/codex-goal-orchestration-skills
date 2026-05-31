@@ -19,7 +19,9 @@ SKILLS = (
 )
 SHARED_SCRIPTS = (
     "append_scheduler_event.py",
+    "check_model_catalog.py",
     "create_lite_advice_packet.py",
+    "context_pack.py",
     "extract_telemetry.py",
     "scheduler_tick.py",
     "validate_lite_advice.py",

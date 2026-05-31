@@ -20,6 +20,8 @@ Your job is:
 7. Review branch status/review artifacts against `main.prompt.md` DoD.
 8. Return `pass` only when the DoD is falsifiably satisfied.
 
+Runtime token discipline: use script outputs, JSON artifacts, and validator defects as the working surface. Do not open `skills/*/scripts/*.py` during normal runtime; inspect Python source only when a script itself fails and debugging the script is the assigned task.
+
 ## Skill Availability Bootstrap
 
 Every `/goal` run starts by checking runtime skill availability before prompt audit, branch creation, or agent dispatch. Resolve the skills root once:
@@ -37,6 +39,15 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_goal_skill_avail
 ```
 
 If this fails, stop immediately and return `blocked` with the missing skill/script names. Do not run prompt audit, create worktrees, or apply amendments until bootstrap passes.
+
+Then record the fresh Codex model catalog for this run before selecting or launching model routes:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py" --json --require-codex \
+  > /absolute/path/to/plans/orchestration/<job-id>/model-catalog.json
+```
+
+Use the live `codex debug models` source when available. Treat bundled-only results as fallback evidence, not as authoritative proof that an account-visible model is unavailable.
 
 ## Mandatory Start
 

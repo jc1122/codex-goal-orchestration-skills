@@ -112,6 +112,9 @@ jobs:
       - name: Dependency policy report
         run: python3 scripts/check_dependency_policy.py --json > maintenance/reports/dependency-policy.json
 
+      - name: Model catalog report
+        run: python3 scripts/check_model_catalog.py --json > maintenance/reports/model-catalog.json
+
       - name: Ruff report
         continue-on-error: true
         run: ruff check . --output-format=json > maintenance/reports/ruff.json

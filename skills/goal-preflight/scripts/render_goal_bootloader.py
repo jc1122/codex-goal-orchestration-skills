@@ -41,6 +41,7 @@ MAX_ACTIVE_BRANCH_AGENTS = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
 def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     manifest = bundle_dir / "job.manifest.json"
     main_prompt = bundle_dir / "main.prompt.md"
+    model_catalog = bundle_dir / "model-catalog.json"
     return f"""Use $goal-main-orchestrator.
 
 Prepared bundle:
@@ -55,7 +56,9 @@ If the bundle root or repository root above is wrong because files moved, stop a
 
 Pass only absolute paths to goal orchestration scripts. If a script entry path would be relative or would contain `..` traversal, stop and regenerate the bundle or bootloader.
 
-Mandatory bootstrap first: verify runtime skill availability before prompt audit. Resolve GOAL_SKILLS_ROOT from ${{CODEX_HOME:-$HOME/.codex}}/skills, falling back to $HOME/.agents/skills, then run check_goal_skill_availability.py for goal-main-orchestrator, goal-branch-orchestrator, and goal-plan-amender. If any skill or required script is unavailable, return blocked and ask the user to install the skills package.
+Mandatory bootstrap first: verify runtime skill availability before prompt audit. Resolve GOAL_SKILLS_ROOT from ${{CODEX_HOME:-$HOME/.codex}}/skills, falling back to $HOME/.agents/skills, then run check_goal_skill_availability.py for goal-main-orchestrator, goal-branch-orchestrator, and goal-plan-amender. If any skill or required script is unavailable, return blocked and ask the user to install the skills package. Then record the fresh live Codex model catalog before selecting model routes:
+
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py" --json --require-codex > {model_catalog}
 
 Mandatory second action: create and run the prompt-audit packet over job.manifest.json, main.prompt.md, and every listed branch prompt. Do not create branch worktrees or launch branch orchestrators unless bootstrap passed and prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
 

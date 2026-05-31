@@ -22,6 +22,8 @@ Your job is:
 9. Dispatch a read-only heavy-model reviewer.
 10. Return branch status only when the branch prompt DoD is satisfied or explicitly blocked.
 
+Runtime token discipline: use generated packets, route JSON, scheduler JSON, validator defects, and status artifacts as the working surface. Do not open `skills/*/scripts/*.py` during normal orchestration; inspect Python source only when a script fails and debugging that script is the assigned task.
+
 ## Required Start
 
 Before dispatching workers, resolve the skills root and verify the branch skill plus Codex CLI are available:
@@ -38,6 +40,12 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/check_goal_skill_ava
 ```
 
 If this fails, return `blocked` before launching workers or reviewers.
+
+Then check the fresh local Codex model catalog before choosing a worker route. Prefer the model-catalog artifact recorded by the main orchestrator when present, and rerun the installed checker if it is missing or stale:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/check_model_catalog.py" --check --require-codex
+```
 
 Then run:
 
@@ -84,7 +92,7 @@ After running the generated `launch.sh`, validate `advice.json` with `scripts/va
 
 ## Worker Packets
 
-Workers must fit the smallest intended worker context across the fixed fallback chain, so keep packets below roughly 80k-100k total input context by using:
+Workers must fit the smallest intended worker context across the fixed fallback chain, so keep packets below roughly 40k total input context by using:
 
 - one objective;
 - narrow owned files/modules;
@@ -161,7 +169,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packe
 
 Research workers use `codex --search exec --ephemeral -s read-only` without user-config suppression, so they may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, package metadata lookups, remote APIs, shell/network inspection commands, read-only local file access, and configured tool/skill documentation when relevant. They must not edit files, inspect secrets or unrelated private files, or perform state-changing, destructive, credential, posting, purchasing, or remote mutation actions. A passing research status must capture `search_queries` when search was used, `source_urls`, `tools_used`, `local_files_read`, exact `commands_run`, and findings. Research-worker statuses belong in the branch `worker_statuses` rollup with `role: "research-worker"` and `status_path` pointing to manifest-owned `research/<packet_id>/research.json`; validation rejects obvious state-changing commands, package/system mutation, file writes, shell redirection to files, environment dumps, and secret/credential path reads.
 
-The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed out-of-worktree context snapshots so workspace-restricted CLIs do not need to read bundle paths outside the worker worktree. Generated worker launchers use the selected ordered route; the default is Gemini CLI with `gemini-3.1-pro-preview`, Gemini CLI with `gemini-3-flash-preview`, `gpt-5.3-codex-spark`, GitHub Copilot CLI with `gpt-5.4` and `--effort high`, then `gpt-5.4-mini`. No model, effort, approval-mode, or permission overrides are accepted. All full launcher attempts run through `timeout --foreground --kill-after=30s`: normal workers default to 3600 seconds per route attempt, research workers to 1200 seconds, reviewers to 1800 seconds, prompt audit to 1200 seconds, and Lite advisors to 600 seconds. Timeout is a failed attempt, not a reason to poll active logs; the launcher tries the next allowed fallback only when no valid artifact exists and, for write-capable workers, the worker worktree is clean. There is no same-alias retry loop. All worker providers receive the same generated prompt and must satisfy the same worker status schema, including `selected_ladder` and `selection_reason`; CLI permission controls are provider-specific, so acceptance still depends on schema validation, clean fallback boundaries, branch diff inspection, and branch-level tests. Before each full Gemini worker attempt, the launcher runs a 20-second headless probe with the same Gemini model. Before the full Copilot worker attempt, the launcher runs a 20-second no-tool probe with `gpt-5-mini` and `--effort low` to verify Copilot CLI/auth/routing without spending a `gpt-5.4` call. Gemini and Copilot are best-effort: if the command is unavailable, quota-limited, unavailable, timed out, or fails without dirtying the worker worktree, the launcher continues to the next selected worker. Copilot runs the real worker in programmatic mode with `gpt-5.4`, `--effort high`, minimal tool permissions, JSONL events, and a Markdown session share; because Copilot has no local `--output-schema` equivalent, the launcher accepts only the marked final worker JSON and still requires orchestrator diff/test verification. Each terminal launcher path writes `telemetry.json` with declared/called/accepted route aliases, provider/model ids, prompt/output/log character and byte counts, `timeout_seconds`, and best-effort token usage parsed from provider logs when exposed. If Gemini or Copilot returns a marked worker status with the provider alias `status: "success"`, the launcher normalizes it to canonical `pass` before schema validation, without adding command evidence. If Gemini Pro, Gemini Flash, Spark, Copilot, or mini leaves dirty partial work without a valid `status.json`, the launcher refuses fallback, writes `fallback.blocked.txt`, writes a terminal blocked `status.json`, and writes `telemetry.json`. If all selected attempts fail cleanly, the launcher writes a terminal blocked `status.json` and `telemetry.json`.
+The packet generator enforces absolute `--worktree`, `--out-dir`, `--task-file`, and `--context-file` paths. Worker prompts render worktree-local context files as relative paths and embed only bounded deterministic excerpts for out-of-worktree context, so workspace-restricted CLIs get enough routing context without full external files. Generated worker launchers use the selected ordered route; no model, effort, approval-mode, or permission overrides are accepted. Each terminal launcher path writes `telemetry.json` with declared/called/accepted route aliases, provider/model ids, prompt/output/log character and byte counts, `timeout_seconds`, and best-effort token usage parsed from provider logs when exposed. If a write-capable attempt leaves dirty partial work without a valid `status.json`, the launcher refuses fallback and writes terminal blocked evidence.
 
 After launching worker packets, wait for the next launcher process to finish. If a worker or research-worker launcher is still active, do not poll its worktree, event logs, process table, `status.json`, or `research.json`, and do not send status nudges. Inspect worker status files, research files, and diffs only after the launcher exits, a worker reports `blocked`/`failed`/`partial`, or the user explicitly enters debug mode. Once an exited worker is integrated, free its active slot and immediately refill from the ready worker queue when possible.
 

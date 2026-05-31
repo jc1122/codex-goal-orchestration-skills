@@ -33,19 +33,25 @@ SEMVER_RE = re.compile(
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
 REQUIRED_PACKAGE_FILES = {
+    "AGENTS.md",
     "README.md",
     "package.json",
     "bin/install-goal-skills.js",
     "fixtures/preparedness/research-worker-brief.json",
     "maintenance/AGENT_MAINTENANCE.md",
+    "maintenance/agent-context-index.json",
     "maintenance/dependency-policy.json",
     "maintenance/size-budget.json",
     "scripts/check_dependency_policy.py",
     "scripts/check_golden_smoke.py",
+    "scripts/check_model_catalog.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
     "scripts/check_size_budget.py",
+    "scripts/generate_agent_context_index.py",
     "scripts/sync_goal_shared.py",
+    "skills/_goal_shared/scripts/check_model_catalog.py",
+    "skills/_goal_shared/scripts/context_pack.py",
     "skills/_goal_shared/scripts/orchestration_contract.py",
     "skills/_goal_shared/scripts/scheduler_tick.py",
     "skills/_goal_shared/scripts/status_validation.py",
@@ -67,13 +73,17 @@ REQUIRED_PACKAGE_FILES = {
     "skills/goal-preflight/scripts/lint_preflight_brief.py",
 }
 REQUIRED_PACKAGE_FILES_ENTRIES = {
+    "AGENTS.md",
     "bin/",
     "fixtures/",
     "maintenance/AGENT_MAINTENANCE.md",
+    "maintenance/agent-context-index.json",
     "maintenance/dependency-policy.json",
     "maintenance/size-budget.json",
     "scripts/check_dependency_policy.py",
     "scripts/check_golden_smoke.py",
+    "scripts/check_model_catalog.py",
+    "scripts/generate_agent_context_index.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
     "scripts/check_size_budget.py",
@@ -143,7 +153,18 @@ def check_metadata(package: dict) -> str:
     require(not missing_file_entries, f"package.json files is missing entries: {', '.join(missing_file_entries)}")
     scripts = package.get("scripts")
     require(isinstance(scripts, dict), "package.json scripts must be an object")
-    for script in ("check", "check:shared", "check:fixtures", "check:golden", "check:release", "check:maintenance"):
+    for script in (
+        "check",
+        "check:shared",
+        "check:fixtures",
+        "check:golden",
+        "check:release",
+        "check:maintenance",
+        "check:models",
+        "check:context",
+        "generate:context",
+        "context:index",
+    ):
         require(script in scripts, f"package.json scripts missing {script}")
     return version
 
@@ -156,6 +177,9 @@ def check_readme(version: str) -> None:
         "npm run check:golden",
         "npm run check:release",
         "npm run check:maintenance",
+        "npm run check:models",
+        "npm run check:context",
+        "npm run generate:context",
         "Release",
         "package.json` version",
     ]:

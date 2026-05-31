@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.5
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.6
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -57,6 +57,8 @@ npm run check:fixtures
 npm run check:golden
 npm run check:release
 npm run check:maintenance
+npm run check:models
+npm run check:context
 ```
 
 `check:fixtures` validates the preparedness fixture bundle without launching live model CLIs. It covers timeout-wrapped launcher generation, valid broad-access research-worker artifacts, preflight brief linting, schema v2 scheduler refill/under-capacity/stuck-worker/stuck-branch/dependency-failed/watchdog closeout fixtures, deterministic pre-review gate creation, conservative branch status assembly, review router tiers including premium escalation, failed pre-review gate blocking reviewer launch, topology lint failures, amendment validation/apply fixtures, rejection of old self-reported saturation without a ledger, rejection of obsolete narrow research policy text, and rejection of unsafe research-worker command evidence.
@@ -65,7 +67,7 @@ npm run check:maintenance
 
 `check:release` validates release metadata, installer `--list`/`--version`, temp install parity, and `npm pack --dry-run --json` package contents.
 
-`check:maintenance` runs warning-first repository guardrails. It reports tracked file counts, lines, characters, approximate tokens, per-skill size, runtime dependency policy, and Dependabot coverage. The size budget is stored in `maintenance/size-budget.json` and uses `git ls-files`, so ignored caches and untracked scratch files do not count. Refresh the budget only for intentional growth:
+`check:maintenance` runs warning-first repository guardrails. It reports tracked file counts, lines, characters, approximate tokens, per-skill size, runtime dependency policy, Dependabot coverage, and local Codex model catalog compatibility. The model catalog check uses `codex debug models` when available, then falls back to `codex debug models --bundled`; absence of the Codex CLI is reported as skipped so CI remains portable. The size budget is stored in `maintenance/size-budget.json` and uses `git ls-files`, so ignored caches and untracked scratch files do not count. Refresh the budget only for intentional growth:
 
 ```bash
 python3 scripts/check_size_budget.py --update
@@ -74,8 +76,32 @@ python3 scripts/check_size_budget.py --update
 Machine-readable maintenance reports are available with:
 
 ```bash
+python3 scripts/generate_agent_context_index.py --json
+python3 scripts/check_model_catalog.py --json
 python3 scripts/check_size_budget.py --json
 python3 scripts/check_dependency_policy.py --json
+```
+
+### Codex Model Catalog
+
+Model route aliases are defined in `skills/_goal_shared/scripts/orchestration_contract.py` and are checked against the local Codex catalog:
+
+```bash
+npm run check:models
+npm run models:catalog
+```
+
+`scripts/check_model_catalog.py` prefers `codex debug models`, which returns the refreshed account-visible catalog. It falls back to `codex debug models --bundled` only when the live catalog is unavailable, because the bundled catalog is shipped with the CLI binary and can lag behind models available to the current account. A model with `supported_in_api=false` may still be usable through `codex exec`; this is expected for route aliases such as Codex Spark.
+
+The same checker is installed into each skill as `scripts/check_model_catalog.py`, so runtime bootstraps can record a fresh `model-catalog.json` before prompt audit, branch scheduling, worker route selection, or reviewer route selection.
+
+Do not update packet validators just because the local model bundle changed. Validators should preserve alias and telemetry consistency for already-created artifacts. Update route aliases only when `npm run check:models` shows the live catalog no longer contains a configured model or when intentionally adopting a new route.
+
+Agent navigation is generated for token-efficient repo entry. Agents should read `AGENTS.md`, then `maintenance/agent-context-index.json`, before broad scans. Regenerate it after moving, adding, or deleting navigation-relevant files:
+
+```bash
+npm run generate:context
+npm run check:context
 ```
 
 Optional quality tooling is pinned separately from runtime code:

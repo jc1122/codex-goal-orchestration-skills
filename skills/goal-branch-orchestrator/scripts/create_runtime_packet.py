@@ -34,8 +34,21 @@ def _load_status_validation():
     return module
 
 
+def _load_context_pack():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "context_pack.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared context pack helper: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_context_pack", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared context pack helper: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 CONTRACT = _load_contract()
 STATUS_VALIDATION = _load_status_validation()
+CONTEXT_PACK = _load_context_pack()
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
 GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
@@ -64,7 +77,8 @@ REVIEWER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.REVIEWER_ATTEMPT_TIMEOUT_SECONDS
 TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
-MAX_EMBEDDED_CONTEXT_CHARS = 120000
+MAX_CONTEXT_PACK_CHARS = CONTEXT_PACK.DEFAULT_TOTAL_CHARS
+MAX_CONTEXT_FILE_CHARS = CONTEXT_PACK.DEFAULT_PER_FILE_CHARS
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 ALLOWED_WORKER_ROUTES = CONTRACT.ALLOWED_WORKER_ROUTES
 WORKER_ROUTE_LABELS = {
@@ -354,47 +368,13 @@ def optional_list(title: str, values: list[str]) -> str:
 
 
 def context_section(worktree: str, context_files: list[str]) -> str:
-    if not context_files:
-        return "Context files to read first: none"
-    worktree_path = Path(worktree).resolve()
-    lines = ["Context files to read first:"]
-    embedded = []
-    embedded_chars = 0
-    for index, value in enumerate(context_files, start=1):
-        path = Path(value).resolve()
-        try:
-            relative = path.relative_to(worktree_path)
-        except ValueError:
-            text = path.read_text(encoding="utf-8")
-            embedded_chars += len(text)
-            if embedded_chars > MAX_EMBEDDED_CONTEXT_CHARS:
-                raise SystemExit(
-                    "external context files exceed embedded worker prompt limit; "
-                    "split the packet or use worktree-local context files"
-                )
-            label = f"external-context-{index}: {path.name}"
-            lines.append(f"- {label} is embedded below; do not read the original absolute path.")
-            embedded.append((label, text))
-        else:
-            lines.append(f"- {relative.as_posix()}")
-    if embedded:
-        lines.extend(
-            [
-                "",
-                "External context snapshots embedded below for workspace-restricted CLIs.",
-                "Use these snapshots instead of trying to read their original absolute paths.",
-            ]
-        )
-        for label, text in embedded:
-            lines.extend(
-                [
-                    "",
-                    f"BEGIN_EMBEDDED_CONTEXT {label}",
-                    text.rstrip(),
-                    f"END_EMBEDDED_CONTEXT {label}",
-                ]
-            )
-    return "\n".join(lines)
+    pack = CONTEXT_PACK.pack_context(
+        worktree=Path(worktree).resolve(),
+        context_files=[Path(value).resolve() for value in context_files],
+        total_chars=MAX_CONTEXT_PACK_CHARS,
+        per_file_chars=MAX_CONTEXT_FILE_CHARS,
+    )
+    return CONTEXT_PACK.markdown_from_pack(pack)
 
 
 def load_task(path: Path | None) -> str:
@@ -652,7 +632,7 @@ You are Worker {packet_id}.
 Worktree: {worktree}
 Branch: {branch}
 
-You are not alone in the codebase. Do not revert edits made by others. Own only the files/modules assigned here. If the task needs more than roughly 80k-100k tokens of context, stop and return `blocked` instead of broadening scope.
+You are not alone in the codebase. Do not revert edits made by others. Own only the files/modules assigned here. If the task needs more than roughly 40k tokens of context, stop and return `blocked` instead of broadening scope.
 
 Selected worker ladder: {", ".join(selected_ladder)}
 Route selection reason: {selection_reason}

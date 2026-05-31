@@ -1,0 +1,462 @@
+{
+  "schema_version": 1,
+  "generated_from": {
+    "git_head": "f3e5e35",
+    "source_fingerprint": "sha256:1f92256e990dbcd55c7642a01d5d5624be7a3bcebbc03baca35ecc121be09f48"
+  },
+  "navigation_rules": [
+    "Read this file before broad repository scans.",
+    "Prefer tasks.<task>.read for first context.",
+    "Use skills.<skill>.read_first for skill-specific work.",
+    "Open core_scripts only when implementing or debugging that surface.",
+    "During runtime orchestration, use script outputs and validator defects before reading Python source.",
+    "Run npm run generate:context after moving, adding, or deleting navigation-relevant files."
+  ],
+  "entrypoints": {
+    "agent_start": [
+      "AGENTS.md",
+      "maintenance/agent-context-index.json"
+    ],
+    "install": [
+      "bin/install-goal-skills.js",
+      "package.json"
+    ],
+    "ci": [
+      ".github/workflows/ci.yml",
+      "package.json"
+    ],
+    "dependencies": [
+      ".github/dependabot.yml",
+      "maintenance/dependency-policy.json",
+      "package.json",
+      "requirements-dev.txt"
+    ],
+    "maintenance": [
+      "maintenance/agent-context-index.json",
+      "maintenance/size-budget.json",
+      "maintenance/dependency-policy.json",
+      "scripts/generate_agent_context_index.py",
+      "scripts/check_size_budget.py",
+      "scripts/check_dependency_policy.py",
+      "scripts/check_model_catalog.py"
+    ],
+    "release": [
+      "scripts/check_release.py",
+      "package.json",
+      "bin/install-goal-skills.js"
+    ],
+    "npm_scripts": {
+      "check": "npm run check:shared && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
+      "check:context": "python3 scripts/generate_agent_context_index.py --check",
+      "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
+      "check:golden": "python3 scripts/check_golden_smoke.py",
+      "check:maintenance": "npm run check:context && python3 scripts/check_size_budget.py && python3 scripts/check_dependency_policy.py && npm run check:models",
+      "check:maintenance:deps": "python3 scripts/check_dependency_policy.py",
+      "check:maintenance:size": "python3 scripts/check_size_budget.py",
+      "check:models": "python3 scripts/check_model_catalog.py --check",
+      "check:quality": "ruff check . && pyright",
+      "check:release": "python3 scripts/check_release.py",
+      "check:shared": "python3 scripts/sync_goal_shared.py",
+      "context:index": "python3 scripts/generate_agent_context_index.py --json",
+      "generate:context": "python3 scripts/generate_agent_context_index.py --write",
+      "lint:ruff": "ruff check .",
+      "models:catalog": "python3 scripts/check_model_catalog.py --json",
+      "typecheck": "pyright"
+    }
+  },
+  "skills": {
+    "goal-branch-orchestrator": {
+      "role": "Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree.",
+      "read_first": [
+        "skills/goal-branch-orchestrator/SKILL.md",
+        "skills/goal-branch-orchestrator/references/branch-runtime-contract.md",
+        "skills/goal-branch-orchestrator/references/lite-advisor-contract.md"
+      ],
+      "core_scripts": [
+        "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+        "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+        "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+        "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
+        "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
+      ],
+      "depends_on": [
+        "_goal_shared",
+        "goal-preflight"
+      ]
+    },
+    "goal-main-orchestrator": {
+      "role": "Runtime-only main orchestrator for prepared /goal job bundles.",
+      "read_first": [
+        "skills/goal-main-orchestrator/SKILL.md",
+        "skills/goal-main-orchestrator/references/lite-advisor-contract.md",
+        "skills/goal-main-orchestrator/references/main-runtime-contract.md",
+        "skills/goal-main-orchestrator/references/prompt-audit-contract.md"
+      ],
+      "core_scripts": [
+        "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+        "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+        "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
+        "skills/goal-main-orchestrator/scripts/validate_main_status.py",
+        "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py"
+      ],
+      "depends_on": [
+        "_goal_shared",
+        "goal-branch-orchestrator",
+        "goal-plan-amender"
+      ]
+    },
+    "goal-plan-amender": {
+      "role": "Runtime-only plan amender for audited /goal bundles.",
+      "read_first": [
+        "skills/goal-plan-amender/SKILL.md",
+        "skills/goal-plan-amender/references/amendment-contract.md",
+        "skills/goal-plan-amender/references/lite-advisor-contract.md"
+      ],
+      "core_scripts": [
+        "skills/goal-plan-amender/scripts/amendment_lib.py",
+        "skills/goal-plan-amender/scripts/apply_manifest_amendment.py",
+        "skills/goal-plan-amender/scripts/create_adaptation_packet.py",
+        "skills/goal-plan-amender/scripts/create_amendment_decision.py",
+        "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py",
+        "skills/goal-plan-amender/scripts/recommend_amendment_decision.py",
+        "skills/goal-plan-amender/scripts/validate_amender_packet.py",
+        "skills/goal-plan-amender/scripts/validate_manifest_amendment.py"
+      ],
+      "depends_on": [
+        "_goal_shared",
+        "goal-preflight"
+      ]
+    },
+    "goal-preflight": {
+      "role": "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief.",
+      "read_first": [
+        "skills/goal-preflight/SKILL.md",
+        "skills/goal-preflight/references/actionability-rubric.md",
+        "skills/goal-preflight/references/bundle-contract.md",
+        "skills/goal-preflight/references/lite-advisor-contract.md",
+        "skills/goal-preflight/references/parallelization-rules.md",
+        "skills/goal-preflight/assets/branch.prompt.template.md",
+        "skills/goal-preflight/assets/main.prompt.template.md"
+      ],
+      "core_scripts": [
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
+        "skills/goal-preflight/scripts/lint_goal_bundle.py",
+        "skills/goal-preflight/scripts/lint_preflight_brief.py",
+        "skills/goal-preflight/scripts/render_goal_bootloader.py"
+      ],
+      "depends_on": [
+        "_goal_shared",
+        "goal-branch-orchestrator",
+        "goal-main-orchestrator",
+        "goal-plan-amender"
+      ]
+    }
+  },
+  "shared": {
+    "_goal_shared": {
+      "read_first": [
+        "skills/_goal_shared/scripts/orchestration_contract.py",
+        "skills/_goal_shared/scripts/path_rules.py",
+        "skills/_goal_shared/scripts/status_validation.py",
+        "skills/_goal_shared/references/lite-advisor-contract.md"
+      ],
+      "shared_scripts": [
+        "skills/_goal_shared/scripts/append_scheduler_event.py",
+        "skills/_goal_shared/scripts/check_goal_skill_availability.py",
+        "skills/_goal_shared/scripts/check_model_catalog.py",
+        "skills/_goal_shared/scripts/context_pack.py",
+        "skills/_goal_shared/scripts/create_lite_advice_packet.py",
+        "skills/_goal_shared/scripts/extract_telemetry.py",
+        "skills/_goal_shared/scripts/scheduler_tick.py",
+        "skills/_goal_shared/scripts/validate_lite_advice.py"
+      ],
+      "shared_references": [
+        "skills/_goal_shared/references/lite-advisor-contract.md"
+      ],
+      "wrapped_by_public_skills": [
+        "goal-branch-orchestrator",
+        "goal-main-orchestrator",
+        "goal-plan-amender",
+        "goal-preflight"
+      ]
+    }
+  },
+  "edges": [
+    {
+      "source": "goal-branch-orchestrator",
+      "target": "_goal_shared",
+      "paths": [
+        "skills/goal-branch-orchestrator/references/lite-advisor-contract.md",
+        "skills/goal-branch-orchestrator/scripts/append_scheduler_event.py",
+        "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+        "skills/goal-branch-orchestrator/scripts/check_goal_skill_availability.py",
+        "skills/goal-branch-orchestrator/scripts/create_lite_advice_packet.py",
+        "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+        "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+        "skills/goal-branch-orchestrator/scripts/extract_telemetry.py",
+        "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
+        "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
+        "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
+        "skills/goal-branch-orchestrator/scripts/validate_lite_advice.py"
+      ]
+    },
+    {
+      "source": "goal-branch-orchestrator",
+      "target": "goal-main-orchestrator",
+      "paths": [
+        "skills/goal-branch-orchestrator/SKILL.md"
+      ]
+    },
+    {
+      "source": "goal-branch-orchestrator",
+      "target": "goal-plan-amender",
+      "paths": [
+        "skills/goal-branch-orchestrator/SKILL.md",
+        "skills/goal-branch-orchestrator/references/branch-runtime-contract.md"
+      ]
+    },
+    {
+      "source": "goal-branch-orchestrator",
+      "target": "goal-preflight",
+      "paths": [
+        "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py"
+      ]
+    },
+    {
+      "source": "goal-main-orchestrator",
+      "target": "_goal_shared",
+      "paths": [
+        "skills/goal-main-orchestrator/references/lite-advisor-contract.md",
+        "skills/goal-main-orchestrator/scripts/append_scheduler_event.py",
+        "skills/goal-main-orchestrator/scripts/check_goal_skill_availability.py",
+        "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+        "skills/goal-main-orchestrator/scripts/create_lite_advice_packet.py",
+        "skills/goal-main-orchestrator/scripts/extract_telemetry.py",
+        "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+        "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
+        "skills/goal-main-orchestrator/scripts/validate_lite_advice.py",
+        "skills/goal-main-orchestrator/scripts/validate_main_status.py",
+        "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py"
+      ]
+    },
+    {
+      "source": "goal-main-orchestrator",
+      "target": "goal-branch-orchestrator",
+      "paths": [
+        "skills/goal-main-orchestrator/SKILL.md",
+        "skills/goal-main-orchestrator/references/main-runtime-contract.md",
+        "skills/goal-main-orchestrator/scripts/validate_main_status.py"
+      ]
+    },
+    {
+      "source": "goal-main-orchestrator",
+      "target": "goal-plan-amender",
+      "paths": [
+        "skills/goal-main-orchestrator/SKILL.md",
+        "skills/goal-main-orchestrator/references/main-runtime-contract.md"
+      ]
+    },
+    {
+      "source": "goal-main-orchestrator",
+      "target": "goal-preflight",
+      "paths": [
+        "skills/goal-main-orchestrator/SKILL.md"
+      ]
+    },
+    {
+      "source": "goal-plan-amender",
+      "target": "_goal_shared",
+      "paths": [
+        "skills/goal-plan-amender/references/lite-advisor-contract.md",
+        "skills/goal-plan-amender/scripts/amendment_lib.py",
+        "skills/goal-plan-amender/scripts/append_scheduler_event.py",
+        "skills/goal-plan-amender/scripts/check_goal_skill_availability.py",
+        "skills/goal-plan-amender/scripts/create_lite_advice_packet.py",
+        "skills/goal-plan-amender/scripts/extract_telemetry.py",
+        "skills/goal-plan-amender/scripts/scheduler_tick.py",
+        "skills/goal-plan-amender/scripts/validate_lite_advice.py"
+      ]
+    },
+    {
+      "source": "goal-plan-amender",
+      "target": "goal-branch-orchestrator",
+      "paths": [
+        "skills/goal-plan-amender/SKILL.md"
+      ]
+    },
+    {
+      "source": "goal-plan-amender",
+      "target": "goal-main-orchestrator",
+      "paths": [
+        "skills/goal-plan-amender/SKILL.md",
+        "skills/goal-plan-amender/agents/openai.yaml",
+        "skills/goal-plan-amender/references/amendment-contract.md"
+      ]
+    },
+    {
+      "source": "goal-plan-amender",
+      "target": "goal-preflight",
+      "paths": [
+        "skills/goal-plan-amender/references/amendment-contract.md",
+        "skills/goal-plan-amender/scripts/amendment_lib.py"
+      ]
+    },
+    {
+      "source": "goal-preflight",
+      "target": "_goal_shared",
+      "paths": [
+        "skills/goal-preflight/references/lite-advisor-contract.md",
+        "skills/goal-preflight/scripts/append_scheduler_event.py",
+        "skills/goal-preflight/scripts/check_goal_skill_availability.py",
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
+        "skills/goal-preflight/scripts/create_lite_advice_packet.py",
+        "skills/goal-preflight/scripts/extract_telemetry.py",
+        "skills/goal-preflight/scripts/lint_goal_bundle.py",
+        "skills/goal-preflight/scripts/lint_preflight_brief.py",
+        "skills/goal-preflight/scripts/render_goal_bootloader.py",
+        "skills/goal-preflight/scripts/scheduler_tick.py",
+        "skills/goal-preflight/scripts/validate_lite_advice.py"
+      ]
+    },
+    {
+      "source": "goal-preflight",
+      "target": "goal-branch-orchestrator",
+      "paths": [
+        "skills/goal-preflight/SKILL.md",
+        "skills/goal-preflight/assets/main.prompt.template.md",
+        "skills/goal-preflight/scripts/render_goal_bootloader.py"
+      ]
+    },
+    {
+      "source": "goal-preflight",
+      "target": "goal-main-orchestrator",
+      "paths": [
+        "skills/goal-preflight/SKILL.md",
+        "skills/goal-preflight/assets/main.prompt.template.md",
+        "skills/goal-preflight/references/actionability-rubric.md",
+        "skills/goal-preflight/references/bundle-contract.md",
+        "skills/goal-preflight/scripts/lint_goal_bundle.py",
+        "skills/goal-preflight/scripts/render_goal_bootloader.py"
+      ]
+    },
+    {
+      "source": "goal-preflight",
+      "target": "goal-plan-amender",
+      "paths": [
+        "skills/goal-preflight/SKILL.md",
+        "skills/goal-preflight/assets/main.prompt.template.md",
+        "skills/goal-preflight/references/bundle-contract.md",
+        "skills/goal-preflight/scripts/render_goal_bootloader.py"
+      ]
+    }
+  ],
+  "tasks": {
+    "agent_navigation": {
+      "read": [
+        "AGENTS.md",
+        "maintenance/agent-context-index.json"
+      ],
+      "write_candidates": [
+        "maintenance/agent-context-index.json",
+        "scripts/generate_agent_context_index.py"
+      ],
+      "checks": [
+        "npm run check:context"
+      ]
+    },
+    "bundle_schema": {
+      "read": [
+        "skills/_goal_shared/scripts/orchestration_contract.py",
+        "skills/goal-preflight/references/bundle-contract.md",
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
+        "skills/goal-preflight/scripts/lint_goal_bundle.py"
+      ],
+      "write_candidates": [
+        "skills/goal-preflight/scripts",
+        "skills/_goal_shared/scripts/orchestration_contract.py"
+      ],
+      "checks": [
+        "npm run check:fixtures",
+        "npm run check:golden"
+      ]
+    },
+    "runtime_scheduling": {
+      "read": [
+        "skills/goal-main-orchestrator/SKILL.md",
+        "skills/_goal_shared/scripts/scheduler_tick.py",
+        "skills/_goal_shared/scripts/status_validation.py",
+        "skills/goal-main-orchestrator/scripts/validate_main_status.py"
+      ],
+      "write_candidates": [
+        "skills/_goal_shared/scripts",
+        "skills/goal-main-orchestrator/scripts"
+      ],
+      "checks": [
+        "npm run check:fixtures",
+        "npm run check:golden"
+      ]
+    },
+    "branch_execution": {
+      "read": [
+        "skills/goal-branch-orchestrator/SKILL.md",
+        "skills/goal-branch-orchestrator/references/branch-runtime-contract.md",
+        "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+        "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
+      ],
+      "write_candidates": [
+        "skills/goal-branch-orchestrator/scripts"
+      ],
+      "checks": [
+        "npm run check:fixtures",
+        "npm run check:golden"
+      ]
+    },
+    "amendments": {
+      "read": [
+        "skills/goal-plan-amender/SKILL.md",
+        "skills/goal-plan-amender/references/amendment-contract.md",
+        "skills/goal-plan-amender/scripts/amendment_lib.py"
+      ],
+      "write_candidates": [
+        "skills/goal-plan-amender/scripts"
+      ],
+      "checks": [
+        "npm run check:fixtures",
+        "npm run check:golden"
+      ]
+    },
+    "release_install": {
+      "read": [
+        "package.json",
+        "bin/install-goal-skills.js",
+        "scripts/check_release.py"
+      ],
+      "write_candidates": [
+        "package.json",
+        "bin/install-goal-skills.js",
+        "scripts/check_release.py"
+      ],
+      "checks": [
+        "npm run check:release"
+      ]
+    },
+    "maintenance_guardrails": {
+      "read": [
+        "maintenance/AGENT_MAINTENANCE.md",
+        "scripts/check_size_budget.py",
+        "scripts/check_dependency_policy.py",
+        "scripts/generate_agent_context_index.py",
+        "scripts/check_model_catalog.py"
+      ],
+      "write_candidates": [
+        "maintenance",
+        "scripts/check_size_budget.py",
+        "scripts/check_dependency_policy.py",
+        "scripts/check_model_catalog.py"
+      ],
+      "checks": [
+        "npm run check:maintenance"
+      ]
+    }
+  }
+}
