@@ -1388,6 +1388,8 @@ def assert_summary(bundle: Path) -> None:
     files = summary.get("telemetry_files")
     if not isinstance(files, list) or len(files) < 5:
         raise SystemExit("telemetry summary must include audit, worker, research, reviewer, and Lite telemetry")
+    if summary.get("telemetry_count") != len(files):
+        raise SystemExit("telemetry summary telemetry_count must match telemetry_files length")
     totals = summary.get("totals")
     if not isinstance(totals, dict) or totals.get("packet_count") != len(files):
         raise SystemExit("telemetry summary packet_count must match telemetry_files length")

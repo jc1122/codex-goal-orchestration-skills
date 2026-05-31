@@ -2274,6 +2274,8 @@ def main() -> int:
         )
         run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
         telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
+        if telemetry_summary.get("telemetry_count") != 1:
+            raise SystemExit("summarize_telemetry.py should expose top-level telemetry_count")
         pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
         if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
             raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")

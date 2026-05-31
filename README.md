@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.33
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.34
 ```
 
 The installer copies bundled skills plus root agent-navigation metadata (`AGENTS.md` and `maintenance/agent-context-index.json`) to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -126,7 +126,7 @@ Generated prompt-audit launchers are compact wrappers too. Runtime agents should
 
 Generated worker packets are compact too: when `create_runtime_packet.py` receives `job.manifest.json`, it writes a deterministic `packet-context.json` branch/work-item slice, normalizes manifest branch ids to `branch_name` for worker status compatibility, and removes the full manifest excerpt from `prompt.md`. When it also receives a fresh `--model-catalog`, it prunes unsupported Codex aliases from the default worker ladder before writing `route.json`. Normal worker `launch.sh` files are tiny wrappers; provider attempts, probes, selected route commands, timeout policy, and terminal blocked metadata live in packet-local `launch-config.json`. Normal Codex worker attempts use `--ignore-user-config --ignore-rules` to avoid loading the parent session's maintenance context, and the packet runner normalizes marker-wrapped worker JSON before telemetry is extracted. Gemini worker attempts still pass the full prompt on stdin so process inspection does not expose or re-tokenize the worker prompt. Main and branch ready-list helpers clamp `--limit` to remaining capacity, so phase-manifest commands can use `--limit 4` without forcing agents to compute slots manually.
 
-Main closeout is assembled deterministically too. Runtime agents should run `summarize_telemetry.py`, then `assemble_main_status.py`, then `validate_main_status.py --status`; they should not hand-author `main.status.json` from branch artifacts. `telemetry.summary.json` includes warning-only `token_pressure.warnings` when known child-session input tokens greatly exceed packet prompt estimates; inspect those warnings before opening raw event logs.
+Main closeout is assembled deterministically too. Runtime agents should run `summarize_telemetry.py`, then `assemble_main_status.py`, then `validate_main_status.py --status`; they should not hand-author `main.status.json` from branch artifacts. `telemetry.summary.json` lists discovered artifacts in `telemetry_files`, exposes `telemetry_count`, and includes warning-only `token_pressure.warnings` when known child-session input tokens greatly exceed packet prompt estimates; inspect those fields before opening raw event logs.
 
 Scheduler ledgers should also be artifact-driven where possible. After worker or branch status artifacts exist, use `scheduler_tick.py --close-from-artifacts --validate-final` to append launch, finish, close, and refill evidence from manifest-owned artifacts instead of editing scheduler JSON by hand.
 

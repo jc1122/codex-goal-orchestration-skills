@@ -290,6 +290,7 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
         "schema_version": 1,
         "bundle_dir": bundle_dir.as_posix(),
         "telemetry_files": [path.relative_to(bundle_dir).as_posix() for path in files],
+        "telemetry_count": len(files),
         "defects": defects,
         "totals": compact_bucket(totals),
         "by_role": {key: compact_bucket(by_role[key]) for key in sorted(by_role)},
@@ -318,7 +319,12 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Summarize bundle packet telemetry into telemetry.summary.json. "
+            "The output includes telemetry_files, telemetry_count, totals, premium_usage, and token_pressure warnings."
+        )
+    )
     parser.add_argument("--bundle-dir", required=True)
     parser.add_argument("--output", help="Defaults to <bundle-dir>/telemetry.summary.json")
     args = parser.parse_args()
