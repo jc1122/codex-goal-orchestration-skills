@@ -664,6 +664,7 @@ def worker_status() -> dict:
         "status": "pass",
         "branch": BRANCH_NAME,
         "worktree": REPO_ROOT.as_posix(),
+        "route_class": "normal-code",
         "selected_ladder": ["codex-mini"],
         "selection_reason": "Golden smoke uses the cheapest deterministic route alias.",
         "changed_files": [],
@@ -706,6 +707,7 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
         {
             "packet_id": WORKER_PACKET,
             "role": "worker",
+            "route_class": worker["route_class"],
             "selected_ladder": worker["selected_ladder"],
             "selection_reason": worker["selection_reason"],
         },
@@ -1865,6 +1867,49 @@ def main() -> int:
         route_mismatch_result = validate_branch(route_mismatch_bundle, expect=1)
         if "route.json selected_ladder" not in route_mismatch_result.stdout and "must be one of" not in route_mismatch_result.stdout:
             raise SystemExit("reviewer route/telemetry mismatch fixture did not fail on route aliases")
+
+        worker_cost_misuse_bundle = tmp_path / "worker-route-class-cost-misuse"
+        shutil.copytree(bundle, worker_cost_misuse_bundle)
+        rewrite_copied_branch_paths(worker_cost_misuse_bundle)
+        expensive_ladder = ["gemini-pro"]
+        expensive_reason = "Golden smoke intentionally misroutes normal code work through a premium ladder."
+        worker_artifact = read_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "status.json")
+        worker_artifact["selected_ladder"] = expensive_ladder
+        worker_artifact["selection_reason"] = expensive_reason
+        write_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "status.json", worker_artifact)
+        worker_route = read_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "route.json")
+        worker_route["selected_ladder"] = expensive_ladder
+        worker_route["selection_reason"] = expensive_reason
+        write_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "route.json", worker_route)
+        worker_telemetry = read_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "telemetry.json")
+        worker_telemetry["accepted_alias"] = "gemini-pro"
+        worker_telemetry["attempts"] = [
+            {
+                "alias": "gemini-pro",
+                "provider": "gemini",
+                "model": "gemini-3.1-pro-preview",
+                "effort": None,
+                "command": "gemini --model gemini-3.1-pro-preview --approval-mode default",
+                "timeout_seconds": 3600,
+                "called": True,
+                "accepted": True,
+                "event_logs": [],
+                "probe_logs": [],
+                "usage": None,
+            }
+        ]
+        worker_telemetry["totals"]["attempts_declared"] = 1
+        worker_telemetry["totals"]["attempts_called"] = 1
+        write_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "telemetry.json", worker_telemetry)
+        worker_cost_status = read_json(worker_cost_misuse_bundle / "branches" / "B01.status.json")
+        for item in worker_cost_status.get("worker_statuses", []):
+            if isinstance(item, dict) and item.get("packet_id") == WORKER_PACKET:
+                item["selected_ladder"] = expensive_ladder
+                item["selection_reason"] = expensive_reason
+        write_json(worker_cost_misuse_bundle / "branches" / "B01.status.json", worker_cost_status)
+        worker_cost_result = validate_branch(worker_cost_misuse_bundle, expect=1)
+        if "route_class 'normal-code'" not in worker_cost_result.stdout or "premium/full" not in worker_cost_result.stdout:
+            raise SystemExit("worker route-class cost misuse fixture did not fail on premium route aliases")
 
         missing_worker_gate_bundle = tmp_path / "pre-review-gate-missing-worker-evidence"
         shutil.copytree(bundle, missing_worker_gate_bundle)

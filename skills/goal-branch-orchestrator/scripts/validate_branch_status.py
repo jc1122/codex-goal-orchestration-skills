@@ -45,6 +45,9 @@ BRANCH_LITE_PURPOSES = {"branch-packet-planning", "context-pack", "worker-summar
 MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 ALLOWED_WORKER_ROUTES = CONTRACT.ALLOWED_WORKER_ROUTES
+WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
+MANIFEST_WORKER_ROUTE_CLASSES = tuple(route_class for route_class in WORKER_ROUTE_CLASSES if route_class != "custom")
+WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
 WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
 RESEARCH_ALIASES = CONTRACT.RESEARCH_ALIASES
 RESEARCH_FORBIDDEN_COMMAND_PATTERNS = [
@@ -201,6 +204,28 @@ def validate_worker_ladder(defects: list[str], value: object, path: str) -> list
     return aliases
 
 
+def validate_worker_route_class(defects: list[str], value: object, path: str) -> str:
+    route_class = require_string(defects, value, path)
+    if route_class and route_class not in WORKER_ROUTE_CLASSES:
+        defect(defects, path, f"must be one of {list(WORKER_ROUTE_CLASSES)}")
+    return route_class
+
+
+def validate_route_class_cost(defects: list[str], route_class: str, selected_ladder: list[str], path: str, reason: object) -> None:
+    if route_class not in WORKER_ROUTE_CLASS_LADDERS or not selected_ladder:
+        return
+    allowed = list(WORKER_ROUTE_CLASS_LADDERS[route_class])
+    if route_class in {"mechanical", "docs", "small-edit", "normal-code"}:
+        disallowed = [alias for alias in selected_ladder if alias not in allowed]
+        if disallowed:
+            defect(defects, path, f"route_class {route_class!r} must not use premium/full route aliases: {', '.join(disallowed)}")
+    if route_class == "complex-code":
+        reason_text = reason if isinstance(reason, str) else ""
+        markers = ("complex", "risk", "cross-module", "premium", "architecture", "validator", "scheduler")
+        if not any(marker in reason_text.lower() for marker in markers):
+            defect(defects, path, "complex-code route_class must include a concrete cost/risk justification in selection_reason")
+
+
 def validate_worker_route_artifact(
     defects: list[str],
     route_value: object,
@@ -209,15 +234,19 @@ def validate_worker_route_artifact(
     worker: dict,
 ) -> None:
     route = require_object(defects, route_value, path)
-    for key in ["packet_id", "role", "selected_ladder", "selection_reason"]:
+    for key in ["packet_id", "role", "route_class", "selected_ladder", "selection_reason"]:
         if key not in route:
             defect(defects, path, f"missing key: {key}")
     if route.get("packet_id") != worker.get("packet_id"):
         defect(defects, f"{path}.packet_id", "must match worker packet_id")
     if route.get("role") != "worker":
         defect(defects, f"{path}.role", "must be 'worker'")
-    validate_worker_ladder(defects, route.get("selected_ladder"), f"{path}.selected_ladder")
-    require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
+    route_class = validate_worker_route_class(defects, route.get("route_class"), f"{path}.route_class")
+    selected_ladder = validate_worker_ladder(defects, route.get("selected_ladder"), f"{path}.selected_ladder")
+    selection_reason = require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
+    validate_route_class_cost(defects, route_class, selected_ladder, f"{path}.selected_ladder", selection_reason)
+    if route.get("route_class") != worker.get("route_class"):
+        defect(defects, f"{path}.route_class", "must match worker route_class")
     if route.get("selected_ladder") != worker.get("selected_ladder"):
         defect(defects, f"{path}.selected_ladder", "must match worker selected_ladder")
     if route.get("selection_reason") != worker.get("selection_reason"):
@@ -274,8 +303,10 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
         defect(defects, f"{path}.status_path", "must be an absolute path without traversal")
     if worktree and not is_absolute_path(worktree):
         defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
-    validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
-    require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
+    route_class = validate_worker_route_class(defects, data.get("route_class"), f"{path}.route_class")
+    selected_ladder = validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
+    selection_reason = require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
+    validate_route_class_cost(defects, route_class, selected_ladder, f"{path}.selected_ladder", selection_reason)
     validate_path_list(defects, data.get("changed_files"), f"{path}.changed_files")
     validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
     validate_command_list(defects, data.get("tests"), f"{path}.tests")
@@ -349,8 +380,10 @@ def validate_worker_artifact(defects: list[str], value: object, path: str) -> di
     worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
     if worktree and not is_absolute_path(worktree):
         defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
-    validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
-    require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
+    route_class = validate_worker_route_class(defects, data.get("route_class"), f"{path}.route_class")
+    selected_ladder = validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
+    selection_reason = require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
+    validate_route_class_cost(defects, route_class, selected_ladder, f"{path}.selected_ladder", selection_reason)
     validate_path_list(defects, data.get("changed_files"), f"{path}.changed_files")
     validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
     validate_command_list(defects, data.get("tests"), f"{path}.tests")
@@ -415,6 +448,8 @@ def validate_worker_artifacts(
     require_existing = branch_status in {"pass", "partial"}
     worker_compared_keys = [key for key in CONTRACT.WORKER_STATUS_REQUIRED if key not in {"role", "branch"}]
     research_compared_keys = [key for key in CONTRACT.RESEARCH_STATUS_REQUIRED if key != "branch"]
+    branch_id = branch.get("id") if isinstance(branch, dict) else ""
+    expected_route_classes = expected_worker_route_classes(defects, branch, branch_id) if isinstance(branch_id, str) and branch_id else {}
     for index, item in enumerate(worker_statuses):
         if not isinstance(item, dict):
             continue
@@ -457,6 +492,10 @@ def validate_worker_artifacts(
             compared_keys = worker_compared_keys
         if isinstance(branch, str) and branch.strip() and artifact.get("branch") != branch:
             defect(defects, f"{item_path}.status_path.branch", "must match branch status branch")
+        if item_role == "worker":
+            expected_route_class = expected_route_classes.get(str(packet_id))
+            if expected_route_class and artifact.get("route_class") != expected_route_class:
+                defect(defects, f"{item_path}.route_class", "must match manifest work item route_class")
         for key in compared_keys:
             if artifact.get(key) != item.get(key):
                 defect(defects, f"{item_path}.{key}", "must match packet status artifact")
@@ -492,6 +531,8 @@ def validate_worker_artifacts(
             allowed_aliases=DEFAULT_WORKER_LADDER,
             require_called=True,
         )
+        if telemetry.get("route_class") and telemetry.get("route_class") != artifact.get("route_class"):
+            defect(defects, f"{item_path}.telemetry_path.route_class", "must match worker status route_class")
         telemetry_attempts = telemetry.get("attempts") if isinstance(telemetry.get("attempts"), list) else []
         telemetry_aliases = [
             attempt.get("alias")
@@ -585,6 +626,36 @@ def expected_worker_packet_roles(defects: list[str], branch_entry: dict, branch_
             role = "worker"
         roles[packet_id] = role
     return roles
+
+
+def expected_worker_route_classes(defects: list[str], branch_entry: dict, branch_id: str) -> dict[str, str]:
+    route_classes = {}
+    work_items = branch_entry.get("work_items")
+    if not isinstance(work_items, list):
+        return route_classes
+    for index, item in enumerate(work_items):
+        if not isinstance(item, dict):
+            continue
+        item_id = item.get("id")
+        packet_id = item.get("packet_id")
+        if not isinstance(item_id, str) or not isinstance(packet_id, str):
+            continue
+        expected_packet_id = f"{branch_id}-{item_id}"
+        if packet_id != expected_packet_id:
+            continue
+        role = item.get("worker_type", "worker")
+        if role == "research":
+            role = "research-worker"
+        route_class = item.get("route_class")
+        if role == "research-worker":
+            if route_class is not None:
+                defect(defects, f"manifest.branch.work_items[{index}].route_class", "must be omitted for research-worker items")
+            continue
+        if not isinstance(route_class, str) or route_class not in MANIFEST_WORKER_ROUTE_CLASSES:
+            defect(defects, f"manifest.branch.work_items[{index}].route_class", f"must be one of {list(MANIFEST_WORKER_ROUTE_CLASSES)}")
+            route_class = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
+        route_classes[packet_id] = route_class
+    return route_classes
 
 
 def expected_worker_dependencies(branch_entry: dict, branch_id: str) -> dict[str, list[str]]:

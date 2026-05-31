@@ -161,6 +161,31 @@ DEFAULT_WORKER_LADDER = (
     "codex-mini",
 )
 ALLOWED_WORKER_ROUTES = frozenset(DEFAULT_WORKER_LADDER)
+DEFAULT_WORKER_ROUTE_CLASS = "normal-code"
+WORKER_ROUTE_CLASSES = (
+    "mechanical",
+    "docs",
+    "small-edit",
+    "normal-code",
+    "complex-code",
+    "custom",
+)
+WORKER_ROUTE_CLASS_LADDERS = {
+    "mechanical": ("codex-mini",),
+    "docs": ("codex-mini",),
+    "small-edit": ("codex-spark", "codex-mini"),
+    "normal-code": ("codex-spark", "codex-mini"),
+    "complex-code": DEFAULT_WORKER_LADDER,
+    "custom": DEFAULT_WORKER_LADDER,
+}
+WORKER_ROUTE_CLASS_REASONS = {
+    "mechanical": "Mechanical route class selected: use the cheapest Codex mini route for bounded deterministic edits.",
+    "docs": "Docs route class selected: use the cheapest Codex mini route for documentation-only work.",
+    "small-edit": "Small-edit route class selected: use Codex Spark with Codex mini fallback for bounded low-risk code changes.",
+    "normal-code": "Normal-code route class selected: use Codex Spark with Codex mini fallback for ordinary bounded implementation work.",
+    "complex-code": "Complex-code route class selected: full worker ladder is allowed for high-risk or cross-module implementation work.",
+    "custom": "Custom worker route selected by the branch orchestrator with an explicit selection reason.",
+}
 RESEARCH_ALIASES = ("codex-research", "codex-research-mini")
 DEFAULT_LITE_LADDER = ("gemini-lite",)
 ALLOWED_LITE_ROUTES = DEFAULT_LITE_LADDER
@@ -182,6 +207,11 @@ ALLOWED_AMENDER_TELEMETRY_ALIASES = ALLOWED_AMENDER_ROUTES + (DETERMINISTIC_AMEN
 WORKER_MODEL_POLICY = {
     "default_ladder": list(DEFAULT_WORKER_LADDER),
     "allowed_routes": list(DEFAULT_WORKER_LADDER),
+    "default_route_class": DEFAULT_WORKER_ROUTE_CLASS,
+    "route_classes": {
+        route_class: list(ladder)
+        for route_class, ladder in WORKER_ROUTE_CLASS_LADDERS.items()
+    },
     "branch_may_select_worker_route": True,
     "selection_reason_required": True,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder.",
@@ -256,6 +286,7 @@ WORKER_STATUS_REQUIRED = (
     "status",
     "branch",
     "worktree",
+    "route_class",
     "selected_ladder",
     "selection_reason",
     "changed_files",
@@ -269,6 +300,7 @@ WORKER_ROLLUP_REQUIRED = (
     "status",
     "status_path",
     "worktree",
+    "route_class",
     "selected_ladder",
     "selection_reason",
     "changed_files",
@@ -341,6 +373,14 @@ def shell_quote(value: str) -> str:
 
 def worker_ladder_list() -> list[str]:
     return list(DEFAULT_WORKER_LADDER)
+
+
+def worker_route_class_ladder(route_class: str) -> list[str]:
+    return list(WORKER_ROUTE_CLASS_LADDERS.get(route_class, WORKER_ROUTE_CLASS_LADDERS[DEFAULT_WORKER_ROUTE_CLASS]))
+
+
+def worker_route_class_reason(route_class: str) -> str:
+    return WORKER_ROUTE_CLASS_REASONS.get(route_class, WORKER_ROUTE_CLASS_REASONS[DEFAULT_WORKER_ROUTE_CLASS])
 
 
 def worker_scheduler_path(branch_id: str) -> str:

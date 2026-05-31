@@ -2599,7 +2599,7 @@ def main() -> int:
             ]
         )
         catalog_config = assert_compact_runtime_launcher(catalog_packet_root / "B01-W05", "worker")
-        expected_catalog_ladder = ["gemini-pro", "gemini-flash", "copilot-gpt-5.4", "codex-mini"]
+        expected_catalog_ladder = ["codex-mini"]
         if catalog_config.get("selected_ladder") != expected_catalog_ladder:
             raise SystemExit(f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}")
         catalog_meta = catalog_config.get("model_catalog", {})
@@ -2722,6 +2722,7 @@ def main() -> int:
             "  'status': 'pass',\n"
             "  'branch': 'preparedness-research-fixture',\n"
             f"  'worktree': {ROOT.as_posix()!r},\n"
+            "  'route_class': 'normal-code',\n"
             "  'selected_ladder': ['codex-mini'],\n"
             "  'selection_reason': 'Fixture exercises marker-wrapped Codex output.',\n"
             "  'changed_files': [],\n"
@@ -2749,6 +2750,8 @@ def main() -> int:
         usage = manifest_worker_telemetry.get("totals", {}).get("known_usage", {})
         if manifest_worker_telemetry.get("accepted_alias") != "codex-mini" or usage.get("input_tokens") != 321:
             raise SystemExit(f"worker runtime did not extract accepted Codex telemetry after marker normalization: {manifest_worker_telemetry!r}")
+        if manifest_worker_telemetry.get("route_class") != "normal-code":
+            raise SystemExit(f"worker telemetry did not preserve route_class: {manifest_worker_telemetry!r}")
 
         run(
             [

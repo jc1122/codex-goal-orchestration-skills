@@ -209,6 +209,7 @@ def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str
         "status": "blocked",
         "branch": string_value(config, "branch"),
         "worktree": string_value(config, "worktree"),
+        "route_class": string_value(config, "route_class"),
         "selected_ladder": config.get("selected_ladder", []),
         "selection_reason": config.get("selection_reason", ""),
         "changed_files": extract_changed_files(string_value(config, "worktree")),

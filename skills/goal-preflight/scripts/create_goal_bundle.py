@@ -57,6 +57,9 @@ MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
 MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
+DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
+WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
+MANIFEST_WORKER_ROUTE_CLASSES = tuple(route_class for route_class in WORKER_ROUTE_CLASSES if route_class != "custom")
 WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
 AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 LITE_MODEL_POLICY = CONTRACT.LITE_MODEL_POLICY
@@ -97,6 +100,7 @@ def example_brief() -> dict:
                         "context_files": ["tests/test_kernel.py"],
                         "depends_on": [],
                         "verification": ["pytest tests/test_kernel.py"],
+                        "route_class": "normal-code",
                         "dod": [
                             "Kernel tests pass without output changes.",
                             "Public function signatures in src/kernel.py are unchanged.",
@@ -109,6 +113,7 @@ def example_brief() -> dict:
                         "context_files": ["src/kernel.py"],
                         "depends_on": [],
                         "verification": ["pytest tests/test_kernel.py"],
+                        "route_class": "small-edit",
                         "dod": [
                             "Tests fail against an obvious legacy output regression.",
                             "Coverage stays focused on observable behavior.",
@@ -129,6 +134,7 @@ def example_brief() -> dict:
                         "context_files": ["tests/test_cli.py"],
                         "depends_on": [],
                         "verification": ["pytest tests/test_cli.py"],
+                        "route_class": "normal-code",
                         "dod": [
                             "CLI tests pass for text and JSON output modes.",
                             "Exit code behavior remains unchanged.",
@@ -141,6 +147,7 @@ def example_brief() -> dict:
                         "context_files": ["src/cli.py"],
                         "depends_on": [],
                         "verification": ["pytest tests/test_cli.py"],
+                        "route_class": "small-edit",
                         "dod": [
                             "CLI regression tests cover the optimized code path.",
                             "No tests depend on wall-clock timing.",
@@ -199,6 +206,7 @@ def brief_schema_summary() -> dict:
         "work_item_optional": {
             "id": "W01-style id; defaults by order",
             "worker_type": "worker or research-worker; default worker",
+            "route_class": f"one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)} for worker items; default {DEFAULT_WORKER_ROUTE_CLASS}; omit for research-worker",
             "context_files": ["repo-relative read-first files"],
             "depends_on": "prior work item ids only; omit or [] for parallel workers",
         },
@@ -286,6 +294,21 @@ def normalize_worker_type(value: object, field: str) -> str:
     return normalized
 
 
+def normalize_route_class(value: object, worker_type: str, field: str) -> str | None:
+    if worker_type == "research-worker":
+        if value is not None:
+            raise SystemExit(f"{field} is only valid for worker items, not research-worker items")
+        return None
+    if value is None:
+        return DEFAULT_WORKER_ROUTE_CLASS
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{field} must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}")
+    normalized = value.strip()
+    if normalized not in MANIFEST_WORKER_ROUTE_CLASSES:
+        raise SystemExit(f"{field} must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}")
+    return normalized
+
+
 def branch_id(index: int) -> str:
     return f"B{index:02d}"
 
@@ -324,6 +347,7 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
                     f"### {item_id}: {item.get('title') or 'Work item'}",
                     f"Worker packet id: {packet_id}",
                     f"Worker type: {item.get('worker_type', 'worker')}",
+                    f"Route class: {item.get('route_class', 'n/a')}",
                     f"Objective: {item.get('objective', 'Objective not supplied.')}",
                     "Owned paths:",
                     bullets(item.get("owned_paths", [])),
@@ -363,7 +387,6 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
             **item,
             "id": item_id,
             "packet_id": packet_id,
-            "worker_type": normalize_worker_type(item.get("worker_type"), f"branch {branch_id_value} work item {item_id} worker_type"),
             "objective": objective,
             "owned_paths": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} owned_paths") for value in require_string_list(item.get("owned_paths"), f"branch {branch_id_value} work item {item_id} owned_paths", min_items=1)],
             "context_files": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} context_files") for value in require_string_list(item.get("context_files", []), f"branch {branch_id_value} work item {item_id} context_files")],
@@ -371,6 +394,11 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
             "verification": require_string_list(item.get("verification"), f"branch {branch_id_value} work item {item_id} verification", min_items=1),
             "dod": require_string_list(item.get("dod"), f"branch {branch_id_value} work item {item_id} dod", min_items=1),
         }
+        worker_type = normalize_worker_type(item.get("worker_type"), f"branch {branch_id_value} work item {item_id} worker_type")
+        route_class = normalize_route_class(item.get("route_class"), worker_type, f"branch {branch_id_value} work item {item_id} route_class")
+        normalized_item["worker_type"] = worker_type
+        if route_class is not None:
+            normalized_item["route_class"] = route_class
         normalized.append(normalized_item)
     known_ids = {item["id"] for item in normalized}
     order = {item["id"]: index for index, item in enumerate(normalized)}

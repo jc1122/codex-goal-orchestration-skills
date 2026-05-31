@@ -170,6 +170,7 @@ def build_telemetry(
     prompt = file_stats(prompt_path)
     output_stats = file_stats(output_path)
     output_json = read_json(output_path)
+    route_class = output_json.get("route_class") if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str) else None
     attempts = []
     for spec in attempt_specs:
         event_logs = [file_stats(packet_dir / str(path)) for path in spec.get("event_logs", [])]
@@ -203,6 +204,7 @@ def build_telemetry(
         "schema_version": 1,
         "packet_id": packet_id,
         "role": role,
+        **({"route_class": route_class} if route_class else {}),
         "output_artifact": output_name,
         "prompt_artifact": prompt_name,
         "prompt_chars": prompt["chars"],

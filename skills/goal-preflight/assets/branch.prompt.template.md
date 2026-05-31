@@ -46,6 +46,8 @@ Default worker ladder: {default_worker_ladder}
 
 Allowed worker route aliases: {allowed_worker_routes}
 
+Worker route classes are declared per work item in `job.manifest.json`. Use the declared class unless a more specific route is justified: mechanical/docs -> Codex mini; small-edit/normal-code -> Codex Spark then Codex mini; complex-code -> full ladder.
+
 Selected worker ladders must be an ordered non-empty subsequence of the default ladder with a `selection_reason`; do not invent aliases or reorder providers.
 
 ## Lite Advisors
@@ -82,6 +84,7 @@ Return blocked if either command fails.
 - Independent worker packets launched as a rolling saturated pool up to max_active_worker_packets, or branch status records the serial/under-capacity reason.
 - `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
 - Every worker status records `selected_ladder` and `selection_reason`, and selected ladders preserve the allowed worker route order.
+- Every normal worker status records `route_class`; the route artifact and status agree, and low-cost route classes do not use premium/full ladders.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
 - `{pre_review_gate_path}` passed before reviewer launch; reviewer `route.json` exists; the reviewer artifact exists, is `mergeable`, records matching `semantic_input_hashes` and reuse policy, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/research-worker/reviewer launchers were waited on rather than polled.

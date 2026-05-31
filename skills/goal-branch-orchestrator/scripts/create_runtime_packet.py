@@ -81,6 +81,9 @@ MAX_CONTEXT_PACK_CHARS = CONTEXT_PACK.DEFAULT_TOTAL_CHARS
 MAX_CONTEXT_FILE_CHARS = CONTEXT_PACK.DEFAULT_PER_FILE_CHARS
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 ALLOWED_WORKER_ROUTES = CONTRACT.ALLOWED_WORKER_ROUTES
+DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
+WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
+WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
 WORKER_ROUTE_LABELS = {
     "gemini-pro": "Gemini Pro",
     "gemini-flash": "Gemini Flash",
@@ -176,6 +179,42 @@ def normalize_worker_ladder(values: list[str]) -> list[str]:
             + ", ".join(DEFAULT_WORKER_LADDER)
         )
     return flattened
+
+
+def normalize_route_class(value: object, *, allow_custom: bool = True) -> str:
+    if value is None:
+        return DEFAULT_WORKER_ROUTE_CLASS
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"route class must be one of {', '.join(WORKER_ROUTE_CLASSES)}")
+    normalized = value.strip()
+    allowed = WORKER_ROUTE_CLASSES if allow_custom else tuple(item for item in WORKER_ROUTE_CLASSES if item != "custom")
+    if normalized not in allowed:
+        raise SystemExit(f"route class must be one of {', '.join(allowed)}")
+    return normalized
+
+
+def ladder_for_route_class(route_class: str) -> list[str]:
+    return list(WORKER_ROUTE_CLASS_LADDERS.get(route_class, WORKER_ROUTE_CLASS_LADDERS[DEFAULT_WORKER_ROUTE_CLASS]))
+
+
+def default_selection_reason(route_class: str) -> str:
+    return CONTRACT.worker_route_class_reason(route_class)
+
+
+def validate_route_class_selection(route_class: str, selected_ladder: list[str], selection_reason: str) -> None:
+    if route_class in {"mechanical", "docs", "small-edit", "normal-code"}:
+        allowed = set(ladder_for_route_class(route_class))
+        disallowed = [alias for alias in selected_ladder if alias not in allowed]
+        if disallowed:
+            raise SystemExit(
+                f"route_class {route_class!r} cannot use premium/full worker route aliases: "
+                + ", ".join(disallowed)
+            )
+    if route_class == "complex-code":
+        reason = selection_reason.lower()
+        markers = ("complex", "risk", "cross-module", "premium", "architecture", "validator", "scheduler")
+        if not any(marker in reason for marker in markers):
+            raise SystemExit("--selection-reason for route_class 'complex-code' must include a concrete cost/risk justification")
 
 
 def model_catalog_rows(path: Path) -> tuple[dict, dict[str, dict]]:
@@ -415,6 +454,7 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "status": {"type": "string", "enum": list(CONTRACT.STATUSES)},
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
+            "route_class": {"type": "string", "enum": list(WORKER_ROUTE_CLASSES)},
             "selected_ladder": {
                 "type": "array",
                 "minItems": 1,
@@ -628,6 +668,7 @@ def compact_worker_context(
             "id": work_item.get("id"),
             "packet_id": work_item.get("packet_id"),
             "worker_type": work_item.get("worker_type", "worker"),
+            "route_class": work_item.get("route_class", DEFAULT_WORKER_ROUTE_CLASS),
             "objective": work_item.get("objective"),
             "owned_paths": work_owned_paths,
             "context_files": work_context_files,
@@ -658,6 +699,7 @@ def compact_worker_context(
             "",
             f"Work item: {work_item.get('id', '')} / {packet_id}",
             f"Worker type: {work_item.get('worker_type', 'worker')}",
+            f"Route class: {work_item.get('route_class', DEFAULT_WORKER_ROUTE_CLASS)}",
             f"Objective: {work_item.get('objective', '')}",
             "",
             "Owned paths:",
@@ -908,6 +950,7 @@ def prompt_for(
     context_files: list[str],
     task_text: str,
     selected_ladder: list[str] | None,
+    route_class: str,
     selection_reason: str,
     packet_context_path: str = "",
     include_worktree_context_excerpts: bool = False,
@@ -1025,6 +1068,7 @@ Example shape only:
             "status": "blocked",
             "branch": branch,
             "worktree": worktree,
+            "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
             "changed_files": [],
@@ -1046,9 +1090,10 @@ Branch: {branch}
 You are not alone in the codebase. Do not revert edits made by others. Own only the files/modules assigned here. If the task needs more than roughly 40k tokens of context, stop and return `blocked` instead of broadening scope.
 
 Selected worker ladder: {", ".join(selected_ladder)}
+Route class: {route_class}
 Route selection reason: {selection_reason}
 
-Copy `selected_ladder` and `selection_reason` exactly into the final worker status. Do not change model aliases, model ids, effort levels, or provider order.
+Copy `route_class`, `selected_ladder`, and `selection_reason` exactly into the final worker status. Do not change model aliases, model ids, effort levels, or provider order.
 
 {optional_list("Owned files/modules", owned_files)}
 
@@ -1166,6 +1211,7 @@ def compact_launch_config(
     schema_name: str,
     output_name: str,
     selected_ladder: list[str] | None = None,
+    route_class: str = DEFAULT_WORKER_ROUTE_CLASS,
     selection_reason: str = "",
     model_catalog: dict | None = None,
     review_route: dict | None = None,
@@ -1179,6 +1225,7 @@ def compact_launch_config(
             "schema_version": 1,
             "role": "worker",
             "packet_id": packet_id,
+            "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
             "branch": branch,
@@ -1287,6 +1334,13 @@ def main() -> int:
         help="Allowed worker route alias. Repeat to choose a non-empty ordered subsequence of the standard ladder.",
     )
     parser.add_argument(
+        "--route-class",
+        help=(
+            "Worker route class. Defaults from the manifest work item when available; otherwise "
+            f"{DEFAULT_WORKER_ROUTE_CLASS}. Known classes: {', '.join(WORKER_ROUTE_CLASSES)}."
+        ),
+    )
+    parser.add_argument(
         "--model-catalog",
         help=(
             "Optional fresh check_model_catalog.py --json output. For worker packets, unsupported Codex "
@@ -1374,6 +1428,7 @@ def main() -> int:
         if gate_reuse_policy.get("accepted") is True:
             review_reuse_policy = dict(gate_reuse_policy)
     selected_ladder: list[str] | None = None
+    route_class = DEFAULT_WORKER_ROUTE_CLASS
     selection_reason = ""
     model_catalog: dict | None = None
     if args.role == "worker":
@@ -1383,7 +1438,17 @@ def main() -> int:
                 normalized_worker_routes.append(item)
             else:
                 normalized_worker_routes.extend(item)
-        selected_ladder = normalize_worker_ladder(normalized_worker_routes)
+        manifest_work_item: dict | None = None
+        manifest_context = find_manifest_context(context_files, manifest_branch_id, packet_id)
+        if manifest_context is not None:
+            _manifest_path, _manifest, _branch_data, manifest_work_item = manifest_context
+        manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
+        route_class = normalize_route_class(args.route_class or manifest_route_class or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS))
+        selected_ladder = (
+            normalize_worker_ladder(normalized_worker_routes)
+            if normalized_worker_routes
+            else ladder_for_route_class(route_class)
+        )
         catalog_path = (
             resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
             if args.model_catalog
@@ -1398,13 +1463,11 @@ def main() -> int:
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
         if not selection_reason:
-            selection_reason = (
-                "Default standard worker ladder selected: Gemini Pro, Gemini Flash, "
-                "Codex Spark, GitHub Copilot gpt-5.4 high effort, Codex mini."
-            )
+            selection_reason = default_selection_reason(route_class)
         if model_catalog and model_catalog.get("filtered_aliases"):
             aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
             selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
+        validate_route_class_selection(route_class, selected_ladder, selection_reason)
 
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     packet_dir = out_dir / packet_id
@@ -1470,6 +1533,7 @@ def main() -> int:
             context_files,
             task_text,
             selected_ladder,
+            route_class,
             selection_reason,
             packet_context_path,
             args.include_worktree_context_excerpts,
@@ -1482,6 +1546,7 @@ def main() -> int:
             "role": "worker",
             "branch_id": manifest_branch_id,
             "branch": branch,
+            "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
             "default_ladder": list(DEFAULT_WORKER_LADDER),
@@ -1499,6 +1564,7 @@ def main() -> int:
         schema_name,
         output_name,
         selected_ladder=selected_ladder,
+        route_class=route_class,
         selection_reason=selection_reason,
         model_catalog=model_catalog,
         review_route=review_route,
