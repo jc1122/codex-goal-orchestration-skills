@@ -2343,6 +2343,44 @@ def main() -> int:
         if blocked_audit.get("status") != "blocked" or blocked_audit.get("can_start") is not False:
             raise SystemExit(f"fake-codex audit launcher did not write a terminal blocked audit: {blocked_audit!r}")
 
+        deterministic_audit_phase = tmp_path / "audit-deterministic-phase"
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--audit-dir",
+                deterministic_audit_phase.as_posix(),
+                "--deterministic",
+                "--require-pass",
+            ]
+        )
+        deterministic_phase_report = read_json(deterministic_audit_phase / "prompt-audit-phase.json")
+        if deterministic_phase_report.get("status") != "pass":
+            raise SystemExit(f"deterministic prompt-audit phase should pass a lint-clean bundle: {deterministic_phase_report!r}")
+        deterministic_audit = read_json(deterministic_audit_phase / "prompt-audit.json")
+        if deterministic_audit.get("status") != "pass" or deterministic_audit.get("can_start") is not True:
+            raise SystemExit(f"deterministic prompt-audit did not write a passing audit: {deterministic_audit!r}")
+        deterministic_telemetry = read_json(deterministic_audit_phase / "telemetry.json")
+        if deterministic_telemetry.get("accepted_alias") != "deterministic-prompt-audit":
+            raise SystemExit(f"deterministic prompt-audit telemetry mismatch: {deterministic_telemetry!r}")
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+                "--audit",
+                (deterministic_audit_phase / "prompt-audit.json").as_posix(),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--require-pass",
+            ]
+        )
+
         audit_phase = tmp_path / "audit-phase"
         run(
             [

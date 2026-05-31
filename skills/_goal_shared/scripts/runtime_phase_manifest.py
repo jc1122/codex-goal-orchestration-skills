@@ -85,7 +85,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "prompt_audit",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/run_prompt_audit_phase.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --audit-dir /abs/bundle/audit --require-pass",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/run_prompt_audit_phase.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --audit-dir /abs/bundle/audit --deterministic --require-pass",
                 "pass": "prompt-audit.json status=pass and can_start=true",
                 "on_fail": "do not create branches; read audit/prompt-audit-phase.json before event logs",
             },

@@ -33,7 +33,10 @@ require_string_list = STATUS_VALIDATION.require_string_list
 validate_telemetry_artifact = STATUS_VALIDATION.validate_telemetry_artifact
 
 AUDIT_STATUSES = {"pass", "failed", "blocked"}
-AUDIT_LADDER = ["gpt-5.5", "gpt-5.4"]
+MODEL_AUDIT_LADDER = ["gpt-5.5", "gpt-5.4"]
+DETERMINISTIC_AUDIT_LADDER = ["deterministic-prompt-audit"]
+AUDIT_LADDERS = [MODEL_AUDIT_LADDER, DETERMINISTIC_AUDIT_LADDER]
+AUDIT_ALIASES = sorted({alias for ladder in AUDIT_LADDERS for alias in ladder})
 
 
 def validate_defects(defects: list[str], value: object) -> None:
@@ -58,17 +61,17 @@ def validate_telemetry(defects: list[str], audit_path: Path, *, audit_status: st
         "$.telemetry",
         packet_id="prompt-audit",
         role="prompt-auditor",
-        allowed_aliases=AUDIT_LADDER,
+        allowed_aliases=AUDIT_ALIASES,
         require_called=audit_status == "pass",
     )
     attempts = telemetry.get("attempts")
     if not isinstance(attempts, list):
         return
     aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
-    if aliases != AUDIT_LADDER:
-        defect(defects, "$.telemetry.attempts", "must declare gpt-5.5 then gpt-5.4")
+    if aliases not in AUDIT_LADDERS:
+        defect(defects, "$.telemetry.attempts", f"must declare one audit ladder: {AUDIT_LADDERS!r}")
     called = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict) and attempt.get("called") is True]
-    if called and called != AUDIT_LADDER[: len(called)]:
+    if called and not any(called == ladder[: len(called)] for ladder in AUDIT_LADDERS):
         defect(defects, "$.telemetry.attempts", "called attempts must be a non-empty prefix of the audit ladder")
     accepted = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict) and attempt.get("accepted") is True]
     if audit_status == "pass" and len(accepted) != 1:

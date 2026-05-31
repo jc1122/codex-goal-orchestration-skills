@@ -15,6 +15,7 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CREATE_AUDIT_PACKET = SCRIPT_DIR / "create_audit_packet.py"
+DETERMINISTIC_PROMPT_AUDIT = SCRIPT_DIR / "deterministic_prompt_audit.py"
 VALIDATE_PROMPT_AUDIT = SCRIPT_DIR / "validate_prompt_audit.py"
 ACTIVE_PROCESS: subprocess.Popen[str] | None = None
 
@@ -206,6 +207,11 @@ def main() -> int:
     parser.add_argument("--audit-dir", required=True)
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--require-pass", action="store_true", help="Return success only when prompt audit can start branches.")
+    parser.add_argument(
+        "--deterministic",
+        action="store_true",
+        help="Use deterministic bundle and prompt checks instead of model audit attempts.",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument(
         "--attempt-timeout-seconds",
@@ -252,14 +258,30 @@ def main() -> int:
         create_command.extend(["--attempt-timeout-seconds", str(args.attempt_timeout_seconds)])
 
     commands: dict[str, Any] = {"create": run_command(create_command)}
+    deterministic_result: dict[str, Any] | None = None
     launch_result: dict[str, Any] | None = None
     basic_validation: dict[str, Any] | None = None
     require_pass_validation: dict[str, Any] | None = None
 
-    if commands["create"]["returncode"] == 0 and launch_path.exists():
+    if commands["create"]["returncode"] == 0 and args.deterministic:
+        deterministic_command = [
+            sys.executable,
+            DETERMINISTIC_PROMPT_AUDIT.as_posix(),
+            "--manifest",
+            manifest_path.as_posix(),
+            "--repo-root",
+            repo_root.as_posix(),
+            "--audit-dir",
+            audit_dir.as_posix(),
+        ]
+        deterministic_result = run_command(deterministic_command)
+        commands["deterministic_audit"] = deterministic_result
+        commands["launch"] = None
+    elif commands["create"]["returncode"] == 0 and launch_path.exists():
         launch_result = run_command([launch_path.as_posix()], cwd=audit_dir, timeout_seconds=args.launch_timeout_seconds)
         commands["launch"] = launch_result
     else:
+        commands["deterministic_audit"] = None
         commands["launch"] = None
 
     if audit_path.exists():

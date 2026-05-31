@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:a989612f137af3ef2fcb185b339d8d7b779a46a24a11b63e8bd88317ddefa954"
+    "source_fingerprint": "sha256:dee1c73d28211eda2652263a5f4ef3bb95d7cc7ce4a42663db46b47d4e6e6812"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -104,6 +104,7 @@
       "assets_on_demand": [],
       "core_scripts": [
         "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+        "skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py",
         "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
         "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
         "skills/goal-main-orchestrator/scripts/runtime_prompt_audit_runner.py",
@@ -114,7 +115,8 @@
       "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
-        "goal-branch-orchestrator"
+        "goal-branch-orchestrator",
+        "goal-preflight"
       ]
     },
     "goal-plan-amender": {
@@ -290,7 +292,8 @@
       "source": "goal-main-orchestrator",
       "target": "goal-preflight",
       "paths": [
-        "skills/goal-main-orchestrator/SKILL.md"
+        "skills/goal-main-orchestrator/SKILL.md",
+        "skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py"
       ]
     },
     {
