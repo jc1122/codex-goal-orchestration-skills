@@ -8,6 +8,8 @@ During runtime orchestration, prefer generated JSON artifacts, script `--help`, 
 
 For generated prompt-audit, runtime, and Lite advisory packets, inspect packet-local `prompt.md`, `packet-context.json`, `route.json`, `launch-config.json`, status/review/research/advice/audit outputs, and `telemetry.json` before expanding to implementation files.
 
+For main prompt audit, use `run_prompt_audit_phase.py`; inspect `audit/prompt-audit-phase.json` before raw event logs.
+
 ```bash
 npm run generate:context
 npm run check:context

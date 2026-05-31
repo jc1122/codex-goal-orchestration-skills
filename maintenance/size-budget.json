@@ -1,11 +1,11 @@
 {
   "largest_files": [
     {
-      "approx_tokens": 25672,
-      "bytes": 102687,
-      "chars": 102687,
+      "approx_tokens": 26005,
+      "bytes": 104021,
+      "chars": 104021,
       "files": 1,
-      "lines": 2554,
+      "lines": 2582,
       "path": "scripts/check_preparedness_fixtures.py"
     },
     {
@@ -129,9 +129,9 @@
   ],
   "per_skill": {
     "_goal_shared": {
-      "approx_tokens": 52816,
-      "bytes": 211264,
-      "chars": 211264,
+      "approx_tokens": 52765,
+      "bytes": 211059,
+      "chars": 211059,
       "files": 14,
       "lines": 5043
     },
@@ -143,11 +143,11 @@
       "lines": 5391
     },
     "goal-main-orchestrator": {
-      "approx_tokens": 41656,
-      "bytes": 166626,
-      "chars": 166626,
-      "files": 21,
-      "lines": 3338
+      "approx_tokens": 44592,
+      "bytes": 178370,
+      "chars": 178370,
+      "files": 22,
+      "lines": 3671
     },
     "goal-plan-amender": {
       "approx_tokens": 32301,
@@ -167,32 +167,32 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 260054,
-      "bytes": 1040217,
-      "chars": 1040217,
-      "files": 86,
-      "lines": 24245
+      "approx_tokens": 263272,
+      "bytes": 1053090,
+      "chars": 1053090,
+      "files": 87,
+      "lines": 24606
     },
     "skill_python": {
-      "approx_tokens": 201760,
-      "bytes": 807041,
-      "chars": 807041,
-      "files": 77,
-      "lines": 18351
+      "approx_tokens": 204645,
+      "bytes": 818580,
+      "chars": 818580,
+      "files": 78,
+      "lines": 18684
     },
     "skills": {
-      "approx_tokens": 226402,
-      "bytes": 905607,
-      "chars": 905607,
-      "files": 99,
-      "lines": 19690
+      "approx_tokens": 229286,
+      "bytes": 917146,
+      "chars": 917146,
+      "files": 100,
+      "lines": 20023
     },
     "tracked": {
-      "approx_tokens": 300310,
-      "bytes": 1201238,
-      "chars": 1201238,
-      "files": 124,
-      "lines": 26999
+      "approx_tokens": 303614,
+      "bytes": 1214457,
+      "chars": 1214457,
+      "files": 125,
+      "lines": 27363
     }
   },
   "skill_docs": {

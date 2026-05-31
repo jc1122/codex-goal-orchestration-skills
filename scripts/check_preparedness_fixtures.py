@@ -2320,6 +2320,34 @@ def main() -> int:
         if blocked_audit.get("status") != "blocked" or blocked_audit.get("can_start") is not False:
             raise SystemExit(f"fake-codex audit launcher did not write a terminal blocked audit: {blocked_audit!r}")
 
+        audit_phase = tmp_path / "audit-phase"
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--audit-dir",
+                audit_phase.as_posix(),
+                "--attempt-timeout-seconds",
+                "7",
+                "--require-pass",
+            ],
+            expect=1,
+            env=audit_env,
+        )
+        phase_report = read_json(audit_phase / "prompt-audit-phase.json")
+        if phase_report.get("status") != "blocked":
+            raise SystemExit(f"prompt-audit phase wrapper should preserve structured blocked state: {phase_report!r}")
+        phase_audit = read_json(audit_phase / "prompt-audit.json")
+        if phase_audit.get("status") != "blocked" or phase_audit.get("can_start") is not False:
+            raise SystemExit(f"prompt-audit phase wrapper did not write blocked audit: {phase_audit!r}")
+        phase_config = read_json(audit_phase / "launch-config.json")
+        if phase_config.get("attempt_timeout_seconds") != 7:
+            raise SystemExit(f"prompt-audit phase wrapper did not pass timeout override: {phase_config!r}")
+
         audit_signal = tmp_path / "audit-signal"
         run(
             [

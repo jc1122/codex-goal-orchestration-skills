@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.22
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.23
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -122,7 +122,7 @@ python3 "$CODEX_HOME/skills/goal-preflight/scripts/create_goal_bundle.py" --exam
 
 Generated `main.prompt.md`, branch prompts, prompt-audit packets, and `goal-bootloader.md` are intentionally compact. They carry job-specific data and point runtime agents at `job.manifest.json`, phase manifests, script outputs, and validators instead of repeating long orchestration policy in every prompt. Bundle lint now checks that generated prompts point agents at `runtime_phase_manifest.py --markdown` and explicitly discourage reading skill Python source during normal runtime.
 
-Generated prompt-audit launchers are compact wrappers too. `audit/launch.sh` delegates to `runtime_prompt_audit_runner.py`; packet-local `launch-config.json` carries the audit model ladder, timeout policy, event logs, validator paths, terminal blocked metadata, and telemetry inputs. If audit attempts fail or time out, the runner writes a terminal blocked `prompt-audit.json` plus `telemetry.json` so agents do not need to inspect raw event logs first.
+Generated prompt-audit launchers are compact wrappers too. Runtime agents should use `run_prompt_audit_phase.py` for the whole create/launch/validate flow; it writes `audit/prompt-audit-phase.json` so agents have one small artifact to read before raw event logs. `audit/launch.sh` delegates to `runtime_prompt_audit_runner.py`; packet-local `launch-config.json` carries the audit model ladder, timeout policy, event logs, validator paths, terminal blocked metadata, and telemetry inputs. If audit attempts fail or time out, the runner writes a terminal blocked `prompt-audit.json` plus `telemetry.json`.
 
 Generated worker packets are compact too: when `create_runtime_packet.py` receives `job.manifest.json`, it writes a deterministic `packet-context.json` branch/work-item slice and removes the full manifest excerpt from `prompt.md`. Normal worker `launch.sh` files are tiny wrappers; provider attempts, probes, selected route commands, timeout policy, and terminal blocked metadata live in packet-local `launch-config.json`. Gemini worker attempts still pass the full prompt on stdin so process inspection does not expose or re-tokenize the worker prompt.
 

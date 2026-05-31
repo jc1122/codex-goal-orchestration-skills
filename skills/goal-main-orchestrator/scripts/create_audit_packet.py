@@ -31,10 +31,10 @@ TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
 RUNNER_PATH = (Path(__file__).resolve().parent / "runtime_prompt_audit_runner.py").resolve()
 
 
-def audit_telemetry_attempts(repo_root: Path) -> list[dict]:
+def audit_telemetry_attempts(repo_root: Path, *, timeout_seconds: int = AUDIT_ATTEMPT_TIMEOUT_SECONDS) -> list[dict]:
     attempts = CONTRACT.codex_telemetry_attempts(
         ["gpt-5.5", "gpt-5.4"],
-        timeout_seconds=AUDIT_ATTEMPT_TIMEOUT_SECONDS,
+        timeout_seconds=timeout_seconds,
         sandbox="read-only",
         event_labels=["primary", "fallback"],
     )
@@ -251,8 +251,13 @@ exec python3 "$runner" --packet-dir "$(pwd)"
 """
 
 
-def audit_launch_config(manifest_path: Path, repo_root: Path) -> dict:
-    attempts = audit_telemetry_attempts(repo_root)
+def audit_launch_config(
+    manifest_path: Path,
+    repo_root: Path,
+    *,
+    attempt_timeout_seconds: int = AUDIT_ATTEMPT_TIMEOUT_SECONDS,
+) -> dict:
+    attempts = audit_telemetry_attempts(repo_root, timeout_seconds=attempt_timeout_seconds)
     return {
         "schema_version": 1,
         "role": "prompt-auditor",
@@ -263,7 +268,7 @@ def audit_launch_config(manifest_path: Path, repo_root: Path) -> dict:
         "schema_name": "prompt-audit.schema.json",
         "output_name": "prompt-audit.json",
         "telemetry_name": "telemetry.json",
-        "attempt_timeout_seconds": AUDIT_ATTEMPT_TIMEOUT_SECONDS,
+        "attempt_timeout_seconds": attempt_timeout_seconds,
         "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
         "telemetry_script": (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix(),
         "validation_script": (Path(__file__).resolve().parent / "validate_prompt_audit.py").as_posix(),
@@ -285,7 +290,15 @@ def main() -> int:
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--replace", action="store_true", help="Archive an existing audit packet under attempts/ and recreate it.")
+    parser.add_argument(
+        "--attempt-timeout-seconds",
+        type=int,
+        default=AUDIT_ATTEMPT_TIMEOUT_SECONDS,
+        help="Per-model prompt-audit attempt timeout; default preserves runtime policy.",
+    )
     args = parser.parse_args()
+    if args.attempt_timeout_seconds <= 0:
+        raise SystemExit("--attempt-timeout-seconds must be positive")
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
@@ -303,7 +316,12 @@ def main() -> int:
         encoding="utf-8",
     )
     (out_dir / "launch-config.json").write_text(
-        json.dumps(audit_launch_config(manifest_path, repo_root), indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            audit_launch_config(manifest_path, repo_root, attempt_timeout_seconds=args.attempt_timeout_seconds),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     launch = out_dir / "launch.sh"
