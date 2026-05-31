@@ -1,11 +1,11 @@
 {
   "largest_files": [
     {
-      "approx_tokens": 26005,
-      "bytes": 104021,
-      "chars": 104021,
+      "approx_tokens": 26374,
+      "bytes": 105494,
+      "chars": 105494,
       "files": 1,
-      "lines": 2582,
+      "lines": 2605,
       "path": "scripts/check_preparedness_fixtures.py"
     },
     {
@@ -49,11 +49,11 @@
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py"
     },
     {
-      "approx_tokens": 10576,
-      "bytes": 42306,
-      "chars": 42306,
+      "approx_tokens": 10638,
+      "bytes": 42551,
+      "chars": 42551,
       "files": 1,
-      "lines": 853,
+      "lines": 859,
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py"
     },
     {
@@ -157,42 +157,42 @@
       "lines": 2947
     },
     "goal-preflight": {
-      "approx_tokens": 38151,
-      "bytes": 152603,
-      "chars": 152603,
+      "approx_tokens": 38212,
+      "bytes": 152848,
+      "chars": 152848,
       "files": 22,
-      "lines": 2971
+      "lines": 2977
     }
   },
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 263561,
-      "bytes": 1054244,
-      "chars": 1054244,
+      "approx_tokens": 263990,
+      "bytes": 1055962,
+      "chars": 1055962,
       "files": 87,
-      "lines": 24632
+      "lines": 24661
     },
     "skill_python": {
-      "approx_tokens": 204645,
-      "bytes": 818580,
-      "chars": 818580,
+      "approx_tokens": 204706,
+      "bytes": 818825,
+      "chars": 818825,
       "files": 78,
-      "lines": 18684
+      "lines": 18690
     },
     "skills": {
-      "approx_tokens": 229286,
-      "bytes": 917146,
-      "chars": 917146,
+      "approx_tokens": 229348,
+      "bytes": 917391,
+      "chars": 917391,
       "files": 100,
-      "lines": 20023
+      "lines": 20029
     },
     "tracked": {
-      "approx_tokens": 303926,
-      "bytes": 1215704,
-      "chars": 1215704,
+      "approx_tokens": 304356,
+      "bytes": 1217422,
+      "chars": 1217422,
       "files": 125,
-      "lines": 27389
+      "lines": 27418
     }
   },
   "skill_docs": {

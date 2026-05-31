@@ -2116,6 +2116,29 @@ def main() -> int:
                 "critical",
             ]
         )
+        string_bullet_brief = json.loads(example_brief_path.read_text(encoding="utf-8"))
+        string_bullet_brief["branches"][0]["stop_conditions"] = "Stop if public behavior tests fail."
+        string_bullet_brief["branches"][0]["dod"] = "Branch-level behavior remains compatible."
+        string_bullet_path = tmp_path / "string-bullet-brief.json"
+        string_bullet_path.write_text(json.dumps(string_bullet_brief, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        string_bullet_bundle = tmp_path / "string-bullet-bundle"
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/create_goal_bundle.py",
+                "--brief",
+                string_bullet_path.as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--out-dir",
+                string_bullet_bundle.as_posix(),
+            ]
+        )
+        string_bullet_prompt = (string_bullet_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
+        assert_contains(string_bullet_prompt, "- Stop if public behavior tests fail.", "string bullet branch prompt")
+        assert_contains(string_bullet_prompt, "- Branch-level behavior remains compatible.", "string bullet branch prompt")
+        if "- S\n- t\n- o\n- p" in string_bullet_prompt or "- B\n- r\n- a\n- n\n- c\n- h" in string_bullet_prompt:
+            raise SystemExit("branch prompt split a string field into one bullet per character")
         run_scheduler_fixtures(bundle / "job.manifest.json")
         run_scheduler_tick_fixture(tmp_path)
         run_launch_ready_helper_fixtures(tmp_path)

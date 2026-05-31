@@ -286,7 +286,13 @@ def load_json(path: Path) -> dict:
         return json.load(handle)
 
 
-def bullets(values: list[str], fallback: str = "- none") -> str:
+def bullets(values: object, fallback: str = "- none") -> str:
+    if isinstance(values, str):
+        values = [values.strip()] if values.strip() else []
+    if isinstance(values, list):
+        values = [item.strip() for item in values if isinstance(item, str) and item.strip()]
+    else:
+        values = []
     if not values:
         return fallback
     return "\n".join(f"- {value}" for value in values)
