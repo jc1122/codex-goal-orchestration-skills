@@ -113,9 +113,9 @@
       "path": "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py"
     },
     {
-      "approx_tokens": 5698,
-      "bytes": 22793,
-      "chars": 22793,
+      "approx_tokens": 5702,
+      "bytes": 22809,
+      "chars": 22809,
       "files": 1,
       "lines": 602,
       "path": "skills/goal-main-orchestrator/scripts/create_audit_packet.py"
@@ -143,9 +143,9 @@
       "lines": 4819
     },
     "goal-main-orchestrator": {
-      "approx_tokens": 39108,
-      "bytes": 156430,
-      "chars": 156430,
+      "approx_tokens": 39112,
+      "bytes": 156446,
+      "chars": 156446,
       "files": 19,
       "lines": 3109
     },
@@ -167,30 +167,30 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 238400,
-      "bytes": 953600,
-      "chars": 953600,
+      "approx_tokens": 238404,
+      "bytes": 953616,
+      "chars": 953616,
       "files": 79,
       "lines": 22416
     },
     "skill_python": {
-      "approx_tokens": 187452,
-      "bytes": 749808,
-      "chars": 749808,
+      "approx_tokens": 187456,
+      "bytes": 749824,
+      "chars": 749824,
       "files": 70,
       "lines": 17072
     },
     "skills": {
-      "approx_tokens": 213931,
-      "bytes": 855725,
-      "chars": 855725,
+      "approx_tokens": 213935,
+      "bytes": 855741,
+      "chars": 855741,
       "files": 92,
       "lines": 18421
     },
     "tracked": {
-      "approx_tokens": 279630,
-      "bytes": 1118520,
-      "chars": 1118520,
+      "approx_tokens": 279635,
+      "bytes": 1118540,
+      "chars": 1118540,
       "files": 117,
       "lines": 25156
     }

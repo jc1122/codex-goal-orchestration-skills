@@ -394,7 +394,7 @@ path = Path(events_path)
 if not path.exists():
     raise SystemExit(1)
 
-required = {
+required = frozenset([
     "manifest",
     "repo_root",
     "status",
@@ -405,11 +405,11 @@ required = {
     "actionability_verdict",
     "commands_run",
     "summary",
-}
+])
 
 
 def valid(data: object) -> bool:
-    if not isinstance(data, dict) or set(data) < required:
+    if not isinstance(data, dict) or not required <= set(data):
         return False
     if data.get("manifest") != manifest or data.get("repo_root") != repo_root:
         return False
