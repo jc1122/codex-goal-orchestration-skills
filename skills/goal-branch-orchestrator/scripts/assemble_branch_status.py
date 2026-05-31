@@ -232,6 +232,39 @@ def changed_files_from_git(worktree: Path, base_ref: str) -> list[str]:
     ]
 
 
+def append_unique(target: list[str], value: object) -> None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped and stripped not in target:
+            target.append(stripped)
+
+
+def collect_worker_tests(worker_statuses: list[dict]) -> list[str]:
+    tests: list[str] = []
+    for status in worker_statuses:
+        for value in status.get("tests", []):
+            append_unique(tests, value)
+    return tests
+
+
+def collect_manifest_dod(branch: dict) -> list[str]:
+    items: list[str] = []
+    dod = branch.get("dod")
+    if isinstance(dod, list):
+        for value in dod:
+            append_unique(items, value)
+    else:
+        append_unique(items, dod)
+    work_items = branch.get("work_items")
+    if isinstance(work_items, list):
+        for work_item in work_items:
+            if not isinstance(work_item, dict):
+                continue
+            for value in work_item.get("dod", []):
+                append_unique(items, value)
+    return items
+
+
 def review_status(bundle_dir: Path, branch: dict) -> tuple[str, list[str]]:
     review_path = safe_bundle_path(bundle_dir, branch.get("review_path"), "manifest branch review_path")
     if not review_path.exists():
@@ -272,9 +305,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     changed_files = list(args.changed_file) if args.changed_file else changed_files_from_git(worktree, base_ref)
     dod_items = [item for item in args.dod_item if item.strip()]
     if not dod_items:
-        dod = branch.get("dod")
-        if isinstance(dod, list):
-            dod_items = [item for item in dod if isinstance(item, str) and item.strip()]
+        dod_items = collect_manifest_dod(branch)
     blockers = list(args.blocker)
     blockers.extend(worker_blockers)
     blockers.extend(scheduler_defects)
@@ -296,7 +327,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         status = "blocked"
     if status != "pass" and not blockers:
         blockers.append("Branch status assembled conservatively without explicit pass evidence.")
-    tests = list(args.test_evidence)
+    tests = list(args.test_evidence) if args.test_evidence else collect_worker_tests(worker_statuses)
     commands_run = [diff_command]
     branch_status = {
         "branch_id": branch_id,

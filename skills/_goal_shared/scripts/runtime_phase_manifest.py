@@ -100,8 +100,14 @@ PHASES: dict[str, dict[str, Any]] = {
                 "agent_does": "record launch/finish/close/refill/defer/blocked events as branches complete",
             },
             {
+                "id": "watchdog",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope main --runtime-ref goal-main-orchestrator --init --record-ready",
+                "agent_does": "after orchestration_watchdog.main_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; close unreachable or stale active branches with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
+                "pass": "active work completes normally or has terminal scheduler evidence before replacement launch",
+            },
+            {
                 "id": "validate_collect",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-status /abs/bundle/branches/Bxx.status.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json",
                 "agent_does": "accept only validated terminal branch artifacts",
             },
             {
@@ -130,19 +136,30 @@ PHASES: dict[str, dict[str, Any]] = {
                 "agent_does": "launch independent ready workers as a saturated pool up to max_active_worker_packets",
             },
             {
-                "id": "worker_packets",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --model-catalog /abs/bundle/branches/Bxx.model-catalog.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
-                "agent_does": "run packet launch.sh; do not inspect active logs while running",
-            },
-            {
                 "id": "context_pack",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/context_pack.py --worktree /abs/worktree --context-file /abs/context --markdown --output /abs/bundle/branches/Bxx.context-pack.md",
-                "agent_does": "use the written bounded context pack; do not broaden context by default",
+                "agent_does": "use the written bounded context pack; default is path-only for worktree files, add --include-worktree-excerpts only when bounded source excerpts are needed",
+            },
+            {
+                "id": "worker_packets",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --model-catalog /abs/bundle/branches/Bxx.model-catalog.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
+                "agent_does": "run packet launch.sh; do not inspect active logs while running; include worktree context excerpts only when a bounded source excerpt is required",
+            },
+            {
+                "id": "watchdog",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --init --record-ready",
+                "agent_does": "after orchestration_watchdog.branch_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; close unreachable or stale active worker/reviewer packets with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
+                "pass": "active worker/reviewer work completes normally or has terminal scheduler evidence before replacement launch",
             },
             {
                 "id": "integrate_workers",
                 "agent_does": "after launcher exit, inspect status/diff/tests; let scheduler_tick record launch/finish/close/refill from artifacts",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --init --record-ready --close-from-artifacts --validate-final",
+            },
+            {
+                "id": "assemble_for_review",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/assemble_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --worktree /abs/branch-worktree --replace",
+                "pass": "branch status validates as partial/pass with integrated worker evidence",
             },
             {
                 "id": "pre_review_gate",
@@ -151,12 +168,12 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "reviewer",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role reviewer --packet-id Bxx-R01 --branch branch --worktree /abs/branch-worktree --manifest /abs/bundle/job.manifest.json --pre-review-gate /abs/gate --out-dir /abs/bundle/reviewers",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role reviewer --packet-id Bxx-R01 --branch Bxx --worktree /abs/branch-worktree --manifest /abs/bundle/job.manifest.json --pre-review-gate /abs/gate --out-dir /abs/bundle/reviewers",
                 "agent_does": "run read-only reviewer packet only after gate passes",
             },
             {
                 "id": "assemble_validate",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/assemble_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --worktree /abs/branch-worktree && python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-status /abs/bundle/branches/Bxx.status.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/assemble_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --worktree /abs/branch-worktree --allow-pass --replace && python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json",
                 "pass": "validated branch status",
             },
         ],

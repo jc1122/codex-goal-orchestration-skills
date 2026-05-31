@@ -489,12 +489,13 @@ def optional_list(title: str, values: list[str]) -> str:
     return title + ":\n" + "\n".join(f"- {value}" for value in values)
 
 
-def context_section(worktree: str, context_files: list[str]) -> str:
+def context_section(worktree: str, context_files: list[str], *, include_worktree_excerpts: bool) -> str:
     pack = CONTEXT_PACK.pack_context(
         worktree=Path(worktree).resolve(),
         context_files=[Path(value).resolve() for value in context_files],
         total_chars=MAX_CONTEXT_PACK_CHARS,
         per_file_chars=MAX_CONTEXT_FILE_CHARS,
+        include_worktree_excerpts=include_worktree_excerpts,
     )
     return CONTEXT_PACK.markdown_from_pack(pack)
 
@@ -726,6 +727,89 @@ def branch_entry(manifest: dict, branch_id: str) -> dict:
     return matches[0] if len(matches) == 1 else {}
 
 
+def bundle_path(bundle_dir: Path, value: object, field: str) -> str | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    relative = PATH_RULES.require_relative_path(value, field)
+    return (bundle_dir / relative).resolve().as_posix()
+
+
+def reviewer_packet_context(
+    *,
+    packet_id: str,
+    branch_id: str,
+    worktree: Path,
+    manifest_path: Path,
+    manifest: dict,
+    gate_path: Path,
+    gate: dict,
+    review_route: dict,
+    review_schema_path: Path,
+    review_output_path: Path,
+) -> dict:
+    bundle_dir = manifest_path.parent
+    branch_data = branch_entry(manifest, branch_id)
+    worker_artifacts: list[dict] = []
+    work_items = branch_data.get("work_items") if isinstance(branch_data.get("work_items"), list) else []
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        worker_packet_id = item.get("packet_id")
+        if not isinstance(worker_packet_id, str) or not worker_packet_id.strip():
+            item_id = item.get("id")
+            worker_packet_id = f"{branch_id}-{item_id}" if isinstance(item_id, str) else ""
+        if not worker_packet_id:
+            continue
+        role = item.get("worker_type", "worker")
+        if role == "research":
+            role = "research-worker"
+        if role == "research-worker":
+            packet_dir = bundle_dir / "research" / worker_packet_id
+            status_path = packet_dir / "research.json"
+        else:
+            packet_dir = bundle_dir / "workers" / worker_packet_id
+            status_path = packet_dir / "status.json"
+        worker_artifacts.append(
+            {
+                "packet_id": worker_packet_id,
+                "role": role if role == "research-worker" else "worker",
+                "status_path": status_path.resolve().as_posix(),
+                "telemetry_path": (packet_dir / "telemetry.json").resolve().as_posix(),
+                "route_path": (packet_dir / "route.json").resolve().as_posix(),
+            }
+        )
+    base_ref = str(manifest.get("base_ref", "main"))
+    return {
+        "schema_version": 1,
+        "kind": "compact_reviewer_context",
+        "packet_id": packet_id,
+        "role": "reviewer",
+        "branch_id": branch_id,
+        "branch_name": branch_data.get("branch_name"),
+        "worktree": worktree.as_posix(),
+        "base_ref": base_ref,
+        "read_first": {
+            "pre_review_gate": gate_path.as_posix(),
+            "branch_status": bundle_path(bundle_dir, branch_data.get("status_path"), "branch status_path"),
+            "branch_prompt": bundle_path(bundle_dir, branch_data.get("prompt"), "branch prompt"),
+            "manifest": manifest_path.as_posix(),
+            "worker_artifacts": worker_artifacts,
+            "review_schema": review_schema_path.as_posix(),
+        },
+        "write_only": {
+            "review_output": review_output_path.as_posix(),
+        },
+        "commands_to_run": [
+            "pwd",
+            "git status --short --branch",
+            f"git diff --check {base_ref}...HEAD",
+        ],
+        "route": review_route,
+        "semantic_input_hashes": gate.get("semantic_input_hashes", {}),
+        "reuse_policy": gate.get("reuse_policy", {}),
+    }
+
+
 def branch_entry_for_packet(manifest: dict, branch_value: str, packet_id: str) -> dict:
     branches = manifest.get("branches")
     if not isinstance(branches, list):
@@ -792,7 +876,7 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
     if docs_like and len(changed_paths) <= 3:
         return "light", ["small documentation-only review surface"]
     policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
-    default_tier = policy.get("default_tier") if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS else "standard"
+    default_tier = policy.get("default_tier") if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS else CONTRACT.REVIEW_MODEL_POLICY["default_tier"]
     return str(default_tier), ["default deterministic review tier"]
 
 
@@ -825,8 +909,15 @@ def prompt_for(
     task_text: str,
     selected_ladder: list[str] | None,
     selection_reason: str,
+    packet_context_path: str = "",
+    include_worktree_context_excerpts: bool = False,
 ) -> str:
     if role == "reviewer":
+        context_pointer = (
+            f"Packet context to read first:\n- {packet_context_path}"
+            if packet_context_path
+            else context_section(worktree, context_files, include_worktree_excerpts=include_worktree_context_excerpts)
+        )
         return f"""# Branch Reviewer Packet {packet_id}
 
 You are Reviewer {packet_id}. Do not edit files.
@@ -834,7 +925,7 @@ You are Reviewer {packet_id}. Do not edit files.
 Worktree: {worktree}
 Branch: {branch}
 
-{context_section(worktree, context_files)}
+{context_pointer}
 
 Before reviewing, run:
 
@@ -848,7 +939,9 @@ Review the branch against its prompt, worker status files, diffs, test evidence,
 
 The branch orchestrator must have supplied a passing schema v2 `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `semantic_input_hashes` exactly into the final review JSON as `semantic_input_hashes`, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every semantic input hash matches exactly and both the source review and source telemetry are present; otherwise produce a fresh review.
 
-Determine the branch base ref from the branch prompt or manifest context. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
+Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. Use those paths before searching any bundle directory.
+
+Determine the branch base ref from `compact_reviewer_context`. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
 Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
 """
@@ -897,7 +990,7 @@ Local read scope:
 
 {optional_list("Relevant local files/modules", owned_files)}
 
-{context_section(worktree, context_files)}
+{context_section(worktree, context_files, include_worktree_excerpts=include_worktree_context_excerpts)}
 
 Before researching, run:
 
@@ -959,7 +1052,7 @@ Copy `selected_ladder` and `selection_reason` exactly into the final worker stat
 
 {optional_list("Owned files/modules", owned_files)}
 
-{context_section(worktree, context_files)}
+{context_section(worktree, context_files, include_worktree_excerpts=include_worktree_context_excerpts)}
 
 Before editing, run:
 
@@ -1056,13 +1149,13 @@ def launch_for(
 
 def reviewer_ladder_from_route(review_route: dict | None) -> list[str]:
     route = review_route or {
-        "selected_ladder": CONTRACT.review_route_for_tier("standard"),
-        "selection_reason": "Default standard reviewer route.",
+        "selected_ladder": CONTRACT.review_route_for_tier(CONTRACT.REVIEW_MODEL_POLICY["default_tier"]),
+        "selection_reason": "Default light reviewer route.",
     }
     return [
         item for item in route.get("selected_ladder", [])
         if isinstance(item, str) and item in REVIEW_ROUTE_MODELS
-    ] or CONTRACT.review_route_for_tier("standard")
+    ] or CONTRACT.review_route_for_tier(CONTRACT.REVIEW_MODEL_POLICY["default_tier"])
 
 
 def compact_launch_config(
@@ -1182,6 +1275,11 @@ def main() -> int:
     parser.add_argument("--owned-file", action="append", default=[])
     parser.add_argument("--context-file", action="append", default=[])
     parser.add_argument(
+        "--include-worktree-context-excerpts",
+        action="store_true",
+        help="Embed bounded excerpts for worktree-local --context-file inputs in worker/research prompts; default is path-only.",
+    )
+    parser.add_argument(
         "--worker-route",
         action="append",
         nargs="+",
@@ -1247,6 +1345,7 @@ def main() -> int:
         manifest = load_json(manifest_path)
         gate = load_json(gate_path)
         branch_id = packet_id.split("-R", 1)[0] if "-R" in packet_id else ""
+        manifest_branch_id = branch_id or manifest_branch_id
         defects: list[str] = []
         STATUS_VALIDATION.validate_pre_review_gate_artifact(
             defects,
@@ -1327,6 +1426,21 @@ def main() -> int:
 
     task_text = load_task(task_file)
     packet_context: dict | None = None
+    packet_context_path = ""
+    if args.role == "reviewer":
+        packet_context_path = (packet_dir / "packet-context.json").resolve().as_posix()
+        packet_context = reviewer_packet_context(
+            packet_id=packet_id,
+            branch_id=manifest_branch_id,
+            worktree=worktree,
+            manifest_path=manifest_path,
+            manifest=manifest,
+            gate_path=gate_path,
+            gate=gate,
+            review_route=review_route or {},
+            review_schema_path=packet_dir / schema_name,
+            review_output_path=packet_dir / output_name,
+        )
     if args.role == "worker":
         compact_context = compact_worker_context(
             branch_id=manifest_branch_id,
@@ -1357,6 +1471,8 @@ def main() -> int:
             task_text,
             selected_ladder,
             selection_reason,
+            packet_context_path,
+            args.include_worktree_context_excerpts,
         ),
         encoding="utf-8",
     )

@@ -36,7 +36,9 @@ Worker scheduler ledger: {worker_scheduler_path}. `worker_parallelism.scheduler_
 
 Worker parallelization rationale: {worker_parallelization_rationale}
 
-Use each listed Worker packet id exactly once unless replacing a non-pass attempt with `create_runtime_packet.py --replace`. Worker, research-worker, reviewer, and Lite packets must write same-packet `telemetry.json`. After dispatch, wait for launchers; do not poll active worker/reviewer logs, process tables, or status files.
+Use each listed Worker packet id exactly once unless replacing a non-pass attempt with `create_runtime_packet.py --replace`. Worker, research-worker, reviewer, and Lite packets must write same-packet `telemetry.json`. Outside the watchdog threshold exception below, wait for launchers and do not poll active worker/reviewer logs, process tables, or status files.
+
+If no worker/reviewer completes after `orchestration_watchdog.branch_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active packets with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
 
 ## Worker Model Routing
 
@@ -76,6 +78,6 @@ Run the branch skill and Codex CLI availability bootstrap before worker dispatch
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
 - `{pre_review_gate_path}` passed before reviewer launch; reviewer `route.json` exists; the reviewer artifact exists, is `mergeable`, records matching `semantic_input_hashes` and reuse policy, records `git diff --check {base_ref}...HEAD`, and has no verification gaps.
 - Active worker/research-worker/reviewer launchers were waited on rather than polled.
-- Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
+- Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/{branch_id}.status.json`.
 - `lite_advice` records are present, even when empty; every relevant branch Lite packet directory is recorded, validated, and treated only as advisory context routing.
 {dod}

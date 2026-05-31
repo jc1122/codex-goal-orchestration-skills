@@ -98,7 +98,7 @@ REVIEW_HEAVY_TRIGGER_PATTERNS = (
 )
 REVIEW_MODEL_POLICY = {
     "router": "deterministic-v1",
-    "default_tier": "standard",
+    "default_tier": "light",
     "routes": {tier: list(route) for tier, route in REVIEW_MODEL_ROUTES.items()},
     "heavy_triggers": [
         "public API changes",

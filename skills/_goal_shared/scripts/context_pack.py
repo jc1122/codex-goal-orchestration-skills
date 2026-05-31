@@ -39,6 +39,7 @@ def pack_context(
     context_files: list[Path],
     total_chars: int = DEFAULT_TOTAL_CHARS,
     per_file_chars: int = DEFAULT_PER_FILE_CHARS,
+    include_worktree_excerpts: bool = False,
 ) -> dict[str, Any]:
     entries = []
     remaining = total_chars
@@ -49,26 +50,34 @@ def pack_context(
         except ValueError:
             relative_text = None
         else:
-            entries.append(
-                {
-                    "kind": "worktree_path",
-                    "label": f"context-{index}",
-                    "path": relative.as_posix(),
-                    "absolute_path": resolved.as_posix(),
-                }
-            )
-            continue
+            relative_text = relative.as_posix()
+            if not include_worktree_excerpts:
+                entries.append(
+                    {
+                        "kind": "worktree_path",
+                        "label": f"context-{index}",
+                        "path": relative_text,
+                        "absolute_path": resolved.as_posix(),
+                    }
+                )
+                continue
 
         text = resolved.read_text(encoding="utf-8", errors="replace")
         limit = min(per_file_chars, max(0, remaining))
         excerpt, truncated = excerpt_text(text, limit)
         remaining -= len(excerpt)
+        label = (
+            f"context-{index}: {relative_text}"
+            if relative_text is not None
+            else f"external-context-{index}: {resolved.name}"
+        )
         entries.append(
             {
                 "kind": "embedded_excerpt",
-                "label": f"external-context-{index}: {resolved.name}",
+                "label": label,
                 "path": relative_text,
                 "absolute_path": resolved.as_posix(),
+                "origin": "worktree" if relative_text is not None else "external",
                 "sha256": sha256_file(resolved),
                 "source_chars": len(text),
                 "included_chars": len(excerpt),
@@ -83,6 +92,7 @@ def pack_context(
         "schema_version": 1,
         "total_char_limit": total_chars,
         "per_file_char_limit": per_file_chars,
+        "worktree_context_mode": "embedded_excerpt" if include_worktree_excerpts else "path_reference",
         "omitted_context_files": max(0, omitted),
         "entries": entries,
     }
@@ -110,7 +120,7 @@ def markdown_from_pack(pack: dict[str, Any]) -> str:
         lines.append(f"- {pack['omitted_context_files']} context file(s) omitted after total context limit.")
     embedded = [entry for entry in entries if entry.get("kind") == "embedded_excerpt"]
     if embedded:
-        lines.extend(["", "Deterministic external context excerpts:"])
+        lines.extend(["", "Deterministic context excerpts:"])
         for entry in embedded:
             lines.extend(
                 [
@@ -139,6 +149,11 @@ def main() -> int:
     )
     parser.add_argument("--total-chars", type=int, default=DEFAULT_TOTAL_CHARS)
     parser.add_argument("--per-file-chars", type=int, default=DEFAULT_PER_FILE_CHARS)
+    parser.add_argument(
+        "--include-worktree-excerpts",
+        action="store_true",
+        help="Embed bounded excerpts for context files inside --worktree instead of path-only references.",
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument("--output", help="Optional output file for the rendered JSON or Markdown pack.")
@@ -153,6 +168,7 @@ def main() -> int:
         context_files=paths,
         total_chars=args.total_chars,
         per_file_chars=args.per_file_chars,
+        include_worktree_excerpts=args.include_worktree_excerpts,
     )
     rendered = json.dumps(pack, indent=2, sort_keys=True) + "\n" if args.json else markdown_from_pack(pack) + "\n"
     if args.output:

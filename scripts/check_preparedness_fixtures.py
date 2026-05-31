@@ -2143,8 +2143,80 @@ def main() -> int:
             ]
         )
         run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+        stale_validator_bundle = tmp_path / "stale-validator-command"
+        shutil.copytree(bundle, stale_validator_bundle)
+        stale_prompt = stale_validator_bundle / "main.prompt.md"
+        stale_text = stale_prompt.read_text(encoding="utf-8")
+        stale_text = stale_text.replace(
+            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
+            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json",
+            1,
+        )
+        stale_text = stale_text.replace(
+            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json",
+            1,
+        )
+        stale_prompt.write_text(stale_text, encoding="utf-8")
+        stale_lint = run(
+            ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", stale_validator_bundle.as_posix(), "--no-write"],
+            expect=1,
+        )
+        assert_contains(stale_lint.stdout, "validate_branch_status.py command snippet must include", "stale validator command lint")
+        assert_contains(stale_lint.stdout, "validate_main_status.py command snippet must include", "stale validator command lint")
+        wrong_target_validator_bundle = tmp_path / "wrong-target-validator-command"
+        shutil.copytree(bundle, wrong_target_validator_bundle)
+        wrong_target_prompt = wrong_target_validator_bundle / "main.prompt.md"
+        wrong_target_text = wrong_target_prompt.read_text(encoding="utf-8")
+        wrong_target_text = wrong_target_text.replace(
+            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
+            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+            1,
+        )
+        wrong_target_text = wrong_target_text.replace(
+            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/main.status.json",
+            1,
+        )
+        wrong_target_prompt.write_text(wrong_target_text, encoding="utf-8")
+        wrong_target_branch_prompt = wrong_target_validator_bundle / "branches" / "B01.prompt.md"
+        wrong_target_branch_text = wrong_target_branch_prompt.read_text(encoding="utf-8").replace(
+            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B01.status.json",
+            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B99.status.json",
+            1,
+        )
+        wrong_target_branch_prompt.write_text(wrong_target_branch_text, encoding="utf-8")
+        wrong_target_lint = run(
+            ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", wrong_target_validator_bundle.as_posix(), "--no-write"],
+            expect=1,
+        )
+        assert_contains(wrong_target_lint.stdout, "branches/Bxx.status.json", "wrong branch validator status target")
+        assert_contains(wrong_target_lint.stdout, "branches/B01.status.json", "wrong branch prompt validator status target")
+        assert_contains(wrong_target_lint.stdout, "validate_main_status.py command snippet", "wrong main validator status target")
+        stale_audit_dir = tmp_path / "stale-validator-audit"
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+                "--manifest",
+                (stale_validator_bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--audit-dir",
+                stale_audit_dir.as_posix(),
+                "--deterministic",
+                "--require-pass",
+            ],
+            expect=1,
+        )
+        stale_audit = read_json(stale_audit_dir / "prompt-audit.json")
+        if stale_audit.get("status") != "failed" or stale_audit.get("can_start") is not False:
+            raise SystemExit(f"deterministic prompt audit should fail stale validator snippets: {stale_audit!r}")
         full_phase_manifest = run(
             ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
+        ).stdout
+        main_phase_manifest = run(
+            ["python3", "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
         ).stdout
         compact_phase_manifest = run(
             ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--compact", "--markdown"]
@@ -2153,6 +2225,10 @@ def main() -> int:
             raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
         assert_contains(compact_phase_manifest, "--manifest /abs/bundle/job.manifest.json", "compact phase manifest")
         assert_contains(compact_phase_manifest, "rg/grep", "compact phase manifest")
+        assert_contains(main_phase_manifest, "watchdog", "main phase manifest")
+        assert_contains(main_phase_manifest, "orchestration_watchdog.main_no_completion_wait_limit", "main phase manifest")
+        assert_contains(full_phase_manifest, "watchdog", "branch phase manifest")
+        assert_contains(full_phase_manifest, "orchestration_watchdog.branch_no_completion_wait_limit", "branch phase manifest")
         brief_schema = json.loads(
             run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
         )
@@ -2221,7 +2297,33 @@ def main() -> int:
         )
         if context_pack_result.stdout.strip() != context_pack_out.as_posix() or not context_pack_out.exists():
             raise SystemExit("context_pack.py --output should write the rendered pack and print its path")
-        assert_contains(context_pack_out.read_text(encoding="utf-8"), "Context files to read first:", "context pack output")
+        context_pack_text = context_pack_out.read_text(encoding="utf-8")
+        assert_contains(context_pack_text, "Context files to read first:", "context pack output")
+        assert_contains(context_pack_text, "- README.md", "default path-only context pack output")
+        assert_not_contains(context_pack_text, "BEGIN_CONTEXT_EXCERPT", "default path-only context pack output")
+        context_pack_excerpt_out = tmp_path / "context-pack-excerpt.md"
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/context_pack.py",
+                "--worktree",
+                ROOT.as_posix(),
+                "--context-file",
+                (ROOT / "README.md").as_posix(),
+                "--per-file-chars",
+                "80",
+                "--total-chars",
+                "80",
+                "--include-worktree-excerpts",
+                "--markdown",
+                "--output",
+                context_pack_excerpt_out.as_posix(),
+            ]
+        )
+        context_pack_excerpt_text = context_pack_excerpt_out.read_text(encoding="utf-8")
+        assert_contains(context_pack_excerpt_text, "Deterministic context excerpts:", "worktree excerpt context pack output")
+        assert_contains(context_pack_excerpt_text, "BEGIN_CONTEXT_EXCERPT context-1: README.md", "worktree excerpt context pack output")
+        assert_not_contains(context_pack_excerpt_text, "Context files to read first:\n- README.md", "worktree excerpt context pack output")
         telemetry_bundle = tmp_path / "telemetry-pressure"
         telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
         telemetry_packet.mkdir(parents=True)
@@ -2576,6 +2678,36 @@ def main() -> int:
         if not (manifest_packet_dir / "packet-context.json").exists():
             raise SystemExit("worker --manifest did not create compact packet-context.json")
         assert_contains(manifest_worker_prompt, "Compact Worker Task", "worker --manifest prompt")
+        excerpt_packet_root = tmp_path / "excerpt-packets"
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                "--role",
+                "worker",
+                "--packet-id",
+                "B01-W99",
+                "--branch",
+                "preparedness-research-fixture",
+                "--worktree",
+                ROOT.as_posix(),
+                "--out-dir",
+                excerpt_packet_root.as_posix(),
+                "--task-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--owned-file",
+                "README.md",
+                "--context-file",
+                (ROOT / "README.md").as_posix(),
+                "--worker-route",
+                "codex-mini",
+                "--selection-reason",
+                "Fixture exercises bounded worktree context excerpts.",
+                "--include-worktree-context-excerpts",
+            ]
+        )
+        excerpt_worker_prompt = (excerpt_packet_root / "B01-W99" / "prompt.md").read_text(encoding="utf-8")
+        assert_contains(excerpt_worker_prompt, "BEGIN_CONTEXT_EXCERPT context-1: README.md", "worker excerpt prompt")
         fake_codex_dir = tmp_path / "fake-codex-worker"
         fake_codex_dir.mkdir()
         fake_codex = fake_codex_dir / "codex"
@@ -2872,6 +3004,16 @@ def main() -> int:
             ]
         )
         reviewer_config = assert_compact_runtime_launcher(packet_root / "B01-R01", "reviewer", 1800)
+        reviewer_packet_root = packet_root / "B01-R01"
+        reviewer_packet_context = reviewer_packet_root / "packet-context.json"
+        reviewer_prompt = (reviewer_packet_root / "prompt.md").read_text(encoding="utf-8")
+        if not reviewer_packet_context.exists():
+            raise SystemExit("reviewer packet-context.json was not created")
+        reviewer_context_text = reviewer_packet_context.read_text(encoding="utf-8")
+        if "compact_reviewer_context" not in reviewer_context_text:
+            raise SystemExit(f"reviewer packet context should be compact: {reviewer_context_text!r}")
+        if f"Packet context to read first:\n- {reviewer_packet_context.as_posix()}" not in reviewer_prompt:
+            raise SystemExit("reviewer prompt should read compact_reviewer_context first")
         reviewer_attempts = reviewer_config.get("attempts")
         reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
         if reviewer_aliases != ["gpt-5.4-mini", "gpt-5.4"]:

@@ -105,7 +105,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
   },
   "review_model_policy": {
     "router": "deterministic-v1",
-    "default_tier": "standard",
+    "default_tier": "light",
     "routes": {
       "light": ["gpt-5.4-mini", "gpt-5.4"],
       "standard": ["gpt-5.4", "gpt-5.5"],
@@ -175,7 +175,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - `main.prompt.md` says parallelism is the default, branch orchestrator slots should stay saturated up to `max_active_branch_agents`, and waves are scheduling/order groups rather than implicit dependency barriers.
 - Branch manifest `depends_on` entries reference only prior branch ids; a branch is deferred only while one of those explicit dependencies is incomplete.
 - `main.prompt.md` says finished branch orchestrator agents must be closed before replacements launch.
-- `main.prompt.md` requires manifest-bound `validate_branch_status.py` for branch outputs and manifest-bound `validate_main_status.py` for final output.
+- `main.prompt.md` requires manifest-bound `validate_branch_status.py --manifest ... --status ...` for branch outputs and manifest-bound `validate_main_status.py --manifest ... --status ...` for final output.
 - `job.manifest.json` contains `adaptation_policy` and `amender_model_policy`; main may invoke `goal-plan-amender` only after terminal branch validation and only for future unstarted work.
 - Plan-amender packets live under `amendments/Axxx.packet/`, select an allowed amender model ladder in `route.json`, write `telemetry.json`, and write proposals to the sibling `amendments/Axxx.proposal.json`.
 - `main.prompt.md` requires `summarize_telemetry.py --bundle-dir <bundle>` before final validation and requires `telemetry.summary.json` for pass.
@@ -188,7 +188,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
-- Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json`.
+- Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
 - Branch prompts require worker, research-worker, reviewer, and Lite packet `telemetry.json` artifacts for pass.
 - Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/research-worker/reviewer launchers are active.
 - Branch prompts define Worker Model Routing and require `selected_ladder` plus `selection_reason` in every worker status and branch rollup.

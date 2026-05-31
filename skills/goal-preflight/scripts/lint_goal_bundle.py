@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import shlex
+import re
 from pathlib import Path
 
 
@@ -60,6 +61,17 @@ LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
 ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
+VALIDATOR_COMMAND_STATUS_HINTS = {
+    "validate_branch_status.py": "--status /absolute/path/to/bundle/branches/Bxx.status.json",
+    "validate_main_status.py": "--status /absolute/path/to/bundle/main.status.json",
+}
+VALIDATOR_COMMAND_RE = re.compile(r"(?P<script>validate_(?:branch|main)_status\.py)\b(?P<tail>[^`\n]*)")
+STATUS_TARGET_PREFIXES = (
+    "/absolute/path/to/bundle/",
+    "/absolute/path/to/",
+    "/abs/bundle/",
+    "/abs/",
+)
 
 
 def load_json(path: Path) -> dict:
@@ -73,6 +85,56 @@ def has_dod(text: str) -> bool:
         return False
     after = lowered.split("definition of done", 1)[1]
     return "- " in after
+
+
+def canonical_status_target(value: str) -> str:
+    target = value.strip().strip("`'\"").rstrip(".,;)")
+    for prefix in STATUS_TARGET_PREFIXES:
+        if target.startswith(prefix):
+            target = target[len(prefix):]
+            break
+    if target.startswith("branches/"):
+        return target
+    if "/branches/" in target:
+        return "branches/" + target.rsplit("/branches/", 1)[1]
+    if target.endswith("/main.status.json"):
+        return "main.status.json"
+    return target
+
+
+def status_target_from_line(script_name: str, line: str) -> str | None:
+    for match in VALIDATOR_COMMAND_RE.finditer(line):
+        if match.group("script") != script_name:
+            continue
+        snippet = script_name + match.group("tail")
+        try:
+            tokens = shlex.split(snippet)
+        except ValueError:
+            return None
+        for index, token in enumerate(tokens):
+            if token == "--status" and index + 1 < len(tokens):
+                return canonical_status_target(tokens[index + 1])
+    return None
+
+
+def lint_validator_command_snippets(defect, path: str, text: str, expected_status_targets: dict[str, str]) -> None:
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for script_name, expected_target in expected_status_targets.items():
+            status_hint = VALIDATOR_COMMAND_STATUS_HINTS[script_name]
+            if f"{script_name} --manifest" not in line:
+                continue
+            actual_target = status_target_from_line(script_name, line)
+            if actual_target != expected_target:
+                if actual_target:
+                    action = f"use {expected_target} as status target"
+                else:
+                    action = f"include {status_hint}"
+                defect(
+                    path,
+                    "major",
+                    f"line {lineno}: {script_name} command snippet must {action} on same line",
+                )
+                continue
 
 
 def load_lite_validator() -> object | None:
@@ -517,6 +579,15 @@ def lint(bundle_dir: Path) -> dict:
         defect(str(main_path), "critical", "main prompt is missing")
     elif main_path is not None:
         main_text = main_path.read_text(encoding="utf-8")
+        lint_validator_command_snippets(
+            defect,
+            str(main_path),
+            main_text,
+            {
+                "validate_branch_status.py": "branches/Bxx.status.json",
+                "validate_main_status.py": "main.status.json",
+            },
+        )
         for phrase in [
             "manifest paths",
             "repository root",
@@ -542,6 +613,7 @@ def lint(bundle_dir: Path) -> dict:
             "close finished branch orchestrator agents",
             "rolling saturated pool",
             "scheduler ledger",
+            "orchestration_watchdog.main_no_completion_wait_limit",
             "validate_branch_status.py --manifest",
             "summarize_telemetry.py --bundle-dir",
             "telemetry.summary.json",
@@ -797,6 +869,13 @@ def lint(bundle_dir: Path) -> dict:
             defect(str(prompt_path), "critical", f"branch prompt missing for {branch.get('id')}")
             continue
         text = prompt_path.read_text(encoding="utf-8")
+        expected_status_path = branch.get("status_path") if isinstance(branch.get("status_path"), str) else "branches/Bxx.status.json"
+        lint_validator_command_snippets(
+            defect,
+            str(prompt_path),
+            text,
+            {"validate_branch_status.py": expected_status_path},
+        )
         for phrase in [
             "Objective",
             "Scope",
@@ -821,6 +900,7 @@ def lint(bundle_dir: Path) -> dict:
             "Worker packet id",
             "telemetry.json",
             "Lite Advisors",
+            "orchestration_watchdog.branch_no_completion_wait_limit",
             "validate_branch_status.py --manifest",
             "Stop Conditions",
             "git diff --check",
