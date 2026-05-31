@@ -62,7 +62,14 @@ Before reviewer launch, create schema v2 `{pre_review_gate_path}` / `pre_review_
 
 ## Bootstrap Requirement
 
-Run the branch skill and Codex CLI availability bootstrap before worker dispatch. Return blocked if the bootstrap fails.
+Before worker dispatch, run:
+
+```bash
+python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/check_goal_skill_availability.py --skills-root $GOAL_SKILLS_ROOT --require goal-branch-orchestrator --require-codex-cli && \
+python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex > /absolute/path/to/bundle/branches/{branch_id}.model-catalog.json
+```
+
+Return blocked if either command fails.
 
 ## Stop Conditions
 
