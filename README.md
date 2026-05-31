@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.7
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.8
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -103,6 +103,15 @@ Agent navigation is generated for token-efficient repo entry. Agents should read
 npm run generate:context
 npm run check:context
 ```
+
+Runtime skill entrypoints are intentionally small wrappers. Each installed skill exposes a compact phase table:
+
+```bash
+python3 "$CODEX_HOME/skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py" --markdown
+python3 "$CODEX_HOME/skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py" --markdown
+```
+
+Runtime agents should follow those phase tables, script `--help` output, JSON artifacts, and validator defects before opening long references. Python script source is an implementation/debug surface, not normal runtime context.
 
 Optional quality tooling is pinned separately from runtime code:
 

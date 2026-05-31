@@ -1,13 +1,14 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "git_head": "f8e7126",
-    "source_fingerprint": "sha256:a80cd601a3d5d5aad08384237e663892428c2472e15f194aaf9caeae41d17371"
+    "git_head": "55f89dd",
+    "source_fingerprint": "sha256:55b9469c044c3eee0bdf1107ba465162750920b6b6140bb69be3348cb38b0892"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
     "Prefer tasks.<task>.read for first context.",
     "Use skills.<skill>.read_first for skill-specific work.",
+    "Run skills.<skill>.phase_manifest_command for runtime flow before opening detailed references.",
     "Open core_scripts only when implementing or debugging that surface.",
     "During runtime orchestration, use script outputs and validator defects before reading Python source.",
     "Run npm run generate:context after moving, adding, or deleting navigation-relevant files."
@@ -68,10 +69,14 @@
     "goal-branch-orchestrator": {
       "role": "Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree.",
       "read_first": [
-        "skills/goal-branch-orchestrator/SKILL.md",
+        "skills/goal-branch-orchestrator/SKILL.md"
+      ],
+      "phase_manifest_command": "python3 skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py --markdown",
+      "reference_on_demand": [
         "skills/goal-branch-orchestrator/references/branch-runtime-contract.md",
         "skills/goal-branch-orchestrator/references/lite-advisor-contract.md"
       ],
+      "assets_on_demand": [],
       "core_scripts": [
         "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
         "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
@@ -79,6 +84,7 @@
         "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
         "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
       ],
+      "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
         "goal-preflight"
@@ -87,11 +93,15 @@
     "goal-main-orchestrator": {
       "role": "Runtime-only main orchestrator for prepared /goal job bundles.",
       "read_first": [
-        "skills/goal-main-orchestrator/SKILL.md",
+        "skills/goal-main-orchestrator/SKILL.md"
+      ],
+      "phase_manifest_command": "python3 skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py --markdown",
+      "reference_on_demand": [
         "skills/goal-main-orchestrator/references/lite-advisor-contract.md",
         "skills/goal-main-orchestrator/references/main-runtime-contract.md",
         "skills/goal-main-orchestrator/references/prompt-audit-contract.md"
       ],
+      "assets_on_demand": [],
       "core_scripts": [
         "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
         "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
@@ -99,19 +109,23 @@
         "skills/goal-main-orchestrator/scripts/validate_main_status.py",
         "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py"
       ],
+      "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
-        "goal-branch-orchestrator",
-        "goal-plan-amender"
+        "goal-branch-orchestrator"
       ]
     },
     "goal-plan-amender": {
       "role": "Runtime-only plan amender for audited /goal bundles.",
       "read_first": [
-        "skills/goal-plan-amender/SKILL.md",
+        "skills/goal-plan-amender/SKILL.md"
+      ],
+      "phase_manifest_command": "python3 skills/goal-plan-amender/scripts/runtime_phase_manifest.py --markdown",
+      "reference_on_demand": [
         "skills/goal-plan-amender/references/amendment-contract.md",
         "skills/goal-plan-amender/references/lite-advisor-contract.md"
       ],
+      "assets_on_demand": [],
       "core_scripts": [
         "skills/goal-plan-amender/scripts/amendment_lib.py",
         "skills/goal-plan-amender/scripts/apply_manifest_amendment.py",
@@ -122,6 +136,7 @@
         "skills/goal-plan-amender/scripts/validate_amender_packet.py",
         "skills/goal-plan-amender/scripts/validate_manifest_amendment.py"
       ],
+      "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
         "goal-preflight"
@@ -130,11 +145,16 @@
     "goal-preflight": {
       "role": "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief.",
       "read_first": [
-        "skills/goal-preflight/SKILL.md",
+        "skills/goal-preflight/SKILL.md"
+      ],
+      "phase_manifest_command": "python3 skills/goal-preflight/scripts/runtime_phase_manifest.py --markdown",
+      "reference_on_demand": [
         "skills/goal-preflight/references/actionability-rubric.md",
         "skills/goal-preflight/references/bundle-contract.md",
         "skills/goal-preflight/references/lite-advisor-contract.md",
-        "skills/goal-preflight/references/parallelization-rules.md",
+        "skills/goal-preflight/references/parallelization-rules.md"
+      ],
+      "assets_on_demand": [
         "skills/goal-preflight/assets/branch.prompt.template.md",
         "skills/goal-preflight/assets/main.prompt.template.md"
       ],
@@ -144,6 +164,7 @@
         "skills/goal-preflight/scripts/lint_preflight_brief.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ],
+      "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
         "goal-branch-orchestrator",
@@ -155,9 +176,6 @@
   "shared": {
     "_goal_shared": {
       "read_first": [
-        "skills/_goal_shared/scripts/orchestration_contract.py",
-        "skills/_goal_shared/scripts/path_rules.py",
-        "skills/_goal_shared/scripts/status_validation.py",
         "skills/_goal_shared/references/lite-advisor-contract.md"
       ],
       "shared_scripts": [
@@ -167,12 +185,14 @@
         "skills/_goal_shared/scripts/context_pack.py",
         "skills/_goal_shared/scripts/create_lite_advice_packet.py",
         "skills/_goal_shared/scripts/extract_telemetry.py",
+        "skills/_goal_shared/scripts/runtime_phase_manifest.py",
         "skills/_goal_shared/scripts/scheduler_tick.py",
         "skills/_goal_shared/scripts/validate_lite_advice.py"
       ],
       "shared_references": [
         "skills/_goal_shared/references/lite-advisor-contract.md"
       ],
+      "open_shared_scripts_only_for": "implementation or debugging of shared deterministic helpers",
       "wrapped_by_public_skills": [
         "goal-branch-orchestrator",
         "goal-main-orchestrator",
@@ -197,6 +217,7 @@
         "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
         "skills/goal-branch-orchestrator/scripts/extract_telemetry.py",
         "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
+        "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
         "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
         "skills/goal-branch-orchestrator/scripts/validate_lite_advice.py"
@@ -213,7 +234,6 @@
       "source": "goal-branch-orchestrator",
       "target": "goal-plan-amender",
       "paths": [
-        "skills/goal-branch-orchestrator/SKILL.md",
         "skills/goal-branch-orchestrator/references/branch-runtime-contract.md"
       ]
     },
@@ -237,6 +257,7 @@
         "skills/goal-main-orchestrator/scripts/create_lite_advice_packet.py",
         "skills/goal-main-orchestrator/scripts/extract_telemetry.py",
         "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+        "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
         "skills/goal-main-orchestrator/scripts/validate_lite_advice.py",
         "skills/goal-main-orchestrator/scripts/validate_main_status.py",
@@ -279,15 +300,9 @@
         "skills/goal-plan-amender/scripts/context_pack.py",
         "skills/goal-plan-amender/scripts/create_lite_advice_packet.py",
         "skills/goal-plan-amender/scripts/extract_telemetry.py",
+        "skills/goal-plan-amender/scripts/runtime_phase_manifest.py",
         "skills/goal-plan-amender/scripts/scheduler_tick.py",
         "skills/goal-plan-amender/scripts/validate_lite_advice.py"
-      ]
-    },
-    {
-      "source": "goal-plan-amender",
-      "target": "goal-branch-orchestrator",
-      "paths": [
-        "skills/goal-plan-amender/SKILL.md"
       ]
     },
     {
@@ -322,6 +337,7 @@
         "skills/goal-preflight/scripts/lint_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_preflight_brief.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py",
+        "skills/goal-preflight/scripts/runtime_phase_manifest.py",
         "skills/goal-preflight/scripts/scheduler_tick.py",
         "skills/goal-preflight/scripts/validate_lite_advice.py"
       ]
@@ -330,7 +346,6 @@
       "source": "goal-preflight",
       "target": "goal-branch-orchestrator",
       "paths": [
-        "skills/goal-preflight/SKILL.md",
         "skills/goal-preflight/assets/main.prompt.template.md",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
@@ -351,7 +366,6 @@
       "source": "goal-preflight",
       "target": "goal-plan-amender",
       "paths": [
-        "skills/goal-preflight/SKILL.md",
         "skills/goal-preflight/assets/main.prompt.template.md",
         "skills/goal-preflight/references/bundle-contract.md",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
@@ -375,10 +389,14 @@
     "bundle_schema": {
       "read": [
         "skills/_goal_shared/scripts/orchestration_contract.py",
-        "skills/goal-preflight/references/bundle-contract.md",
-        "skills/goal-preflight/scripts/create_goal_bundle.py",
-        "skills/goal-preflight/scripts/lint_goal_bundle.py"
+        "skills/goal-preflight/references/bundle-contract.md"
       ],
+      "commands": [
+        "python3 skills/goal-preflight/scripts/runtime_phase_manifest.py --markdown",
+        "python3 skills/goal-preflight/scripts/create_goal_bundle.py --help",
+        "python3 skills/goal-preflight/scripts/lint_goal_bundle.py --help"
+      ],
+      "open_scripts_only_for": "bundle schema implementation or script debugging",
       "write_candidates": [
         "skills/goal-preflight/scripts",
         "skills/_goal_shared/scripts/orchestration_contract.py"
@@ -390,11 +408,18 @@
     },
     "runtime_scheduling": {
       "read": [
-        "skills/goal-main-orchestrator/SKILL.md",
-        "skills/_goal_shared/scripts/scheduler_tick.py",
-        "skills/_goal_shared/scripts/status_validation.py",
-        "skills/goal-main-orchestrator/scripts/validate_main_status.py"
+        "skills/goal-main-orchestrator/SKILL.md"
       ],
+      "commands": [
+        "python3 skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py --markdown",
+        "python3 skills/goal-main-orchestrator/scripts/scheduler_tick.py --help",
+        "python3 skills/goal-main-orchestrator/scripts/validate_main_status.py --help"
+      ],
+      "reference_on_demand": [
+        "skills/goal-main-orchestrator/references/main-runtime-contract.md",
+        "skills/goal-main-orchestrator/references/prompt-audit-contract.md"
+      ],
+      "open_scripts_only_for": "scheduler/status validator implementation or script debugging",
       "write_candidates": [
         "skills/_goal_shared/scripts",
         "skills/goal-main-orchestrator/scripts"
@@ -406,11 +431,17 @@
     },
     "branch_execution": {
       "read": [
-        "skills/goal-branch-orchestrator/SKILL.md",
-        "skills/goal-branch-orchestrator/references/branch-runtime-contract.md",
-        "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-        "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
+        "skills/goal-branch-orchestrator/SKILL.md"
       ],
+      "commands": [
+        "python3 skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py --markdown",
+        "python3 skills/goal-branch-orchestrator/scripts/create_runtime_packet.py --help",
+        "python3 skills/goal-branch-orchestrator/scripts/validate_branch_status.py --help"
+      ],
+      "reference_on_demand": [
+        "skills/goal-branch-orchestrator/references/branch-runtime-contract.md"
+      ],
+      "open_scripts_only_for": "packet/status validator implementation or script debugging",
       "write_candidates": [
         "skills/goal-branch-orchestrator/scripts"
       ],
@@ -421,10 +452,17 @@
     },
     "amendments": {
       "read": [
-        "skills/goal-plan-amender/SKILL.md",
-        "skills/goal-plan-amender/references/amendment-contract.md",
-        "skills/goal-plan-amender/scripts/amendment_lib.py"
+        "skills/goal-plan-amender/SKILL.md"
       ],
+      "commands": [
+        "python3 skills/goal-plan-amender/scripts/runtime_phase_manifest.py --markdown",
+        "python3 skills/goal-plan-amender/scripts/recommend_amendment_decision.py --help",
+        "python3 skills/goal-plan-amender/scripts/validate_manifest_amendment.py --help"
+      ],
+      "reference_on_demand": [
+        "skills/goal-plan-amender/references/amendment-contract.md"
+      ],
+      "open_scripts_only_for": "amendment implementation or script debugging",
       "write_candidates": [
         "skills/goal-plan-amender/scripts"
       ],

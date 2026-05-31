@@ -23,6 +23,7 @@ SHARED_SCRIPTS = (
     "create_lite_advice_packet.py",
     "context_pack.py",
     "extract_telemetry.py",
+    "runtime_phase_manifest.py",
     "scheduler_tick.py",
     "validate_lite_advice.py",
     "check_goal_skill_availability.py",

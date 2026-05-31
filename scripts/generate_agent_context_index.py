@@ -264,38 +264,58 @@ def build_tasks() -> dict[str, Any]:
             "read": [
                 "skills/_goal_shared/scripts/orchestration_contract.py",
                 "skills/goal-preflight/references/bundle-contract.md",
-                "skills/goal-preflight/scripts/create_goal_bundle.py",
-                "skills/goal-preflight/scripts/lint_goal_bundle.py",
             ],
+            "commands": [
+                "python3 skills/goal-preflight/scripts/runtime_phase_manifest.py --markdown",
+                "python3 skills/goal-preflight/scripts/create_goal_bundle.py --help",
+                "python3 skills/goal-preflight/scripts/lint_goal_bundle.py --help",
+            ],
+            "open_scripts_only_for": "bundle schema implementation or script debugging",
             "write_candidates": ["skills/goal-preflight/scripts", "skills/_goal_shared/scripts/orchestration_contract.py"],
             "checks": ["npm run check:fixtures", "npm run check:golden"],
         },
         "runtime_scheduling": {
             "read": [
                 "skills/goal-main-orchestrator/SKILL.md",
-                "skills/_goal_shared/scripts/scheduler_tick.py",
-                "skills/_goal_shared/scripts/status_validation.py",
-                "skills/goal-main-orchestrator/scripts/validate_main_status.py",
             ],
+            "commands": [
+                "python3 skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py --markdown",
+                "python3 skills/goal-main-orchestrator/scripts/scheduler_tick.py --help",
+                "python3 skills/goal-main-orchestrator/scripts/validate_main_status.py --help",
+            ],
+            "reference_on_demand": [
+                "skills/goal-main-orchestrator/references/main-runtime-contract.md",
+                "skills/goal-main-orchestrator/references/prompt-audit-contract.md",
+            ],
+            "open_scripts_only_for": "scheduler/status validator implementation or script debugging",
             "write_candidates": ["skills/_goal_shared/scripts", "skills/goal-main-orchestrator/scripts"],
             "checks": ["npm run check:fixtures", "npm run check:golden"],
         },
         "branch_execution": {
             "read": [
                 "skills/goal-branch-orchestrator/SKILL.md",
-                "skills/goal-branch-orchestrator/references/branch-runtime-contract.md",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
             ],
+            "commands": [
+                "python3 skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py --markdown",
+                "python3 skills/goal-branch-orchestrator/scripts/create_runtime_packet.py --help",
+                "python3 skills/goal-branch-orchestrator/scripts/validate_branch_status.py --help",
+            ],
+            "reference_on_demand": ["skills/goal-branch-orchestrator/references/branch-runtime-contract.md"],
+            "open_scripts_only_for": "packet/status validator implementation or script debugging",
             "write_candidates": ["skills/goal-branch-orchestrator/scripts"],
             "checks": ["npm run check:fixtures", "npm run check:golden"],
         },
         "amendments": {
             "read": [
                 "skills/goal-plan-amender/SKILL.md",
-                "skills/goal-plan-amender/references/amendment-contract.md",
-                "skills/goal-plan-amender/scripts/amendment_lib.py",
             ],
+            "commands": [
+                "python3 skills/goal-plan-amender/scripts/runtime_phase_manifest.py --markdown",
+                "python3 skills/goal-plan-amender/scripts/recommend_amendment_decision.py --help",
+                "python3 skills/goal-plan-amender/scripts/validate_manifest_amendment.py --help",
+            ],
+            "reference_on_demand": ["skills/goal-plan-amender/references/amendment-contract.md"],
+            "open_scripts_only_for": "amendment implementation or script debugging",
             "write_candidates": ["skills/goal-plan-amender/scripts"],
             "checks": ["npm run check:fixtures", "npm run check:golden"],
         },
@@ -334,8 +354,8 @@ def build_index() -> dict[str, Any]:
         skill_md = SKILLS_ROOT / skill / "SKILL.md"
         frontmatter = parse_frontmatter(skill_md)
         read_first = [rel(skill_md)]
-        read_first.extend(skill_files(skill, "references", (".md",)))
-        read_first.extend(skill_files(skill, "assets", (".md",)))
+        references = skill_files(skill, "references", (".md",))
+        assets = skill_files(skill, "assets", (".md",))
         scripts = [
             rel(path)
             for path in sorted((SKILLS_ROOT / skill / "scripts").glob("*.py"))
@@ -344,7 +364,11 @@ def build_index() -> dict[str, Any]:
         skills[skill] = {
             "role": first_sentence(frontmatter.get("description", "")),
             "read_first": read_first,
+            "phase_manifest_command": f"python3 skills/{skill}/scripts/runtime_phase_manifest.py --markdown",
+            "reference_on_demand": references,
+            "assets_on_demand": assets,
             "core_scripts": scripts,
+            "open_core_scripts_only_for": "implementation or debugging of that script surface",
             "depends_on": detect_skill_dependencies(skill, public_skills),
         }
 
@@ -363,6 +387,7 @@ def build_index() -> dict[str, Any]:
             "Read this file before broad repository scans.",
             "Prefer tasks.<task>.read for first context.",
             "Use skills.<skill>.read_first for skill-specific work.",
+            "Run skills.<skill>.phase_manifest_command for runtime flow before opening detailed references.",
             "Open core_scripts only when implementing or debugging that surface.",
             "During runtime orchestration, use script outputs and validator defects before reading Python source.",
             "Run npm run generate:context after moving, adding, or deleting navigation-relevant files.",
@@ -372,13 +397,11 @@ def build_index() -> dict[str, Any]:
         "shared": {
             "_goal_shared": {
                 "read_first": [
-                    "skills/_goal_shared/scripts/orchestration_contract.py",
-                    "skills/_goal_shared/scripts/path_rules.py",
-                    "skills/_goal_shared/scripts/status_validation.py",
                     "skills/_goal_shared/references/lite-advisor-contract.md",
                 ],
                 "shared_scripts": shared_scripts,
                 "shared_references": shared_references,
+                "open_shared_scripts_only_for": "implementation or debugging of shared deterministic helpers",
                 "wrapped_by_public_skills": sync["public_skills"],
             }
         },
