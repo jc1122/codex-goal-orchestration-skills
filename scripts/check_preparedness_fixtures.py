@@ -1982,6 +1982,31 @@ def main() -> int:
         assert_shell_syntax(packet_root / "B01-W02" / "launch.sh")
         assert_contains(worker_launch, "timeout --foreground", "worker launcher")
         assert_contains(worker_launch, "worker_attempt_timeout_seconds=3600", "worker launcher")
+        manifest_packet_root = tmp_path / "manifest-packets"
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                "--role",
+                "worker",
+                "--packet-id",
+                "B01-W01",
+                "--branch",
+                "B01",
+                "--worktree",
+                ROOT.as_posix(),
+                "--out-dir",
+                manifest_packet_root.as_posix(),
+                "--task-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+            ]
+        )
+        manifest_worker_prompt = (manifest_packet_root / "B01-W01" / "prompt.md").read_text(encoding="utf-8")
+        if not (manifest_packet_root / "B01-W01" / "packet-context.json").exists():
+            raise SystemExit("worker --manifest did not create compact packet-context.json")
+        assert_contains(manifest_worker_prompt, "Compact Worker Task", "worker --manifest prompt")
 
         run(
             [

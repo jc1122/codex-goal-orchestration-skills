@@ -1565,7 +1565,10 @@ def main() -> int:
     parser.add_argument("--branch", required=True)
     parser.add_argument("--worktree", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--manifest", help="Required for reviewer packets; absolute path to job.manifest.json.")
+    parser.add_argument(
+        "--manifest",
+        help="Absolute path to job.manifest.json. Required for reviewer packets; optional for compact worker packets.",
+    )
     parser.add_argument("--pre-review-gate", help="Required for reviewer packets; absolute path to pre_review_gate.json.")
     parser.add_argument("--task-file")
     parser.add_argument("--owned-file", action="append", default=[])
@@ -1587,6 +1590,13 @@ def main() -> int:
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
     owned_files = normalize_owned_paths(args.owned_file)
     context_files = normalize_context_files(args.context_file)
+    if args.manifest and args.role == "worker":
+        manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+        manifest_value = manifest_path.as_posix()
+        if manifest_value not in context_files:
+            context_files.append(manifest_value)
+    elif args.manifest and args.role == "research-worker":
+        raise SystemExit("--manifest is only valid for worker compact context or reviewer packet generation")
     task_file = (
         resolve_absolute_path(args.task_file, "--task-file", must_exist=True)
         if args.task_file
