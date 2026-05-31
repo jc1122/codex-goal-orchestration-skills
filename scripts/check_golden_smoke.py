@@ -1416,6 +1416,79 @@ def main() -> int:
             ]
         )
         assert_shell_syntax(bundle / "workers" / WORKER_PACKET / "launch.sh")
+        worker_config = assert_compact_runtime_launcher(bundle / "workers" / WORKER_PACKET, "worker")
+        if worker_config.get("attempt_timeout_seconds") != 3600:
+            raise SystemExit("worker launch-config should preserve the 3600 second attempt timeout")
+        if worker_config.get("selected_ladder") != ["codex-mini"]:
+            raise SystemExit(f"worker launch-config selected_ladder mismatch: {worker_config.get('selected_ladder')!r}")
+        if worker_config.get("selection_reason") != "Golden smoke uses the cheapest deterministic route alias.":
+            raise SystemExit(f"worker launch-config selection_reason mismatch: {worker_config.get('selection_reason')!r}")
+        worker_attempts = worker_config.get("attempts", [])
+        event_logs = []
+        probe_logs = []
+        for attempt in worker_attempts:
+            if isinstance(attempt, dict):
+                event_logs.extend(attempt.get("event_logs", []))
+                probe_logs.extend(attempt.get("probe_logs", []))
+        if event_logs != ["events-mini.jsonl"]:
+            raise SystemExit(f"worker launch-config event log mismatch: {event_logs!r}")
+        if probe_logs:
+            raise SystemExit(f"worker launch-config probe logs should be empty for codex-mini-only route: {probe_logs!r}")
+        if worker_config.get("selected_commands") != ["codex exec --ephemeral -m gpt-5.4-mini -s workspace-write"]:
+            raise SystemExit(f"worker launch-config selected command mismatch: {worker_config.get('selected_commands')!r}")
+
+        mixed_worker = bundle / "workers" / "B01-W99"
+        run(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
+                "--role",
+                "worker",
+                "--packet-id",
+                "B01-W99",
+                "--branch",
+                BRANCH_NAME,
+                "--worktree",
+                REPO_ROOT.as_posix(),
+                "--out-dir",
+                (bundle / "workers").as_posix(),
+                "--owned-file",
+                "README.md",
+                "--context-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--task-file",
+                task_file.as_posix(),
+                "--worker-route",
+                "gemini-pro",
+                "copilot-gpt-5.4",
+                "codex-mini",
+                "--selection-reason",
+                "Golden smoke preserves mixed route probe and log metadata.",
+            ]
+        )
+        mixed_config = assert_compact_runtime_launcher(mixed_worker, "worker")
+        if mixed_config.get("selected_ladder") != ["gemini-pro", "copilot-gpt-5.4", "codex-mini"]:
+            raise SystemExit(f"worker launch-config mixed-route ladder mismatch: {mixed_config.get('selected_ladder')!r}")
+        mixed_event_logs = [
+            log
+            for attempt in mixed_config.get("attempts", [])
+            if isinstance(attempt, dict)
+            for log in attempt.get("event_logs", [])
+        ]
+        mixed_probe_logs = [
+            log
+            for attempt in mixed_config.get("attempts", [])
+            if isinstance(attempt, dict)
+            for log in attempt.get("probe_logs", [])
+        ]
+        if mixed_event_logs != ["events-gemini-pro.log", "events-copilot.jsonl", "events-mini.jsonl"]:
+            raise SystemExit(f"worker launch-config mixed-route event log mismatch: {mixed_event_logs!r}")
+        if mixed_probe_logs != [
+            "events-gemini-pro-probe.log",
+            "events-copilot-probe.jsonl",
+            "events-copilot-version.log",
+        ]:
+            raise SystemExit(f"worker launch-config mixed-route probe log mismatch: {mixed_probe_logs!r}")
 
         run(
             [

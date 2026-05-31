@@ -294,7 +294,11 @@ def assert_shell_syntax(path: Path) -> None:
     run(["bash", "-n", path.as_posix()])
 
 
-def assert_compact_runtime_launcher(packet_dir: Path, role: str, timeout_seconds: int) -> dict:
+def assert_compact_runtime_launcher(
+    packet_dir: Path,
+    role: str,
+    timeout_seconds: int | None = None,
+) -> dict:
     launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
     assert_shell_syntax(packet_dir / "launch.sh")
     assert_contains(launch, "runtime_packet_runner.py", f"{role} launcher")
@@ -303,7 +307,7 @@ def assert_compact_runtime_launcher(packet_dir: Path, role: str, timeout_seconds
     config = read_json(packet_dir / "launch-config.json")
     if config.get("role") != role:
         raise SystemExit(f"{role} launch-config role mismatch: {config.get('role')!r}")
-    if config.get("attempt_timeout_seconds") != timeout_seconds:
+    if timeout_seconds is not None and config.get("attempt_timeout_seconds") != timeout_seconds:
         raise SystemExit(f"{role} launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
     return config
 
@@ -2001,10 +2005,80 @@ def main() -> int:
                 "Fixture route selected to inspect generated timeout wrapper.",
             ]
         )
-        worker_launch = (packet_root / "B01-W02" / "launch.sh").read_text(encoding="utf-8")
         assert_shell_syntax(packet_root / "B01-W02" / "launch.sh")
-        assert_contains(worker_launch, "timeout --foreground", "worker launcher")
-        assert_contains(worker_launch, "worker_attempt_timeout_seconds=3600", "worker launcher")
+        worker_config = assert_compact_runtime_launcher(packet_root / "B01-W02", "worker")
+        if worker_config.get("attempt_timeout_seconds") != 3600:
+            raise SystemExit("worker launch-config should preserve the 3600 second attempt timeout")
+        if worker_config.get("selected_ladder") != ["codex-mini"]:
+            raise SystemExit(f"worker launch-config ladder mismatch: {worker_config.get('selected_ladder')!r}")
+        if worker_config.get("selection_reason") != "Fixture route selected to inspect generated timeout wrapper.":
+            raise SystemExit(f"worker launch-config selection reason mismatch: {worker_config.get('selection_reason')!r}")
+        attempts = worker_config.get("attempts", [])
+        event_logs = []
+        probe_logs = []
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                event_logs.extend(attempt.get("event_logs", []))
+                probe_logs.extend(attempt.get("probe_logs", []))
+        if event_logs != ["events-mini.jsonl"]:
+            raise SystemExit(f"worker launch-config event logs mismatch: {event_logs!r}")
+        if probe_logs:
+            raise SystemExit(f"worker launch-config should not include probe logs for codex-mini-only route: {probe_logs!r}")
+        if worker_config.get("selected_commands") != ["codex exec --ephemeral -m gpt-5.4-mini -s workspace-write"]:
+            raise SystemExit(f"worker launch-config selected commands mismatch: {worker_config.get('selected_commands')!r}")
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+                "--role",
+                "worker",
+                "--packet-id",
+                "B01-W04",
+                "--branch",
+                "preparedness-research-fixture-W04",
+                "--worktree",
+                ROOT.as_posix(),
+                "--out-dir",
+                packet_root.as_posix(),
+                "--owned-file",
+                "README.md",
+                "--context-file",
+                (bundle / "branches" / "B01.prompt.md").as_posix(),
+                "--task-file",
+                task_file.as_posix(),
+                "--worker-route",
+                "gemini-pro",
+                "copilot-gpt-5.4",
+                "codex-mini",
+                "--selection-reason",
+                "Fixture route selected to validate worker probe metadata.",
+            ]
+        )
+        mixed_config = assert_compact_runtime_launcher(packet_root / "B01-W04", "worker")
+        if mixed_config.get("selected_ladder") != ["gemini-pro", "copilot-gpt-5.4", "codex-mini"]:
+            raise SystemExit(f"worker launch-config mixed route mismatch: {mixed_config.get('selected_ladder')!r}")
+        if mixed_config.get("selection_reason") != "Fixture route selected to validate worker probe metadata.":
+            raise SystemExit(f"worker launch-config mixed route selection reason mismatch: {mixed_config.get('selection_reason')!r}")
+        mixed_event_logs = [
+            log
+            for attempt in mixed_config.get("attempts", [])
+            if isinstance(attempt, dict)
+            for log in attempt.get("event_logs", [])
+        ]
+        mixed_probe_logs = [
+            log
+            for attempt in mixed_config.get("attempts", [])
+            if isinstance(attempt, dict)
+            for log in attempt.get("probe_logs", [])
+        ]
+        if mixed_event_logs != ["events-gemini-pro.log", "events-copilot.jsonl", "events-mini.jsonl"]:
+            raise SystemExit(f"worker launch-config mixed event log mismatch: {mixed_event_logs!r}")
+        if mixed_probe_logs != [
+            "events-gemini-pro-probe.log",
+            "events-copilot-probe.jsonl",
+            "events-copilot-version.log",
+        ]:
+            raise SystemExit(f"worker launch-config mixed probe log mismatch: {mixed_probe_logs!r}")
         manifest_packet_root = tmp_path / "manifest-packets"
         run(
             [

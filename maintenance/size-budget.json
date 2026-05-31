@@ -1,11 +1,11 @@
 {
   "largest_files": [
     {
-      "approx_tokens": 21991,
-      "bytes": 87963,
-      "chars": 87963,
+      "approx_tokens": 22917,
+      "bytes": 91668,
+      "chars": 91668,
       "files": 1,
-      "lines": 2272,
+      "lines": 2346,
       "path": "scripts/check_preparedness_fixtures.py"
     },
     {
@@ -17,19 +17,19 @@
       "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
     },
     {
-      "approx_tokens": 16315,
-      "bytes": 65260,
-      "chars": 65260,
+      "approx_tokens": 17253,
+      "bytes": 69011,
+      "chars": 69011,
       "files": 1,
-      "lines": 1677,
+      "lines": 1750,
       "path": "scripts/check_golden_smoke.py"
     },
     {
-      "approx_tokens": 16105,
-      "bytes": 64421,
-      "chars": 64421,
+      "approx_tokens": 13180,
+      "bytes": 52720,
+      "chars": 52720,
       "files": 1,
-      "lines": 1647,
+      "lines": 1281,
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py"
     },
     {
@@ -73,6 +73,14 @@
       "path": "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py"
     },
     {
+      "approx_tokens": 7612,
+      "bytes": 30446,
+      "chars": 30446,
+      "files": 1,
+      "lines": 792,
+      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py"
+    },
+    {
       "approx_tokens": 6826,
       "bytes": 27306,
       "chars": 27306,
@@ -111,14 +119,6 @@
       "files": 1,
       "lines": 531,
       "path": "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py"
-    },
-    {
-      "approx_tokens": 5498,
-      "bytes": 21994,
-      "chars": 21994,
-      "files": 1,
-      "lines": 649,
-      "path": "skills/_goal_shared/scripts/create_lite_advice_packet.py"
     }
   ],
   "mode": "warn",
@@ -136,11 +136,11 @@
       "lines": 4929
     },
     "goal-branch-orchestrator": {
-      "approx_tokens": 58967,
-      "bytes": 235869,
-      "chars": 235869,
+      "approx_tokens": 61183,
+      "bytes": 244733,
+      "chars": 244733,
       "files": 19,
-      "lines": 5214
+      "lines": 5355
     },
     "goal-main-orchestrator": {
       "approx_tokens": 38951,
@@ -167,32 +167,32 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 246838,
-      "bytes": 987352,
-      "chars": 987352,
+      "approx_tokens": 250918,
+      "bytes": 1003672,
+      "chars": 1003672,
       "files": 80,
-      "lines": 23208
+      "lines": 23496
     },
     "skill_python": {
-      "approx_tokens": 194222,
-      "bytes": 776887,
-      "chars": 776887,
+      "approx_tokens": 196438,
+      "bytes": 785751,
+      "chars": 785751,
       "files": 71,
-      "lines": 17739
+      "lines": 17880
     },
     "skills": {
-      "approx_tokens": 218781,
-      "bytes": 875123,
-      "chars": 875123,
+      "approx_tokens": 220997,
+      "bytes": 883987,
+      "chars": 883987,
       "files": 93,
-      "lines": 19078
+      "lines": 19219
     },
     "tracked": {
-      "approx_tokens": 286657,
-      "bytes": 1146628,
-      "chars": 1146628,
+      "approx_tokens": 290786,
+      "bytes": 1163145,
+      "chars": 1163145,
       "files": 118,
-      "lines": 25954
+      "lines": 26242
     }
   },
   "skill_docs": {

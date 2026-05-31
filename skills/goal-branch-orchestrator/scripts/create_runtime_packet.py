@@ -102,6 +102,7 @@ WORKER_ROUTE_EVENT_LABELS = {
     "copilot-gpt-5.4": "copilot",
     "codex-mini": "mini",
 }
+WORKER_PACKET_PROMPT = "Follow the complete worker packet instructions provided on stdin."
 REVIEW_ROUTE_MODELS = {
     alias: CONTRACT.CODEX_ROUTE_MODELS[alias]
     for route in CONTRACT.REVIEW_MODEL_ROUTES.values()
@@ -199,6 +200,13 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.log"],
                     "probe_logs": [f"events-{label}-probe.log"],
+                    "probe_model": GEMINI_PRO_MODEL,
+                    "probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
+                    "probe_prompt": GEMINI_PROBE_PROMPT,
+                    "status_markers": {
+                        "begin": GEMINI_STATUS_BEGIN,
+                        "end": GEMINI_STATUS_END,
+                    },
                 }
             )
         elif alias == "gemini-flash":
@@ -212,6 +220,13 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.log"],
                     "probe_logs": [f"events-{label}-probe.log"],
+                    "probe_model": GEMINI_FLASH_MODEL,
+                    "probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
+                    "probe_prompt": GEMINI_PROBE_PROMPT,
+                    "status_markers": {
+                        "begin": GEMINI_STATUS_BEGIN,
+                        "end": GEMINI_STATUS_END,
+                    },
                 }
             )
         elif alias == "copilot-gpt-5.4":
@@ -225,6 +240,10 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.jsonl"],
                     "probe_logs": [f"events-{label}-probe.jsonl", f"events-{label}-version.log"],
+                    "probe_model": COPILOT_PROBE_MODEL,
+                    "probe_reasoning_effort": COPILOT_PROBE_REASONING_EFFORT,
+                    "probe_timeout_seconds": COPILOT_PROBE_TIMEOUT_SECONDS,
+                    "probe_prompt": COPILOT_PROBE_PROMPT,
                 }
             )
         else:
@@ -932,442 +951,10 @@ def launch_for(
     review_semantic_hashes: dict[str, str] | None = None,
     review_reuse_policy: dict | None = None,
 ) -> str:
-    if role == "research-worker":
+    if role in {"research-worker", "reviewer", "worker"}:
         return compact_launch_script()
 
-    if role == "reviewer":
-        return compact_launch_script()
-
-    selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
-    selected_commands = worker_route_commands(selected_ladder)
-    attempts = worker_attempt_script(selected_ladder, output_name)
-    worker_telemetry = telemetry_function("worker", packet_id, output_name, worker_telemetry_attempts(selected_ladder))
-    return f"""#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-
-git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
-
-packet_dir="$(pwd)"
-prompt_path="$packet_dir/prompt.md"
-schema_path="$packet_dir/{schema_name}"
-output_path="$packet_dir/{output_name}"
-packet_id={shell_quote(packet_id)}
-branch_name={shell_quote(branch)}
-worktree_path={shell_quote(worktree)}
-gemini_command={shell_quote(GEMINI_COMMAND)}
-gemini_approval_mode={shell_quote(GEMINI_APPROVAL_MODE)}
-gemini_probe_timeout_seconds={GEMINI_PROBE_TIMEOUT_SECONDS}
-gemini_probe_prompt={shell_quote(GEMINI_PROBE_PROMPT)}
-copilot_command={shell_quote(COPILOT_COMMAND)}
-copilot_model={shell_quote(COPILOT_MODEL)}
-copilot_reasoning_effort={shell_quote(COPILOT_REASONING_EFFORT)}
-copilot_probe_model={shell_quote(COPILOT_PROBE_MODEL)}
-copilot_probe_reasoning_effort={shell_quote(COPILOT_PROBE_REASONING_EFFORT)}
-copilot_probe_timeout_seconds={COPILOT_PROBE_TIMEOUT_SECONDS}
-copilot_probe_prompt={shell_quote(COPILOT_PROBE_PROMPT)}
-worker_attempt_timeout_seconds={WORKER_ATTEMPT_TIMEOUT_SECONDS}
-timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
-rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir"/events-*.log "$packet_dir"/fallback.blocked.txt "$packet_dir/telemetry.json"
-
-run_with_timeout() {{
-  local seconds="$1"
-  shift
-  if ! command -v timeout >/dev/null 2>&1; then
-    echo "timeout command not found; refusing unbounded worker attempt." >&2
-    return 127
-  fi
-  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
-}}
-
-worktree_dirty() {{
-  [ -n "$(git -C {shell_quote(worktree)} status --porcelain)" ]
-}}
-
-guard_clean_for_fallback() {{
-  local label="$1"
-  if [ -s "$output_path" ]; then
-    write_telemetry
-    exit 1
-  fi
-  if worktree_dirty; then
-    echo "$label failed after leaving dirty worktree; refusing fallback in same worktree." > "$packet_dir/fallback.blocked.txt"
-    write_terminal_status blocked "$label failed after leaving dirty worktree; refusing fallback in same worktree."
-    write_telemetry
-    exit 2
-  fi
-}}
-
-write_terminal_status() {{
-  local status="$1"
-  local message="$2"
-  python3 - "$output_path" "$packet_id" "$branch_name" "$worktree_path" "$status" "$message" <<'PY'
-import json
-import subprocess
-import sys
-from pathlib import Path
-
-output_path = Path(sys.argv[1])
-packet_id = sys.argv[2]
-branch = sys.argv[3]
-worktree = sys.argv[4]
-status = sys.argv[5]
-message = sys.argv[6]
-
-try:
-    changed_files = []
-    for line in subprocess.check_output(
-        ["git", "-C", worktree, "status", "--short"],
-        text=True,
-        stderr=subprocess.DEVNULL,
-    ).splitlines():
-        path = line[3:] if len(line) > 3 and line[2] == " " else line.strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if path:
-            changed_files.append(path)
-except Exception:
-    changed_files = []
-
-data = {{
-    "packet_id": packet_id,
-    "role": "worker",
-    "status": status,
-    "branch": branch,
-    "worktree": worktree,
-    "selected_ladder": {json.dumps(selected_ladder)},
-    "selection_reason": {json.dumps(selection_reason)},
-    "changed_files": changed_files,
-    "commands_run": {json.dumps(selected_commands)},
-    "tests": [],
-    "blockers": [message, "Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error."],
-    "handoff": message + " Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error.",
-}}
-output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-PY
-}}
-
-{worker_telemetry}
-
-extract_status_json() {{
-  local raw_path="$1"
-  python3 - "$raw_path" "$schema_path" "$output_path" <<'PY'
-import json
-import re
-import sys
-from pathlib import Path
-
-raw_path = Path(sys.argv[1])
-schema_path = Path(sys.argv[2])
-output_path = Path(sys.argv[3])
-begin = "{GEMINI_STATUS_BEGIN}"
-end = "{GEMINI_STATUS_END}"
-
-
-def validate_type(value, expected_type):
-    if expected_type == "string":
-        return isinstance(value, str)
-    if expected_type == "array":
-        return isinstance(value, list)
-    if expected_type == "object":
-        return isinstance(value, dict)
-    return True
-
-
-def validate(instance, schema):
-    if schema.get("type") == "object" and not isinstance(instance, dict):
-        raise ValueError("status is not a JSON object")
-    required = schema.get("required", [])
-    missing = [field for field in required if field not in instance]
-    if missing:
-        raise ValueError(f"status missing required fields: {{', '.join(missing)}}")
-    properties = schema.get("properties", {{}})
-    if schema.get("additionalProperties") is False:
-        extra = sorted(set(instance) - set(properties))
-        if extra:
-            raise ValueError(f"status has unsupported fields: {{', '.join(extra)}}")
-    for field, field_schema in properties.items():
-        if field not in instance:
-            continue
-        value = instance[field]
-        if "const" in field_schema and value != field_schema["const"]:
-            raise ValueError(f"{{field}} must be {{field_schema['const']!r}}")
-        if "enum" in field_schema and value not in field_schema["enum"]:
-            raise ValueError(f"{{field}} must be one of {{field_schema['enum']!r}}")
-        if "type" in field_schema and not validate_type(value, field_schema["type"]):
-            raise ValueError(f"{{field}} has wrong type")
-        if isinstance(value, str):
-            if "minLength" in field_schema and len(value) < field_schema["minLength"]:
-                raise ValueError(f"{{field}} is too short")
-            if "pattern" in field_schema and re.fullmatch(field_schema["pattern"], value) is None:
-                raise ValueError(f"{{field}} does not match required pattern")
-        if field_schema.get("type") == "array":
-            if "minItems" in field_schema and len(value) < field_schema["minItems"]:
-                raise ValueError(f"{{field}} contains too few items")
-            item_schema = field_schema.get("items", {{}})
-            item_type = item_schema.get("type")
-            for item in value:
-                if item_type:
-                    if not validate_type(item, item_type):
-                        raise ValueError(f"{{field}} contains item with wrong type")
-                if "enum" in item_schema and item not in item_schema["enum"]:
-                    raise ValueError(f"{{field}} contains item outside allowed enum")
-                if isinstance(item, str):
-                    if "minLength" in item_schema and len(item) < item_schema["minLength"]:
-                        raise ValueError(f"{{field}} contains item that is too short")
-                    if "pattern" in item_schema and re.fullmatch(item_schema["pattern"], item) is None:
-                        raise ValueError(f"{{field}} contains item that does not match required pattern")
-
-
-schema = json.loads(schema_path.read_text(encoding="utf-8"))
-
-
-def collect_strings(value):
-    if isinstance(value, str):
-        yield value
-    elif isinstance(value, list):
-        for item in value:
-            yield from collect_strings(item)
-    elif isinstance(value, dict):
-        for item in value.values():
-            yield from collect_strings(item)
-
-
-text = raw_path.read_text(encoding="utf-8", errors="replace")
-sources = [("raw output", text)]
-jsonl_parts = []
-for line in text.splitlines():
-    try:
-        data = json.loads(line)
-    except Exception:
-        continue
-    jsonl_parts.extend(collect_strings(data))
-if jsonl_parts:
-    sources.append(("decoded JSONL strings", "\\n".join(jsonl_parts)))
-
-source_errors = []
-for source_name, source_text in sources:
-    begin_count = source_text.count(begin)
-    end_count = source_text.count(end)
-    if begin_count != 1 or end_count != 1:
-        source_errors.append(
-            f"{{source_name}}: expected exactly one {{begin}} and one {{end}} marker; "
-            f"found {{begin_count}} begin marker(s) and {{end_count}} end marker(s)."
-        )
-        continue
-    start = source_text.index(begin) + len(begin)
-    finish = source_text.index(end)
-    if finish <= start:
-        source_errors.append(f"{{source_name}}: worker status end marker appears before begin marker.")
-        continue
-    candidate = source_text[start:finish].strip()
-    try:
-        data = json.loads(candidate)
-        if data.get("status") == "success":
-            data["status"] = "pass"
-        validate(data, schema)
-    except Exception as exc:
-        source_errors.append(f"{{source_name}}: invalid marked worker status JSON: {{exc}}")
-        continue
-    output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-    raise SystemExit(0)
-
-for message in source_errors:
-    print(message, file=sys.stderr)
-raise SystemExit(1)
-PY
-}}
-
-probe_gemini_model() {{
-  local label="$1"
-  local model="$2"
-  local probe_path="$packet_dir/events-${{label}}-probe.log"
-  (
-    cd {shell_quote(worktree)}
-    python3 - "$gemini_command" "$model" "$gemini_approval_mode" "$gemini_probe_timeout_seconds" "$gemini_probe_prompt" <<'PY'
-import subprocess
-import sys
-
-command, model, approval_mode, timeout_seconds, prompt = sys.argv[1:6]
-expected = prompt.rsplit(":", 1)[-1].strip()
-try:
-    result = subprocess.run(
-        [
-            command,
-            "--model",
-            model,
-            "--approval-mode",
-            approval_mode,
-            "--skip-trust",
-            "-p",
-            prompt,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=int(timeout_seconds),
-        check=False,
-    )
-except subprocess.TimeoutExpired as exc:
-    output = exc.stdout or ""
-    if isinstance(output, bytes):
-        output = output.decode("utf-8", errors="replace")
-    if output:
-        sys.stdout.write(output)
-    print(f"Gemini model probe timed out after {{timeout_seconds}} seconds.", file=sys.stderr)
-    raise SystemExit(124)
-
-if result.stdout:
-    sys.stdout.write(result.stdout)
-if result.returncode != 0:
-    raise SystemExit(result.returncode)
-if expected not in (result.stdout or ""):
-    print(f"Gemini model probe did not return expected token: {{expected}}", file=sys.stderr)
-    raise SystemExit(1)
-raise SystemExit(result.returncode)
-PY
-  ) > "$probe_path" 2>&1
-}}
-
-run_gemini() {{
-  local label="$1"
-  local model="$2"
-  local raw_path="$packet_dir/events-${{label}}.log"
-  if ! command -v "$gemini_command" >/dev/null 2>&1; then
-    echo "Gemini command not found: $gemini_command" > "$raw_path"
-    return 127
-  fi
-  probe_gemini_model "$label" "$model" || return $?
-  (
-    cd {shell_quote(worktree)}
-    run_with_timeout "$worker_attempt_timeout_seconds" "$gemini_command" \\
-      --model "$model" \\
-      --approval-mode "$gemini_approval_mode" \\
-      --skip-trust \\
-      -p "Follow the complete worker packet instructions provided on stdin." < "$prompt_path"
-  ) > "$raw_path" 2>&1
-  extract_status_json "$raw_path"
-}}
-
-probe_copilot_model() {{
-  local label="$1"
-  local probe_path="$packet_dir/events-${{label}}-probe.jsonl"
-  local probe_share="$packet_dir/session-${{label}}-probe.md"
-  (
-    cd {shell_quote(worktree)}
-    python3 - "$copilot_command" "$copilot_probe_model" "$copilot_probe_reasoning_effort" "$copilot_probe_timeout_seconds" "$copilot_probe_prompt" "$probe_share" <<'PY'
-import subprocess
-import sys
-
-command, model, effort, timeout_seconds, prompt, share_path = sys.argv[1:7]
-expected = prompt.rsplit(":", 1)[-1].strip()
-try:
-    result = subprocess.run(
-        [
-            command,
-            "copilot",
-            "--",
-            "-C",
-            "{worktree}",
-            "--model",
-            model,
-            "--effort",
-            effort,
-            "--no-ask-user",
-            "--no-custom-instructions",
-            "--no-remote",
-            "--disable-builtin-mcps",
-            "--log-level",
-            "error",
-            "--output-format",
-            "json",
-            "--stream",
-            "off",
-            "--deny-tool",
-            "shell,write,url,memory",
-            "--share",
-            share_path,
-            "-p",
-            prompt,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        timeout=int(timeout_seconds),
-        check=False,
-    )
-except subprocess.TimeoutExpired as exc:
-    output = exc.stdout or ""
-    if isinstance(output, bytes):
-        output = output.decode("utf-8", errors="replace")
-    if output:
-        sys.stdout.write(output)
-    print(f"Copilot model probe timed out after {{timeout_seconds}} seconds.", file=sys.stderr)
-    raise SystemExit(124)
-
-if result.stdout:
-    sys.stdout.write(result.stdout)
-if result.returncode != 0:
-    raise SystemExit(result.returncode)
-if expected not in (result.stdout or ""):
-    print(f"Copilot model probe did not return expected token: {{expected}}", file=sys.stderr)
-    raise SystemExit(1)
-raise SystemExit(result.returncode)
-PY
-  ) > "$probe_path" 2>&1
-}}
-
-run_copilot() {{
-  local label="$1"
-  local raw_path="$packet_dir/events-${{label}}.jsonl"
-  local session_path="$packet_dir/session-${{label}}.md"
-  if ! command -v "$copilot_command" >/dev/null 2>&1; then
-    echo "GitHub Copilot CLI command not found: $copilot_command" > "$raw_path"
-    return 127
-  fi
-  if ! "$copilot_command" copilot -- --version > "$packet_dir/events-${{label}}-version.log" 2>&1; then
-    return 127
-  fi
-  probe_copilot_model "$label" || return $?
-  (
-    cd {shell_quote(worktree)}
-    run_with_timeout "$worker_attempt_timeout_seconds" "$copilot_command" copilot -- \\
-      -C {shell_quote(worktree)} \\
-      --model "$copilot_model" \\
-      --effort "$copilot_reasoning_effort" \\
-      --no-ask-user \\
-      --no-custom-instructions \\
-      --no-remote \\
-      --disable-builtin-mcps \\
-      --log-level error \\
-      --output-format json \\
-      --stream off \\
-      --allow-tool='read,write,shell(pwd),shell(git:*),shell(python3:*),shell(pytest:*),shell(uv:*),shell(rg:*),shell(sed:*),shell(cat:*),shell(ls:*)' \\
-      --deny-tool='shell(git push),shell(git reset),shell(rm),memory,url' \\
-      --share="$session_path" \\
-      -p "$(cat "$prompt_path")"
-  ) > "$raw_path" 2>&1
-  extract_status_json "$raw_path"
-}}
-
-run_codex() {{
-  local label="$1"
-  local model="$2"
-  run_with_timeout "$worker_attempt_timeout_seconds" codex exec --ephemeral \\
-    -m "$model" \\
-    -C {shell_quote(worktree)} \\
-    -s workspace-write \\
-    --json \\
-    --output-schema "$schema_path" \\
-    -o "$output_path" \\
-    - < "$prompt_path" \\
-    > "$packet_dir/events-${{label}}.jsonl" 2>&1
-}}
-
-{attempts}
-"""
-
+    raise SystemExit(f"unsupported role for launch script generation: {role}")
 
 def reviewer_ladder_from_route(review_route: dict | None) -> list[str]:
     route = review_route or {
@@ -1387,11 +974,49 @@ def compact_launch_config(
     worktree: str,
     schema_name: str,
     output_name: str,
+    selected_ladder: list[str] | None = None,
+    selection_reason: str = "",
     review_route: dict | None = None,
     review_semantic_hashes: dict[str, str] | None = None,
     review_reuse_policy: dict | None = None,
 ) -> dict | None:
     telemetry_script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
+    selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
+    if role == "worker":
+        return {
+            "schema_version": 1,
+            "role": "worker",
+            "packet_id": packet_id,
+            "selected_ladder": selected_ladder,
+            "selection_reason": selection_reason,
+            "branch": branch,
+            "worktree": worktree,
+            "schema_name": schema_name,
+            "output_name": output_name,
+            "sandbox": "workspace-write",
+            "attempt_timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
+            "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+            "worker_prompt": WORKER_PACKET_PROMPT,
+            "status_markers": {
+                "begin": GEMINI_STATUS_BEGIN,
+                "end": GEMINI_STATUS_END,
+            },
+            "attempts": worker_telemetry_attempts(selected_ladder),
+            "selected_commands": worker_route_commands(selected_ladder),
+            "telemetry_script": telemetry_script,
+            "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
+            "copilot_probe_model": COPILOT_PROBE_MODEL,
+            "copilot_probe_reasoning_effort": COPILOT_PROBE_REASONING_EFFORT,
+            "copilot_probe_timeout_seconds": COPILOT_PROBE_TIMEOUT_SECONDS,
+            "copilot_probe_prompt": COPILOT_PROBE_PROMPT,
+            "copilot_model": COPILOT_MODEL,
+            "copilot_reasoning_effort": COPILOT_REASONING_EFFORT,
+            "gemini_probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
+            "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
+            "gemini_approval_mode": GEMINI_APPROVAL_MODE,
+            "gemini_command": GEMINI_COMMAND,
+            "copilot_command": COPILOT_COMMAND,
+        }
     if role == "research-worker":
         return {
             "schema_version": 1,
@@ -1459,6 +1084,7 @@ def main() -> int:
     parser.add_argument(
         "--worker-route",
         action="append",
+        nargs="+",
         default=[],
         help="Allowed worker route alias. Repeat to choose a non-empty ordered subsequence of the standard ladder.",
     )
@@ -1530,7 +1156,13 @@ def main() -> int:
     selected_ladder: list[str] | None = None
     selection_reason = ""
     if args.role == "worker":
-        selected_ladder = normalize_worker_ladder(args.worker_route)
+        normalized_worker_routes: list[str] = []
+        for item in args.worker_route:
+            if isinstance(item, str):
+                normalized_worker_routes.append(item)
+            else:
+                normalized_worker_routes.extend(item)
+        selected_ladder = normalize_worker_ladder(normalized_worker_routes)
         selection_reason = nonempty_text(args.selection_reason)
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
@@ -1612,6 +1244,8 @@ def main() -> int:
         str(worktree),
         schema_name,
         output_name,
+        selected_ladder=selected_ladder,
+        selection_reason=selection_reason,
         review_route=review_route,
         review_semantic_hashes=review_semantic_hashes,
         review_reuse_policy=review_reuse_policy,
