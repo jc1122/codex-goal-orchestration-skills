@@ -389,7 +389,7 @@ def main() -> int:
     parser.add_argument("--completed-branch", action="append", default=[], help="Branch id whose status has completed and been accepted.")
     parser.add_argument("--active-branch", action="append", default=[], help="Branch id already active; used only with --list-ready.")
     parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted branch ids, one per line.")
-    parser.add_argument("--limit", type=int, help="Maximum branch ids to print with --list-ready.")
+    parser.add_argument("--limit", type=int, help="Maximum branch ids to print with --list-ready; values above remaining capacity are clamped.")
     parser.add_argument("--list-waves", action="store_true")
     args = parser.parse_args()
 
@@ -569,9 +569,8 @@ def main() -> int:
         available_capacity = max_active - len(active)
         if available_capacity <= 0:
             return 0
-        limit = args.limit if args.limit is not None else available_capacity
-        if limit > available_capacity:
-            raise SystemExit(f"--limit must not exceed remaining branch capacity ({available_capacity})")
+        requested_limit = args.limit if args.limit is not None else available_capacity
+        limit = min(requested_limit, available_capacity)
         ready = []
         for branch in manifest_branches:
             bid = branch.get("id")

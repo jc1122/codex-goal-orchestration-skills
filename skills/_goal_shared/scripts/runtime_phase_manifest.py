@@ -136,8 +136,8 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "context_pack",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/context_pack.py --worktree /abs/worktree --context-file /abs/context --markdown",
-                "agent_does": "use bounded excerpts/path list; do not broaden context by default",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/context_pack.py --worktree /abs/worktree --context-file /abs/context --markdown --output /abs/bundle/branches/Bxx.context-pack.md",
+                "agent_does": "use the written bounded context pack; do not broaden context by default",
             },
             {
                 "id": "integrate_workers",

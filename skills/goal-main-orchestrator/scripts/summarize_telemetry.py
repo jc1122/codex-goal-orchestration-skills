@@ -17,6 +17,9 @@ USAGE_KEYS = (
     "total_tokens",
 )
 TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendments")
+APPROX_CHARS_PER_TOKEN = 4
+TOKEN_PRESSURE_INPUT_WARN_MIN = 20_000
+TOKEN_PRESSURE_INPUT_WARN_RATIO = 8
 
 
 def zero_usage() -> dict[str, int]:
@@ -117,6 +120,42 @@ def attempt_group_row(key: str, bucket: dict[str, Any]) -> dict[str, Any]:
     return row
 
 
+def token_pressure_warning(
+    *,
+    rel: str,
+    packet_id: str,
+    role: str,
+    packet_prompt_chars: int,
+    attempt: dict[str, Any],
+) -> dict[str, Any] | None:
+    usage = attempt.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    input_tokens = usage.get("input_tokens")
+    if not isinstance(input_tokens, int) or isinstance(input_tokens, bool) or input_tokens < 0:
+        return None
+    prompt_tokens_estimate = max(1, round(packet_prompt_chars / APPROX_CHARS_PER_TOKEN))
+    threshold = max(TOKEN_PRESSURE_INPUT_WARN_MIN, prompt_tokens_estimate * TOKEN_PRESSURE_INPUT_WARN_RATIO)
+    if input_tokens < threshold:
+        return None
+    cached_input_tokens = usage.get("cached_input_tokens")
+    return {
+        "path": rel,
+        "packet_id": packet_id,
+        "role": role,
+        "alias": attempt.get("alias"),
+        "provider": attempt.get("provider"),
+        "model": attempt.get("model"),
+        "prompt_chars": packet_prompt_chars,
+        "prompt_tokens_estimate": prompt_tokens_estimate,
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached_input_tokens if isinstance(cached_input_tokens, int) and not isinstance(cached_input_tokens, bool) else None,
+        "threshold": threshold,
+        "input_to_prompt_estimate_ratio": round(input_tokens / prompt_tokens_estimate, 2),
+        "message": "Known input tokens greatly exceed the packet prompt estimate; inspect launcher flags and inherited context before broad log reads.",
+    }
+
+
 def summarize(bundle_dir: Path) -> dict[str, Any]:
     files = discover_telemetry_files(bundle_dir)
     totals = {
@@ -143,6 +182,7 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
     }
     packets = []
     defects = []
+    token_pressure_warnings = []
 
     for path in files:
         rel = path.relative_to(bundle_dir).as_posix()
@@ -212,6 +252,15 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
                 if attempt.get("accepted") is True:
                     premium_bucket["accepted_attempts"] += 1
                 add_usage(premium_bucket["known_usage"], attempt.get("usage"))
+            pressure = token_pressure_warning(
+                rel=rel,
+                packet_id=packet_id,
+                role=role,
+                packet_prompt_chars=packet_prompt_chars,
+                attempt=attempt,
+            )
+            if pressure is not None:
+                token_pressure_warnings.append(pressure)
             packet_attempts.append(
                 {
                     "alias": attempt.get("alias"),
@@ -254,6 +303,15 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
                 "known_usage": compact_usage(bucket.get("known_usage", {})),
             }
             for key, bucket in premium_usage.items()
+        },
+        "token_pressure": {
+            "approx_chars_per_token": APPROX_CHARS_PER_TOKEN,
+            "input_warn_min": TOKEN_PRESSURE_INPUT_WARN_MIN,
+            "input_warn_ratio": TOKEN_PRESSURE_INPUT_WARN_RATIO,
+            "warnings": sorted(
+                token_pressure_warnings,
+                key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]), str(item["alias"])),
+            ),
         },
         "packets": sorted(packets, key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]))),
     }

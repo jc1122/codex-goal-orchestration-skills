@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -165,7 +166,7 @@ def brief_schema_summary() -> dict:
         },
         "top_level_optional": {
             "title": "display title",
-            "base_ref": "git base ref; defaults to main",
+            "base_ref": "git base ref; defaults to the current git branch, falling back to main",
             "max_active_branch_agents": f"integer 1-{MAX_ACTIVE_BRANCH_AGENTS}; default {MAX_ACTIVE_BRANCH_AGENTS}",
             "serial_reasons": "optional; deterministic defaults are supplied for underfilled branch capacity",
             "parallelization_rationale": "why branches can run as a rolling saturated pool",
@@ -217,6 +218,18 @@ def require_agent_limit(value: object) -> int:
     if limit < 1 or limit > MAX_ACTIVE_BRANCH_AGENTS:
         raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
     return limit
+
+
+def current_git_branch(repo_root: Path) -> str:
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "branch", "--show-current"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    value = result.stdout.strip() if result.returncode == 0 else ""
+    return value if value else "main"
 
 
 def require_worker_limit(value: object) -> int:
@@ -461,14 +474,14 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
             seen_paths[value] = label
 
 
-def normalize_brief(brief: dict) -> dict:
+def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
     if "job_id" not in brief:
         raise SystemExit("brief must include job_id")
     if not brief.get("branches"):
         raise SystemExit("brief must include synthesized branches before bundle generation")
 
     job_id = slug(brief["job_id"])
-    base_ref = require_branch_name(str(brief.get("base_ref", "main")), "base_ref")
+    base_ref = require_branch_name(str(brief.get("base_ref") or default_base_ref), "base_ref")
     max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
     serial_reason = nonempty_text(brief.get("serial_reason"))
     serial_reasons = normalize_reason_list(brief.get("serial_reasons"), serial_reason)
@@ -775,7 +788,7 @@ def lint_bundle(bundle_dir: Path, *, write_output: bool = True) -> dict:
 
 
 def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
-    brief = normalize_brief(brief)
+    brief = normalize_brief(brief, default_base_ref=current_git_branch(repo_root))
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)

@@ -16,7 +16,7 @@ Ask the user for clarification before writing final files if any of these are mi
 
 Do not ask when a conservative default is clear:
 
-- base ref defaults to `main`;
+- base ref defaults to the current git branch, falling back to `main`;
 - max active branch agents defaults to 4;
 - total branch cap defaults to 20;
 - branch worker packet cap defaults to 4;

@@ -124,13 +124,24 @@ def markdown_from_pack(pack: dict[str, Any]) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(
+        description=(
+            "Read one or more input context files and render a bounded context pack. "
+            "By default the pack is printed to stdout; use --output to write it to a file."
+        )
+    )
     parser.add_argument("--worktree", required=True)
-    parser.add_argument("--context-file", action="append", default=[])
+    parser.add_argument(
+        "--context-file",
+        action="append",
+        default=[],
+        help="Input context file to include or reference. Repeat for multiple inputs; this is not an output path.",
+    )
     parser.add_argument("--total-chars", type=int, default=DEFAULT_TOTAL_CHARS)
     parser.add_argument("--per-file-chars", type=int, default=DEFAULT_PER_FILE_CHARS)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--markdown", action="store_true")
+    parser.add_argument("--output", help="Optional output file for the rendered JSON or Markdown pack.")
     args = parser.parse_args()
 
     if bool(args.json) == bool(args.markdown):
@@ -143,10 +154,14 @@ def main() -> int:
         total_chars=args.total_chars,
         per_file_chars=args.per_file_chars,
     )
-    if args.json:
-        print(json.dumps(pack, indent=2, sort_keys=True) + "\n", end="")
+    rendered = json.dumps(pack, indent=2, sort_keys=True) + "\n" if args.json else markdown_from_pack(pack) + "\n"
+    if args.output:
+        output_path = Path(args.output).resolve()
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered, encoding="utf-8")
+        print(output_path.as_posix())
     else:
-        print(markdown_from_pack(pack))
+        print(rendered, end="")
     return 0
 
 

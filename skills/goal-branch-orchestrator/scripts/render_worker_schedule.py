@@ -259,7 +259,7 @@ def main() -> int:
     parser.add_argument("--completed-worker", action="append", default=[], help="Completed and integrated worker packet id.")
     parser.add_argument("--active-worker", action="append", default=[], help="Currently active worker packet id.")
     parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted worker packet ids, one per line.")
-    parser.add_argument("--limit", type=int, help="Maximum packet ids to print with --list-ready.")
+    parser.add_argument("--limit", type=int, help="Maximum packet ids to print with --list-ready; values above remaining capacity are clamped.")
     args = parser.parse_args()
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
@@ -298,9 +298,8 @@ def main() -> int:
     available_capacity = max_active - len(active)
     if available_capacity <= 0:
         return 0
-    limit = args.limit if args.limit is not None else available_capacity
-    if limit > available_capacity:
-        raise SystemExit(f"--limit must not exceed remaining worker capacity ({available_capacity})")
+    requested_limit = args.limit if args.limit is not None else available_capacity
+    limit = min(requested_limit, available_capacity)
 
     completed_items = {packet_to_item[packet_id] for packet_id in completed}
     ready = []

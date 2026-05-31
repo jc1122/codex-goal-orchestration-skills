@@ -2004,6 +2004,21 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     )
     if schedule_ready.stdout.splitlines() != ["B01-W01"]:
         raise SystemExit("render_worker_schedule did not prefer repair relaunch over dependent worker")
+    schedule_ready_clamped = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
+            "--manifest",
+            worker_manifest.as_posix(),
+            "--branch-id",
+            "B01",
+            "--list-ready",
+            "--limit",
+            "4",
+        ]
+    )
+    if schedule_ready_clamped.stdout.splitlines() != ["B01-W01"]:
+        raise SystemExit("render_worker_schedule should clamp --limit to remaining worker capacity")
     completed_non_pass = run(
         [
             "python3",
@@ -2092,6 +2107,23 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     )
     if main_ready.stdout.splitlines() != ["B02"]:
         raise SystemExit("render_branch_worktree_commands did not infer completed branch from scheduler ledger")
+    main_ready_clamped = run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+            "--manifest",
+            (main_bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit",
+            audit_path.as_posix(),
+            "--list-ready",
+            "--limit",
+            "4",
+        ]
+    )
+    if main_ready_clamped.stdout.splitlines() != ["B02"]:
+        raise SystemExit("render_branch_worktree_commands should clamp --limit to remaining branch capacity")
 
 
 def main() -> int:
@@ -2126,11 +2158,125 @@ def main() -> int:
         )
         if "work_item_required" not in brief_schema or "commands" not in brief_schema:
             raise SystemExit("brief schema output is missing required agent guidance")
+        if "current git branch" not in str(brief_schema.get("top_level_optional", {}).get("base_ref", "")):
+            raise SystemExit("brief schema should describe current-branch base_ref default")
         lint_schema = json.loads(
             run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
         )
         if lint_schema != brief_schema:
             raise SystemExit("brief schema output drifted between create and lint helpers")
+        branch_default_repo = tmp_path / "branch-default-repo"
+        branch_default_repo.mkdir()
+        run(["git", "-C", branch_default_repo.as_posix(), "init", "-q", "--initial-branch", "trunk"])
+        (branch_default_repo / "README.md").write_text("branch default fixture\n", encoding="utf-8")
+        branch_default_brief = {
+            "job_id": "branch-default-fixture",
+            "branches": [
+                {
+                    "id": "B01",
+                    "objective": "Verify base_ref default.",
+                    "work_items": [
+                        {
+                            "id": "W01",
+                            "objective": "No-op fixture.",
+                            "owned_paths": ["README.md"],
+                            "verification": ["true"],
+                            "dod": ["Manifest base_ref defaults to the current branch."],
+                        }
+                    ],
+                }
+            ],
+        }
+        branch_default_brief_path = tmp_path / "branch-default-brief.json"
+        branch_default_bundle = tmp_path / "branch-default-bundle"
+        write_json(branch_default_brief_path, branch_default_brief)
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/create_goal_bundle.py",
+                "--brief",
+                branch_default_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                branch_default_bundle.as_posix(),
+            ]
+        )
+        branch_default_manifest = read_json(branch_default_bundle / "job.manifest.json")
+        if branch_default_manifest.get("base_ref") != "trunk":
+            raise SystemExit(f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}")
+        context_pack_out = tmp_path / "context-pack.md"
+        context_pack_result = run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/context_pack.py",
+                "--worktree",
+                ROOT.as_posix(),
+                "--context-file",
+                (ROOT / "README.md").as_posix(),
+                "--markdown",
+                "--output",
+                context_pack_out.as_posix(),
+            ]
+        )
+        if context_pack_result.stdout.strip() != context_pack_out.as_posix() or not context_pack_out.exists():
+            raise SystemExit("context_pack.py --output should write the rendered pack and print its path")
+        assert_contains(context_pack_out.read_text(encoding="utf-8"), "Context files to read first:", "context pack output")
+        telemetry_bundle = tmp_path / "telemetry-pressure"
+        telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
+        telemetry_packet.mkdir(parents=True)
+        write_json(
+            telemetry_packet / "telemetry.json",
+            {
+                "schema_version": 1,
+                "packet_id": "B01-W01",
+                "role": "worker",
+                "output_artifact": "status.json",
+                "prompt_artifact": "prompt.md",
+                "prompt_chars": 100,
+                "prompt_bytes": 100,
+                "output_chars": 10,
+                "output_bytes": 10,
+                "event_log_chars": 10,
+                "event_log_bytes": 10,
+                "accepted_alias": "codex-mini",
+                "attempts": [
+                    {
+                        "alias": "codex-mini",
+                        "provider": "codex",
+                        "model": "gpt-5.4-mini",
+                        "effort": "medium",
+                        "command": "codex exec --ignore-user-config --ignore-rules",
+                        "timeout_seconds": 1200,
+                        "called": True,
+                        "accepted": True,
+                        "event_logs": [],
+                        "probe_logs": [],
+                        "usage": {
+                            "input_tokens": 25000,
+                            "cached_input_tokens": 24000,
+                            "output_tokens": 100,
+                        },
+                    }
+                ],
+                "totals": {
+                    "attempts_declared": 1,
+                    "attempts_called": 1,
+                    "event_log_chars": 10,
+                    "event_log_bytes": 10,
+                    "known_usage": {
+                        "input_tokens": 25000,
+                        "cached_input_tokens": 24000,
+                        "output_tokens": 100,
+                    },
+                },
+            },
+        )
+        run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
+        telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
+        pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
+        if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
+            raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")
         example_brief_path = tmp_path / "example-brief.json"
         example_brief_path.write_text(
             run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--example-brief"]).stdout,
