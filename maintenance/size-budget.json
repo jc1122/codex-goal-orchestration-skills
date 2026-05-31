@@ -41,11 +41,11 @@
       "path": "skills/_goal_shared/scripts/status_validation.py"
     },
     {
-      "approx_tokens": 12453,
-      "bytes": 49811,
-      "chars": 49811,
+      "approx_tokens": 12612,
+      "bytes": 50447,
+      "chars": 50447,
       "files": 1,
-      "lines": 894,
+      "lines": 906,
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py"
     },
     {
@@ -65,11 +65,11 @@
       "path": "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py"
     },
     {
-      "approx_tokens": 8289,
-      "bytes": 33156,
-      "chars": 33156,
+      "approx_tokens": 8338,
+      "bytes": 33354,
+      "chars": 33354,
       "files": 1,
-      "lines": 667,
+      "lines": 671,
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py"
     },
     {
@@ -129,11 +129,11 @@
   ],
   "per_skill": {
     "_goal_shared": {
-      "approx_tokens": 50286,
-      "bytes": 201146,
-      "chars": 201146,
+      "approx_tokens": 50639,
+      "bytes": 202556,
+      "chars": 202556,
       "files": 13,
-      "lines": 4864
+      "lines": 4897
     },
     "goal-branch-orchestrator": {
       "approx_tokens": 55132,
@@ -157,42 +157,42 @@
       "lines": 2911
     },
     "goal-preflight": {
-      "approx_tokens": 34764,
-      "bytes": 139057,
-      "chars": 139057,
+      "approx_tokens": 35271,
+      "bytes": 141084,
+      "chars": 141084,
       "files": 21,
-      "lines": 2686
+      "lines": 2724
     }
   },
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 237912,
-      "bytes": 951646,
-      "chars": 951646,
+      "approx_tokens": 238472,
+      "bytes": 953890,
+      "chars": 953890,
       "files": 79,
-      "lines": 22405
+      "lines": 22454
     },
     "skill_python": {
-      "approx_tokens": 186964,
-      "bytes": 747854,
-      "chars": 747854,
+      "approx_tokens": 187524,
+      "bytes": 750098,
+      "chars": 750098,
       "files": 70,
-      "lines": 17061
+      "lines": 17110
     },
     "skills": {
-      "approx_tokens": 211108,
-      "bytes": 844433,
-      "chars": 844433,
+      "approx_tokens": 211968,
+      "bytes": 847870,
+      "chars": 847870,
       "files": 92,
-      "lines": 18377
+      "lines": 18448
     },
     "tracked": {
-      "approx_tokens": 276913,
-      "bytes": 1107653,
-      "chars": 1107653,
+      "approx_tokens": 277772,
+      "bytes": 1111090,
+      "chars": 1111090,
       "files": 117,
-      "lines": 25113
+      "lines": 25184
     }
   },
   "skill_docs": {

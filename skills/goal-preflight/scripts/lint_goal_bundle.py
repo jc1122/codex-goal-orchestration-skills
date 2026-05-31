@@ -55,6 +55,8 @@ MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.worker_ladder_list()
 AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
+LITE_MODEL_POLICY = CONTRACT.LITE_MODEL_POLICY
+LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
 ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
@@ -319,6 +321,8 @@ def lint(bundle_dir: Path) -> dict:
         "adaptation_policy",
         "worker_model_policy",
         "amender_model_policy",
+        "lite_model_policy",
+        "lite_advisor_policy",
         "review_model_policy",
         "orchestration_watchdog",
         "preflight_lite_advice",
@@ -405,6 +409,14 @@ def lint(bundle_dir: Path) -> dict:
     amender_model_policy = manifest.get("amender_model_policy", {})
     if amender_model_policy != AMENDER_MODEL_POLICY:
         defect("job.manifest.json", "critical", "amender_model_policy must match the shared deterministic plan-amender router policy")
+
+    lite_model_policy = manifest.get("lite_model_policy", {})
+    if lite_model_policy != LITE_MODEL_POLICY:
+        defect("job.manifest.json", "critical", "lite_model_policy must match the shared deterministic Lite model policy")
+
+    lite_advisor_policy = manifest.get("lite_advisor_policy", {})
+    if lite_advisor_policy != LITE_ADVISOR_POLICY:
+        defect("job.manifest.json", "critical", "lite_advisor_policy must match the shared deterministic Lite advisor policy")
 
     watchdog = manifest.get("orchestration_watchdog", {})
     if watchdog != ORCHESTRATION_WATCHDOG:

@@ -82,6 +82,27 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
     "network_scope": "Broad read-only information retrieval is allowed through Codex native web search, configured CLI tools, MCP servers, connector tools, browser/search tools, package metadata lookups, remote APIs, and shell/network inspection commands. State-changing, destructive, credential, posting, purchasing, and file-editing actions are prohibited.",
     "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files."
   },
+  "lite_model_policy": {
+    "default_ladder": ["gemini-lite"],
+    "allowed_routes": ["gemini-lite"],
+    "model_map": {"gemini-lite": "gemini-3.1-flash-lite-preview"},
+    "launcher": "create_lite_advice_packet.py",
+    "selection_reason_required": false,
+    "ordering_rule": "Lite advisors use the fixed gemini-lite route; no runtime route broadening is allowed.",
+    "approval_mode": "plan",
+    "timeout_seconds": 600
+  },
+  "lite_advisor_policy": {
+    "enabled": true,
+    "role": "lite_advisor",
+    "model_policy_ref": "lite_model_policy",
+    "purpose": "context routing only",
+    "launcher": "create_lite_advice_packet.py",
+    "input_scope": "explicit packet input files only; no full repository dumps, full event logs, or unrelated result histories",
+    "must_validate_with": "validate_lite_advice.py",
+    "artifact_paths": "lite/<packet_id>/advice.json and lite/<packet_id>/input-files.json",
+    "telemetry_required": true
+  },
   "review_model_policy": {
     "router": "deterministic-v1",
     "default_tier": "standard",
@@ -161,6 +182,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
 - `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `research_worker_policy` defining `research-worker` packets as broad read-only information retrieval through Codex native search plus configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and read-only local access. It must not suppress user config, and it must prohibit file edits and state-changing actions.
+- `job.manifest.json` contains `lite_model_policy` and `lite_advisor_policy`; Lite advisors are fixed-route context routers, validate through `validate_lite_advice.py`, write telemetry, and cannot satisfy audit/review/mergeability/DoD evidence.
 - `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.
 - Branch prompt/status/review paths are unique and cannot overwrite one another.
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.

@@ -54,6 +54,7 @@ WORKER_ATTEMPT_TIMEOUT_SECONDS = 3600
 RESEARCH_ATTEMPT_TIMEOUT_SECONDS = 1200
 REVIEWER_ATTEMPT_TIMEOUT_SECONDS = 1800
 AMENDER_ATTEMPT_TIMEOUT_SECONDS = 1200
+LITE_ATTEMPT_TIMEOUT_SECONDS = 600
 TIMEOUT_KILL_AFTER_SECONDS = 30
 CODEX_ROUTE_MODELS = {
     "gpt-5.5": "gpt-5.5",
@@ -160,6 +161,10 @@ DEFAULT_WORKER_LADDER = (
 )
 ALLOWED_WORKER_ROUTES = frozenset(DEFAULT_WORKER_LADDER)
 RESEARCH_ALIASES = ("codex-research", "codex-research-mini")
+DEFAULT_LITE_LADDER = ("gemini-lite",)
+ALLOWED_LITE_ROUTES = DEFAULT_LITE_LADDER
+LITE_MODEL = "gemini-3.1-flash-lite-preview"
+LITE_APPROVAL_MODE = "plan"
 AMENDER_ROLE = "plan_amender"
 DEFAULT_AMENDER_LADDER = (
     "gpt-5.4",
@@ -188,6 +193,34 @@ AMENDER_MODEL_POLICY = {
     "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
     "sandbox": "read-only",
     "timeout_seconds": AMENDER_ATTEMPT_TIMEOUT_SECONDS,
+}
+LITE_MODEL_POLICY = {
+    "default_ladder": list(DEFAULT_LITE_LADDER),
+    "allowed_routes": list(ALLOWED_LITE_ROUTES),
+    "model_map": {"gemini-lite": LITE_MODEL},
+    "launcher": "create_lite_advice_packet.py",
+    "selection_reason_required": False,
+    "ordering_rule": "Lite advisors use the fixed gemini-lite route; no runtime route broadening is allowed.",
+    "approval_mode": LITE_APPROVAL_MODE,
+    "timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
+}
+LITE_ADVISOR_POLICY = {
+    "enabled": True,
+    "role": "lite_advisor",
+    "model_policy_ref": "lite_model_policy",
+    "purpose": "context routing only",
+    "launcher": "create_lite_advice_packet.py",
+    "input_scope": "explicit packet input files only; no full repository dumps, full event logs, or unrelated result histories",
+    "must_validate_with": "validate_lite_advice.py",
+    "artifact_paths": "lite/<packet_id>/advice.json and lite/<packet_id>/input-files.json",
+    "telemetry_required": True,
+    "forbidden_as_evidence": [
+        "prompt-audit pass/fail",
+        "review or mergeability verdict",
+        "Definition-of-Done satisfaction",
+        "scientific claim support",
+        "permission to skip validators or reviewers",
+    ],
 }
 RESEARCH_WORKER_POLICY = {
     "enabled": True,
