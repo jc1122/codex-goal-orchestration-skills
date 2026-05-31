@@ -308,6 +308,7 @@ def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summa
         "branch_statuses": branch_statuses,
         "amendment_decisions": amendments,
         "lite_advice": [],
+        "cost_summary_path": "telemetry.summary.json#cost_summary",
         "commands_run": [
             f"python3 {Path(__file__).resolve().as_posix()} --manifest {manifest_path.as_posix()} --out {out_path.as_posix()}"
         ],

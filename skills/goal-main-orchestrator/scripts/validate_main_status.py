@@ -186,6 +186,49 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 defect(defects, f"$.telemetry_summary.premium_usage.{key}.{metric}", "must be a non-negative integer")
         STATUS_VALIDATION.validate_usage(defects, bucket.get("known_usage"), f"$.telemetry_summary.premium_usage.{key}.known_usage")
+    cost = require_object(defects, summary.get("cost_summary"), "$.telemetry_summary.cost_summary")
+    for key in [
+        "declared_attempts",
+        "called_attempts",
+        "prompt_bytes",
+        "output_bytes",
+        "fallback_count",
+        "failed_same_class_attempts",
+    ]:
+        value = cost.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            defect(defects, f"$.telemetry_summary.cost_summary.{key}", "must be a non-negative integer")
+    if cost.get("declared_attempts") != totals.get("attempts_declared"):
+        defect(defects, "$.telemetry_summary.cost_summary.declared_attempts", "must match totals.attempts_declared")
+    if cost.get("called_attempts") != totals.get("attempts_called"):
+        defect(defects, "$.telemetry_summary.cost_summary.called_attempts", "must match totals.attempts_called")
+    if cost.get("prompt_bytes") != totals.get("prompt_bytes"):
+        defect(defects, "$.telemetry_summary.cost_summary.prompt_bytes", "must match totals.prompt_bytes")
+    if cost.get("output_bytes") != totals.get("output_bytes"):
+        defect(defects, "$.telemetry_summary.cost_summary.output_bytes", "must match totals.output_bytes")
+    for key in [
+        "accepted_aliases",
+        "declared_aliases",
+        "called_aliases",
+        "premium_aliases_declared",
+        "premium_aliases_called",
+        "premium_aliases_accepted",
+        "premium_aliases_avoided",
+    ]:
+        bucket = require_object(defects, cost.get(key), f"$.telemetry_summary.cost_summary.{key}")
+        for alias, value in bucket.items():
+            if not isinstance(alias, str) or not alias.strip():
+                defect(defects, f"$.telemetry_summary.cost_summary.{key}", "alias keys must be non-empty strings")
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                defect(defects, f"$.telemetry_summary.cost_summary.{key}.{alias}", "must be a non-negative integer")
+    mini_spark = require_object(defects, cost.get("mini_spark_usage"), "$.telemetry_summary.cost_summary.mini_spark_usage")
+    for alias in ["codex-mini", "codex-spark"]:
+        bucket = require_object(defects, mini_spark.get(alias), f"$.telemetry_summary.cost_summary.mini_spark_usage.{alias}")
+        for metric in ["attempts_declared", "attempts_called", "accepted_attempts"]:
+            value = bucket.get(metric)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                defect(defects, f"$.telemetry_summary.cost_summary.mini_spark_usage.{alias}.{metric}", "must be a non-negative integer")
+        STATUS_VALIDATION.validate_usage(defects, bucket.get("known_usage"), f"$.telemetry_summary.cost_summary.mini_spark_usage.{alias}.known_usage")
 
 
 def validate_decision_artifact(defects: list[str], data: object, path: str, *, amendment_id: str, manifest_path: Path) -> dict:
@@ -700,6 +743,9 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
     )
     validate_amendment_decisions(defects, root, manifest_path=manifest_path, status=status)
     validate_lite_advice_entries(defects, root.get("lite_advice"), "$.lite_advice", manifest_path=manifest_path)
+    cost_summary_path = require_string(defects, root.get("cost_summary_path"), "$.cost_summary_path")
+    if cost_summary_path and cost_summary_path != "telemetry.summary.json#cost_summary":
+        defect(defects, "$.cost_summary_path", "must be 'telemetry.summary.json#cost_summary'")
     validate_telemetry_summary(defects, manifest_path=manifest_path, require_artifacts=status == "pass")
     require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     require_string_list(defects, root.get("dod_checklist"), "$.dod_checklist", min_items=1)

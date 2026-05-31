@@ -120,6 +120,10 @@ def assert_compact_lite_launcher(packet_dir: Path) -> dict:
         raise SystemExit(f"Lite launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
     if config.get("runner_prompt") != "Follow the complete Lite advisory packet instructions provided on stdin.":
         raise SystemExit("Lite launch-config should preserve the stdin runner prompt")
+    if not isinstance(config.get("avoids_action"), str) or not config.get("avoids_action"):
+        raise SystemExit("Lite launch-config missing avoids_action")
+    if not isinstance(config.get("expected_savings_reason"), str) or not config.get("expected_savings_reason"):
+        raise SystemExit("Lite launch-config missing expected_savings_reason")
     if not str(config.get("validation_script", "")).endswith("validate_lite_advice.py"):
         raise SystemExit(f"Lite launch-config validation script mismatch: {config.get('validation_script')!r}")
     if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
@@ -516,6 +520,8 @@ def golden_brief() -> dict:
                         "owned_paths": ["README.md"],
                         "context_files": ["README.md"],
                         "verification": ["git diff --check main...HEAD"],
+                        "route_class": "normal-code",
+                        "route_class_reason": "Golden smoke fixture intentionally exercises a normal-code worker route even though the owned path is documentation-like.",
                         "dod": ["normal worker artifact validates with route and timeout telemetry"],
                     },
                     {
@@ -547,6 +553,8 @@ def write_lite_advice(packet_dir: Path) -> dict:
         "packet_id": LITE_PACKET,
         "role": "lite_advisor",
         "purpose": "branch-packet-planning",
+        "avoids_action": inputs.get("avoids_action"),
+        "expected_savings_reason": inputs.get("expected_savings_reason"),
         "status": "blocked",
         "source_files": source_files,
         "recommended_reads": [],
@@ -589,6 +597,8 @@ def write_lite_advice(packet_dir: Path) -> dict:
     return {
         "packet_id": LITE_PACKET,
         "purpose": "branch-packet-planning",
+        "avoids_action": inputs.get("avoids_action"),
+        "expected_savings_reason": inputs.get("expected_savings_reason"),
         "status": "blocked",
         "disposition": "ignored",
         "advice_path": (packet_dir / "advice.json").as_posix(),

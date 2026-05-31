@@ -59,7 +59,7 @@ DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
 WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
-MANIFEST_WORKER_ROUTE_CLASSES = tuple(route_class for route_class in WORKER_ROUTE_CLASSES if route_class != "custom")
+MANIFEST_WORKER_ROUTE_CLASSES = CONTRACT.MANIFEST_WORKER_ROUTE_CLASSES
 WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
 AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 LITE_MODEL_POLICY = CONTRACT.LITE_MODEL_POLICY
@@ -67,6 +67,54 @@ LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
 RESEARCH_WORKER_POLICY = CONTRACT.RESEARCH_WORKER_POLICY
 REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
 ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
+
+DOC_PATH_RE = re.compile(
+    r"(^|/)(readme|changelog|license|notice|contributing|docs?|documentation)(\.|/|$)|"
+    r"\.(md|markdown|rst|txt|adoc)$",
+    re.IGNORECASE,
+)
+TEST_PATH_RE = re.compile(r"(^|/)(tests?|specs?)(/|$)|(^|/)(test_|.*_test\.)|(\.spec\.|\_spec\.)", re.IGNORECASE)
+CODE_PATH_RE = re.compile(r"\.(py|js|jsx|ts|tsx|go|rs|java|kt|c|cc|cpp|h|hpp|cs|rb|php|swift|scala|sh|bash|zsh)$", re.IGNORECASE)
+COMPLEX_TERMS = (
+    "scheduler",
+    "validator",
+    "validation",
+    "security",
+    "auth",
+    "credential",
+    "migration",
+    "schema",
+    "concurrency",
+    "data-loss",
+    "data loss",
+    "cross-module",
+    "cross module",
+    "architecture",
+    "public api",
+    "prompt-audit",
+    "telemetry",
+    "runtime",
+    "orchestration",
+    "reviewer",
+    "fallback",
+    "timeout",
+    "state machine",
+)
+MECHANICAL_TERMS = (
+    "format",
+    "formatting",
+    "lint",
+    "typo",
+    "spelling",
+    "rename",
+    "version bump",
+    "metadata",
+    "generated",
+    "stale context",
+    "path fix",
+    "path-only",
+    "regenerate",
+)
 
 
 def example_brief() -> dict:
@@ -206,7 +254,8 @@ def brief_schema_summary() -> dict:
         "work_item_optional": {
             "id": "W01-style id; defaults by order",
             "worker_type": "worker or research-worker; default worker",
-            "route_class": f"one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)} for worker items; default {DEFAULT_WORKER_ROUTE_CLASS}; omit for research-worker",
+            "route_class": f"one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)} for worker items; inferred deterministically when omitted; omit for research-worker",
+            "route_class_reason": "optional explicit reason; bundle creation always writes a non-empty reason to job.manifest.json and branch prompts",
             "context_files": ["repo-relative read-first files"],
             "depends_on": "prior work item ids only; omit or [] for parallel workers",
         },
@@ -300,13 +349,121 @@ def normalize_route_class(value: object, worker_type: str, field: str) -> str | 
             raise SystemExit(f"{field} is only valid for worker items, not research-worker items")
         return None
     if value is None:
-        return DEFAULT_WORKER_ROUTE_CLASS
+        return None
     if not isinstance(value, str) or not value.strip():
         raise SystemExit(f"{field} must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}")
     normalized = value.strip()
     if normalized not in MANIFEST_WORKER_ROUTE_CLASSES:
         raise SystemExit(f"{field} must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}")
     return normalized
+
+
+def route_class_reason(value: object, fallback: str, field: str) -> str:
+    if value is None:
+        return fallback
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{field} must be a non-empty string when supplied")
+    return value.strip()
+
+
+def path_bucket(path: str) -> str:
+    if DOC_PATH_RE.search(path):
+        return "docs"
+    if TEST_PATH_RE.search(path):
+        return "test"
+    if CODE_PATH_RE.search(path):
+        return "code"
+    return "other"
+
+
+def top_level(path: str) -> str:
+    return path.split("/", 1)[0]
+
+
+def has_any_term(text: str, terms: tuple[str, ...]) -> bool:
+    return any(term in text for term in terms)
+
+
+def infer_route_class(
+    item: dict,
+    *,
+    branch_context: dict,
+    explicit_route_class: str | None,
+) -> tuple[str | None, str]:
+    worker_type = item["worker_type"]
+    item_id = item["id"]
+    if worker_type == "research-worker":
+        return None, route_class_reason(
+            item.get("route_class_reason"),
+            "Research-worker route selected: the work item gathers outside or local read-only information and does not launch a normal worker ladder.",
+            f"branch {branch_context['id']} work item {item_id} route_class_reason",
+        )
+    if explicit_route_class is not None:
+        return explicit_route_class, route_class_reason(
+            item.get("route_class_reason"),
+            f"Explicit route_class '{explicit_route_class}' supplied by the preflight brief; deterministic inference did not override it.",
+            f"branch {branch_context['id']} work item {item_id} route_class_reason",
+        )
+
+    owned_paths = item.get("owned_paths", [])
+    owned_buckets = [path_bucket(path) for path in owned_paths if isinstance(path, str)]
+    item_text = " ".join(
+        str(value)
+        for value in [
+            item.get("objective", ""),
+            " ".join(item.get("verification", [])),
+            " ".join(item.get("dod", [])),
+        ]
+    ).lower()
+    all_text = " ".join(
+        str(value)
+        for value in [
+            branch_context.get("objective", ""),
+            branch_context.get("scope", ""),
+            branch_context.get("branch_risk", ""),
+            item_text,
+        ]
+    ).lower()
+    has_complex = has_any_term(all_text, COMPLEX_TERMS)
+    has_mechanical = has_any_term(item_text, MECHANICAL_TERMS)
+    changed_surface = {
+        top_level(path)
+        for path in owned_paths
+        if isinstance(path, str) and path.strip()
+    }
+    has_dependencies = bool(item.get("depends_on")) or bool(branch_context.get("depends_on"))
+    path_count = len(owned_paths)
+
+    if owned_buckets and all(bucket == "docs" for bucket in owned_buckets) and not has_complex:
+        return "docs", (
+            "Inferred docs route class: every owned path is documentation-like and the objective, verification, and branch context do not contain high-risk implementation signals."
+        )
+    if has_mechanical and not has_complex and path_count <= 3 and not has_dependencies:
+        return "mechanical", (
+            "Inferred mechanical route class: objective or verification names formatting, generated metadata, path, or lint repair with a small independent changed surface."
+        )
+    if (
+        has_complex
+        or path_count >= 4
+        or len(changed_surface) >= 3
+        or (has_dependencies and path_count >= 2)
+        or branch_context.get("contention_risk") is True
+    ):
+        return "complex-code", (
+            "Inferred complex-code route class: branch risk, dependencies, changed surface, or objective text includes scheduler, validator, security, migration, telemetry, concurrency, or cross-module signals."
+        )
+    if path_count <= 2 and not has_dependencies:
+        if owned_buckets and all(bucket == "test" for bucket in owned_buckets):
+            return "small-edit", (
+                "Inferred small-edit route class: owned paths are test-only, bounded to at most two files, and have no explicit dependencies."
+            )
+        if path_count == 1 or len(changed_surface) <= 1:
+            return "small-edit", (
+                "Inferred small-edit route class: changed surface is bounded to at most two owned paths in one area with no explicit dependencies or high-risk signals."
+            )
+    return DEFAULT_WORKER_ROUTE_CLASS, (
+        "Default normal-code inference: work item was not docs-only, mechanical, small-edit, research, or complex by deterministic preflight signals."
+    )
 
 
 def branch_id(index: int) -> str:
@@ -348,6 +505,7 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
                     f"Worker packet id: {packet_id}",
                     f"Worker type: {item.get('worker_type', 'worker')}",
                     f"Route class: {item.get('route_class', 'n/a')}",
+                    f"Route class reason: {item.get('route_class_reason', 'n/a')}",
                     f"Objective: {item.get('objective', 'Objective not supplied.')}",
                     "Owned paths:",
                     bullets(item.get("owned_paths", [])),
@@ -365,7 +523,7 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
-def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
+def normalize_work_items(items: object, branch_id_value: str, *, branch_context: dict) -> list[dict]:
     if not isinstance(items, list):
         raise SystemExit(f"branch {branch_id_value} work_items must be a list")
     if len(items) < 1 or len(items) > MAX_WORKER_PACKETS_PER_BRANCH:
@@ -395,10 +553,16 @@ def normalize_work_items(items: object, branch_id_value: str) -> list[dict]:
             "dod": require_string_list(item.get("dod"), f"branch {branch_id_value} work item {item_id} dod", min_items=1),
         }
         worker_type = normalize_worker_type(item.get("worker_type"), f"branch {branch_id_value} work item {item_id} worker_type")
-        route_class = normalize_route_class(item.get("route_class"), worker_type, f"branch {branch_id_value} work item {item_id} route_class")
+        explicit_route_class = normalize_route_class(item.get("route_class"), worker_type, f"branch {branch_id_value} work item {item_id} route_class")
         normalized_item["worker_type"] = worker_type
+        route_class, reason = infer_route_class(
+            normalized_item,
+            branch_context=branch_context,
+            explicit_route_class=explicit_route_class,
+        )
         if route_class is not None:
             normalized_item["route_class"] = route_class
+        normalized_item["route_class_reason"] = reason
         normalized.append(normalized_item)
     known_ids = {item["id"] for item in normalized}
     order = {item["id"]: index for index, item in enumerate(normalized)}
@@ -531,7 +695,18 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
             nonempty_text(original.get("worker_parallelization_rationale"))
             or nonempty_text(original_worker_parallelism.get("parallelization_rationale"))
         )
-        work_items = normalize_work_items(original.get("work_items", []), bid)
+        branch_context = {
+            "id": bid,
+            "objective": nonempty_text(original.get("objective")),
+            "scope": nonempty_text(original.get("scope")),
+            "branch_risk": nonempty_text(original.get("branch_risk")),
+            "depends_on": original.get("depends_on", []) if isinstance(original.get("depends_on"), list) else [],
+            "contention_risk": any(
+                isinstance(original.get(key), str) and original.get(key, "").strip()
+                for key in ["contention_reason", "worker_contention_reason"]
+            ),
+        }
+        work_items = normalize_work_items(original.get("work_items", []), bid, branch_context=branch_context)
         owned_paths = derived_owned_paths(work_items)
         if max_workers < MAX_WORKER_PACKETS_PER_BRANCH:
             append_reason_once(

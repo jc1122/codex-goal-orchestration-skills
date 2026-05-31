@@ -25,6 +25,7 @@ SHARED_SCRIPTS = (
     "extract_telemetry.py",
     "runtime_lite_runner.py",
     "runtime_phase_manifest.py",
+    "script_only_repair_gate.py",
     "scheduler_tick.py",
     "validate_lite_advice.py",
     "check_goal_skill_availability.py",

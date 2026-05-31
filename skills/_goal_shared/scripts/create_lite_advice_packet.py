@@ -177,12 +177,25 @@ exec python3 "$runner" --packet-dir "$(pwd)"
 """
 
 
-def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path: str) -> dict:
+def lite_usefulness(purpose: str, avoids_action: str | None, expected_savings_reason: str | None) -> tuple[str, str]:
+    defaults = CONTRACT.lite_avoided_action_defaults(purpose)
+    action = (avoids_action or defaults.get("avoids_action") or "").strip()
+    reason = (expected_savings_reason or defaults.get("expected_savings_reason") or "").strip()
+    if not action:
+        raise SystemExit("--avoids-action is required for this Lite purpose")
+    if not reason:
+        raise SystemExit("--expected-savings-reason is required for this Lite purpose")
+    return action, reason
+
+
+def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path: str, *, avoids_action: str, expected_savings_reason: str) -> dict:
     return {
         "schema_version": 1,
         "role": "lite_advisor",
         "packet_id": packet_id,
         "purpose": purpose,
+        "avoids_action": avoids_action,
+        "expected_savings_reason": expected_savings_reason,
         "base_dir": base_dir.as_posix(),
         "model": LITE_MODEL,
         "approval_mode": GEMINI_APPROVAL_MODE,
@@ -225,6 +238,8 @@ def prompt_for(
     gemini_version: str,
     gemini_sha256: str,
     task_sha256: str,
+    avoids_action: str,
+    expected_savings_reason: str,
 ) -> str:
     source_lines = "\n".join(
         f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
@@ -237,6 +252,8 @@ def prompt_for(
 You are a CLI-only Lite advisor. Do not edit files, create branches, create worktrees, run tests, or decide pass/fail. Your job is to route context cheaply for heavier agents.
 
 Purpose: {purpose}
+Avoids action: {avoids_action}
+Expected savings reason: {expected_savings_reason}
 Base directory: {base_dir}
 
 Deterministic envelope:
@@ -252,6 +269,7 @@ Read only these explicit input files:
 
 Policy:
 - Lite output is advisory only.
+- If you cannot actually reduce the declared avoided action, return `status: "blocked"` and explain why in blockers.
 - Do not decide mergeability, prompt-audit pass/fail, scientific claim support, or Definition-of-Done satisfaction.
 - Preserve labels exactly when present: `unsupported`, `unresolved`, `negative`, `weakened`, `probe-only`, `blocked`.
 - Recommend targeted original reads with path, anchor, and reason. Do not tell heavy agents to reread every source file by default.
@@ -269,6 +287,8 @@ Return exactly one JSON object between these marker lines. Do not print any othe
   "packet_id": "{packet_id}",
   "role": "lite_advisor",
   "purpose": "{purpose}",
+  "avoids_action": {json.dumps(avoids_action)},
+  "expected_savings_reason": {json.dumps(expected_savings_reason)},
   "status": "ok",
   "source_files": {example_sources},
   "recommended_reads": [],
@@ -294,6 +314,8 @@ def main() -> int:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--input-file", action="append", default=[])
     parser.add_argument("--task-file")
+    parser.add_argument("--avoids-action", help="Expensive action this Lite packet is expected to avoid; defaults by purpose when known.")
+    parser.add_argument("--expected-savings-reason", help="Concrete reason this Lite packet reduces a heavier read or model call; defaults by purpose when known.")
     parser.add_argument("--replace", action="store_true", help="Replace an existing packet directory after removing it first.")
     args = parser.parse_args()
 
@@ -317,6 +339,11 @@ def main() -> int:
     if not input_files:
         raise SystemExit("at least one --input-file is required")
     sources = [source_metadata(path, base_dir) for path in input_files]
+    avoids_action, expected_savings_reason = lite_usefulness(
+        args.purpose,
+        args.avoids_action,
+        args.expected_savings_reason,
+    )
 
     packet_dir = out_dir / packet_id
     if packet_dir.exists():
@@ -339,10 +366,14 @@ def main() -> int:
         gemini_version=gemini_version,
         gemini_sha256=gemini_sha256,
         task_sha256=task_sha256,
+        avoids_action=avoids_action,
+        expected_savings_reason=expected_savings_reason,
     )
     inputs = {
         "packet_id": packet_id,
         "purpose": args.purpose,
+        "avoids_action": avoids_action,
+        "expected_savings_reason": expected_savings_reason,
         "skill": skill,
         "base_dir": base_dir.as_posix(),
         "model": LITE_MODEL,
@@ -361,7 +392,19 @@ def main() -> int:
     )
     (packet_dir / "task.md").write_text(extra, encoding="utf-8")
     (packet_dir / "launch-config.json").write_text(
-        json.dumps(lite_launch_config(packet_id, args.purpose, base_dir, gemini_path), indent=2, sort_keys=True) + "\n",
+        json.dumps(
+            lite_launch_config(
+                packet_id,
+                args.purpose,
+                base_dir,
+                gemini_path,
+                avoids_action=avoids_action,
+                expected_savings_reason=expected_savings_reason,
+            ),
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     launch_path = packet_dir / "launch.sh"

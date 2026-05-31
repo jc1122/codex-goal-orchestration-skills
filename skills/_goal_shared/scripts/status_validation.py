@@ -354,6 +354,22 @@ def validate_reuse_policy(defects: list[str], value: object, path: str) -> None:
             defect(defects, f"{path}.source_telemetry_path", "must identify the reused reviewer telemetry artifact when accepted is true")
 
 
+def validate_reuse_eligibility(defects: list[str], value: object, path: str, *, semantic_hashes: dict[str, str]) -> None:
+    data = require_object(defects, value, path)
+    if not isinstance(data.get("eligible"), bool):
+        defect(defects, f"{path}.eligible", "must be a boolean")
+    require_string(defects, data.get("reason"), f"{path}.reason")
+    required_hashes = require_string_list(defects, data.get("required_hashes"), f"{path}.required_hashes")
+    expected_hashes = sorted(semantic_hashes)
+    if required_hashes and required_hashes != expected_hashes:
+        defect(defects, f"{path}.required_hashes", "must list semantic_input_hashes keys exactly")
+    require_string(defects, data.get("route_policy_path"), f"{path}.route_policy_path")
+    for key in ["source_review_path", "source_telemetry_path"]:
+        value = data.get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            defect(defects, f"{path}.{key}", "must be null or a non-empty string")
+
+
 def validate_pre_review_volatile_inputs(defects: list[str], value: object, path: str) -> None:
     if value in (None, {}):
         return
@@ -862,6 +878,7 @@ def validate_pre_review_gate_artifact(
     for rel_path in required_input_paths or []:
         if rel_path not in semantic_hashes:
             defect(defects, f"{path}.semantic_input_hashes", f"must include current semantic input hash for {rel_path}")
+    validate_reuse_eligibility(defects, gate.get("reuse_eligibility"), f"{path}.reuse_eligibility", semantic_hashes=semantic_hashes)
     validate_reuse_policy(defects, gate.get("reuse_policy"), f"{path}.reuse_policy")
     return gate
 
@@ -1003,6 +1020,8 @@ def validate_runtime_lite_advice_entries(
         required = [
             "packet_id",
             "purpose",
+            "avoids_action",
+            "expected_savings_reason",
             "status",
             "disposition",
             "advice_path",
@@ -1029,6 +1048,8 @@ def validate_runtime_lite_advice_entries(
         purpose = require_string(defects, data.get("purpose"), f"{item_path}.purpose")
         if purpose and purpose not in allowed_purposes:
             defect(defects, f"{item_path}.purpose", f"must be one of {sorted(allowed_purposes)}")
+        avoids_action = require_string(defects, data.get("avoids_action"), f"{item_path}.avoids_action")
+        expected_savings_reason = require_string(defects, data.get("expected_savings_reason"), f"{item_path}.expected_savings_reason")
         status = data.get("status")
         if status not in LITE_STATUSES:
             defect(defects, f"{item_path}.status", f"must be one of {sorted(LITE_STATUSES)}")
@@ -1098,6 +1119,10 @@ def validate_runtime_lite_advice_entries(
         ]
         if source_files != expected_min:
             defect(defects, f"{item_path}.source_files", "must match input-files.json source metadata exactly")
+        if avoids_action and avoids_action != inputs_data.get("avoids_action"):
+            defect(defects, f"{item_path}.avoids_action", "must match input-files.json avoids_action")
+        if expected_savings_reason and expected_savings_reason != inputs_data.get("expected_savings_reason"):
+            defect(defects, f"{item_path}.expected_savings_reason", "must match input-files.json expected_savings_reason")
         if lite_validator is None:
             lite_validator = load_lite_validator(defects, script_dir, validator_module_name)
         if lite_validator is not None:

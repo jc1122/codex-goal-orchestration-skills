@@ -18,6 +18,8 @@ TIMEOUT_NOT_FOUND = "timeout command not found; refusing unbounded {role} attemp
 CONFIG_NAME = "launch-config.json"
 WORKER_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 WORKER_STATUS_END = "END_WORKER_STATUS_JSON"
+TIMEOUT_RETURN_CODES = {124, 137}
+LAUNCHER_STATES = ("active", "timeout", "fail-clean", "fail-dirty", "pass", "blocked")
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -90,6 +92,7 @@ def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, A
     remove_if_exists(packet_dir / output_name)
     remove_if_exists(packet_dir / "telemetry.json")
     remove_if_exists(packet_dir / "fallback.blocked.txt")
+    remove_if_exists(packet_dir / "launcher-state.json")
     seen: set[str] = set()
     for attempt in attempts:
         for key in ("event_logs", "probe_logs"):
@@ -104,6 +107,77 @@ def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, A
         remove_if_exists(Path(path))
     for path in glob.glob((packet_dir / "events-*.log").as_posix()):
         remove_if_exists(Path(path))
+
+
+def state_artifact_name(config: dict[str, Any]) -> str:
+    value = config.get("state_artifact")
+    return value if isinstance(value, str) and value.strip() else "launcher-state.json"
+
+
+def classify_attempt_state(returncode: int, *, output_nonempty: bool, dirty: bool) -> str:
+    if returncode == 0:
+        return "pass"
+    if dirty:
+        return "fail-dirty"
+    if returncode in TIMEOUT_RETURN_CODES:
+        return "timeout"
+    return "fail-clean"
+
+
+def write_launcher_state(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    state: str,
+    attempt: dict[str, Any] | None = None,
+    attempt_index: int | None = None,
+    returncode: int | None = None,
+    dirty: bool | None = None,
+    output_nonempty: bool | None = None,
+    message: str = "",
+) -> None:
+    if state not in LAUNCHER_STATES:
+        raise SystemExit(f"unsupported launcher state: {state}")
+    path = packet_dir / state_artifact_name(config)
+    if path.exists():
+        data = read_json(path)
+    else:
+        data = {
+            "schema_version": 1,
+            "packet_id": string_value(config, "packet_id"),
+            "role": string_value(config, "role"),
+            "state_machine": "active -> timeout|fail-clean|fail-dirty|pass|blocked",
+            "terminal_state": None,
+            "events": [],
+        }
+    events = data.get("events")
+    if not isinstance(events, list):
+        events = []
+        data["events"] = events
+    event = {
+        "seq": len(events) + 1,
+        "state": state,
+    }
+    if attempt_index is not None:
+        event["attempt_index"] = attempt_index
+    if attempt is not None:
+        event["alias"] = attempt.get("alias")
+        event["provider"] = attempt.get("provider")
+        event["model"] = attempt.get("model")
+    if returncode is not None:
+        event["returncode"] = returncode
+    if dirty is not None:
+        event["dirty"] = dirty
+    if output_nonempty is not None:
+        event["output_nonempty"] = output_nonempty
+    if message:
+        event["message"] = message
+    events.append(event)
+    if state == "active":
+        data["terminal_state"] = None
+    elif state in {"timeout", "fail-clean", "fail-dirty", "pass", "blocked"}:
+        data["terminal_state"] = state
+    write_json(path, data)
 
 
 def event_label(attempt: dict[str, Any], fallback: str) -> str:
@@ -779,6 +853,7 @@ def run_packet(packet_dir: Path) -> int:
 
     if role == "worker":
         for index, attempt in enumerate(attempts):
+            write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
             rc, _ = run_worker_attempt(
                 packet_dir=packet_dir,
                 config=config,
@@ -788,34 +863,51 @@ def run_packet(packet_dir: Path) -> int:
                 output_name=output_name,
                 worktree=worktree,
             )
+            output_nonempty = output_path.exists() and output_path.stat().st_size > 0
+            dirty = is_worktree_dirty(worktree)
+            state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
+            write_launcher_state(
+                packet_dir,
+                config,
+                state=state,
+                attempt=attempt,
+                attempt_index=index,
+                returncode=rc,
+                dirty=dirty,
+                output_nonempty=output_nonempty,
+            )
             if rc == 0:
                 write_telemetry(packet_dir, config)
                 return 0
-            if output_path.exists() and output_path.stat().st_size > 0:
+            if output_nonempty:
                 write_telemetry(packet_dir, config)
                 return 1
-            if is_worktree_dirty(worktree):
+            if dirty:
                 label = event_label(attempt, f"attempt-{index + 1}")
                 suffix = "refusing fallback in same worktree." if index < len(attempts) - 1 else "no fallback remains."
                 message = f"{label} failed after leaving dirty worktree; {suffix}"
                 (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
                 write_terminal(packet_dir, config, message)
+                write_launcher_state(packet_dir, config, state="blocked", attempt=attempt, attempt_index=index, returncode=rc, dirty=True, output_nonempty=output_nonempty, message=message)
                 write_telemetry(packet_dir, config)
                 return 2
         if is_worktree_dirty(worktree):
             message = "worker failed after leaving dirty worktree; no fallback remains."
             (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
             write_terminal(packet_dir, config, message)
+            write_launcher_state(packet_dir, config, state="blocked", dirty=True, message=message)
             write_telemetry(packet_dir, config)
             return 2
         message = string_value(config, "terminal_message")
         write_terminal(packet_dir, config, message)
+        write_launcher_state(packet_dir, config, state="blocked", dirty=False, message=message)
         write_telemetry(packet_dir, config)
         return 1
 
     for index, attempt in enumerate(attempts):
         _label = event_label(attempt, f"attempt-{index + 1}")
         provider = attempt.get("provider")
+        write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
         if provider == "codex":
             rc = run_codex_model(
                 attempt,
@@ -828,15 +920,19 @@ def run_packet(packet_dir: Path) -> int:
             )
         else:
             raise SystemExit(f"{CONFIG_NAME} unsupported {role} provider: {provider}")
+        output_nonempty = output_path.exists() and output_path.stat().st_size > 0
+        state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=False)
+        write_launcher_state(packet_dir, config, state=state, attempt=attempt, attempt_index=index, returncode=rc, dirty=False, output_nonempty=output_nonempty)
         if rc == 0:
             write_telemetry(packet_dir, config)
             return 0
-        if output_path.exists() and output_path.stat().st_size > 0:
+        if output_nonempty:
             write_telemetry(packet_dir, config)
             return 1
 
     message = string_value(config, "terminal_message")
     write_terminal(packet_dir, config, message)
+    write_launcher_state(packet_dir, config, state="blocked", dirty=False, message=message)
     write_telemetry(packet_dir, config)
     return 1
 

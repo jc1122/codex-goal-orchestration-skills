@@ -332,6 +332,10 @@ def assert_compact_lite_launcher(packet_dir: Path) -> dict:
         raise SystemExit(f"Lite launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
     if config.get("runner_prompt") != "Follow the complete Lite advisory packet instructions provided on stdin.":
         raise SystemExit("Lite launch-config should preserve the stdin runner prompt")
+    if not isinstance(config.get("avoids_action"), str) or not config.get("avoids_action"):
+        raise SystemExit("Lite launch-config missing avoids_action")
+    if not isinstance(config.get("expected_savings_reason"), str) or not config.get("expected_savings_reason"):
+        raise SystemExit("Lite launch-config missing expected_savings_reason")
     if not str(config.get("validation_script", "")).endswith("validate_lite_advice.py"):
         raise SystemExit(f"Lite launch-config validation script mismatch: {config.get('validation_script')!r}")
     if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
@@ -2126,9 +2130,31 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit("render_branch_worktree_commands should clamp --limit to remaining branch capacity")
 
 
+def test_launcher_state_classifier() -> None:
+    path = ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "runtime_packet_runner.py"
+    spec = importlib.util.spec_from_file_location("preparedness_runtime_packet_runner", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load runtime_packet_runner.py from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    cases = [
+        (124, False, False, "timeout"),
+        (1, False, False, "fail-clean"),
+        (1, False, True, "fail-dirty"),
+        (0, True, False, "pass"),
+    ]
+    for returncode, output_nonempty, dirty, expected in cases:
+        actual = module.classify_attempt_state(returncode, output_nonempty=output_nonempty, dirty=dirty)
+        if actual != expected:
+            raise SystemExit(
+                f"launcher state classifier mismatch for rc={returncode}, output={output_nonempty}, dirty={dirty}: {actual!r}"
+            )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory(prefix="goal-preparedness-fixtures-") as tmp:
         tmp_path = Path(tmp)
+        test_launcher_state_classifier()
         bundle = tmp_path / "bundle"
         run(
             [
@@ -3019,7 +3045,7 @@ def main() -> int:
             raise SystemExit("reviewer prompt should read compact_reviewer_context first")
         reviewer_attempts = reviewer_config.get("attempts")
         reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
-        if reviewer_aliases != ["gpt-5.4-mini", "gpt-5.4"]:
+        if reviewer_aliases != ["gpt-5.5", "gpt-5.4"]:
             raise SystemExit(f"reviewer launch-config route mismatch: {reviewer_aliases!r}")
         if not reviewer_attempts or any(
             not isinstance(attempt, dict)
@@ -3032,7 +3058,7 @@ def main() -> int:
             raise SystemExit("reviewer launch-config omitted semantic_input_hashes")
         if not reviewer_config.get("reuse_policy"):
             raise SystemExit("reviewer launch-config omitted reuse_policy")
-        assert_reviewer_route(packet_root, "B01-R01", ["gpt-5.4-mini", "gpt-5.4"])
+        assert_reviewer_route(packet_root, "B01-R01", ["gpt-5.5", "gpt-5.4"])
         for packet_id, tier, expected in [
             ("B01-R02", "standard", ["gpt-5.4", "gpt-5.5"]),
             ("B01-R03", "heavy", ["gpt-5.5", "gpt-5.4"]),

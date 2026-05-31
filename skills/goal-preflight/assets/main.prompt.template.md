@@ -16,6 +16,7 @@ Base ref: {base_ref}
 - Use $goal-main-orchestrator. Treat `job.manifest.json` as the contract and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 - Treat manifest paths as bundle-root relative and worktree paths as repo-root relative. Reject absolute paths, backslashes, and `..` traversal.
 - Run availability bootstrap and fresh model-catalog capture before prompt audit. Do not create branches until `prompt-audit.json` pins this manifest and repository root with `status=pass`.
+- Run `script_only_repair_gate.py --scope main` before prompt audit or branch launch. Complete any `script_action_available` commands first; launch a model only after the gate returns `needs_semantic_decision`.
 - Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots and close finished branch orchestrator agents. Set absolute bundle paths and run:
 
 ```bash
@@ -33,7 +34,7 @@ Launch the next eligible branch from that output only.
 - Outside that watchdog exception, wait for branch agents and do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files.
 - Branch sessions must launch workers as a rolling saturated pool up to each branch cap. Research-worker, reviewer, Lite, and amendment policy lives in `job.manifest.json` and packet validators.
 - Before merge readiness, require `git diff --check {base_ref}...HEAD`; accept each branch after `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
-- Before final pass, run `summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` and require current `telemetry.summary.json` plus `validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json`.
+- Before final pass, run `summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` and require current `telemetry.summary.json` with `cost_summary`, `main.status.json` `cost_summary_path`, plus `validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json`.
 - Optional Lite advisors are context routers only, never audit/review/mergeability/DoD evidence. Preserve unsupported, unresolved, negative, and probe-only labels.
 
 ## Parallelization Rationale
@@ -68,6 +69,7 @@ Launch the next eligible branch from that output only.
 
 - Skill availability bootstrap passed for runtime skills before prompt audit.
 - Packet telemetry exists for prompt audit, workers, research-workers, reviewers, any Lite packets, and any plan-amender packets; each declared attempt records `timeout_seconds`; `telemetry.summary.json` was regenerated.
+- `telemetry.summary.json` includes deterministic `cost_summary` fields for declared/called attempts, aliases, premium aliases avoided, mini/spark usage, prompt/output bytes, fallbacks, and failed same-class attempts; `main.status.json` points to it.
 - `{main_scheduler_path}` exists, matches the current manifest hash, and proves branch slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
 - Every branch status passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
 - Every terminal branch summary has an `amendment_decisions` launch or skip record; every launched amender has passing packet validation.

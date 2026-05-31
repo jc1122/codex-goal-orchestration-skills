@@ -112,6 +112,8 @@ def prompt_for(
     gemini_version: str,
     gemini_sha256: str,
     task_sha256: str,
+    avoids_action: str,
+    expected_savings_reason: str,
 ) -> str:
     source_lines = "\n".join(
         f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
@@ -124,6 +126,8 @@ def prompt_for(
 You are a CLI-only Lite advisor. Do not edit files, create branches, create worktrees, run tests, or decide pass/fail. Your job is to route context cheaply for heavier agents.
 
 Purpose: {purpose}
+Avoids action: {avoids_action}
+Expected savings reason: {expected_savings_reason}
 Base directory: {base_dir}
 
 Deterministic envelope:
@@ -139,6 +143,7 @@ Read only these explicit input files:
 
 Policy:
 - Lite output is advisory only.
+- If you cannot actually reduce the declared avoided action, return `status: "blocked"` and explain why in blockers.
 - Do not decide mergeability, prompt-audit pass/fail, scientific claim support, or Definition-of-Done satisfaction.
 - Preserve labels exactly when present: `unsupported`, `unresolved`, `negative`, `weakened`, `probe-only`, `blocked`.
 - Recommend targeted original reads with path, anchor, and reason. Do not tell heavy agents to reread every source file by default.
@@ -156,6 +161,8 @@ Return exactly one JSON object between these marker lines. Do not print any othe
   "packet_id": "{packet_id}",
   "role": "lite_advisor",
   "purpose": "{purpose}",
+  "avoids_action": {json.dumps(avoids_action)},
+  "expected_savings_reason": {json.dumps(expected_savings_reason)},
   "status": "ok",
   "source_files": {example_sources},
   "recommended_reads": [],
@@ -372,6 +379,8 @@ def validate_inputs_envelope(
         defect(defects, "input-files.json.purpose", f"must match advice purpose {purpose!r}")
     if isinstance(input_purpose, str) and input_purpose not in allowed_purposes():
         defect(defects, "input-files.json.purpose", f"not allowed for {current_skill_name()}: {input_purpose!r}")
+    require_string(defects, inputs.get("avoids_action"), "input-files.json.avoids_action")
+    require_string(defects, inputs.get("expected_savings_reason"), "input-files.json.expected_savings_reason")
     skill = inputs.get("skill")
     if skill != current_skill_name():
         defect(defects, "input-files.json.skill", f"must be {current_skill_name()!r}")
@@ -422,6 +431,8 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
         gemini_version=str(inputs.get("gemini_version", "")),
         gemini_sha256=str(inputs.get("gemini_sha256", "")),
         task_sha256=str(inputs.get("task_sha256", "")),
+        avoids_action=str(inputs.get("avoids_action", "")),
+        expected_savings_reason=str(inputs.get("expected_savings_reason", "")),
     )
     regenerated_hash = sha256_text(regenerated)
     if regenerated_hash != expected:
@@ -533,6 +544,8 @@ def validate(
         "packet_id",
         "role",
         "purpose",
+        "avoids_action",
+        "expected_savings_reason",
         "status",
         "source_files",
         "recommended_reads",
@@ -559,6 +572,13 @@ def validate(
         defect(defects, "$.purpose", f"not allowed for {current_skill_name()}: {actual_purpose!r}")
     if purpose and actual_purpose != purpose:
         defect(defects, "$.purpose", f"must be {purpose!r}")
+    avoids_action = require_string(defects, root.get("avoids_action"), "$.avoids_action")
+    expected_savings_reason = require_string(defects, root.get("expected_savings_reason"), "$.expected_savings_reason")
+    if inputs is not None:
+        if avoids_action and avoids_action != inputs.get("avoids_action"):
+            defect(defects, "$.avoids_action", "must match input-files.json avoids_action")
+        if expected_savings_reason and expected_savings_reason != inputs.get("expected_savings_reason"):
+            defect(defects, "$.expected_savings_reason", "must match input-files.json expected_savings_reason")
     status = root.get("status")
     if status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")

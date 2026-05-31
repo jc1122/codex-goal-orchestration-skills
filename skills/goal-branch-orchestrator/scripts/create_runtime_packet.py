@@ -884,6 +884,36 @@ def review_changed_paths(gate: dict, branch: dict) -> list[str]:
     return paths
 
 
+def branch_route_classes(branch: dict) -> list[str]:
+    classes: list[str] = []
+    work_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        worker_type = item.get("worker_type", "worker")
+        if worker_type in {"research-worker", "research"}:
+            route_class = "research-worker"
+        else:
+            route_class = item.get("route_class", DEFAULT_WORKER_ROUTE_CLASS)
+        if isinstance(route_class, str) and route_class.strip() and route_class not in classes:
+            classes.append(route_class)
+    return classes
+
+
+def docs_path(path: str) -> bool:
+    lowered = path.lower()
+    return lowered.endswith((".md", ".markdown", ".txt", ".rst", ".adoc")) or lowered.startswith(("docs/", "doc/", "readme", "changelog", "license", "notice"))
+
+
+def test_path(path: str) -> bool:
+    lowered = path.lower()
+    return lowered.startswith(("test/", "tests/", "spec/", "specs/")) or "/tests/" in lowered or lowered.startswith("test_") or "_test." in lowered or ".spec." in lowered
+
+
+def production_paths(paths: list[str]) -> list[str]:
+    return [path for path in paths if not docs_path(path) and not test_path(path)]
+
+
 def explicit_review_tier(value: object) -> str:
     if isinstance(value, str) and value in CONTRACT.REVIEW_ROUTE_TIERS:
         return value
@@ -893,7 +923,8 @@ def explicit_review_tier(value: object) -> str:
 def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, list[str]]:
     explicit = explicit_review_tier(gate.get("review_tier")) or explicit_review_tier(branch.get("review_tier"))
     if explicit:
-        return explicit, [f"explicit {explicit} review tier"]
+        explicit_reason = nonempty_text(gate.get("review_tier_reason")) or nonempty_text(branch.get("review_tier_reason"))
+        return explicit, [explicit_reason or f"explicit {explicit} review tier"]
     changed_paths = review_changed_paths(gate, branch)
     trigger_hits: list[str] = []
     lower_paths = " ".join(changed_paths).lower()
@@ -909,14 +940,23 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
         trigger_hits.append("large-diff")
     if gate.get("prior_reviewer_blockers"):
         trigger_hits.append("reviewer-blocker")
+    route_classes = branch_route_classes(branch)
+    if "complex-code" in route_classes:
+        trigger_hits.append("complex-code route class")
+    checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
+    tests = checks.get("tests") if isinstance(checks.get("tests"), dict) else {}
+    if tests.get("status") not in {None, "pass"}:
+        trigger_hits.append("incomplete verification")
+    if gate.get("status") not in {None, "pass"}:
+        trigger_hits.append("incomplete pre-review gate")
     if trigger_hits:
         return "heavy", sorted(set(trigger_hits))
-    docs_like = changed_paths and all(
-        path.endswith((".md", ".txt", ".rst")) or path.startswith(("docs/", "README", "CHANGELOG"))
-        for path in changed_paths
-    )
-    if docs_like and len(changed_paths) <= 3:
-        return "light", ["small documentation-only review surface"]
+    if route_classes and set(route_classes) <= {"docs", "mechanical"}:
+        return "light", ["docs/mechanical route classes with no production behavior signal"]
+    if changed_paths and not production_paths(changed_paths) and len(changed_paths) <= 6:
+        return "light", ["docs or test-only review surface with no production path changes"]
+    if route_classes and set(route_classes) <= {"small-edit", "normal-code"}:
+        return "standard", ["normal or small-edit implementation route classes require standard reviewer routing"]
     policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
     default_tier = policy.get("default_tier") if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS else CONTRACT.REVIEW_MODEL_POLICY["default_tier"]
     return str(default_tier), ["default deterministic review tier"]
@@ -935,7 +975,8 @@ def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id
         "selection_reason": "; ".join(reasons),
         "policy_router": CONTRACT.REVIEW_MODEL_POLICY["router"],
         "policy_routes": CONTRACT.REVIEW_MODEL_POLICY["routes"],
-        "heavy_triggers": [reason for reason in reasons if reason in CONTRACT.REVIEW_HEAVY_TRIGGER_PATTERNS],
+        "heavy_triggers": reasons if tier == "heavy" else [],
+        "route_classes": branch_route_classes(branch),
         "changed_paths": review_changed_paths(gate, branch),
     }
 
@@ -1232,6 +1273,7 @@ def compact_launch_config(
             "worktree": worktree,
             "schema_name": schema_name,
             "output_name": output_name,
+            "state_artifact": "launcher-state.json",
             "sandbox": "workspace-write",
             "attempt_timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
             "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
@@ -1266,6 +1308,7 @@ def compact_launch_config(
             "worktree": worktree,
             "schema_name": schema_name,
             "output_name": output_name,
+            "state_artifact": "launcher-state.json",
             "sandbox": "read-only",
             "attempt_timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
             "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
@@ -1287,6 +1330,7 @@ def compact_launch_config(
             "worktree": worktree,
             "schema_name": schema_name,
             "output_name": output_name,
+            "state_artifact": "launcher-state.json",
             "sandbox": "read-only",
             "attempt_timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
             "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
@@ -1411,13 +1455,16 @@ def main() -> int:
         )
         if defects:
             raise SystemExit("pre-review gate failed; refusing reviewer packet generation:\n" + "\n".join(defects))
+        gate_reuse_policy = gate.get("reuse_policy") if isinstance(gate.get("reuse_policy"), dict) else {}
+        if gate_reuse_policy.get("accepted") is True and gate_reuse_policy.get("source_telemetry_path"):
+            print("pre-review gate accepted reviewer reuse with telemetry; no reviewer model packet generated")
+            return 0
         review_route = select_review_route(manifest, gate, branch_id=branch_id, packet_id=packet_id)
         review_semantic_hashes = {
             key: value
             for key, value in gate.get("semantic_input_hashes", {}).items()
             if isinstance(key, str) and isinstance(value, str)
         } if isinstance(gate.get("semantic_input_hashes"), dict) else {}
-        gate_reuse_policy = gate.get("reuse_policy") if isinstance(gate.get("reuse_policy"), dict) else {}
         review_reuse_policy = {
             "mode": "new",
             "accepted": False,

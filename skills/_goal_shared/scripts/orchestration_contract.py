@@ -98,7 +98,7 @@ REVIEW_HEAVY_TRIGGER_PATTERNS = (
 )
 REVIEW_MODEL_POLICY = {
     "router": "deterministic-v1",
-    "default_tier": "light",
+    "default_tier": "standard",
     "routes": {tier: list(route) for tier, route in REVIEW_MODEL_ROUTES.items()},
     "heavy_triggers": [
         "public API changes",
@@ -170,6 +170,7 @@ WORKER_ROUTE_CLASSES = (
     "complex-code",
     "custom",
 )
+MANIFEST_WORKER_ROUTE_CLASSES = tuple(route_class for route_class in WORKER_ROUTE_CLASSES if route_class != "custom")
 WORKER_ROUTE_CLASS_LADDERS = {
     "mechanical": ("codex-mini",),
     "docs": ("codex-mini",),
@@ -235,6 +236,48 @@ LITE_MODEL_POLICY = {
     "approval_mode": LITE_APPROVAL_MODE,
     "timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
 }
+LITE_AVOIDED_ACTIONS_BY_PURPOSE = {
+    "preflight-decomposition": {
+        "avoids_action": "full preflight decomposition model pass",
+        "expected_savings_reason": "A compact Lite read can identify whether the source material already contains branchable work before a heavier decomposition pass.",
+    },
+    "lint-repair": {
+        "avoids_action": "semantic lint-repair model pass",
+        "expected_savings_reason": "A Lite lint summary can route deterministic bundle defects to scripts before a heavier repair agent is launched.",
+    },
+    "audit-defect-summary": {
+        "avoids_action": "heavy prompt-audit defect reread",
+        "expected_savings_reason": "A Lite summary can name the exact audit defects to repair without reloading the full audit event stream.",
+    },
+    "main-summary": {
+        "avoids_action": "full completed-branch artifact reread",
+        "expected_savings_reason": "A Lite summary can compress terminal branch evidence before the main orchestrator decides finalization.",
+    },
+    "branch-packet-planning": {
+        "avoids_action": "heavy branch packet-planning pass",
+        "expected_savings_reason": "A Lite pass can choose the minimal packet context from manifest and branch prompt metadata before worker creation.",
+    },
+    "context-pack": {
+        "avoids_action": "broad worktree context packing",
+        "expected_savings_reason": "A Lite pass can name the few context files needed and avoid loading unrelated repository files.",
+    },
+    "worker-summary": {
+        "avoids_action": "full completed-worker artifact reread",
+        "expected_savings_reason": "A Lite summary can condense worker status, diff, and verification evidence before branch integration.",
+    },
+    "blocked-triage": {
+        "avoids_action": "heavy blocked-worker triage pass",
+        "expected_savings_reason": "A Lite pass can classify whether the blocker is script-repairable before launching a heavier model.",
+    },
+    "amendment-summary": {
+        "avoids_action": "full amendment artifact reread",
+        "expected_savings_reason": "A Lite summary can condense amendment evidence before a deterministic decision script is run.",
+    },
+    "amendment-defect-summary": {
+        "avoids_action": "heavy amendment defect triage pass",
+        "expected_savings_reason": "A Lite summary can route validator defects to deterministic amendment repair scripts first.",
+    },
+}
 LITE_ADVISOR_POLICY = {
     "enabled": True,
     "role": "lite_advisor",
@@ -243,6 +286,7 @@ LITE_ADVISOR_POLICY = {
     "launcher": "create_lite_advice_packet.py",
     "input_scope": "explicit packet input files only; no full repository dumps, full event logs, or unrelated result histories",
     "must_validate_with": "validate_lite_advice.py",
+    "usefulness_gate": "Lite packets must declare avoids_action and expected_savings_reason; skip Lite when it cannot avoid a heavier read or model call.",
     "artifact_paths": "lite/<packet_id>/advice.json and lite/<packet_id>/input-files.json",
     "telemetry_required": True,
     "forbidden_as_evidence": [
@@ -360,6 +404,7 @@ MAIN_STATUS_REQUIRED = (
     "branch_statuses",
     "amendment_decisions",
     "lite_advice",
+    "cost_summary_path",
     "commands_run",
     "dod_checklist",
     "blockers",
@@ -381,6 +426,10 @@ def worker_route_class_ladder(route_class: str) -> list[str]:
 
 def worker_route_class_reason(route_class: str) -> str:
     return WORKER_ROUTE_CLASS_REASONS.get(route_class, WORKER_ROUTE_CLASS_REASONS[DEFAULT_WORKER_ROUTE_CLASS])
+
+
+def lite_avoided_action_defaults(purpose: str) -> dict:
+    return dict(LITE_AVOIDED_ACTIONS_BY_PURPOSE.get(purpose, {}))
 
 
 def worker_scheduler_path(branch_id: str) -> str:

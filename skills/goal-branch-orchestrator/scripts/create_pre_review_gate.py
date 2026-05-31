@@ -301,6 +301,50 @@ def default_reuse_policy() -> dict:
     }
 
 
+def review_route_policy(branch: dict, branch_id: str, manifest: dict) -> dict:
+    work_items = []
+    for item in branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        worker_type = item.get("worker_type", "worker")
+        if worker_type == "research":
+            worker_type = "research-worker"
+        work_items.append(
+            {
+                "id": item.get("id"),
+                "packet_id": item.get("packet_id"),
+                "worker_type": worker_type,
+                "route_class": "research-worker" if worker_type == "research-worker" else item.get("route_class"),
+                "route_class_reason": item.get("route_class_reason"),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "branch_id": branch_id,
+        "review_model_policy": manifest.get("review_model_policy"),
+        "worker_model_policy": manifest.get("worker_model_policy"),
+        "branch_review_tier": branch.get("review_tier"),
+        "branch_review_tier_reason": branch.get("review_tier_reason"),
+        "work_item_route_policy": work_items,
+    }
+
+
+def pre_review_evidence(branch_id: str, tests: dict, dod_items: list[str], diff_command: str, ownership: dict) -> dict:
+    return {
+        "schema_version": 1,
+        "branch_id": branch_id,
+        "tests": tests,
+        "dod_evidence": {
+            "status": "pass" if dod_items else "failed",
+            "items": dod_items,
+        },
+        "diff_check": {
+            "command": diff_command,
+        },
+        "ownership": ownership,
+    }
+
+
 def display_path(bundle_dir: Path, path: Path) -> str:
     try:
         return path.resolve().relative_to(bundle_dir.resolve()).as_posix()
@@ -308,13 +352,33 @@ def display_path(bundle_dir: Path, path: Path) -> str:
         return path.resolve().as_posix()
 
 
-def reuse_policy(args: argparse.Namespace, bundle_dir: Path, semantic_hashes: dict[str, str]) -> tuple[dict, list[str]]:
+def reuse_policy(
+    args: argparse.Namespace,
+    bundle_dir: Path,
+    semantic_hashes: dict[str, str],
+    *,
+    route_policy_path: str,
+) -> tuple[dict, dict, list[str]]:
+    base_eligibility = {
+        "eligible": False,
+        "reason": "",
+        "required_hashes": sorted(semantic_hashes),
+        "route_policy_path": route_policy_path,
+        "source_review_path": None,
+        "source_telemetry_path": None,
+    }
     if not args.reuse_source_review and not args.reuse_source_telemetry:
-        return default_reuse_policy(), []
+        eligibility = dict(base_eligibility)
+        eligibility["reason"] = "no source review and telemetry were supplied"
+        return default_reuse_policy(), eligibility, []
     if not args.reuse_source_review or not args.reuse_source_telemetry:
-        return default_reuse_policy(), ["accepted reuse requires both --reuse-source-review and --reuse-source-telemetry"]
+        eligibility = dict(base_eligibility)
+        eligibility["reason"] = "accepted reuse requires both --reuse-source-review and --reuse-source-telemetry"
+        return default_reuse_policy(), eligibility, [eligibility["reason"]]
     review_path = resolve_absolute_path(args.reuse_source_review, "--reuse-source-review", must_exist=True)
     telemetry_path = resolve_absolute_path(args.reuse_source_telemetry, "--reuse-source-telemetry", must_exist=True)
+    source_review_display = display_path(bundle_dir, review_path)
+    source_telemetry_display = display_path(bundle_dir, telemetry_path)
     defects = []
     review = read_json(review_path)
     source_hashes = {
@@ -335,13 +399,25 @@ def reuse_policy(args: argparse.Namespace, bundle_dir: Path, semantic_hashes: di
     )
     defects.extend(telemetry_defects)
     accepted = not defects
-    return {
+    policy = {
         "mode": "reuse" if accepted else "new",
         "accepted": accepted,
         "semantic_hashes_match": accepted,
-        "source_review_path": display_path(bundle_dir, review_path),
-        "source_telemetry_path": display_path(bundle_dir, telemetry_path),
-    }, defects
+        "source_review_path": source_review_display,
+        "source_telemetry_path": source_telemetry_display,
+    }
+    eligibility = dict(base_eligibility)
+    eligibility.update(
+        {
+            "eligible": accepted,
+            "reason": "semantic hashes, route policy, worktree freshness, test evidence, and source telemetry match"
+            if accepted
+            else "; ".join(defects),
+            "source_review_path": source_review_display,
+            "source_telemetry_path": source_telemetry_display,
+        }
+    )
+    return policy, eligibility, defects
 
 
 def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict) -> tuple[dict, list[str]]:
@@ -427,16 +503,25 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     freshness_rel_path = BRANCH_VALIDATOR.worktree_freshness_path(branch_id)
     freshness_snapshot, freshness_defects = worktree_snapshot(worktree, str(base_ref), branch_id, branch_status)
     write_json(bundle_dir / freshness_rel_path, freshness_snapshot)
-    semantic_hashes, hash_defects = required_input_hashes(bundle_dir, branch, branch_id)
+    route_policy_rel_path = BRANCH_VALIDATOR.review_route_policy_path(branch_id)
+    write_json(bundle_dir / route_policy_rel_path, review_route_policy(branch, branch_id, manifest))
     worker_defects = worker_pass_defects(branch, branch_status, branch_id)
     ownership = ownership_check(branch, branch_status)
-    reuse, reuse_defects = reuse_policy(args, bundle_dir, semantic_hashes)
     dod_items = [item for item in args.dod_item if item.strip()]
     if not dod_items:
         dod_value = branch_status.get("dod_checklist")
         if isinstance(dod_value, list):
             dod_items = [item for item in dod_value if isinstance(item, str) and item.strip()]
     dod_defects = [] if dod_items else ["DoD evidence is required; pass --dod-item or provide branch status dod_checklist"]
+    evidence_rel_path = BRANCH_VALIDATOR.review_evidence_path(branch_id)
+    write_json(bundle_dir / evidence_rel_path, pre_review_evidence(branch_id, tests, dod_items, diff_command, ownership))
+    semantic_hashes, hash_defects = required_input_hashes(bundle_dir, branch, branch_id)
+    reuse, reuse_eligibility, reuse_defects = reuse_policy(
+        args,
+        bundle_dir,
+        semantic_hashes,
+        route_policy_path=route_policy_rel_path,
+    )
 
     checks = {
         "manifest_validation": {
@@ -491,6 +576,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "checks": checks,
         "semantic_input_hashes": semantic_hashes,
         "volatile_input_hashes": {},
+        "reuse_eligibility": reuse_eligibility,
         "reuse_policy": reuse,
     }
     if defects:

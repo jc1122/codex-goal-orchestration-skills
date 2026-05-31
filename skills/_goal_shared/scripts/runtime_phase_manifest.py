@@ -58,6 +58,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "pass": "status=pass",
             },
             {
+                "id": "script_repair_gate",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope preflight --json",
+                "pass": "decision=needs_semantic_decision or direct script actions completed and gate rerun clean",
+                "agent_does": "run deterministic script suggestions before any optional Lite or semantic repair pass",
+            },
+            {
                 "id": "handoff",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir /abs/bundle",
                 "agent_does": "return the exact bootloader text",
@@ -82,6 +88,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "id": "model_catalog",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py --json --require-codex > /abs/bundle/model-catalog.json",
                 "pass": "status pass/source live preferred",
+            },
+            {
+                "id": "script_repair_gate",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope main --json",
+                "pass": "decision=needs_semantic_decision before launching prompt audit or branch orchestrators",
+                "agent_does": "complete script_action_available commands first; launch a model only after the gate returns needs_semantic_decision",
             },
             {
                 "id": "prompt_audit",
@@ -136,6 +148,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "agent_does": "launch independent ready workers as a saturated pool up to max_active_worker_packets",
             },
             {
+                "id": "script_repair_gate",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope branch --branch-id Bxx --json",
+                "pass": "decision=needs_semantic_decision before worker packet launch",
+                "agent_does": "complete script_action_available commands first; launch workers only after the gate allows semantic work",
+            },
+            {
                 "id": "context_pack",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/context_pack.py --worktree /abs/worktree --context-file /abs/context --markdown --output /abs/bundle/branches/Bxx.context-pack.md",
                 "agent_does": "use the written bounded context pack; default is path-only for worktree files, add --include-worktree-excerpts only when bounded source excerpts are needed",
@@ -167,6 +185,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "pass": "pre_review_gate.json status=pass",
             },
             {
+                "id": "pre_reviewer_script_gate",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope branch --branch-id Bxx --status /abs/bundle/branches/Bxx.status.json --json",
+                "pass": "decision=needs_semantic_decision or accepted reviewer reuse with telemetry",
+                "agent_does": "prefer deterministic repair/reuse evidence over reviewer model launch",
+            },
+            {
                 "id": "reviewer",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role reviewer --packet-id Bxx-R01 --branch Bxx --worktree /abs/branch-worktree --manifest /abs/bundle/job.manifest.json --pre-review-gate /abs/gate --out-dir /abs/bundle/reviewers",
                 "agent_does": "run read-only reviewer packet only after gate passes",
@@ -188,6 +212,12 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "decision",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/recommend_amendment_decision.py --manifest /abs/bundle/job.manifest.json --amendment-id A001",
+            },
+            {
+                "id": "script_repair_gate",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --scope amender --status /abs/bundle/branches/Bxx.status.json --json",
+                "pass": "decision=needs_semantic_decision before semantic amender packet launch",
+                "agent_does": "use amendment decision and blocker repair commands before launching an amender model",
             },
             {
                 "id": "packet",

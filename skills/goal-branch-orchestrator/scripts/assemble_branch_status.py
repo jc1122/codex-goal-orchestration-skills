@@ -207,6 +207,8 @@ def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
             {
                 "packet_id": packet_dir.name,
                 "purpose": advice.get("purpose", inputs.get("purpose")),
+                "avoids_action": advice.get("avoids_action", inputs.get("avoids_action")),
+                "expected_savings_reason": advice.get("expected_savings_reason", inputs.get("expected_savings_reason")),
                 "status": advice.get("status", "blocked"),
                 "disposition": "ignored",
                 "advice_path": advice_path.resolve().as_posix(),

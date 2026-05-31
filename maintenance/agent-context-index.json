@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:c6994038a91b1bb712708c7b3d167eb04fd1e181931c71624d083f0219fbb14d"
+    "source_fingerprint": "sha256:5bbb2c30aa0993b43ab4f67a2d7f0ca09dfca356b3cc881e252a28cfef5b0df8"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -193,6 +193,7 @@
         "skills/_goal_shared/scripts/runtime_lite_runner.py",
         "skills/_goal_shared/scripts/runtime_phase_manifest.py",
         "skills/_goal_shared/scripts/scheduler_tick.py",
+        "skills/_goal_shared/scripts/script_only_repair_gate.py",
         "skills/_goal_shared/scripts/validate_lite_advice.py"
       ],
       "shared_references": [

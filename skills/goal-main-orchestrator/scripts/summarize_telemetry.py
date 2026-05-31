@@ -20,6 +20,14 @@ TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendme
 APPROX_CHARS_PER_TOKEN = 4
 TOKEN_PRESSURE_INPUT_WARN_MIN = 20_000
 TOKEN_PRESSURE_INPUT_WARN_RATIO = 8
+PREMIUM_ALIASES = {
+    "gpt-5.5",
+    "gemini-pro",
+    "gemini-flash",
+    "copilot-gpt-5.4",
+    "codex-research",
+}
+MINI_SPARK_ALIASES = ("codex-mini", "codex-spark")
 
 
 def zero_usage() -> dict[str, int]:
@@ -77,6 +85,15 @@ def ensure_bucket(groups: dict[str, dict[str, Any]], key: str) -> dict[str, Any]
 
 
 def zero_premium_bucket() -> dict[str, Any]:
+    return {
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "accepted_attempts": 0,
+        "known_usage": zero_usage(),
+    }
+
+
+def zero_alias_bucket() -> dict[str, Any]:
     return {
         "attempts_declared": 0,
         "attempts_called": 0,
@@ -180,6 +197,16 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
         "amender_gpt_5_5": zero_premium_bucket(),
         "reviewer_gpt_5_5": zero_premium_bucket(),
     }
+    declared_aliases: dict[str, int] = {}
+    called_aliases: dict[str, int] = {}
+    accepted_aliases: dict[str, int] = {}
+    mini_spark_usage = {alias: zero_alias_bucket() for alias in MINI_SPARK_ALIASES}
+    premium_aliases_declared: dict[str, int] = {}
+    premium_aliases_called: dict[str, int] = {}
+    premium_aliases_accepted: dict[str, int] = {}
+    premium_aliases_avoided: dict[str, int] = {}
+    fallback_count = 0
+    failed_same_class_attempts = 0
     packets = []
     defects = []
     token_pressure_warnings = []
@@ -196,8 +223,10 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
         attempts = data.get("attempts") if isinstance(data.get("attempts"), list) else []
         called_attempts = [item for item in attempts if isinstance(item, dict) and item.get("called") is True]
         accepted_attempts = [item for item in attempts if isinstance(item, dict) and item.get("accepted") is True]
+        fallback_count += max(0, len(called_attempts) - 1)
         packet_prompt_chars = data.get("prompt_chars") if isinstance(data.get("prompt_chars"), int) else 0
         packet_prompt_bytes = data.get("prompt_bytes") if isinstance(data.get("prompt_bytes"), int) else 0
+        route_class = data.get("route_class") if isinstance(data.get("route_class"), str) else None
 
         for bucket in (totals, ensure_bucket(by_role, role)):
             bucket["packet_count"] += 1
@@ -219,16 +248,38 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
         for attempt in attempts:
             if not isinstance(attempt, dict):
                 continue
+            alias = attempt.get("alias") if isinstance(attempt.get("alias"), str) and attempt.get("alias") else "unknown"
+            declared_aliases[alias] = declared_aliases.get(alias, 0) + 1
+            if alias in PREMIUM_ALIASES:
+                premium_aliases_declared[alias] = premium_aliases_declared.get(alias, 0) + 1
             key = attempt_group_key(role, attempt)
             bucket = ensure_bucket(by_attempt, key)
             bucket["packet_count"] += 1
             bucket["attempts_declared"] += 1
             if attempt.get("called") is True:
+                called_aliases[alias] = called_aliases.get(alias, 0) + 1
+                if alias in PREMIUM_ALIASES:
+                    premium_aliases_called[alias] = premium_aliases_called.get(alias, 0) + 1
+                if route_class and attempt.get("accepted") is not True:
+                    failed_same_class_attempts += 1
                 bucket["attempts_called"] += 1
                 bucket["model_prompt_chars_estimate"] += packet_prompt_chars
                 bucket["model_prompt_bytes_estimate"] += packet_prompt_bytes
             if attempt.get("accepted") is True:
+                accepted_aliases[alias] = accepted_aliases.get(alias, 0) + 1
+                if alias in PREMIUM_ALIASES:
+                    premium_aliases_accepted[alias] = premium_aliases_accepted.get(alias, 0) + 1
                 bucket["accepted_attempts"] += 1
+            if alias in MINI_SPARK_ALIASES:
+                alias_bucket = mini_spark_usage[alias]
+                alias_bucket["attempts_declared"] += 1
+                if attempt.get("called") is True:
+                    alias_bucket["attempts_called"] += 1
+                if attempt.get("accepted") is True:
+                    alias_bucket["accepted_attempts"] += 1
+                add_usage(alias_bucket["known_usage"], attempt.get("usage"))
+            if alias in PREMIUM_ALIASES and attempt.get("called") is not True:
+                premium_aliases_avoided[alias] = premium_aliases_avoided.get(alias, 0) + 1
             for log_group in ("event_logs", "probe_logs"):
                 logs = attempt.get(log_group)
                 if isinstance(logs, list):
@@ -278,6 +329,7 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
                 "path": rel,
                 "packet_id": packet_id,
                 "role": role,
+                "route_class": route_class,
                 "accepted_alias": data.get("accepted_alias"),
                 "prompt_chars": data.get("prompt_chars"),
                 "output_chars": data.get("output_chars"),
@@ -285,6 +337,26 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
                 "attempts": packet_attempts,
             }
         )
+
+    cost_summary = {
+        "declared_attempts": totals["attempts_declared"],
+        "called_attempts": totals["attempts_called"],
+        "accepted_aliases": dict(sorted(accepted_aliases.items())),
+        "declared_aliases": dict(sorted(declared_aliases.items())),
+        "called_aliases": dict(sorted(called_aliases.items())),
+        "premium_aliases_declared": dict(sorted(premium_aliases_declared.items())),
+        "premium_aliases_called": dict(sorted(premium_aliases_called.items())),
+        "premium_aliases_accepted": dict(sorted(premium_aliases_accepted.items())),
+        "premium_aliases_avoided": dict(sorted(premium_aliases_avoided.items())),
+        "mini_spark_usage": {
+            alias: compact_bucket(mini_spark_usage[alias])
+            for alias in MINI_SPARK_ALIASES
+        },
+        "prompt_bytes": totals["prompt_bytes"],
+        "output_bytes": totals["output_bytes"],
+        "fallback_count": fallback_count,
+        "failed_same_class_attempts": failed_same_class_attempts,
+    }
 
     return {
         "schema_version": 1,
@@ -305,6 +377,7 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
             }
             for key, bucket in premium_usage.items()
         },
+        "cost_summary": cost_summary,
         "token_pressure": {
             "approx_chars_per_token": APPROX_CHARS_PER_TOKEN,
             "input_warn_min": TOKEN_PRESSURE_INPUT_WARN_MIN,

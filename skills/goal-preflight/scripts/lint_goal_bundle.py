@@ -55,6 +55,7 @@ MAX_WORKER_PACKETS_PER_BRANCH = CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
 MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.worker_ladder_list()
+MANIFEST_WORKER_ROUTE_CLASSES = CONTRACT.MANIFEST_WORKER_ROUTE_CLASSES
 AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 LITE_MODEL_POLICY = CONTRACT.LITE_MODEL_POLICY
 LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
@@ -227,6 +228,8 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         required = [
             "packet_id",
             "purpose",
+            "avoids_action",
+            "expected_savings_reason",
             "status",
             "disposition",
             "advice_path",
@@ -250,6 +253,10 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         purpose = record.get("purpose")
         if purpose not in PREFLIGHT_LITE_PURPOSES:
             defect("job.manifest.json", "critical", f"{path}.purpose must be one of {sorted(PREFLIGHT_LITE_PURPOSES)}")
+        if not isinstance(record.get("avoids_action"), str) or not record.get("avoids_action", "").strip():
+            defect("job.manifest.json", "critical", f"{path}.avoids_action must be a non-empty string")
+        if not isinstance(record.get("expected_savings_reason"), str) or not record.get("expected_savings_reason", "").strip():
+            defect("job.manifest.json", "critical", f"{path}.expected_savings_reason must be a non-empty string")
         if record.get("status") not in LITE_STATUSES:
             defect("job.manifest.json", "critical", f"{path}.status must be one of {sorted(LITE_STATUSES)}")
         if record.get("disposition") not in LITE_DISPOSITIONS:
@@ -306,6 +313,10 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         ]
         if record.get("source_files") != expected_min:
             defect("job.manifest.json", "critical", f"{path}.source_files must match input-files.json source metadata exactly")
+        if record.get("avoids_action") != inputs_data.get("avoids_action"):
+            defect("job.manifest.json", "critical", f"{path}.avoids_action must match input-files.json")
+        if record.get("expected_savings_reason") != inputs_data.get("expected_savings_reason"):
+            defect("job.manifest.json", "critical", f"{path}.expected_savings_reason must match input-files.json")
         lite_defects = validator.validate(
             advice_data,
             packet_id=packet_id,
@@ -671,6 +682,8 @@ def lint(bundle_dir: Path) -> dict:
         "worker_parallelism",
     ]
     has_research_work_item = False
+    worker_route_class_count = 0
+    default_normal_route_count = 0
     for branch in branches:
         for key in required_branch_keys:
             if key not in branch:
@@ -730,6 +743,22 @@ def lint(bundle_dir: Path) -> dict:
                     defect("job.manifest.json", "critical", f"{item_path}.worker_type must be 'worker' or 'research-worker'")
                 if worker_type == RESEARCH_WORKER_TYPE:
                     has_research_work_item = True
+                    if "route_class" in item:
+                        defect("job.manifest.json", "critical", f"{item_path}.route_class must be omitted for research-worker items")
+                else:
+                    worker_route_class_count += 1
+                    route_class = item.get("route_class")
+                    if route_class not in MANIFEST_WORKER_ROUTE_CLASSES:
+                        defect("job.manifest.json", "critical", f"{item_path}.route_class must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}")
+                    route_reason = item.get("route_class_reason")
+                    if not isinstance(route_reason, str) or not route_reason.strip():
+                        defect("job.manifest.json", "critical", f"{item_path}.route_class_reason must be a non-empty string")
+                    elif route_class == "normal-code" and "default normal-code inference" in route_reason.lower():
+                        default_normal_route_count += 1
+                if worker_type == RESEARCH_WORKER_TYPE:
+                    route_reason = item.get("route_class_reason")
+                    if not isinstance(route_reason, str) or not route_reason.strip():
+                        defect("job.manifest.json", "critical", f"{item_path}.route_class_reason must explain research-worker routing")
                 for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
                     values = item.get(key, [])
                     if key in {"owned_paths", "verification", "dod"} and key not in item:
@@ -898,6 +927,7 @@ def lint(bundle_dir: Path) -> dict:
             "Worker Model Routing",
             "Selected worker ladders",
             "Worker packet id",
+            "Route class reason",
             "telemetry.json",
             "Lite Advisors",
             "orchestration_watchdog.branch_no_completion_wait_limit",
@@ -912,6 +942,13 @@ def lint(bundle_dir: Path) -> dict:
                 defect(str(prompt_path), "major", f"branch prompt missing section: {phrase}")
         if not has_dod(text):
             defect(str(prompt_path), "critical", f"branch {branch.get('id')} lacks a falsifiable Definition of Done")
+
+    if worker_route_class_count and default_normal_route_count == worker_route_class_count:
+        defect(
+            "job.manifest.json",
+            "warning",
+            "all worker route classes fell back to default normal-code; check whether docs, mechanical, small-edit, complex-code, or research-worker routing should apply",
+        )
 
     if has_research_work_item:
         if research_worker_policy is None:

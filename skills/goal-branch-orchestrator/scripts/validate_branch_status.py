@@ -282,7 +282,13 @@ def validate_reviewer_route_artifact(
     expected = CONTRACT.review_route_for_tier(str(tier)) if tier in CONTRACT.REVIEW_ROUTE_TIERS else []
     if selected and expected and selected != expected:
         defect(defects, f"{path}.selected_ladder", f"must match review_model_policy route for tier {tier!r}")
-    require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
+    selection_reason = require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
+    if tier == "heavy":
+        heavy_triggers = route.get("heavy_triggers")
+        if not isinstance(heavy_triggers, list) or not any(isinstance(item, str) and item.strip() for item in heavy_triggers):
+            defect(defects, f"{path}.heavy_triggers", "must explain heavy reviewer routing with at least one trigger")
+        if selection_reason and "default deterministic review tier" in selection_reason.lower():
+            defect(defects, f"{path}.selection_reason", "must not be the default reason when heavy reviewer routing is selected")
     if route.get("policy_router") != CONTRACT.REVIEW_MODEL_POLICY["router"]:
         defect(defects, f"{path}.policy_router", f"must be {CONTRACT.REVIEW_MODEL_POLICY['router']!r}")
     return selected
@@ -685,12 +691,22 @@ def worktree_freshness_path(branch_id: str) -> str:
     return f"branches/{branch_id}.worktree_freshness.json"
 
 
+def review_route_policy_path(branch_id: str) -> str:
+    return f"branches/{branch_id}.review_route_policy.json"
+
+
+def review_evidence_path(branch_id: str) -> str:
+    return f"branches/{branch_id}.pre_review_evidence.json"
+
+
 def required_pre_review_input_paths(branch_entry: dict, branch_id: str) -> list[str]:
     paths = [
         "job.manifest.json",
         str(branch_entry.get("prompt", "")),
         CONTRACT.worker_scheduler_path(branch_id),
         worktree_freshness_path(branch_id),
+        review_route_policy_path(branch_id),
+        review_evidence_path(branch_id),
     ]
     work_items = branch_entry.get("work_items")
     if isinstance(work_items, list):
