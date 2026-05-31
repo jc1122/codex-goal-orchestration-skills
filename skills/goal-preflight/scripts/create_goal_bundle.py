@@ -167,7 +167,7 @@ def brief_schema_summary() -> dict:
             "title": "display title",
             "base_ref": "git base ref; defaults to main",
             "max_active_branch_agents": f"integer 1-{MAX_ACTIVE_BRANCH_AGENTS}; default {MAX_ACTIVE_BRANCH_AGENTS}",
-            "serial_reasons": "required when intentionally underfilling branch capacity",
+            "serial_reasons": "optional; deterministic defaults are supplied for underfilled branch capacity",
             "parallelization_rationale": "why branches can run as a rolling saturated pool",
             "merge_policy": "operator-controlled merge instructions",
             "artifact_policy": "artifact retention policy; deterministic default is supplied",
@@ -184,7 +184,7 @@ def brief_schema_summary() -> dict:
             "worktree_path": "repo-relative worktree path",
             "depends_on": "prior branch ids only; omit or [] for parallel branches",
             "max_active_worker_packets": f"integer 1-{MAX_WORKER_PACKETS_PER_BRANCH}; default {MAX_WORKER_PACKETS_PER_BRANCH}",
-            "worker_serial_reasons": "required when intentionally underfilling worker capacity",
+            "worker_serial_reasons": "optional; deterministic defaults are supplied for underfilled worker capacity",
             "scope": "branch-specific boundary text",
             "dod": "branch-level DoD; worker DoD is still required",
             "stop_conditions": "branch stop conditions",
@@ -240,6 +240,11 @@ def normalize_reason_list(value: object, fallback: str = "") -> list[str]:
     if fallback:
         return [fallback]
     return []
+
+
+def append_reason_once(reasons: list[str], reason: str) -> None:
+    if reason not in reasons:
+        reasons.append(reason)
 
 
 def require_string_list(value: object, field: str, *, min_items: int = 0) -> list[str]:
@@ -481,17 +486,17 @@ def normalize_brief(brief: dict) -> dict:
         )
         work_items = normalize_work_items(original.get("work_items", []), bid)
         owned_paths = derived_owned_paths(work_items)
-        if max_workers < MAX_WORKER_PACKETS_PER_BRANCH and not worker_serial_reasons:
-            raise SystemExit(
-                f"branch {bid} max_active_worker_packets below 4 requires "
-                "branches[].worker_serial_reasons or branches[].worker_parallelism.serial_reasons"
+        if max_workers < MAX_WORKER_PACKETS_PER_BRANCH:
+            append_reason_once(
+                worker_serial_reasons,
+                f"Branch {bid} caps worker concurrency at {max_workers}, below the package maximum of {MAX_WORKER_PACKETS_PER_BRANCH}.",
             )
-        if len(work_items) == 1 and max_workers > 1 and not worker_serial_reasons:
-            raise SystemExit(f"branch {bid} has one worker but max_active_worker_packets > 1; add worker_serial_reasons or lower the cap")
-        if ready_width(work_items) < min(max_workers, len(work_items)) and not worker_serial_reasons:
-            raise SystemExit(f"branch {bid} worker dependency topology underfills ready width; add worker_serial_reasons")
-        if len(work_items) > 2 and longest_work_item_chain(work_items) >= len(work_items) - 1 and not worker_serial_reasons:
-            raise SystemExit(f"branch {bid} worker dependency chain serializes most work; add worker_serial_reasons")
+        if len(work_items) == 1 and max_workers > 1:
+            append_reason_once(worker_serial_reasons, f"Branch {bid} declares one worker item, so no additional independent worker packet exists to fill capacity.")
+        if ready_width(work_items) < min(max_workers, len(work_items)):
+            append_reason_once(worker_serial_reasons, f"Branch {bid} worker depends_on topology leaves fewer initially ready workers than capacity.")
+        if len(work_items) > 2 and longest_work_item_chain(work_items) >= len(work_items) - 1:
+            append_reason_once(worker_serial_reasons, f"Branch {bid} worker dependency chain serializes most work by explicit depends_on topology.")
         branch = {
             **original,
             "work_items": work_items,
@@ -524,10 +529,13 @@ def normalize_brief(brief: dict) -> dict:
 
     if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
         raise SystemExit(f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}")
-    if len(branches) == 1 and not serial_reasons:
-        raise SystemExit("single-branch bundles are serialized and require brief.serial_reasons or brief.serial_reason")
-    if max_active < MAX_ACTIVE_BRANCH_AGENTS and not serial_reasons:
-        raise SystemExit("max_active_branch_agents below 4 requires serial_reasons or serial_reason")
+    if len(branches) == 1:
+        append_reason_once(serial_reasons, "Only one branch is declared, so branch orchestration cannot fill multiple branch slots.")
+    if max_active < MAX_ACTIVE_BRANCH_AGENTS:
+        append_reason_once(
+            serial_reasons,
+            f"max_active_branch_agents is {max_active}, below the package maximum of {MAX_ACTIVE_BRANCH_AGENTS}.",
+        )
     preflight_lite_advice = brief.get("preflight_lite_advice", [])
     if not isinstance(preflight_lite_advice, list):
         raise SystemExit("preflight_lite_advice must be an array when supplied")
@@ -564,14 +572,14 @@ def normalize_brief(brief: dict) -> dict:
     normalize_branch_dependencies(branches)
 
     initial_ready = len([branch for branch in branches if not branch.get("depends_on")])
-    if initial_ready < min(max_active, len(branches)) and not serial_reasons:
-        raise SystemExit("initial ready branch count underfills max_active_branch_agents; add serial_reasons")
+    if initial_ready < min(max_active, len(branches)):
+        append_reason_once(serial_reasons, "Initial ready branch count underfills max_active_branch_agents because of explicit branch depends_on topology.")
     branch_chain_lengths: dict[str, int] = {}
     for branch in branches:
         dep_lengths = [branch_chain_lengths.get(dep, 1) for dep in branch.get("depends_on", [])]
         branch_chain_lengths[branch["id"]] = 1 + (max(dep_lengths) if dep_lengths else 0)
-    if len(branches) > 2 and max(branch_chain_lengths.values(), default=0) >= len(branches) - 1 and not serial_reasons:
-        raise SystemExit("branch dependency chain serializes most work; add serial_reasons")
+    if len(branches) > 2 and max(branch_chain_lengths.values(), default=0) >= len(branches) - 1:
+        append_reason_once(serial_reasons, "Branch dependency chain serializes most work by explicit branch depends_on topology.")
 
     return {
         **brief,

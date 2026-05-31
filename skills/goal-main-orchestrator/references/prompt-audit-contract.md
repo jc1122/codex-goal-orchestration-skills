@@ -1,6 +1,6 @@
 # Prompt Audit Contract
 
-The prompt auditor is a read-only heavy-model agent launched before branch creation. The launcher uses exactly `gpt-5.5`, then `gpt-5.4`; do not pass model overrides. It writes `telemetry.json` next to `prompt-audit.json` on every terminal path. Lite advisors must not be used before prompt audit to pre-screen or soften prompt defects. After a failed or blocked audit, main may use a Lite `audit-defect-summary` packet only to summarize defects for handoff.
+The prompt auditor is a read-only heavy-model agent launched before branch creation. The compact `launch.sh` delegates to `runtime_prompt_audit_runner.py`; packet-local `launch-config.json` records the exact `gpt-5.5`, then `gpt-5.4` route, timeout policy, event logs, validator paths, terminal blocked metadata, and telemetry inputs. Do not pass model overrides. The runner writes `telemetry.json` next to `prompt-audit.json` on every terminal path. Lite advisors must not be used before prompt audit to pre-screen or soften prompt defects. After a failed or blocked audit, main may use a Lite `audit-defect-summary` packet only to summarize defects for handoff.
 
 ## Files To Check
 

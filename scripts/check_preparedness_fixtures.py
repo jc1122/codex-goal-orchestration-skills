@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -17,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 BRIEF = ROOT / "fixtures" / "preparedness" / "research-worker-brief.json"
 
 
-def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(command, cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
     if result.returncode != expect:
         print(f"command failed with {result.returncode}, expected {expect}: {' '.join(command)}", file=sys.stderr)
         if result.stdout:
@@ -352,6 +353,45 @@ def assert_compact_lite_launcher(packet_dir: Path) -> dict:
     return config
 
 
+def assert_compact_audit_launcher(packet_dir: Path) -> dict:
+    launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
+    assert_shell_syntax(packet_dir / "launch.sh")
+    assert_contains(launch, "runtime_prompt_audit_runner.py", "audit launcher")
+    if len(launch) > 800:
+        raise SystemExit(f"audit launcher should stay compact, got {len(launch)} chars")
+    config = read_json(packet_dir / "launch-config.json")
+    if config.get("role") != "prompt-auditor":
+        raise SystemExit(f"audit launch-config role mismatch: {config.get('role')!r}")
+    if config.get("attempt_timeout_seconds") != 1200:
+        raise SystemExit(f"audit launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
+    if config.get("timeout_kill_after_seconds") != 30:
+        raise SystemExit(f"audit launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
+    if config.get("telemetry_name") != "telemetry.json":
+        raise SystemExit(f"audit launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
+    if not str(config.get("validation_script", "")).endswith("validate_prompt_audit.py"):
+        raise SystemExit(f"audit launch-config validation script mismatch: {config.get('validation_script')!r}")
+    if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
+        raise SystemExit(f"audit launch-config telemetry script mismatch: {config.get('telemetry_script')!r}")
+    attempts = config.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) != 2:
+        raise SystemExit(f"audit launch-config should contain two attempts: {attempts!r}")
+    aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
+    if aliases != ["gpt-5.5", "gpt-5.4"]:
+        raise SystemExit(f"audit launch-config aliases mismatch: {aliases!r}")
+    event_logs = [
+        log
+        for attempt in attempts
+        if isinstance(attempt, dict)
+        for log in attempt.get("event_logs", [])
+    ]
+    if event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
+        raise SystemExit(f"audit launch-config event logs mismatch: {event_logs!r}")
+    terminal_messages = config.get("terminal_messages")
+    if not isinstance(terminal_messages, dict) or "invalid_output" not in terminal_messages:
+        raise SystemExit("audit launch-config terminal messages missing")
+    return config
+
+
 def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None = None, diff_stats: dict | None = None) -> Path:
     gate = json.loads((bundle / "branches" / "B01.pre_review_gate.json").read_text(encoding="utf-8"))
     gate["review_packet_id"] = packet_id
@@ -407,7 +447,8 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     }
     brief_path = tmp_path / "topology-default-rationale.json"
     write_json(brief_path, default_rationale_brief)
-    result = run(
+    topology_default_bundle = tmp_path / "topology-default-rationale"
+    run(
         [
             "python3",
             "skills/goal-preflight/scripts/create_goal_bundle.py",
@@ -416,11 +457,12 @@ def run_topology_fixtures(tmp_path: Path) -> None:
             "--repo-root",
             ROOT.as_posix(),
             "--out-dir",
-            (tmp_path / "topology-default-rationale").as_posix(),
-        ],
-        expect=1,
+            topology_default_bundle.as_posix(),
+        ]
     )
-    assert_contains(result.stdout, "serial_reasons", "default rationale topology fixture")
+    default_manifest = read_json(topology_default_bundle / "job.manifest.json")
+    if not default_manifest.get("parallelization", {}).get("serial_reasons"):
+        raise SystemExit("default rationale topology fixture did not synthesize serial_reasons")
 
     one_worker_brief = {
         "job_id": "topology-one-worker",
@@ -436,7 +478,8 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     }
     brief_path = tmp_path / "topology-one-worker.json"
     write_json(brief_path, one_worker_brief)
-    result = run(
+    one_worker_bundle = tmp_path / "topology-one-worker"
+    run(
         [
             "python3",
             "skills/goal-preflight/scripts/create_goal_bundle.py",
@@ -445,11 +488,12 @@ def run_topology_fixtures(tmp_path: Path) -> None:
             "--repo-root",
             ROOT.as_posix(),
             "--out-dir",
-            (tmp_path / "topology-one-worker").as_posix(),
-        ],
-        expect=1,
+            one_worker_bundle.as_posix(),
+        ]
     )
-    assert_contains(result.stdout, "one worker", "one-worker topology fixture")
+    one_worker_manifest = read_json(one_worker_bundle / "job.manifest.json")
+    if not one_worker_manifest["branches"][0]["worker_parallelism"].get("serial_reasons"):
+        raise SystemExit("one-worker topology fixture did not synthesize worker serial_reasons")
 
     serial_chain_brief = {
         "job_id": "topology-serial-chain",
@@ -462,7 +506,8 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     }
     brief_path = tmp_path / "topology-serial-chain.json"
     write_json(brief_path, serial_chain_brief)
-    result = run(
+    serial_chain_bundle = tmp_path / "topology-serial-chain"
+    run(
         [
             "python3",
             "skills/goal-preflight/scripts/create_goal_bundle.py",
@@ -471,11 +516,13 @@ def run_topology_fixtures(tmp_path: Path) -> None:
             "--repo-root",
             ROOT.as_posix(),
             "--out-dir",
-            (tmp_path / "topology-serial-chain").as_posix(),
-        ],
-        expect=1,
+            serial_chain_bundle.as_posix(),
+        ]
     )
-    assert_contains(result.stdout, "serial", "serial-chain topology fixture")
+    serial_manifest = read_json(serial_chain_bundle / "job.manifest.json")
+    serial_reasons = serial_manifest.get("parallelization", {}).get("serial_reasons", [])
+    if not serial_reasons or not any("dependency" in item for item in serial_reasons):
+        raise SystemExit(f"serial-chain topology fixture did not synthesize dependency serial_reasons: {serial_reasons!r}")
 
     overlap_brief = {
         "job_id": "topology-cross-overlap",
@@ -544,6 +591,65 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
             "skills/goal-preflight/scripts/lint_preflight_brief.py",
             "--brief",
             valid_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+        ]
+    )
+    defaulted_brief = {
+        "job_id": "brief-lint-defaults",
+        "base_ref": "main",
+        "goal": "Validate deterministic preflight defaults for underfilled worker topology.",
+        "source_summary": "This fixture omits policy and serial reason fields so scripts must synthesize deterministic defaults.",
+        "required_evidence": ["The linter accepts deterministic policy and serial reason defaults from normalization."],
+        "final_dod": ["The generated brief lint result is pass without manual repair fields."],
+        "branches": [
+            {
+                "id": "B01",
+                "objective": "Validate dependency-based worker serial reason defaults.",
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Read the README and make no changes.",
+                        "owned_paths": ["README.md"],
+                        "context_files": ["README.md"],
+                        "verification": ["git diff --check main...HEAD"],
+                        "dod": ["README context remains available for deterministic checks."],
+                    },
+                    {
+                        "id": "W02",
+                        "depends_on": ["W01"],
+                        "objective": "Read the same README after the first packet.",
+                        "owned_paths": ["README.md"],
+                        "context_files": ["README.md"],
+                        "verification": ["git diff --check main...HEAD"],
+                        "dod": ["Second packet dependency is represented deterministically."],
+                    },
+                ],
+            },
+            {
+                "id": "B02",
+                "objective": "Validate single-worker serial reason defaults.",
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Read the branch skill documentation summary.",
+                        "owned_paths": ["skills/goal-branch-orchestrator/SKILL.md"],
+                        "context_files": ["skills/goal-branch-orchestrator/SKILL.md"],
+                        "verification": ["git diff --check main...HEAD"],
+                        "dod": ["Single worker branch is accepted with deterministic serial reason."],
+                    }
+                ],
+            },
+        ],
+    }
+    defaulted_path = tmp_path / "brief-lint-defaults.json"
+    write_json(defaulted_path, defaulted_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_preflight_brief.py",
+            "--brief",
+            defaulted_path.as_posix(),
             "--repo-root",
             ROOT.as_posix(),
         ]
@@ -2189,10 +2295,29 @@ def main() -> int:
                 (tmp_path / "audit").as_posix(),
             ]
         )
-        audit_launch = (tmp_path / "audit" / "launch.sh").read_text(encoding="utf-8")
-        assert_shell_syntax(tmp_path / "audit" / "launch.sh")
-        assert_contains(audit_launch, "timeout --foreground", "audit launcher")
-        assert_contains(audit_launch, "attempt_timeout_seconds=1200", "audit launcher")
+        assert_compact_audit_launcher(tmp_path / "audit")
+        fake_bin = tmp_path / "fake-codex-bin"
+        fake_bin.mkdir()
+        fake_codex = fake_bin / "codex"
+        fake_codex.write_text("#!/usr/bin/env bash\necho fake codex failure >&2\nexit 42\n", encoding="utf-8")
+        fake_codex.chmod(0o755)
+        audit_env = {**os.environ, "PATH": fake_bin.as_posix() + os.pathsep + os.environ.get("PATH", "")}
+        run([(tmp_path / "audit" / "launch.sh").as_posix()], expect=1, env=audit_env)
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+                "--audit",
+                (tmp_path / "audit" / "prompt-audit.json").as_posix(),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+            ]
+        )
+        blocked_audit = read_json(tmp_path / "audit" / "prompt-audit.json")
+        if blocked_audit.get("status") != "blocked" or blocked_audit.get("can_start") is not False:
+            raise SystemExit(f"fake-codex audit launcher did not write a terminal blocked audit: {blocked_audit!r}")
 
         run(
             [

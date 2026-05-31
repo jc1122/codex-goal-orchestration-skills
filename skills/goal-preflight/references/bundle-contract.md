@@ -195,5 +195,5 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - Branch manifest work items include deterministic `packet_id` values in `<branch_id>-<work_item_id>` form, optional `worker_type` values of `worker` or `research-worker`, and branch prompts list those packet ids.
 - Work-item `depends_on` entries reference only prior work item ids and are the only reason to defer an otherwise eligible worker.
 - Branch manifest entries and prompts include 1 to 4 worker packets per branch, a hard `max_active_worker_packets` cap of 1-4/default 4, and require independent worker packets to launch as a rolling saturated pool up to that active cap.
-- Single-branch bundles include `parallelization.serial_reasons`.
+- Single-branch, under-capacity, and dependency-serialized bundles include `parallelization.serial_reasons`; `create_goal_bundle.py` supplies deterministic reasons when the brief omits them.
 - Generated prompts name `schedulers/main.scheduler.json`, `schedulers/<branch-id>.worker.scheduler.json`, and branch-local `pre_review_gate.json`; runtime validators require current ledgers/gates before pass claims.

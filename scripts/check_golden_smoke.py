@@ -127,6 +127,38 @@ def assert_compact_lite_launcher(packet_dir: Path) -> dict:
     return config
 
 
+def assert_compact_audit_launcher(packet_dir: Path) -> dict:
+    launch_path = packet_dir / "launch.sh"
+    assert_shell_syntax(launch_path)
+    launch = launch_path.read_text(encoding="utf-8")
+    if "runtime_prompt_audit_runner.py" not in launch:
+        raise SystemExit("audit launcher should delegate to runtime_prompt_audit_runner.py")
+    if len(launch) > 800:
+        raise SystemExit(f"audit launcher should stay compact, got {len(launch)} chars")
+    config = read_json(packet_dir / "launch-config.json")
+    if config.get("role") != "prompt-auditor":
+        raise SystemExit(f"audit launch-config role mismatch: {config.get('role')!r}")
+    if config.get("attempt_timeout_seconds") != 1200:
+        raise SystemExit(f"audit launch-config should preserve the 1200 second attempt timeout: {config.get('attempt_timeout_seconds')!r}")
+    if config.get("timeout_kill_after_seconds") != 30:
+        raise SystemExit(f"audit launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
+    attempts = config.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) != 2:
+        raise SystemExit(f"audit launch-config should contain two attempts: {attempts!r}")
+    aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
+    if aliases != ["gpt-5.5", "gpt-5.4"]:
+        raise SystemExit(f"audit launch-config aliases mismatch: {aliases!r}")
+    event_logs = [
+        log
+        for attempt in attempts
+        if isinstance(attempt, dict)
+        for log in attempt.get("event_logs", [])
+    ]
+    if event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
+        raise SystemExit(f"audit launch-config event logs mismatch: {event_logs!r}")
+    return config
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     digest.update(path.read_bytes())
@@ -1428,7 +1460,7 @@ def main() -> int:
                 (bundle / "audit").as_posix(),
             ]
         )
-        assert_shell_syntax(bundle / "audit" / "launch.sh")
+        assert_compact_audit_launcher(bundle / "audit")
 
         run(
             [

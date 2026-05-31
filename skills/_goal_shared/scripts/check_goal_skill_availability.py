@@ -35,6 +35,7 @@ REQUIRED_FILES = {
         "scripts/create_lite_advice_packet.py",
         "scripts/context_pack.py",
         "scripts/render_branch_worktree_commands.py",
+        "scripts/runtime_prompt_audit_runner.py",
         "scripts/runtime_phase_manifest.py",
         "scripts/runtime_lite_runner.py",
         "scripts/extract_telemetry.py",

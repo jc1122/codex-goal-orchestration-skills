@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:4c6a237c5a55a2da5429c0bc4daacf8c83a2715a9017bcff8a455c10459d5034"
+    "source_fingerprint": "sha256:0ce3ba30d240ea9b70e3c43036b01de741c9b59c8ea02aa653e11e837a0ad2a3"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -105,6 +105,7 @@
       "core_scripts": [
         "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
         "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+        "skills/goal-main-orchestrator/scripts/runtime_prompt_audit_runner.py",
         "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
         "skills/goal-main-orchestrator/scripts/validate_main_status.py",
         "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py"

@@ -28,28 +28,23 @@ AUDIT_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.5"]
 AUDIT_FALLBACK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.4"]
 AUDIT_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.AUDIT_ATTEMPT_TIMEOUT_SECONDS
 TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
+RUNNER_PATH = (Path(__file__).resolve().parent / "runtime_prompt_audit_runner.py").resolve()
 
 
-def audit_telemetry_attempts() -> list[dict]:
-    return CONTRACT.codex_telemetry_attempts(
+def audit_telemetry_attempts(repo_root: Path) -> list[dict]:
+    attempts = CONTRACT.codex_telemetry_attempts(
         ["gpt-5.5", "gpt-5.4"],
         timeout_seconds=AUDIT_ATTEMPT_TIMEOUT_SECONDS,
         sandbox="read-only",
         event_labels=["primary", "fallback"],
     )
-
-
-def telemetry_function() -> str:
-    script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
-    return CONTRACT.telemetry_shell_function(
-        script_path=script,
-        packet_dir_expr="$(pwd)",
-        packet_id="prompt-audit",
-        role="prompt-auditor",
-        output_name="prompt-audit.json",
-        prompt_name="prompt.md",
-        attempts=audit_telemetry_attempts(),
-    )
+    for attempt in attempts:
+        model = str(attempt.get("model", ""))
+        attempt["command"] = (
+            f"codex exec --ephemeral -m {model} -C {repo_root.as_posix()} "
+            "-s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json"
+        )
+    return attempts
 
 
 def _load_path_rules():
@@ -166,15 +161,11 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
         work_items = branch.get("work_items", [])
         if isinstance(work_items, list):
             worker_packet_ids = ",".join(
-                str(item.get("packet_id", "missing"))
-                if isinstance(item, dict)
-                else "invalid"
+                str(item.get("packet_id", "missing")) if isinstance(item, dict) else "invalid"
                 for item in work_items
             )
             worker_types = ",".join(
-                str(item.get("worker_type", "worker"))
-                if isinstance(item, dict)
-                else "invalid"
+                str(item.get("worker_type", "worker")) if isinstance(item, dict) else "invalid"
                 for item in work_items
             )
         else:
@@ -246,310 +237,45 @@ exactly as specified by the schema.
 """
 
 
-def render_launch(repo_root: Path, manifest_path: Path) -> str:
-    telemetry = telemetry_function()
+def render_launch() -> str:
     return f"""#!/usr/bin/env bash
 set -euo pipefail
 
 cd "$(dirname "$0")"
-
-git -C {shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/dev/null
-
-output_path="$(pwd)/prompt-audit.json"
-attempt_timeout_seconds={AUDIT_ATTEMPT_TIMEOUT_SECONDS}
-timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
-rm -f "$output_path" "$(pwd)/events-primary.jsonl" "$(pwd)/events-fallback.jsonl" "$(pwd)/telemetry.json"
-
-run_with_timeout() {{
-  local seconds="$1"
-  shift
-  if ! command -v timeout >/dev/null 2>&1; then
-    echo "timeout command not found; refusing unbounded prompt-audit attempt." >&2
-    return 127
-  fi
-  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
-}}
-
-run_model() {{
-  local label="$1"
-  local model="$2"
-  run_with_timeout "$attempt_timeout_seconds" codex exec --ephemeral \\
-    -m "$model" \\
-    -C {shell_quote(repo_root.as_posix())} \\
-    -s read-only \\
-    --json \\
-    --output-schema "$(pwd)/prompt-audit.schema.json" \\
-    -o "$(pwd)/prompt-audit.json" \\
-    - < "$(pwd)/prompt.md" \\
-    > "$(pwd)/events-${{label}}.jsonl" 2>&1
-}}
-
-valid_audit() {{
-  python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} <<'PY'
-import json
-import sys
-
-path, manifest, repo_root = sys.argv[1:4]
-try:
-    with open(path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
-except Exception:
-    raise SystemExit(1)
-
-required = [
-    "manifest",
-    "repo_root",
-    "status",
-    "can_start",
-    "checked_files",
-    "defects",
-    "missing_dod_items",
-    "actionability_verdict",
-    "commands_run",
-    "summary",
-]
-if any(key not in data for key in required):
-    raise SystemExit(1)
-if data["manifest"] != manifest or data["repo_root"] != repo_root:
-    raise SystemExit(1)
-if data["status"] not in {{"pass", "failed", "blocked"}}:
-    raise SystemExit(1)
-if not isinstance(data["can_start"], bool):
-    raise SystemExit(1)
-def require_string_list(key, *, min_items=0):
-    value = data[key]
-    if not isinstance(value, list) or len(value) < min_items:
-        raise SystemExit(1)
-    if any(not isinstance(item, str) or not item.strip() for item in value):
-        raise SystemExit(1)
-
-
-for key in ["checked_files", "missing_dod_items"]:
-    require_string_list(key)
-require_string_list("commands_run", min_items=1)
-if not isinstance(data["defects"], list):
-    raise SystemExit(1)
-for item in data["defects"]:
-    if not isinstance(item, dict):
-        raise SystemExit(1)
-    if not isinstance(item.get("file"), str) or not item["file"].strip():
-        raise SystemExit(1)
-    if item.get("severity") not in {"critical", "major", "minor"}:
-        raise SystemExit(1)
-    if not isinstance(item.get("message"), str) or not item["message"].strip():
-        raise SystemExit(1)
-for key in ["actionability_verdict", "summary"]:
-    if not isinstance(data[key], str) or not data[key].strip():
-        raise SystemExit(1)
-if data["status"] == "pass":
-    if data["can_start"] is not True or data["missing_dod_items"] or not data["checked_files"]:
-        raise SystemExit(1)
-    for item in data["defects"]:
-        if item.get("severity") in {"critical", "major"}:
-            raise SystemExit(1)
-PY
-}}
-
-audit_status() {{
-  python3 - "$output_path" <<'PY'
-import json
-import sys
-
-with open(sys.argv[1], "r", encoding="utf-8") as handle:
-    data = json.load(handle)
-print(data.get("status", ""))
-PY
-}}
-
-finish_valid_audit() {{
-  write_telemetry
-  if [ "$(audit_status)" = "pass" ]; then
-    exit 0
-  fi
-  exit 1
-}}
-
-recover_audit_from_events() {{
-  local label="$1"
-  python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} "events-${{label}}.jsonl" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-output_path, manifest, repo_root, events_path = sys.argv[1:5]
-path = Path(events_path)
-if not path.exists():
-    raise SystemExit(1)
-
-required = frozenset([
-    "manifest",
-    "repo_root",
-    "status",
-    "can_start",
-    "checked_files",
-    "defects",
-    "missing_dod_items",
-    "actionability_verdict",
-    "commands_run",
-    "summary",
-])
-
-
-def valid(data: object) -> bool:
-    if not isinstance(data, dict) or not required <= set(data):
-        return False
-    if data.get("manifest") != manifest or data.get("repo_root") != repo_root:
-        return False
-    if data.get("status") not in {"pass", "failed", "blocked"}:
-        return False
-    if not isinstance(data.get("can_start"), bool):
-        return False
-    for key in ["checked_files", "missing_dod_items", "commands_run"]:
-        value = data.get(key)
-        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
-            return False
-    if not data["commands_run"]:
-        return False
-    defects = data.get("defects")
-    if not isinstance(defects, list):
-        return False
-    for item in defects:
-        if not isinstance(item, dict):
-            return False
-        if not isinstance(item.get("file"), str) or not item["file"].strip():
-            return False
-        if item.get("severity") not in {"critical", "major", "minor"}:
-            return False
-        if not isinstance(item.get("message"), str) or not item["message"].strip():
-            return False
-    for key in ["actionability_verdict", "summary"]:
-        if not isinstance(data.get(key), str) or not data[key].strip():
-            return False
-    return True
-
-
-messages: list[str] = []
-for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-    try:
-        event = json.loads(raw)
-    except json.JSONDecodeError:
-        continue
-    item = event.get("item")
-    if isinstance(item, dict) and item.get("type") == "agent_message":
-        text = item.get("text")
-        if isinstance(text, str) and text.strip():
-            messages.append(text.strip())
-
-for text in reversed(messages):
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        continue
-    if valid(data):
-        with open(output_path, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, sort_keys=True)
-            handle.write("\\n")
-        raise SystemExit(0)
-
-raise SystemExit(1)
-PY
-}}
-
-audit_failure_summary() {{
-  python3 - <<'PY'
-from pathlib import Path
-
-logs = []
-for name in ["events-primary.jsonl", "events-fallback.jsonl"]:
-    path = Path(name)
-    if not path.exists():
-        logs.append(name + ": missing")
-        continue
-    text = path.read_text(encoding="utf-8", errors="replace")
-    lowered = text.lower()
-    if "read-only file system" in lowered:
-        logs.append(name + ": codex-init-read-only-filesystem")
-    elif "unsupported" in lowered and "model" in lowered:
-        logs.append(name + ": model-unsupported")
-    elif "timed out" in lowered or "timeout" in lowered:
-        logs.append(name + ": timeout")
-    elif "schema" in lowered:
-        logs.append(name + ": schema-or-output-invalid")
-    elif text.strip():
-        tail = " | ".join(line.strip() for line in text.splitlines()[-5:] if line.strip())
-        logs.append(name + ": " + tail[:500])
-    else:
-        logs.append(name + ": empty")
-
-print("Prompt audit primary and fallback failed without producing a valid prompt-audit.json. failure_fingerprints=" + "; ".join(logs))
-PY
-}}
-
-{telemetry}
-
-write_terminal_audit() {{
-  local message="$1"
-  python3 - "$output_path" {shell_quote(manifest_path.as_posix())} {shell_quote(repo_root.as_posix())} "$message" <<'PY'
-import json
-import sys
-
-output_path, manifest, repo_root, message = sys.argv[1:5]
-data = {{
-    "manifest": manifest,
-    "repo_root": repo_root,
-    "status": "blocked",
-    "can_start": False,
-    "checked_files": [],
-    "defects": [
-        {{
-            "file": "prompt-audit",
-            "severity": "critical",
-            "message": message,
-        }}
-    ],
-    "missing_dod_items": [
-        "prompt audit did not produce a valid audit artifact",
-        "Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
-    ],
-    "actionability_verdict": "blocked",
-    "commands_run": [
-        "codex exec --ephemeral -m {AUDIT_MODEL} -C {repo_root.as_posix()} -s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json",
-        "codex exec --ephemeral -m {AUDIT_FALLBACK_MODEL} -C {repo_root.as_posix()} -s read-only --json --output-schema prompt-audit.schema.json -o prompt-audit.json",
-    ],
-    "summary": message + " Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
-}}
-with open(output_path, "w", encoding="utf-8") as handle:
-    json.dump(data, handle, indent=2, sort_keys=True)
-    handle.write("\\n")
-PY
-}}
-
-run_model primary {shell_quote(AUDIT_MODEL)} || true
-recover_audit_from_events primary || true
-if [ -s "$output_path" ] && valid_audit; then
-  finish_valid_audit
+runner={shell_quote(RUNNER_PATH.as_posix())}
+if [[ ! -f "$runner" ]]; then
+  echo "prompt audit runner missing: $runner" >&2
+  exit 127
 fi
-
-if [ -s "$output_path" ] && valid_audit; then
-  finish_valid_audit
-fi
-
-rm -f "$output_path"
-
-run_model fallback {shell_quote(AUDIT_FALLBACK_MODEL)} || true
-recover_audit_from_events fallback || true
-if [ -s "$output_path" ] && valid_audit; then
-  finish_valid_audit
-fi
-
-if [ -s "$output_path" ] && valid_audit; then
-  finish_valid_audit
-fi
-
-write_terminal_audit "$(audit_failure_summary)"
-write_telemetry
-exit 1
+exec python3 "$runner" --packet-dir "$(pwd)"
 """
+
+
+def audit_launch_config(manifest_path: Path, repo_root: Path) -> dict:
+    attempts = audit_telemetry_attempts(repo_root)
+    return {
+        "schema_version": 1,
+        "role": "prompt-auditor",
+        "packet_id": "prompt-audit",
+        "repo_root": repo_root.as_posix(),
+        "manifest_path": manifest_path.as_posix(),
+        "prompt_name": "prompt.md",
+        "schema_name": "prompt-audit.schema.json",
+        "output_name": "prompt-audit.json",
+        "telemetry_name": "telemetry.json",
+        "attempt_timeout_seconds": AUDIT_ATTEMPT_TIMEOUT_SECONDS,
+        "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+        "telemetry_script": (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix(),
+        "validation_script": (Path(__file__).resolve().parent / "validate_prompt_audit.py").as_posix(),
+        "attempts": attempts,
+        "commands_run": [str(attempt.get("command", "")) for attempt in attempts],
+        "terminal_messages": {
+            "git_invalid": "Repository root is not a valid git worktree; prompt audit cannot run.",
+            "missing_runtime_file": "Prompt audit runtime input file is missing.",
+            "command_failed": "Prompt audit command failed before producing a valid prompt-audit.json.",
+            "invalid_output": "Prompt audit did not produce a valid prompt-audit.json artifact.",
+        },
+    }
 
 
 def main() -> int:
@@ -575,11 +301,12 @@ def main() -> int:
         render_prompt(manifest_path, repo_root, manifest),
         encoding="utf-8",
     )
-    launch = out_dir / "launch.sh"
-    launch.write_text(
-        render_launch(repo_root, manifest_path),
+    (out_dir / "launch-config.json").write_text(
+        json.dumps(audit_launch_config(manifest_path, repo_root), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
+    launch = out_dir / "launch.sh"
+    launch.write_text(render_launch(), encoding="utf-8")
     os.chmod(launch, 0o755)
     print(out_dir)
     return 0
