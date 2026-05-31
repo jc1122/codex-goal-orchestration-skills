@@ -11,6 +11,7 @@ import tempfile
 import hashlib
 import os
 import shutil
+import re
 from pathlib import Path
 
 
@@ -26,8 +27,20 @@ REVIEW_PACKET = "B01-R01"
 LITE_PACKET = "B01-L01"
 
 
-def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=CHECKOUT_ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+def run(
+    command: list[str],
+    *,
+    expect: int = 0,
+    cwd: Path | None = None,
+) -> subprocess.CompletedProcess[str]:
+    result = subprocess.run(
+        command,
+        cwd=cwd or CHECKOUT_ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
     if result.returncode != expect:
         print(f"command failed with {result.returncode}, expected {expect}: {' '.join(command)}", file=sys.stderr)
         if result.stdout:
@@ -157,6 +170,128 @@ def assert_compact_audit_launcher(packet_dir: Path) -> dict:
     if event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
         raise SystemExit(f"audit launch-config event logs mismatch: {event_logs!r}")
     return config
+
+
+def _expand_prompt_path(value: str, variables: dict[str, str]) -> str:
+    token = value.strip()
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"\"", "'"}:
+        token = token[1:-1]
+    changed = True
+    while changed:
+        previous = token
+        for name, replacement in variables.items():
+            token = token.replace(f"${{{name}}}", replacement)
+            token = token.replace(f"${name}", replacement)
+        changed = token != previous
+    return token
+
+
+def _collect_render_command_from_prompt(prompt_path: Path, bundle: Path) -> tuple[str, str]:
+    lines = prompt_path.read_text(encoding="utf-8").splitlines()
+    render_line: str | None = None
+    for line in lines:
+        if "render_branch_worktree_commands.py" in line and "python3" in line:
+            render_line = line.strip()
+            break
+    if render_line is None:
+        raise SystemExit("main prompt did not include the branch render command")
+
+    assignment_re = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)=(\".*?\"|'.*?'|[^\s#]+)\s*$")
+    variables: dict[str, str] = {}
+    for line in lines:
+        match = assignment_re.match(line.strip())
+        if match:
+            variable = match.group(2)
+            if len(variable) >= 2 and variable[0] == variable[-1] and variable[0] in {"\"", "'"}:
+                variable = variable[1:-1]
+            variables[match.group(1)] = variable
+
+    command_parts = shlex.split(render_line)
+    try:
+        manifest_idx = command_parts.index("--manifest")
+        audit_idx = command_parts.index("--audit")
+    except ValueError as exc:
+        raise SystemExit("render command in main prompt missing --manifest or --audit") from exc
+
+    if manifest_idx + 1 >= len(command_parts) or audit_idx + 1 >= len(command_parts):
+        raise SystemExit("render command in main prompt is missing --manifest/--audit values")
+
+    manifest_path = _expand_prompt_path(command_parts[manifest_idx + 1], variables)
+    audit_path = _expand_prompt_path(command_parts[audit_idx + 1], variables)
+    manifest_path = manifest_path.replace("/absolute/path/to/bundle", bundle.as_posix())
+    audit_path = audit_path.replace("/absolute/path/to/bundle", bundle.as_posix())
+
+    if not manifest_path.startswith("/"):
+        raise SystemExit("main prompt render command must pass an absolute --manifest path")
+    if not audit_path.startswith("/"):
+        raise SystemExit("main prompt render command must pass an absolute --audit path")
+    return manifest_path, audit_path
+
+
+def assert_prompt_render_command_uses_absolute_paths(bundle: Path) -> None:
+    manifest_path, audit_path = _collect_render_command_from_prompt(bundle / "main.prompt.md", bundle)
+    render_script = skill_script("goal-main-orchestrator", "render_branch_worktree_commands.py")
+
+    ready = run(
+        [
+            "python3",
+            render_script,
+            "--manifest",
+            manifest_path,
+            "--repo-root",
+            REPO_ROOT.as_posix(),
+            "--audit",
+            audit_path,
+            "--list-ready",
+            "--limit",
+            "4",
+        ],
+        cwd=Path("/tmp"),
+    )
+    if ready.stdout.strip().splitlines() != ["B01"]:
+        raise SystemExit(f"main prompt render command did not resolve B01 as branch-ready: {ready.stdout!r}")
+
+    def _assert_bad_relative_render_command(label: str, manifest_value: str, audit_value: str, expected_diag: str) -> None:
+        bad = subprocess.run(
+            [
+                "python3",
+                render_script,
+                "--manifest",
+                manifest_value,
+                "--repo-root",
+                REPO_ROOT.as_posix(),
+                "--audit",
+                audit_value,
+                "--list-ready",
+                "--limit",
+                "4",
+            ],
+            cwd=bundle,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        if bad.returncode == 0:
+            raise SystemExit(f"known-bad {label} render command unexpectedly succeeded")
+        message = bad.stdout.strip()
+        if expected_diag not in message:
+            raise SystemExit(
+                f"known-bad {label} render command produced unexpected diagnostic: {message!r}"
+            )
+
+    _assert_bad_relative_render_command(
+        "manifest-relative",
+        "job.manifest.json",
+        audit_path,
+        "--manifest must be an absolute path",
+    )
+    _assert_bad_relative_render_command(
+        "audit-relative",
+        manifest_path,
+        "audit/prompt-audit.json",
+        "--audit must be an absolute path",
+    )
 
 
 def sha256_file(path: Path) -> str:
@@ -1623,6 +1758,7 @@ def main() -> int:
                 "--require-pass",
             ]
         )
+        assert_prompt_render_command_uses_absolute_paths(bundle)
         worker, research = write_worker_artifacts(bundle)
         write_scheduler_ledgers(bundle)
         write_pre_review_branch_status(bundle, worker, research, lite_record)
