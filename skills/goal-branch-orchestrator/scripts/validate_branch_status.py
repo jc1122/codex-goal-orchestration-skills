@@ -729,8 +729,26 @@ def required_pre_review_input_paths(branch_entry: dict, branch_id: str) -> list[
     return [path for path in paths if isinstance(path, str) and path.strip()]
 
 
+_GIT_STDOUT_CACHE: dict[tuple[str, tuple[str, ...]], subprocess.CompletedProcess[str]] = {}
+
+
+def cacheable_git_stdout(command: list[str]) -> bool:
+    if len(command) < 2 or command[0] != "git":
+        return False
+    if command[1] in {"rev-parse", "merge-base"}:
+        return True
+    return command[1:3] == ["diff", "--name-status"] or (
+        command[1:3] == ["diff", "--name-only"] and any("...HEAD" in part for part in command[3:])
+    )
+
+
 def run_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
+    key = (cwd.resolve().as_posix(), tuple(command))
+    if cacheable_git_stdout(command):
+        cached = _GIT_STDOUT_CACHE.get(key)
+        if cached is not None:
+            return cached
+    result = subprocess.run(
         command,
         cwd=cwd,
         text=True,
@@ -738,6 +756,13 @@ def run_git(command: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str
         stderr=subprocess.STDOUT,
         check=False,
     )
+    if result.returncode == 0 and cacheable_git_stdout(command):
+        _GIT_STDOUT_CACHE[key] = result
+    return result
+
+
+def clear_git_stdout_cache() -> None:
+    _GIT_STDOUT_CACHE.clear()
 
 
 def git_stdout(defects: list[str], command: list[str], *, cwd: Path, path: str, label: str) -> str:

@@ -48,6 +48,7 @@ REQUIRED_PACKAGE_FILES = {
     "scripts/check_dependency_policy.py",
     "scripts/check_golden_smoke.py",
     "scripts/check_model_catalog.py",
+    "scripts/fixture_support.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
     "scripts/check_size_budget.py",
@@ -96,6 +97,7 @@ REQUIRED_PACKAGE_FILES_ENTRIES = {
     "scripts/check_dependency_policy.py",
     "scripts/check_golden_smoke.py",
     "scripts/check_model_catalog.py",
+    "scripts/fixture_support.py",
     "scripts/generate_agent_context_index.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",
@@ -111,6 +113,9 @@ def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[s
     npm_cache = str(Path(tempfile.gettempdir()) / "codex-goal-npm-cache")
     env["npm_config_cache"] = npm_cache
     env["NPM_CONFIG_CACHE"] = npm_cache
+    env["npm_config_update_notifier"] = "false"
+    env["NPM_CONFIG_UPDATE_NOTIFIER"] = "false"
+    env["NO_UPDATE_NOTIFIER"] = "1"
     result = subprocess.run(
         command,
         cwd=ROOT,

@@ -32,6 +32,7 @@
     "scripts/check_golden_smoke.py",
     "scripts/check_dependency_policy.py",
     "scripts/check_model_catalog.py",
+    "scripts/fixture_support.py",
     "scripts/generate_agent_context_index.py",
     "scripts/check_preparedness_fixtures.py",
     "scripts/check_release.py",

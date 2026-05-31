@@ -6,13 +6,13 @@ from __future__ import annotations
 import json
 import shlex
 import subprocess
-import sys
 import tempfile
-import hashlib
 import os
 import shutil
 import re
 from pathlib import Path
+
+from fixture_support import read_json, run_command, sha256_file, write_json
 
 
 CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
@@ -33,20 +33,7 @@ def run(
     expect: int = 0,
     cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        cwd=cwd or CHECKOUT_ROOT,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
-    if result.returncode != expect:
-        print(f"command failed with {result.returncode}, expected {expect}: {' '.join(command)}", file=sys.stderr)
-        if result.stdout:
-            print(result.stdout, file=sys.stderr)
-        raise SystemExit(1)
-    return result
+    return run_command(command, root=CHECKOUT_ROOT, expect=expect, cwd=cwd)
 
 
 def skill_script(skill: str, script: str) -> str:
@@ -71,18 +58,6 @@ def create_temp_repo(tmp_path: Path) -> Path:
     run(["git", "-C", repo.as_posix(), "add", "README.md"])
     run(["git", "-C", repo.as_posix(), "commit", "-m", "initial fixture"])
     return repo.resolve()
-
-
-def write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def read_json(path: Path) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise SystemExit(f"expected JSON object at {path}")
-    return data
 
 
 def assert_compact_runtime_launcher(packet_dir: Path, role: str) -> dict:
@@ -296,12 +271,6 @@ def assert_prompt_render_command_uses_absolute_paths(bundle: Path) -> None:
         "audit/prompt-audit.json",
         "--audit must be an absolute path",
     )
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    digest.update(path.read_bytes())
-    return "sha256:" + digest.hexdigest()
 
 
 def scheduler_event(seq: int, event: str, **kwargs) -> dict:

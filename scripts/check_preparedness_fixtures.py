@@ -7,12 +7,12 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 import time
-import hashlib
 import importlib.util
 from pathlib import Path
+
+from fixture_support import read_json, run_command, sha256_file, write_json
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -20,31 +20,7 @@ BRIEF = ROOT / "fixtures" / "preparedness" / "research-worker-brief.json"
 
 
 def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=ROOT, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
-    if result.returncode != expect:
-        print(f"command failed with {result.returncode}, expected {expect}: {' '.join(command)}", file=sys.stderr)
-        if result.stdout:
-            print(result.stdout, file=sys.stderr)
-        raise SystemExit(1)
-    return result
-
-
-def write_json(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-
-
-def read_json(path: Path) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(data, dict):
-        raise SystemExit(f"expected JSON object at {path}")
-    return data
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    digest.update(path.read_bytes())
-    return "sha256:" + digest.hexdigest()
+    return run_command(command, root=ROOT, expect=expect, env=env)
 
 
 def scheduler_event(seq: int, event: str, **kwargs) -> dict:

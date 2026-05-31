@@ -43,6 +43,7 @@ MAX_TOTAL_BRANCHES = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendments")
 AUDIT_TELEMETRY_ALIASES = ("gpt-5.5", "gpt-5.4", "deterministic-prompt-audit")
+BRANCH_STATUS_VALIDATOR = None
 
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
 load_json = STATUS_VALIDATION.load_json
@@ -407,6 +408,9 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
 
 
 def load_branch_status_validator(defects: list[str]):
+    global BRANCH_STATUS_VALIDATOR
+    if BRANCH_STATUS_VALIDATOR is not None:
+        return BRANCH_STATUS_VALIDATOR
     path = Path(__file__).resolve().parents[2] / "goal-branch-orchestrator" / "scripts" / "validate_branch_status.py"
     if not path.exists():
         defect(defects, "$", f"missing branch status validator: {path}")
@@ -421,6 +425,7 @@ def load_branch_status_validator(defects: list[str]):
     except Exception as exc:  # noqa: BLE001
         defect(defects, "$", f"could not import branch status validator {path}: {exc}")
         return None
+    BRANCH_STATUS_VALIDATOR = module
     return module
 
 
