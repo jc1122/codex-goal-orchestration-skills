@@ -42,7 +42,7 @@ def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     manifest = bundle_dir / "job.manifest.json"
     main_prompt = bundle_dir / "main.prompt.md"
     model_catalog = bundle_dir / "model-catalog.json"
-    return f"""Use $goal-main-orchestrator.
+    return f"""Use $goal-main-orchestrator with the generated bundle context below.
 
 Prepared bundle:
 - Bundle root: {bundle_dir}
@@ -50,21 +50,45 @@ Prepared bundle:
 - Manifest: {manifest}
 - Main prompt: {main_prompt}
 
-Read `job.manifest.json` and `main.prompt.md` first, then run the main skill `runtime_phase_manifest.py --markdown`. Treat script output, JSON artifacts, and validator defects as the working surface; do not read skill Python source unless debugging a failed script.
+Read `job.manifest.json` and `main.prompt.md` first, then run in order:
 
-Use the Bundle root and Repository root above. If either moved, regenerate this bootloader; do not hand-edit paths.
+```bash
+if [ -d "${{CODEX_HOME:-$HOME/.codex}}/skills/goal-main-orchestrator" ]; then
+  GOAL_SKILLS_ROOT="${{CODEX_HOME:-$HOME/.codex}}/skills"
+elif [ -d "$HOME/.agents/skills/goal-main-orchestrator" ]; then
+  GOAL_SKILLS_ROOT="$HOME/.agents/skills"
+else
+  echo "missing installed skill root for goal-main-orchestrator (checked $CODEX_HOME/.codex and $HOME/.agents/skills)" >&2
+  exit 1
+fi
 
-Pass only absolute paths to goal orchestration scripts. Stop if a script path would be relative or contain `..` traversal.
+python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest.py --markdown
+python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_goal_skill_availability.py --skills-root $GOAL_SKILLS_ROOT --require goal-main-orchestrator --require goal-branch-orchestrator --require goal-plan-amender
+python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py --json --require-codex > {model_catalog}
+python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/run_prompt_audit_phase.py --manifest {manifest} --repo-root {repo_root} --audit-dir {bundle_dir}/audit --deterministic --require-pass
+```
 
-Mandatory bootstrap first: verify skill availability with check_goal_skill_availability.py for goal-main-orchestrator, goal-branch-orchestrator, and goal-plan-amender. Resolve GOAL_SKILLS_ROOT from ${{CODEX_HOME:-$HOME/.codex}}/skills, falling back to $HOME/.agents/skills. Then record the fresh live Codex model catalog:
+Treat script output, JSON artifacts, and validator defects as the working surface; do not read skill Python source unless debugging a failed script.
+Use absolute paths only for goal scripts; regenerate this bootloader if bundle or repo paths change.
 
-python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py" --json --require-codex > {model_catalog}
+Mandatory skill availability bootstrap:
+1. `runtime_phase_manifest.py --markdown`
+2. `check_goal_skill_availability.py --require goal-main-orchestrator --require goal-branch-orchestrator --require goal-plan-amender`
+3. `check_model_catalog.py --json --require-codex`
 
-Mandatory second action: create and run prompt audit over job.manifest.json, main.prompt.md, and listed branch prompts. Do not create branch worktrees unless prompt-audit.json says status=pass, can_start=true, and pins the manifest and repository root above.
+Do not start branches unless prompt-audit says `status=pass`, `can_start=true`, and it pins the manifest and repository above.
 
-Parallelism is the default. Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Keep branch orchestrator slots saturated and launch the next eligible branch after closing a finished agent. Defer only unresolved manifest depends_on ids; non-pass dependencies need dependency_failed evidence. Waves are scheduling/order groups, not barriers. Each branch declares 1 to 4 worker packets and branch prompts require a rolling saturated pool up to the worker cap. Record scheduler v2 evidence under schedulers/. Wait for dispatched agents; do not poll active branch, worker, reviewer, process, or status artifacts.
+Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Keep branch slots saturated, record scheduler-v2 evidence under `schedulers/`, and avoid polling active branch, worker, reviewer, process, or status artifacts.
 
-Finish only when main.prompt.md Definition of Done is falsifiably satisfied by status files, review files, packet telemetry, telemetry.summary.json, command evidence, and final git state. If anything is missing or unverifiable, return blocked or partial, not pass.
+Parallelism is the default. Keep branch orchestrator slots saturated and use a rolling saturated pool. Defer only unresolved `depends_on` entries. Waves are scheduling/order groups, not barriers. Branches may each declare 1 to 4 worker packets in-band.
+
+Finish only when the Definition of Done in `main.prompt.md` is satisfied and all evidence is present:
+- Branch `status` and `review` files required by DoD are complete.
+- Packet telemetry and `telemetry.summary.json` are present and coherent.
+- Command evidence (stdout/stderr + exit code) exists for `run_prompt_audit_phase.py --deterministic --require-pass` and final `validate_main_status.py`.
+- Final `python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py` succeeds.
+- Git state is clean/explicit in status-review artifacts.
+Otherwise return blocked/partial.
 """
 
 
