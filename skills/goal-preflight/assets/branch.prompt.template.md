@@ -30,7 +30,7 @@ Max worker packets for this branch: 4
 
 Use $goal-branch-orchestrator. Treat `job.manifest.json` as the policy source and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 
-Worker packets are default. Cap: {max_active_worker_packets} active, 4 total; never exceed either. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
+Cap: {max_active_worker_packets} active, 4 total; never exceed either. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
 
 Worker scheduler ledger: {worker_scheduler_path}. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Record ready/launch/finish/close/refill/defer/under_capacity/blocked evidence with scheduler scripts.
 
