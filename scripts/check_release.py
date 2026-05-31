@@ -17,7 +17,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_JSON = ROOT / "package.json"
 README = ROOT / "README.md"
+SKILLS_DIR = ROOT / "skills"
 INSTALLER = ROOT / "bin" / "install-goal-skills.js"
+SKILL_VERSION_RE = re.compile(r"(?m)^version:\s*(?P<version>\S+)\s*$")
 EXPECTED_SKILLS = [
     "goal-branch-orchestrator",
     "goal-main-orchestrator",
@@ -198,6 +200,23 @@ def check_readme(version: str) -> None:
     require(version in load_package().get("version", ""), "internal version readback failed")
 
 
+def check_skill_versions(version: str) -> None:
+    for name in EXPECTED_SKILLS:
+        skill_md = SKILLS_DIR / name / "SKILL.md"
+        text = skill_md.read_text(encoding="utf-8")
+        require(text.startswith("---"), f"{name}/SKILL.md must start with YAML frontmatter")
+        parts = text.split("---", 2)
+        require(len(parts) >= 3, f"{name}/SKILL.md frontmatter is malformed")
+        frontmatter = parts[1]
+        match = SKILL_VERSION_RE.search(frontmatter)
+        require(match is not None, f"{name}/SKILL.md frontmatter is missing a version field")
+        skill_version = match.group("version").strip().strip("\"'")
+        require(
+            skill_version == version,
+            f"{name}/SKILL.md version {skill_version!r} must match package version {version!r}",
+        )
+
+
 def check_installer(version: str) -> None:
     listed = run(["node", INSTALLER.as_posix(), "--list"]).stdout.strip().splitlines()
     require(listed == EXPECTED_SKILLS, f"installer --list mismatch: {listed!r}")
@@ -266,6 +285,7 @@ def main() -> int:
     package = load_package()
     version = check_metadata(package)
     check_readme(version)
+    check_skill_versions(version)
     check_installer(version)
     check_pack(version)
     if args.require_clean:
