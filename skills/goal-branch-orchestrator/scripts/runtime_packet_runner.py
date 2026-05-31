@@ -48,6 +48,13 @@ def int_value(data: dict[str, Any], key: str) -> int:
     return value
 
 
+def bool_value(data: dict[str, Any], key: str) -> bool:
+    value = data.get(key, False)
+    if not isinstance(value, bool):
+        raise SystemExit(f"{CONFIG_NAME} {key} must be a boolean when present")
+    return value
+
+
 def list_value(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
     value = data.get(key)
     if not isinstance(value, list):
@@ -505,10 +512,17 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
         raise SystemExit(f"{CONFIG_NAME} attempt missing model")
     event_path = packet_dir / f"events-{label}.jsonl"
     prompt_path = packet_dir / "prompt.md"
+    lean_flags: list[str] = []
+    if role != "research-worker":
+        if bool_value(attempt, "ignore_user_config"):
+            lean_flags.append("--ignore-user-config")
+        if bool_value(attempt, "ignore_rules"):
+            lean_flags.append("--ignore-rules")
     command = [
         "codex",
         "exec",
         "--ephemeral",
+        *lean_flags,
         "-m",
         model,
         "-C",

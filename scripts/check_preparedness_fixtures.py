@@ -2231,8 +2231,10 @@ def main() -> int:
             raise SystemExit(f"worker launch-config event logs mismatch: {event_logs!r}")
         if probe_logs:
             raise SystemExit(f"worker launch-config should not include probe logs for codex-mini-only route: {probe_logs!r}")
-        if worker_config.get("selected_commands") != ["codex exec --ephemeral -m gpt-5.4-mini -s workspace-write"]:
+        if worker_config.get("selected_commands") != ["codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"]:
             raise SystemExit(f"worker launch-config selected commands mismatch: {worker_config.get('selected_commands')!r}")
+        if not attempts or attempts[0].get("ignore_user_config") is not True or attempts[0].get("ignore_rules") is not True:
+            raise SystemExit(f"worker Codex attempt should use lean Codex startup flags: {attempts!r}")
         run(
             [
                 "python3",
@@ -2286,6 +2288,13 @@ def main() -> int:
             "events-copilot-version.log",
         ]:
             raise SystemExit(f"worker launch-config mixed probe log mismatch: {mixed_probe_logs!r}")
+        mixed_codex_attempts = [
+            attempt
+            for attempt in mixed_config.get("attempts", [])
+            if isinstance(attempt, dict) and attempt.get("provider") == "codex"
+        ]
+        if len(mixed_codex_attempts) != 1 or mixed_codex_attempts[0].get("ignore_user_config") is not True or mixed_codex_attempts[0].get("ignore_rules") is not True:
+            raise SystemExit(f"mixed worker Codex attempt should use lean Codex startup flags: {mixed_codex_attempts!r}")
         worker_model_catalog = tmp_path / "worker-model-catalog.json"
         write_json(
             worker_model_catalog,
@@ -2439,6 +2448,12 @@ def main() -> int:
         ]
         if research_event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
             raise SystemExit(f"research launch-config event log mismatch: {research_event_logs!r}")
+        if any(
+            isinstance(attempt, dict)
+            and ("ignore_user_config" in attempt or "ignore_rules" in attempt or "--ignore-user-config" in str(attempt.get("command", "")))
+            for attempt in research_config.get("attempts", [])
+        ):
+            raise SystemExit(f"research-worker attempts must keep user config/search access: {research_config.get('attempts')!r}")
 
         run(
             [
@@ -2660,6 +2675,13 @@ def main() -> int:
         reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
         if reviewer_aliases != ["gpt-5.4-mini", "gpt-5.4"]:
             raise SystemExit(f"reviewer launch-config route mismatch: {reviewer_aliases!r}")
+        if not reviewer_attempts or any(
+            not isinstance(attempt, dict)
+            or attempt.get("ignore_user_config") is not True
+            or attempt.get("ignore_rules") is not True
+            for attempt in reviewer_attempts
+        ):
+            raise SystemExit(f"reviewer Codex attempts should use lean Codex startup flags: {reviewer_attempts!r}")
         if not reviewer_config.get("semantic_input_hashes"):
             raise SystemExit("reviewer launch-config omitted semantic_input_hashes")
         if not reviewer_config.get("reuse_policy"):

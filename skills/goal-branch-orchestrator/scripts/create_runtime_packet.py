@@ -88,12 +88,13 @@ WORKER_ROUTE_LABELS = {
     "copilot-gpt-5.4": "GitHub Copilot",
     "codex-mini": "Codex mini",
 }
+CODEX_LEAN_EXEC_FLAGS_TEXT = " ".join(CONTRACT.CODEX_LEAN_EXEC_FLAGS)
 WORKER_ROUTE_COMMANDS = {
     "gemini-pro": f"gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
     "gemini-flash": f"gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
-    "codex-spark": f"codex exec --ephemeral -m {SPARK_MODEL} -s workspace-write",
+    "codex-spark": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {SPARK_MODEL} -s workspace-write",
     "copilot-gpt-5.4": f"gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
-    "codex-mini": f"codex exec --ephemeral -m {MINI_MODEL} -s workspace-write",
+    "codex-mini": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {MINI_MODEL} -s workspace-write",
 }
 WORKER_ROUTE_EVENT_LABELS = {
     "gemini-pro": "gemini-pro",
@@ -338,6 +339,8 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                     "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
                     "event_logs": [f"events-{label}.jsonl"],
                     "probe_logs": [],
+                    "ignore_user_config": True,
+                    "ignore_rules": True,
                 }
             )
     return attempts
@@ -348,6 +351,7 @@ def reviewer_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
         selected_ladder,
         timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
         sandbox="read-only",
+        lean=True,
     )
 
 
@@ -1118,7 +1122,7 @@ def compact_launch_config(
     if role == "reviewer":
         reviewer_ladder = reviewer_ladder_from_route(review_route)
         terminal_commands = [
-            f"codex exec --ephemeral -m {REVIEW_ROUTE_MODELS[alias]} -s read-only"
+            CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
             for alias in reviewer_ladder
         ]
         return {

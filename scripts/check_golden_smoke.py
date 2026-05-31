@@ -587,7 +587,7 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
                     alias="codex-mini",
                     provider="codex",
                     model="gpt-5.4-mini",
-                    command="codex exec --ephemeral -m gpt-5.4-mini -s workspace-write",
+                    command="codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write",
                     timeout_seconds=3600,
                     called=True,
                     accepted=True,
@@ -676,7 +676,7 @@ def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
             alias=str(alias),
             provider="codex",
             model=model_by_alias[str(alias)],
-            command=f"codex exec --ephemeral -m {model_by_alias[str(alias)]} -s read-only",
+            command=f"codex exec --ephemeral --ignore-user-config --ignore-rules -m {model_by_alias[str(alias)]} -s read-only",
             timeout_seconds=1800,
             called=index == 0,
             accepted=index == 0,
@@ -1488,8 +1488,10 @@ def main() -> int:
             raise SystemExit(f"worker launch-config event log mismatch: {event_logs!r}")
         if probe_logs:
             raise SystemExit(f"worker launch-config probe logs should be empty for codex-mini-only route: {probe_logs!r}")
-        if worker_config.get("selected_commands") != ["codex exec --ephemeral -m gpt-5.4-mini -s workspace-write"]:
+        if worker_config.get("selected_commands") != ["codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"]:
             raise SystemExit(f"worker launch-config selected command mismatch: {worker_config.get('selected_commands')!r}")
+        if not worker_attempts or worker_attempts[0].get("ignore_user_config") is not True or worker_attempts[0].get("ignore_rules") is not True:
+            raise SystemExit(f"worker Codex attempt should use lean Codex startup flags: {worker_attempts!r}")
 
         mixed_worker = bundle / "workers" / "B01-W99"
         run(
@@ -1543,6 +1545,13 @@ def main() -> int:
             "events-copilot-version.log",
         ]:
             raise SystemExit(f"worker launch-config mixed-route probe log mismatch: {mixed_probe_logs!r}")
+        mixed_codex_attempts = [
+            attempt
+            for attempt in mixed_config.get("attempts", [])
+            if isinstance(attempt, dict) and attempt.get("provider") == "codex"
+        ]
+        if len(mixed_codex_attempts) != 1 or mixed_codex_attempts[0].get("ignore_user_config") is not True or mixed_codex_attempts[0].get("ignore_rules") is not True:
+            raise SystemExit(f"mixed worker Codex attempt should use lean Codex startup flags: {mixed_codex_attempts!r}")
 
         run(
             [
@@ -1569,6 +1578,13 @@ def main() -> int:
         research_config = assert_compact_runtime_launcher(bundle / "research" / RESEARCH_PACKET, "research-worker")
         if research_config.get("attempt_timeout_seconds") != 1200:
             raise SystemExit("research launch-config should preserve the 1200 second attempt timeout")
+        research_attempts = research_config.get("attempts", [])
+        if any(
+            isinstance(attempt, dict)
+            and ("ignore_user_config" in attempt or "ignore_rules" in attempt or "--ignore-user-config" in str(attempt.get("command", "")))
+            for attempt in research_attempts
+        ):
+            raise SystemExit(f"research-worker attempts must keep user config/search access: {research_attempts!r}")
 
         run(
             [
@@ -1638,6 +1654,14 @@ def main() -> int:
         reviewer_config = assert_compact_runtime_launcher(bundle / "reviewers" / REVIEW_PACKET, "reviewer")
         if reviewer_config.get("attempt_timeout_seconds") != 1800:
             raise SystemExit("reviewer launch-config should preserve the 1800 second attempt timeout")
+        reviewer_attempts = reviewer_config.get("attempts", [])
+        if not reviewer_attempts or any(
+            not isinstance(attempt, dict)
+            or attempt.get("ignore_user_config") is not True
+            or attempt.get("ignore_rules") is not True
+            for attempt in reviewer_attempts
+        ):
+            raise SystemExit(f"reviewer Codex attempts should use lean Codex startup flags: {reviewer_attempts!r}")
         write_review(bundle, input_hashes)
         write_branch_and_main_status(bundle)
 

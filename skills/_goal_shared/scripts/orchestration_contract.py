@@ -56,6 +56,7 @@ REVIEWER_ATTEMPT_TIMEOUT_SECONDS = 1800
 AMENDER_ATTEMPT_TIMEOUT_SECONDS = 1200
 LITE_ATTEMPT_TIMEOUT_SECONDS = 600
 TIMEOUT_KILL_AFTER_SECONDS = 30
+CODEX_LEAN_EXEC_FLAGS = ("--ignore-user-config", "--ignore-rules")
 CODEX_ROUTE_MODELS = {
     "gpt-5.5": "gpt-5.5",
     "gpt-5.4": "gpt-5.4",
@@ -404,9 +405,12 @@ def codex_event_label(alias: str) -> str:
     return CODEX_ROUTE_EVENT_LABELS.get(alias, alias.replace(".", "-"))
 
 
-def codex_command(alias: str, *, sandbox: str, search: bool = False) -> str:
+def codex_command(alias: str, *, sandbox: str, search: bool = False, lean: bool = False) -> str:
+    if search and lean:
+        raise ValueError("lean Codex exec flags are intentionally unavailable for search/research routes")
     prefix = "codex --search exec" if search else "codex exec"
-    return f"{prefix} --ephemeral -m {codex_model(alias)} -s {sandbox}"
+    lean_flags = "" if not lean else " " + " ".join(CODEX_LEAN_EXEC_FLAGS)
+    return f"{prefix} --ephemeral{lean_flags} -m {codex_model(alias)} -s {sandbox}"
 
 
 def codex_telemetry_attempts(
@@ -416,22 +420,25 @@ def codex_telemetry_attempts(
     sandbox: str,
     event_labels: list[str] | None = None,
     search: bool = False,
+    lean: bool = False,
 ) -> list[dict]:
     attempts = []
     for index, alias in enumerate(selected_ladder):
         label = event_labels[index] if event_labels and index < len(event_labels) else codex_event_label(alias)
-        attempts.append(
-            {
-                "alias": alias,
-                "provider": "codex",
-                "model": codex_model(alias),
-                "effort": "",
-                "command": codex_command(alias, sandbox=sandbox, search=search),
-                "timeout_seconds": timeout_seconds,
-                "event_logs": [f"events-{label}.jsonl"],
-                "probe_logs": [],
-            }
-        )
+        attempt = {
+            "alias": alias,
+            "provider": "codex",
+            "model": codex_model(alias),
+            "effort": "",
+            "command": codex_command(alias, sandbox=sandbox, search=search, lean=lean),
+            "timeout_seconds": timeout_seconds,
+            "event_logs": [f"events-{label}.jsonl"],
+            "probe_logs": [],
+        }
+        if lean:
+            attempt["ignore_user_config"] = True
+            attempt["ignore_rules"] = True
+        attempts.append(attempt)
     return attempts
 
 
