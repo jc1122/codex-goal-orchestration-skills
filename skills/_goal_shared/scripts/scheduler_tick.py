@@ -245,6 +245,7 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
     deferred_excuses: set[str] = set()
     under_capacity_excuses: set[str] = set()
     finished_status: dict[str, str] = {}
+    max_observed_active = 0
     known = set(item_ids)
     for index, event in enumerate(ledger.get("events", [])):
         if not isinstance(event, dict):
@@ -263,6 +264,7 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
                 raise SystemExit(f"scheduler events[{index}] duplicates active launch for {event_id}")
             launched.add(str(event_id))
             active.add(str(event_id))
+            max_observed_active = max(max_observed_active, len(active))
             finished.discard(str(event_id))
             closed.discard(str(event_id))
             finished_status.pop(str(event_id), None)
@@ -345,6 +347,7 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
         "unexcused": unexcused,
         "launchable": launchable,
         "remaining_capacity": max(0, capacity - len(active)),
+        "max_observed_active": max_observed_active,
     }
 
 
@@ -483,6 +486,134 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
     return appended, replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
 
 
+def artifact_statuses(manifest_path: Path, manifest: dict, scope: str, branch_id: str | None) -> dict[str, str]:
+    bundle_dir = manifest_path.parent
+    statuses: dict[str, str] = {}
+    if scope == "main":
+        branches = manifest.get("branches")
+        if not isinstance(branches, list):
+            raise SystemExit("manifest branches must be an array")
+        for branch in branches:
+            if not isinstance(branch, dict):
+                continue
+            item_id = branch.get("id")
+            rel_path = branch.get("status_path")
+            if not isinstance(item_id, str) or not isinstance(rel_path, str):
+                continue
+            status_path = bundle_dir / rel_path
+            if not status_path.exists():
+                continue
+            status = read_json(status_path).get("status")
+            if status not in TERMINAL_STATUSES:
+                raise SystemExit(f"status artifact {status_path} must contain a terminal status")
+            statuses[item_id] = str(status)
+        return statuses
+
+    if branch_id is None:
+        raise SystemExit("--branch-id is required for worker artifact closeout")
+    branch = manifest_branch(manifest, branch_id)
+    work_items = branch.get("work_items")
+    if not isinstance(work_items, list):
+        raise SystemExit(f"branch {branch_id} work_items must be an array")
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        packet_id = item.get("packet_id")
+        if not isinstance(packet_id, str) or not packet_id.strip():
+            continue
+        worker_type = item.get("worker_type", "worker")
+        if worker_type == CONTRACT.RESEARCH_WORKER_TYPE:
+            status_path = bundle_dir / "research" / packet_id / "research.json"
+        else:
+            status_path = bundle_dir / "workers" / packet_id / "status.json"
+        if not status_path.exists():
+            continue
+        status = read_json(status_path).get("status")
+        if status not in TERMINAL_STATUSES:
+            raise SystemExit(f"status artifact {status_path} must contain a terminal status")
+        statuses[packet_id] = str(status)
+    return statuses
+
+
+def close_from_artifacts(
+    ledger: dict,
+    spec: dict,
+    *,
+    runtime_ref: str,
+    timestamp_value: str | None,
+    terminal_statuses: dict[str, str],
+) -> tuple[list[dict], dict]:
+    item_ids = list(spec["item_ids"])
+    dependencies = dict(spec["dependencies"])
+    capacity = int(spec["capacity"])
+    allow_relaunch = spec.get("kind") == "branch-worker-pool"
+    appended: list[dict] = []
+    max_steps = max(10, len(item_ids) * 8)
+
+    for _ in range(max_steps):
+        progressed = False
+        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        already_ready = set(state["ready"])
+        for item_id in state["eligible"]:
+            if item_id not in already_ready:
+                appended.append(append_event(ledger, event="ready", runtime_ref=runtime_ref, timestamp_value=timestamp_value, id=item_id))
+                progressed = True
+
+        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        finished = set(state["finished"])
+        for item_id in state["active"]:
+            if item_id in finished:
+                appended.append(append_event(ledger, event="close", runtime_ref=runtime_ref, timestamp_value=timestamp_value, id=item_id))
+                progressed = True
+                after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+                if after_close["remaining_capacity"] > 0 and after_close["unexcused"]:
+                    appended.append(
+                        append_event(
+                            ledger,
+                            event="refill",
+                            runtime_ref=runtime_ref,
+                            timestamp_value=timestamp_value,
+                            eligible_ids=after_close["unexcused"],
+                        )
+                    )
+                break
+        if progressed:
+            continue
+
+        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        finished = set(state["finished"])
+        for item_id in state["active"]:
+            status = terminal_statuses.get(item_id)
+            if status and item_id not in finished:
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="finish",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        id=item_id,
+                        status=status,
+                    )
+                )
+                progressed = True
+                break
+        if progressed:
+            continue
+
+        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        launchable = [item_id for item_id in state["launchable"] if item_id in terminal_statuses]
+        while launchable and state["remaining_capacity"] > 0:
+            item_id = launchable.pop(0)
+            appended.append(append_event(ledger, event="launch", runtime_ref=runtime_ref, timestamp_value=timestamp_value, id=item_id))
+            progressed = True
+            state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+            launchable = [candidate for candidate in state["launchable"] if candidate in terminal_statuses]
+        if not progressed:
+            return appended, state
+
+    raise SystemExit("--close-from-artifacts did not converge; inspect scheduler ledger")
+
+
 def validate_final(ledger_path: Path, ledger: dict, spec: dict, manifest_path: Path) -> list[str]:
     defects: list[str] = []
     STATUS_VALIDATION.validate_scheduler_ledger(
@@ -518,6 +649,11 @@ def main() -> int:
     parser.add_argument("--defer", action="append", default=[], help="Append a structured defer event for an eligible id.")
     parser.add_argument("--blocked", action="append", default=[], help="Append a structured blocked event for an id.")
     parser.add_argument("--under-capacity", action="store_true", help="Record under-capacity evidence for current unexcused eligible ids.")
+    parser.add_argument(
+        "--close-from-artifacts",
+        action="store_true",
+        help="Append ready/launch/finish/close events for terminal manifest-owned status artifacts.",
+    )
     parser.add_argument("--reason-code", choices=sorted(REASON_CODES))
     parser.add_argument("--reason")
     parser.add_argument("--list-ready", action="store_true", help="Print launchable ids after applying requested events.")
@@ -532,6 +668,15 @@ def main() -> int:
     ledger_path = (manifest_path.parent / spec["path"]).resolve()
     ledger = load_or_create_ledger(ledger_path, spec, manifest_path, create=args.init)
     appended, state = apply_actions(args, ledger, spec, args.timestamp)
+    if args.close_from_artifacts:
+        artifact_appended, state = close_from_artifacts(
+            ledger,
+            spec,
+            runtime_ref=args.runtime_ref,
+            timestamp_value=args.timestamp,
+            terminal_statuses=artifact_statuses(manifest_path, manifest, args.scope, args.branch_id),
+        )
+        appended.extend(artifact_appended)
 
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be a positive integer")

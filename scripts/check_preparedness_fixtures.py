@@ -1804,6 +1804,43 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
         deterministic_ledgers.append((repeat_dir / "schedulers" / "main.scheduler.json").read_text(encoding="utf-8"))
     if deterministic_ledgers[0] != deterministic_ledgers[1]:
         raise SystemExit("scheduler_tick without --timestamp must produce deterministic ledger content")
+    auto_dir = tmp_path / "scheduler-tick-artifacts"
+    auto_manifest = auto_dir / "job.manifest.json"
+    write_json(
+        auto_manifest,
+        {
+            "max_active_branch_agents": 2,
+            "parallelization": {"scheduler_path": "schedulers/main.scheduler.json"},
+            "branches": [
+                {"id": "B01", "depends_on": [], "status_path": "branches/B01.status.json"},
+                {"id": "B02", "depends_on": [], "status_path": "branches/B02.status.json"},
+            ],
+        },
+    )
+    write_json(auto_dir / "branches" / "B01.status.json", {"status": "pass"})
+    write_json(auto_dir / "branches" / "B02.status.json", {"status": "partial"})
+    auto_result = run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
+            "--manifest",
+            auto_manifest.as_posix(),
+            "--scope",
+            "main",
+            "--runtime-ref",
+            "scheduler-tick-artifact-fixture",
+            "--init",
+            "--record-ready",
+            "--close-from-artifacts",
+            "--validate-final",
+            "--json",
+        ]
+    )
+    auto_data = json.loads(auto_result.stdout)
+    if auto_data["state"]["finished_status"] != {"B01": "pass", "B02": "partial"}:
+        raise SystemExit(f"scheduler_tick artifact closeout status mismatch: {auto_data['state']['finished_status']!r}")
+    if auto_data["state"]["max_observed_active"] != 2:
+        raise SystemExit("scheduler_tick artifact closeout did not preserve saturated main launch evidence")
     append_ledgers = []
     for suffix in ["a", "b"]:
         append_dir = tmp_path / f"append-scheduler-event-repeat-{suffix}"

@@ -128,6 +128,8 @@ Generated worker packets are compact too: when `create_runtime_packet.py` receiv
 
 Main closeout is assembled deterministically too. Runtime agents should run `summarize_telemetry.py`, then `assemble_main_status.py`, then `validate_main_status.py --status`; they should not hand-author `main.status.json` from branch artifacts.
 
+Scheduler ledgers should also be artifact-driven where possible. After worker or branch status artifacts exist, use `scheduler_tick.py --close-from-artifacts --validate-final` to append launch, finish, close, and refill evidence from manifest-owned artifacts instead of editing scheduler JSON by hand.
+
 Generated research-worker and reviewer packets use the same wrapper pattern. Runtime attempt policy, telemetry inputs, semantic hashes, and terminal blocked metadata live in packet-local `launch-config.json`, and `runtime_packet_runner.py` performs deterministic execution. Agents should inspect `launch-config.json` and generated artifacts instead of opening launcher implementation source.
 
 Lite advisory launchers use the same compact wrapper pattern: `launch.sh` delegates to `runtime_lite_runner.py`, packet-local `launch-config.json` carries the Gemini command, timeout, telemetry, marker, and terminal-message policy, and the full prompt is passed on stdin rather than exposed in process command lines.
