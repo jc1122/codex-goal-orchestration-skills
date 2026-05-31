@@ -12,25 +12,31 @@ import time
 import importlib.util
 from pathlib import Path
 
-from fixture_support import read_json, run_command, sha256_file, write_json
+from fixture_support import (
+    assert_all_contains,
+    assert_compact_audit_launcher,
+    assert_compact_lite_launcher,
+    assert_compact_runtime_launcher,
+    assert_contains,
+    assert_not_contains,
+    assert_shell_syntax,
+    make_scheduler_event,
+    offline_gemini_env,
+    read_json,
+    run_command,
+    sha256_file,
+    telemetry,
+    write_json,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIEF = ROOT / "fixtures" / "preparedness" / "research-worker-brief.json"
+scheduler_event = make_scheduler_event("preparedness-fixture")
 
 
 def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return run_command(command, root=ROOT, expect=expect, env=env)
-
-
-def scheduler_event(seq: int, event: str, **kwargs) -> dict:
-    return {
-        "seq": seq,
-        "timestamp": f"2026-05-29T00:00:{seq:02d}Z",
-        "runtime_ref": "preparedness-fixture",
-        "event": event,
-        **kwargs,
-    }
 
 
 def write_worker_scheduler(bundle: Path) -> None:
@@ -97,32 +103,6 @@ def assemble_branch_status(bundle: Path) -> None:
             "Static branch fixture assembled from deterministic research-worker artifacts.",
         ]
     )
-
-
-def telemetry(packet_id: str, role: str, output_name: str, *, accepted_alias: str, attempts: list[dict]) -> dict:
-    called_count = sum(1 for item in attempts if item.get("called") is True)
-    return {
-        "schema_version": 1,
-        "packet_id": packet_id,
-        "role": role,
-        "output_artifact": output_name,
-        "prompt_artifact": "prompt.md",
-        "prompt_chars": 1,
-        "prompt_bytes": 1,
-        "output_chars": 1,
-        "output_bytes": 1,
-        "event_log_chars": 0,
-        "event_log_bytes": 0,
-        "accepted_alias": accepted_alias,
-        "attempts": attempts,
-        "totals": {
-            "attempts_declared": len(attempts),
-            "attempts_called": called_count,
-            "event_log_chars": 0,
-            "event_log_bytes": 0,
-            "known_usage": None,
-        },
-    }
 
 
 def research_status(*, bad_command: str | None = None) -> dict:
@@ -256,121 +236,6 @@ def validate_branch(bundle: Path, *, expect: int = 0) -> subprocess.CompletedPro
         ],
         expect=expect,
     )
-
-
-def assert_contains(text: str, needle: str, label: str) -> None:
-    if needle not in text:
-        raise SystemExit(f"{label} missing expected text: {needle}")
-
-
-def assert_not_contains(text: str, needle: str, label: str) -> None:
-    if needle in text:
-        raise SystemExit(f"{label} contains forbidden text: {needle}")
-
-
-def assert_shell_syntax(path: Path) -> None:
-    run(["bash", "-n", path.as_posix()])
-
-
-def assert_compact_runtime_launcher(
-    packet_dir: Path,
-    role: str,
-    timeout_seconds: int | None = None,
-) -> dict:
-    launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
-    assert_shell_syntax(packet_dir / "launch.sh")
-    assert_contains(launch, "runtime_packet_runner.py", f"{role} launcher")
-    if len(launch) > 800:
-        raise SystemExit(f"{role} launcher should stay compact, got {len(launch)} chars")
-    config = read_json(packet_dir / "launch-config.json")
-    if config.get("role") != role:
-        raise SystemExit(f"{role} launch-config role mismatch: {config.get('role')!r}")
-    if timeout_seconds is not None and config.get("attempt_timeout_seconds") != timeout_seconds:
-        raise SystemExit(f"{role} launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
-    return config
-
-
-def assert_compact_lite_launcher(packet_dir: Path) -> dict:
-    launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
-    assert_shell_syntax(packet_dir / "launch.sh")
-    assert_contains(launch, "runtime_lite_runner.py", "Lite launcher")
-    assert_not_contains(launch, '-p "$(cat "$prompt_path")"', "Lite launcher")
-    if len(launch) > 800:
-        raise SystemExit(f"Lite launcher should stay compact, got {len(launch)} chars")
-    config = read_json(packet_dir / "launch-config.json")
-    if config.get("role") != "lite_advisor":
-        raise SystemExit(f"Lite launch-config role mismatch: {config.get('role')!r}")
-    if config.get("attempt_timeout_seconds") != 600:
-        raise SystemExit(f"Lite launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
-    if config.get("timeout_kill_after_seconds") != 30:
-        raise SystemExit(f"Lite launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
-    if config.get("telemetry_name") != "telemetry.json":
-        raise SystemExit(f"Lite launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
-    if config.get("runner_prompt") != "Follow the complete Lite advisory packet instructions provided on stdin.":
-        raise SystemExit("Lite launch-config should preserve the stdin runner prompt")
-    if not isinstance(config.get("avoids_action"), str) or not config.get("avoids_action"):
-        raise SystemExit("Lite launch-config missing avoids_action")
-    if not isinstance(config.get("expected_savings_reason"), str) or not config.get("expected_savings_reason"):
-        raise SystemExit("Lite launch-config missing expected_savings_reason")
-    if not str(config.get("validation_script", "")).endswith("validate_lite_advice.py"):
-        raise SystemExit(f"Lite launch-config validation script mismatch: {config.get('validation_script')!r}")
-    if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
-        raise SystemExit(f"Lite launch-config telemetry script mismatch: {config.get('telemetry_script')!r}")
-    if config.get("status_begin") != "BEGIN_LITE_ADVICE_JSON" or config.get("status_end") != "END_LITE_ADVICE_JSON":
-        raise SystemExit("Lite launch-config marker mismatch")
-    attempts = config.get("attempts")
-    if not isinstance(attempts, list) or len(attempts) != 1:
-        raise SystemExit(f"Lite launch-config should contain exactly one attempt: {attempts!r}")
-    attempt = attempts[0]
-    if attempt.get("alias") != "gemini-lite":
-        raise SystemExit(f"Lite launch-config attempt alias mismatch: {attempt.get('alias')!r}")
-    if attempt.get("event_logs") != ["advice.raw.txt"]:
-        raise SystemExit(f"Lite launch-config event logs mismatch: {attempt.get('event_logs')!r}")
-    if attempt.get("timeout_seconds") != 600:
-        raise SystemExit(f"Lite attempt timeout mismatch: {attempt.get('timeout_seconds')!r}")
-    terminal_messages = config.get("terminal_messages")
-    if not isinstance(terminal_messages, dict) or "invalid_output" not in terminal_messages:
-        raise SystemExit("Lite launch-config terminal messages missing")
-    return config
-
-
-def assert_compact_audit_launcher(packet_dir: Path) -> dict:
-    launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
-    assert_shell_syntax(packet_dir / "launch.sh")
-    assert_contains(launch, "runtime_prompt_audit_runner.py", "audit launcher")
-    if len(launch) > 800:
-        raise SystemExit(f"audit launcher should stay compact, got {len(launch)} chars")
-    config = read_json(packet_dir / "launch-config.json")
-    if config.get("role") != "prompt-auditor":
-        raise SystemExit(f"audit launch-config role mismatch: {config.get('role')!r}")
-    if config.get("attempt_timeout_seconds") != 1200:
-        raise SystemExit(f"audit launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
-    if config.get("timeout_kill_after_seconds") != 30:
-        raise SystemExit(f"audit launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
-    if config.get("telemetry_name") != "telemetry.json":
-        raise SystemExit(f"audit launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
-    if not str(config.get("validation_script", "")).endswith("validate_prompt_audit.py"):
-        raise SystemExit(f"audit launch-config validation script mismatch: {config.get('validation_script')!r}")
-    if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
-        raise SystemExit(f"audit launch-config telemetry script mismatch: {config.get('telemetry_script')!r}")
-    attempts = config.get("attempts")
-    if not isinstance(attempts, list) or len(attempts) != 2:
-        raise SystemExit(f"audit launch-config should contain two attempts: {attempts!r}")
-    aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
-    if aliases != ["gpt-5.5", "gpt-5.4"]:
-        raise SystemExit(f"audit launch-config aliases mismatch: {aliases!r}")
-    event_logs = [
-        log
-        for attempt in attempts
-        if isinstance(attempt, dict)
-        for log in attempt.get("event_logs", [])
-    ]
-    if event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
-        raise SystemExit(f"audit launch-config event logs mismatch: {event_logs!r}")
-    terminal_messages = config.get("terminal_messages")
-    if not isinstance(terminal_messages, dict) or "invalid_output" not in terminal_messages:
-        raise SystemExit("audit launch-config terminal messages missing")
-    return config
 
 
 def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None = None, diff_stats: dict | None = None) -> Path:
@@ -673,10 +538,7 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
         ],
         expect=1,
     )
-    assert_contains(invalid.stdout, "contains placeholder text", "invalid brief lint fixture")
-    assert_contains(invalid.stdout, "concrete top-level goal", "invalid brief lint fixture")
-    assert_contains(invalid.stdout, "context file does not exist", "invalid brief lint fixture")
-    assert_contains(invalid.stdout, "must include at least one exact verification command", "invalid brief lint fixture")
+    assert_all_contains(invalid.stdout, ["contains placeholder text", "concrete top-level goal", "context file does not exist", "must include at least one exact verification command"], "invalid brief lint fixture")
 
 
 def amendment_branch(branch_id: str, owned_path: str, *, depends_on: list[str] | None = None, branch_name: str | None = None) -> dict:
@@ -1362,6 +1224,8 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         "capacity": 2,
         "item_ids": ["B01", "B02", "B03"],
     }
+    main_ids = ["B01", "B02", "B03"]
+    main_deps = {"B01": [], "B02": [], "B03": []}
     multi_branch_refill = {
         **base,
         "events": [
@@ -1380,16 +1244,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(13, "close", id="B03"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "multi-branch-refill",
-        multi_branch_refill,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=True,
-        manifest_path=manifest_path,
-    )
     stuck_branch_continues = {
         **base,
         "events": [
@@ -1409,22 +1263,14 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(14, "close", id="B03"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "stuck-branch-continued-scheduling",
-        stuck_branch_continues,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=True,
-        manifest_path=manifest_path,
-    )
     worker_base = {
         **base,
         "scheduler_kind": "branch-worker-pool",
         "scheduler_path": "schedulers/B01.worker.scheduler.json",
         "item_ids": ["B01-W01", "B01-W02", "B01-W03"],
     }
+    worker_ids = ["B01-W01", "B01-W02", "B01-W03"]
+    worker_deps = {"B01-W01": [], "B01-W02": [], "B01-W03": []}
     stuck_worker_continues = {
         **worker_base,
         "events": [
@@ -1446,16 +1292,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(16, "close", id="B01-W03"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "stuck-worker-continued-scheduling",
-        stuck_worker_continues,
-        expected_ids=["B01-W01", "B01-W02", "B01-W03"],
-        dependencies={"B01-W01": [], "B01-W02": [], "B01-W03": []},
-        capacity=2,
-        expect_pass=True,
-        manifest_path=manifest_path,
-    )
     reviewer_repair_relaunch = {
         **worker_base,
         "capacity": 1,
@@ -1472,16 +1308,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(9, "close", id="B01-W01"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "reviewer-feedback-worker-relaunch",
-        reviewer_repair_relaunch,
-        expected_ids=["B01-W01"],
-        dependencies={"B01-W01": []},
-        capacity=1,
-        expect_pass=True,
-        manifest_path=manifest_path,
-    )
     missing_refill = {
         **base,
         "events": [
@@ -1499,16 +1325,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(12, "close", id="B03"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "missing-refill-event",
-        missing_refill,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=False,
-        manifest_path=manifest_path,
-    )
     under_capacity_without_reason = {
         **base,
         "events": [
@@ -1526,30 +1342,10 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(12, "close", id="B03"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "under-capacity-without-reason",
-        under_capacity_without_reason,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=False,
-        manifest_path=manifest_path,
-    )
     stale_scheduler = {
         **multi_branch_refill,
         "manifest_sha256": "sha256:" + "0" * 64,
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "stale-scheduler-manifest-hash",
-        stale_scheduler,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=False,
-        manifest_path=manifest_path,
-    )
     vague_reason = {
         **base,
         "events": [
@@ -1562,17 +1358,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(7, "blocked", id="B03", reason_code="operator_requested", reason="not reached in negative fixture"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "vague-reason-code-rejection",
-        vague_reason,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=False,
-        manifest_path=manifest_path,
-        require_all_launched=False,
-    )
     dependency_failed = {
         **base,
         "item_ids": ["B01", "B02"],
@@ -1585,17 +1370,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(6, "blocked", id="B02", reason_code="dependency_failed", reason="B02 depends on non-pass B01."),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "dependency-failed-blocking",
-        dependency_failed,
-        expected_ids=["B01", "B02"],
-        dependencies={"B01": [], "B02": ["B01"]},
-        capacity=2,
-        expect_pass=True,
-        manifest_path=manifest_path,
-        require_all_launched=False,
-    )
     dependency_failed_wrong_reason = {
         **dependency_failed,
         "events": [
@@ -1603,17 +1377,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(6, "blocked", id="B02", reason_code="dependency_pending", reason="Wrong reason for non-pass dependency."),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "dependency-failed-wrong-reason",
-        dependency_failed_wrong_reason,
-        expected_ids=["B01", "B02"],
-        dependencies={"B01": [], "B02": ["B01"]},
-        capacity=2,
-        expect_pass=False,
-        manifest_path=manifest_path,
-        require_all_launched=False,
-    )
     stale_active_closeout = {
         **base,
         "capacity": 1,
@@ -1631,16 +1394,6 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(10, "close", id="B02"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "stale-active-closeout-refill",
-        stale_active_closeout,
-        expected_ids=["B01", "B02"],
-        dependencies={"B01": [], "B02": []},
-        capacity=1,
-        expect_pass=True,
-        manifest_path=manifest_path,
-    )
     partial_subset = {
         **base,
         "item_ids": ["B01", "B02", "B03"],
@@ -1655,17 +1408,32 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(8, "close", id="B01"),
         ],
     }
-    assert_scheduler_fixture(
-        status_validation,
-        "partial-subset-structured-closeout",
-        partial_subset,
-        expected_ids=["B01", "B02", "B03"],
-        dependencies={"B01": [], "B02": [], "B03": []},
-        capacity=2,
-        expect_pass=True,
-        manifest_path=manifest_path,
-        require_all_launched=False,
-    )
+    scheduler_cases = [
+        ("multi-branch-refill", multi_branch_refill, main_ids, main_deps, 2, True, True),
+        ("stuck-branch-continued-scheduling", stuck_branch_continues, main_ids, main_deps, 2, True, True),
+        ("stuck-worker-continued-scheduling", stuck_worker_continues, worker_ids, worker_deps, 2, True, True),
+        ("reviewer-feedback-worker-relaunch", reviewer_repair_relaunch, ["B01-W01"], {"B01-W01": []}, 1, True, True),
+        ("missing-refill-event", missing_refill, main_ids, main_deps, 2, False, True),
+        ("under-capacity-without-reason", under_capacity_without_reason, main_ids, main_deps, 2, False, True),
+        ("stale-scheduler-manifest-hash", stale_scheduler, main_ids, main_deps, 2, False, True),
+        ("vague-reason-code-rejection", vague_reason, main_ids, main_deps, 2, False, False),
+        ("dependency-failed-blocking", dependency_failed, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, True, False),
+        ("dependency-failed-wrong-reason", dependency_failed_wrong_reason, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, False, False),
+        ("stale-active-closeout-refill", stale_active_closeout, ["B01", "B02"], {"B01": [], "B02": []}, 1, True, True),
+        ("partial-subset-structured-closeout", partial_subset, main_ids, main_deps, 2, True, False),
+    ]
+    for label, ledger, expected_ids, dependencies, capacity, expect_pass, require_all_launched in scheduler_cases:
+        assert_scheduler_fixture(
+            status_validation,
+            label,
+            ledger,
+            expected_ids=expected_ids,
+            dependencies=dependencies,
+            capacity=capacity,
+            expect_pass=expect_pass,
+            manifest_path=manifest_path,
+            require_all_launched=require_all_launched,
+        )
 
 
 def run_scheduler_tick_fixture(tmp_path: Path) -> None:
@@ -2164,8 +1932,7 @@ def main() -> int:
             ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", stale_validator_bundle.as_posix(), "--no-write"],
             expect=1,
         )
-        assert_contains(stale_lint.stdout, "validate_branch_status.py command snippet must include", "stale validator command lint")
-        assert_contains(stale_lint.stdout, "validate_main_status.py command snippet must include", "stale validator command lint")
+        assert_all_contains(stale_lint.stdout, ["validate_branch_status.py command snippet must include", "validate_main_status.py command snippet must include"], "stale validator command lint")
         wrong_target_validator_bundle = tmp_path / "wrong-target-validator-command"
         shutil.copytree(bundle, wrong_target_validator_bundle)
         wrong_target_prompt = wrong_target_validator_bundle / "main.prompt.md"
@@ -2192,9 +1959,7 @@ def main() -> int:
             ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", wrong_target_validator_bundle.as_posix(), "--no-write"],
             expect=1,
         )
-        assert_contains(wrong_target_lint.stdout, "branches/Bxx.status.json", "wrong branch validator status target")
-        assert_contains(wrong_target_lint.stdout, "branches/B01.status.json", "wrong branch prompt validator status target")
-        assert_contains(wrong_target_lint.stdout, "validate_main_status.py command snippet", "wrong main validator status target")
+        assert_all_contains(wrong_target_lint.stdout, ["branches/Bxx.status.json", "branches/B01.status.json", "validate_main_status.py command snippet"], "wrong validator status target")
         stale_audit_dir = tmp_path / "stale-validator-audit"
         run(
             [
@@ -2225,12 +1990,9 @@ def main() -> int:
         ).stdout
         if len(compact_phase_manifest) >= len(full_phase_manifest):
             raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
-        assert_contains(compact_phase_manifest, "--manifest /abs/bundle/job.manifest.json", "compact phase manifest")
-        assert_contains(compact_phase_manifest, "rg/grep", "compact phase manifest")
-        assert_contains(main_phase_manifest, "watchdog", "main phase manifest")
-        assert_contains(main_phase_manifest, "orchestration_watchdog.main_no_completion_wait_limit", "main phase manifest")
-        assert_contains(full_phase_manifest, "watchdog", "branch phase manifest")
-        assert_contains(full_phase_manifest, "orchestration_watchdog.branch_no_completion_wait_limit", "branch phase manifest")
+        assert_all_contains(compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest")
+        assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit"], "main phase manifest")
+        assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
         brief_schema = json.loads(
             run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
         )
@@ -2300,8 +2062,7 @@ def main() -> int:
         if context_pack_result.stdout.strip() != context_pack_out.as_posix() or not context_pack_out.exists():
             raise SystemExit("context_pack.py --output should write the rendered pack and print its path")
         context_pack_text = context_pack_out.read_text(encoding="utf-8")
-        assert_contains(context_pack_text, "Context files to read first:", "context pack output")
-        assert_contains(context_pack_text, "- README.md", "default path-only context pack output")
+        assert_all_contains(context_pack_text, ["Context files to read first:", "- README.md"], "default path-only context pack output")
         assert_not_contains(context_pack_text, "BEGIN_CONTEXT_EXCERPT", "default path-only context pack output")
         context_pack_excerpt_out = tmp_path / "context-pack-excerpt.md"
         run(
@@ -2323,8 +2084,7 @@ def main() -> int:
             ]
         )
         context_pack_excerpt_text = context_pack_excerpt_out.read_text(encoding="utf-8")
-        assert_contains(context_pack_excerpt_text, "Deterministic context excerpts:", "worktree excerpt context pack output")
-        assert_contains(context_pack_excerpt_text, "BEGIN_CONTEXT_EXCERPT context-1: README.md", "worktree excerpt context pack output")
+        assert_all_contains(context_pack_excerpt_text, ["Deterministic context excerpts:", "BEGIN_CONTEXT_EXCERPT context-1: README.md"], "worktree excerpt context pack output")
         assert_not_contains(context_pack_excerpt_text, "Context files to read first:\n- README.md", "worktree excerpt context pack output")
         telemetry_bundle = tmp_path / "telemetry-pressure"
         telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
@@ -2424,8 +2184,7 @@ def main() -> int:
             ]
         )
         string_bullet_prompt = (string_bullet_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
-        assert_contains(string_bullet_prompt, "- Stop if public behavior tests fail.", "string bullet branch prompt")
-        assert_contains(string_bullet_prompt, "- Branch-level behavior remains compatible.", "string bullet branch prompt")
+        assert_all_contains(string_bullet_prompt, ["- Stop if public behavior tests fail.", "- Branch-level behavior remains compatible."], "string bullet branch prompt")
         if "- S\n- t\n- o\n- p" in string_bullet_prompt or "- B\n- r\n- a\n- n\n- c\n- h" in string_bullet_prompt:
             raise SystemExit("branch prompt split a string field into one bullet per character")
         run_scheduler_fixtures(bundle / "job.manifest.json")
@@ -2975,7 +2734,8 @@ def main() -> int:
                 (ROOT / "README.md").as_posix(),
                 "--task-file",
                 task_file.as_posix(),
-            ]
+            ],
+            env=offline_gemini_env(),
         )
         assert_compact_lite_launcher(tmp_path / "lite" / "B01-L01")
 

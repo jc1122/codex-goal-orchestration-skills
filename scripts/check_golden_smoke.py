@@ -12,7 +12,23 @@ import shutil
 import re
 from pathlib import Path
 
-from fixture_support import read_json, run_command, sha256_file, write_json
+from fixture_support import (
+    assert_all_contains,
+    assert_any_contains,
+    assert_compact_audit_launcher,
+    assert_compact_lite_launcher,
+    assert_compact_runtime_launcher,
+    assert_contains,
+    assert_shell_syntax,
+    attempt,
+    make_scheduler_event,
+    offline_gemini_env,
+    read_json,
+    run_command,
+    sha256_file,
+    telemetry,
+    write_json,
+)
 
 
 CHECKOUT_ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +41,7 @@ WORKER_PACKET = "B01-W01"
 RESEARCH_PACKET = "B01-W02"
 REVIEW_PACKET = "B01-R01"
 LITE_PACKET = "B01-L01"
+scheduler_event = make_scheduler_event("golden-offline-smoke")
 
 
 def run(
@@ -32,8 +49,9 @@ def run(
     *,
     expect: int = 0,
     cwd: Path | None = None,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    return run_command(command, root=CHECKOUT_ROOT, expect=expect, cwd=cwd)
+    return run_command(command, root=CHECKOUT_ROOT, expect=expect, cwd=cwd, env=env)
 
 
 def skill_script(skill: str, script: str) -> str:
@@ -58,97 +76,6 @@ def create_temp_repo(tmp_path: Path) -> Path:
     run(["git", "-C", repo.as_posix(), "add", "README.md"])
     run(["git", "-C", repo.as_posix(), "commit", "-m", "initial fixture"])
     return repo.resolve()
-
-
-def assert_compact_runtime_launcher(packet_dir: Path, role: str) -> dict:
-    launch_path = packet_dir / "launch.sh"
-    assert_shell_syntax(launch_path)
-    launch = launch_path.read_text(encoding="utf-8")
-    if "runtime_packet_runner.py" not in launch:
-        raise SystemExit(f"{role} launcher should delegate to runtime_packet_runner.py")
-    if len(launch) > 800:
-        raise SystemExit(f"{role} launcher should stay compact, got {len(launch)} chars")
-    config = read_json(packet_dir / "launch-config.json")
-    if config.get("role") != role:
-        raise SystemExit(f"{role} launch-config role mismatch: {config.get('role')!r}")
-    return config
-
-
-def assert_compact_lite_launcher(packet_dir: Path) -> dict:
-    launch_path = packet_dir / "launch.sh"
-    assert_shell_syntax(launch_path)
-    launch = launch_path.read_text(encoding="utf-8")
-    if "runtime_lite_runner.py" not in launch:
-        raise SystemExit("Lite launcher should delegate to runtime_lite_runner.py")
-    if '-p "$(cat "$prompt_path")"' in launch:
-        raise SystemExit("Lite launcher must not expose full prompt through command-line substitution")
-    if len(launch) > 800:
-        raise SystemExit(f"Lite launcher should stay compact, got {len(launch)} chars")
-    config = read_json(packet_dir / "launch-config.json")
-    if config.get("role") != "lite_advisor":
-        raise SystemExit(f"Lite launch-config role mismatch: {config.get('role')!r}")
-    if config.get("attempt_timeout_seconds") != 600:
-        raise SystemExit(f"Lite launch-config should preserve the 600 second attempt timeout: {config.get('attempt_timeout_seconds')!r}")
-    if config.get("timeout_kill_after_seconds") != 30:
-        raise SystemExit(f"Lite launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
-    if config.get("telemetry_name") != "telemetry.json":
-        raise SystemExit(f"Lite launch-config telemetry name mismatch: {config.get('telemetry_name')!r}")
-    if config.get("runner_prompt") != "Follow the complete Lite advisory packet instructions provided on stdin.":
-        raise SystemExit("Lite launch-config should preserve the stdin runner prompt")
-    if not isinstance(config.get("avoids_action"), str) or not config.get("avoids_action"):
-        raise SystemExit("Lite launch-config missing avoids_action")
-    if not isinstance(config.get("expected_savings_reason"), str) or not config.get("expected_savings_reason"):
-        raise SystemExit("Lite launch-config missing expected_savings_reason")
-    if not str(config.get("validation_script", "")).endswith("validate_lite_advice.py"):
-        raise SystemExit(f"Lite launch-config validation script mismatch: {config.get('validation_script')!r}")
-    if not str(config.get("telemetry_script", "")).endswith("extract_telemetry.py"):
-        raise SystemExit(f"Lite launch-config telemetry script mismatch: {config.get('telemetry_script')!r}")
-    attempts = config.get("attempts")
-    if not isinstance(attempts, list) or len(attempts) != 1:
-        raise SystemExit(f"Lite launch-config should contain exactly one attempt: {attempts!r}")
-    attempt = attempts[0]
-    if attempt.get("alias") != "gemini-lite":
-        raise SystemExit(f"Lite launch-config attempt alias mismatch: {attempt.get('alias')!r}")
-    if attempt.get("event_logs") != ["advice.raw.txt"]:
-        raise SystemExit(f"Lite launch-config event logs mismatch: {attempt.get('event_logs')!r}")
-    if attempt.get("timeout_seconds") != 600:
-        raise SystemExit(f"Lite attempt timeout mismatch: {attempt.get('timeout_seconds')!r}")
-    terminal_messages = config.get("terminal_messages")
-    if not isinstance(terminal_messages, dict) or "command_failed" not in terminal_messages:
-        raise SystemExit("Lite launch-config terminal messages missing")
-    return config
-
-
-def assert_compact_audit_launcher(packet_dir: Path) -> dict:
-    launch_path = packet_dir / "launch.sh"
-    assert_shell_syntax(launch_path)
-    launch = launch_path.read_text(encoding="utf-8")
-    if "runtime_prompt_audit_runner.py" not in launch:
-        raise SystemExit("audit launcher should delegate to runtime_prompt_audit_runner.py")
-    if len(launch) > 800:
-        raise SystemExit(f"audit launcher should stay compact, got {len(launch)} chars")
-    config = read_json(packet_dir / "launch-config.json")
-    if config.get("role") != "prompt-auditor":
-        raise SystemExit(f"audit launch-config role mismatch: {config.get('role')!r}")
-    if config.get("attempt_timeout_seconds") != 1200:
-        raise SystemExit(f"audit launch-config should preserve the 1200 second attempt timeout: {config.get('attempt_timeout_seconds')!r}")
-    if config.get("timeout_kill_after_seconds") != 30:
-        raise SystemExit(f"audit launch-config kill-after mismatch: {config.get('timeout_kill_after_seconds')!r}")
-    attempts = config.get("attempts")
-    if not isinstance(attempts, list) or len(attempts) != 2:
-        raise SystemExit(f"audit launch-config should contain two attempts: {attempts!r}")
-    aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
-    if aliases != ["gpt-5.5", "gpt-5.4"]:
-        raise SystemExit(f"audit launch-config aliases mismatch: {aliases!r}")
-    event_logs = [
-        log
-        for attempt in attempts
-        if isinstance(attempt, dict)
-        for log in attempt.get("event_logs", [])
-    ]
-    if event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
-        raise SystemExit(f"audit launch-config event logs mismatch: {event_logs!r}")
-    return config
 
 
 def _expand_prompt_path(value: str, variables: dict[str, str]) -> str:
@@ -273,16 +200,6 @@ def assert_prompt_render_command_uses_absolute_paths(bundle: Path) -> None:
     )
 
 
-def scheduler_event(seq: int, event: str, **kwargs) -> dict:
-    return {
-        "seq": seq,
-        "timestamp": f"2026-05-29T00:00:{seq:02d}Z",
-        "runtime_ref": "golden-offline-smoke",
-        "event": event,
-        **kwargs,
-    }
-
-
 def write_scheduler_ledgers(bundle: Path) -> None:
     run(
         [
@@ -344,32 +261,6 @@ def write_scheduler_ledgers(bundle: Path) -> None:
     )
 
 
-def telemetry(packet_id: str, role: str, output_name: str, *, accepted_alias: str | None, attempts: list[dict]) -> dict:
-    called_count = sum(1 for item in attempts if item.get("called") is True)
-    return {
-        "schema_version": 1,
-        "packet_id": packet_id,
-        "role": role,
-        "output_artifact": output_name,
-        "prompt_artifact": "prompt.md",
-        "prompt_chars": 1,
-        "prompt_bytes": 1,
-        "output_chars": 1,
-        "output_bytes": 1,
-        "event_log_chars": 0,
-        "event_log_bytes": 0,
-        "accepted_alias": accepted_alias,
-        "attempts": attempts,
-        "totals": {
-            "attempts_declared": len(attempts),
-            "attempts_called": called_count,
-            "event_log_chars": 0,
-            "event_log_bytes": 0,
-            "known_usage": None,
-        },
-    }
-
-
 def create_amendment_decision(
     bundle: Path,
     amendment_id: str,
@@ -428,32 +319,6 @@ def recommend_amendment_decision(bundle: Path, amendment_id: str) -> dict:
         "packet_validation_path": f"amendments/{amendment_id}.packet/packet.validation.json"
         if recommendation["decision"] == "launch"
         else None,
-    }
-
-
-def attempt(
-    *,
-    alias: str,
-    provider: str,
-    model: str,
-    command: str,
-    timeout_seconds: int,
-    called: bool,
-    accepted: bool,
-    effort: str | None = None,
-) -> dict:
-    return {
-        "alias": alias,
-        "provider": provider,
-        "model": model,
-        "effort": effort,
-        "command": command,
-        "timeout_seconds": timeout_seconds,
-        "called": called,
-        "accepted": accepted,
-        "event_logs": [],
-        "probe_logs": [],
-        "usage": None,
     }
 
 
@@ -1307,8 +1172,7 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
         ],
         expect=1,
     )
-    if "manifest_sha256" not in strict_branch.stdout and "semantic_input_hashes.job.manifest.json" not in strict_branch.stdout:
-        raise SystemExit("strict branch validation did not fail on stale manifest evidence after amendment")
+    assert_any_contains(strict_branch.stdout, ["manifest_sha256", "semantic_input_hashes.job.manifest.json"], "strict branch stale manifest fixture")
     run(
         [
             "python3",
@@ -1491,10 +1355,6 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
     if not (target_bundle / "branches" / "B02.prompt.md").exists():
         raise SystemExit("deterministic blocker repair did not regenerate B02 prompt")
     run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
-
-
-def assert_shell_syntax(path: Path) -> None:
-    run(["bash", "-n", path.as_posix()])
 
 
 def assert_summary(bundle: Path) -> None:
@@ -1720,7 +1580,8 @@ def main() -> int:
                 (REPO_ROOT / "README.md").as_posix(),
                 "--task-file",
                 task_file.as_posix(),
-            ]
+            ],
+            env=offline_gemini_env(),
         )
         assert_compact_lite_launcher(bundle / "lite" / LITE_PACKET)
 
@@ -1833,8 +1694,7 @@ def main() -> int:
             ],
             expect=1,
         )
-        if "semantic_input_hashes" not in mismatch_result.stdout:
-            raise SystemExit("reviewer reuse/hash mismatch fixture did not fail on semantic_input_hashes")
+        assert_contains(mismatch_result.stdout, "semantic_input_hashes", "reviewer reuse/hash mismatch fixture")
 
         route_mismatch_bundle = tmp_path / "reviewer-route-telemetry-mismatch"
         shutil.copytree(bundle, route_mismatch_bundle)
@@ -1844,8 +1704,7 @@ def main() -> int:
         telemetry_data["accepted_alias"] = "gpt-5.5"
         write_json(route_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json", telemetry_data)
         route_mismatch_result = validate_branch(route_mismatch_bundle, expect=1)
-        if "route.json selected_ladder" not in route_mismatch_result.stdout and "must be one of" not in route_mismatch_result.stdout:
-            raise SystemExit("reviewer route/telemetry mismatch fixture did not fail on route aliases")
+        assert_any_contains(route_mismatch_result.stdout, ["route.json selected_ladder", "must be one of"], "reviewer route/telemetry mismatch fixture")
 
         worker_cost_misuse_bundle = tmp_path / "worker-route-class-cost-misuse"
         shutil.copytree(bundle, worker_cost_misuse_bundle)
@@ -1887,8 +1746,7 @@ def main() -> int:
                 item["selection_reason"] = expensive_reason
         write_json(worker_cost_misuse_bundle / "branches" / "B01.status.json", worker_cost_status)
         worker_cost_result = validate_branch(worker_cost_misuse_bundle, expect=1)
-        if "route_class 'normal-code'" not in worker_cost_result.stdout or "premium/full" not in worker_cost_result.stdout:
-            raise SystemExit("worker route-class cost misuse fixture did not fail on premium route aliases")
+        assert_all_contains(worker_cost_result.stdout, ["route_class 'normal-code'", "premium/full"], "worker route-class cost misuse fixture")
 
         missing_worker_gate_bundle = tmp_path / "pre-review-gate-missing-worker-evidence"
         shutil.copytree(bundle, missing_worker_gate_bundle)
@@ -1897,8 +1755,7 @@ def main() -> int:
         missing_worker_gate["checks"].pop("worker_evidence", None)
         write_json(missing_worker_gate_bundle / "branches" / "B01.pre_review_gate.json", missing_worker_gate)
         missing_worker_gate_result = validate_branch(missing_worker_gate_bundle, expect=1)
-        if "worker_evidence" not in missing_worker_gate_result.stdout:
-            raise SystemExit("pre-review gate fixture did not fail when worker_evidence was missing")
+        assert_contains(missing_worker_gate_result.stdout, "worker_evidence", "pre-review gate missing worker evidence fixture")
 
         reuse_bundle = tmp_path / "reviewer-reuse-valid"
         make_reuse_bundle(bundle, reuse_bundle, input_hashes)
@@ -1909,8 +1766,7 @@ def main() -> int:
         rewrite_copied_branch_paths(missing_reuse_source_bundle)
         (missing_reuse_source_bundle / "reviewers" / "B01-R00" / "telemetry.json").unlink()
         missing_reuse_result = validate_branch(missing_reuse_source_bundle, expect=1)
-        if "source_telemetry_path" not in missing_reuse_result.stdout:
-            raise SystemExit("reviewer reuse missing telemetry fixture did not fail on source_telemetry_path")
+        assert_contains(missing_reuse_result.stdout, "source_telemetry_path", "reviewer reuse missing telemetry fixture")
 
         partial_branch_bundle = tmp_path / "partial-branch-subset"
         make_partial_branch_bundle(bundle, partial_branch_bundle, worker)
@@ -1936,8 +1792,7 @@ def main() -> int:
             ],
             expect=1,
         )
-        if "before reviewer launch" not in partial_gate_result.stdout:
-            raise SystemExit("partial worker evidence fixture did not fail the pre-review gate")
+        assert_contains(partial_gate_result.stdout, "before reviewer launch", "partial worker evidence fixture")
 
         refill_bundle = tmp_path / "assembler-refill-events"
         make_refill_assembly_bundle(bundle, refill_bundle)
@@ -1965,8 +1820,7 @@ def main() -> int:
             ],
             expect=1,
         )
-        if "stale" not in stale_result.stdout:
-            raise SystemExit("stale telemetry fixture did not fail on stale summary evidence")
+        assert_contains(stale_result.stdout, "stale", "stale telemetry fixture")
 
         freshness_bundle = tmp_path / "worktree-freshness-stale"
         shutil.copytree(bundle, freshness_bundle)
@@ -1974,8 +1828,7 @@ def main() -> int:
         original_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
         (REPO_ROOT / "README.md").write_text(original_readme + "\nUnreviewed freshness fixture change.\n", encoding="utf-8")
         freshness_result = validate_branch(freshness_bundle, expect=1)
-        if "worktree_freshness" not in freshness_result.stdout:
-            raise SystemExit("worktree freshness fixture did not fail on changed current file content")
+        assert_contains(freshness_result.stdout, "worktree_freshness", "worktree freshness fixture")
 
     print("status=pass")
     return 0

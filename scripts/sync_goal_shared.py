@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -31,6 +32,11 @@ SHARED_SCRIPTS = (
     "check_goal_skill_availability.py",
 )
 SHARED_REFERENCES = ("lite-advisor-contract.md",)
+CHECKED_IN_WRAPPER_RATIONALE = (
+    "Skill SKILL.md files, generated phase manifests, and installed-skill workflows call "
+    "skill-local script paths directly; checked-in wrappers keep those paths executable "
+    "while delegating implementation to skills/_goal_shared."
+)
 
 
 SCRIPT_WRAPPER_TEMPLATE = """#!/usr/bin/env python3
@@ -98,9 +104,25 @@ def expected_files() -> dict[Path, str]:
     return files
 
 
+def summary_payload(*, drift: list[Path]) -> dict:
+    wrapper_count = len(SKILLS) * len(SHARED_SCRIPTS)
+    reference_wrapper_count = len(SKILLS) * len(SHARED_REFERENCES)
+    return {
+        "status": "failed" if drift else "pass",
+        "skills": list(SKILLS),
+        "shared_scripts": list(SHARED_SCRIPTS),
+        "shared_references": list(SHARED_REFERENCES),
+        "generated_script_wrappers": wrapper_count,
+        "generated_reference_wrappers": reference_wrapper_count,
+        "checked_in_wrapper_rationale": CHECKED_IN_WRAPPER_RATIONALE,
+        "drift": [path.relative_to(ROOT).as_posix() for path in drift],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="Rewrite generated wrappers.")
+    parser.add_argument("--json", action="store_true", help="Print wrapper ownership and drift details as JSON.")
     args = parser.parse_args()
 
     drift: list[Path] = []
@@ -115,12 +137,16 @@ def main() -> int:
         if actual != expected:
             drift.append(path)
 
-    if drift:
+    if args.json:
+        print(json.dumps(summary_payload(drift=drift), indent=2, sort_keys=True))
+    elif drift:
         print("status=failed")
         for path in drift:
             print(f"- generated wrapper drift: {path.relative_to(ROOT)}")
+    else:
+        print("status=pass")
+    if drift:
         return 1
-    print("status=pass")
     return 0
 
 

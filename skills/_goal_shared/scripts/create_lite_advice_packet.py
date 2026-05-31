@@ -15,6 +15,7 @@ from pathlib import Path
 
 
 BRANCH_LITE_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*-L[A-Za-z0-9_.-]+$")
+SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 LITE_MODEL = "gemini-3.1-flash-lite-preview"
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "plan"
@@ -106,7 +107,37 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def offline_gemini_metadata_from_env() -> tuple[str, str, str] | None:
+    if os.environ.get("GOAL_LITE_OFFLINE_GEMINI_METADATA") != "1":
+        return None
+    gemini_path = os.environ.get("GOAL_LITE_GEMINI_PATH", "").strip()
+    gemini_version = os.environ.get("GOAL_LITE_GEMINI_VERSION", "").strip()
+    gemini_sha256 = os.environ.get("GOAL_LITE_GEMINI_SHA256", "").strip()
+    missing = [
+        name
+        for name, value in (
+            ("GOAL_LITE_GEMINI_PATH", gemini_path),
+            ("GOAL_LITE_GEMINI_VERSION", gemini_version),
+            ("GOAL_LITE_GEMINI_SHA256", gemini_sha256),
+        )
+        if not value
+    ]
+    if missing:
+        raise SystemExit(f"offline Gemini metadata mode missing: {', '.join(missing)}")
+    path = Path(gemini_path)
+    if "\\" in gemini_path or not path.is_absolute() or ".." in path.parts:
+        raise SystemExit("GOAL_LITE_GEMINI_PATH must be an absolute path without traversal")
+    if gemini_version == "unavailable":
+        raise SystemExit("GOAL_LITE_GEMINI_VERSION must be a captured fixture version")
+    if not SHA256_RE.fullmatch(gemini_sha256):
+        raise SystemExit("GOAL_LITE_GEMINI_SHA256 must match sha256:<64 lowercase hex chars>")
+    return gemini_path, gemini_version, gemini_sha256
+
+
 def resolve_gemini() -> tuple[str, str, str]:
+    offline_metadata = offline_gemini_metadata_from_env()
+    if offline_metadata is not None:
+        return offline_metadata
     executable = shutil.which(GEMINI_COMMAND)
     if executable is None:
         return "", "unavailable", "unavailable"
