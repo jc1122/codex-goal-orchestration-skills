@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "git_head": "f3e5e35",
-    "source_fingerprint": "sha256:1f92256e990dbcd55c7642a01d5d5624be7a3bcebbc03baca35ecc121be09f48"
+    "git_head": "f8e7126",
+    "source_fingerprint": "sha256:a80cd601a3d5d5aad08384237e663892428c2472e15f194aaf9caeae41d17371"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -190,6 +190,8 @@
         "skills/goal-branch-orchestrator/scripts/append_scheduler_event.py",
         "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
         "skills/goal-branch-orchestrator/scripts/check_goal_skill_availability.py",
+        "skills/goal-branch-orchestrator/scripts/check_model_catalog.py",
+        "skills/goal-branch-orchestrator/scripts/context_pack.py",
         "skills/goal-branch-orchestrator/scripts/create_lite_advice_packet.py",
         "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
         "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
@@ -229,6 +231,8 @@
         "skills/goal-main-orchestrator/references/lite-advisor-contract.md",
         "skills/goal-main-orchestrator/scripts/append_scheduler_event.py",
         "skills/goal-main-orchestrator/scripts/check_goal_skill_availability.py",
+        "skills/goal-main-orchestrator/scripts/check_model_catalog.py",
+        "skills/goal-main-orchestrator/scripts/context_pack.py",
         "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
         "skills/goal-main-orchestrator/scripts/create_lite_advice_packet.py",
         "skills/goal-main-orchestrator/scripts/extract_telemetry.py",
@@ -271,6 +275,8 @@
         "skills/goal-plan-amender/scripts/amendment_lib.py",
         "skills/goal-plan-amender/scripts/append_scheduler_event.py",
         "skills/goal-plan-amender/scripts/check_goal_skill_availability.py",
+        "skills/goal-plan-amender/scripts/check_model_catalog.py",
+        "skills/goal-plan-amender/scripts/context_pack.py",
         "skills/goal-plan-amender/scripts/create_lite_advice_packet.py",
         "skills/goal-plan-amender/scripts/extract_telemetry.py",
         "skills/goal-plan-amender/scripts/scheduler_tick.py",
@@ -308,6 +314,8 @@
         "skills/goal-preflight/references/lite-advisor-contract.md",
         "skills/goal-preflight/scripts/append_scheduler_event.py",
         "skills/goal-preflight/scripts/check_goal_skill_availability.py",
+        "skills/goal-preflight/scripts/check_model_catalog.py",
+        "skills/goal-preflight/scripts/context_pack.py",
         "skills/goal-preflight/scripts/create_goal_bundle.py",
         "skills/goal-preflight/scripts/create_lite_advice_packet.py",
         "skills/goal-preflight/scripts/extract_telemetry.py",

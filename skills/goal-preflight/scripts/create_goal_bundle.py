@@ -328,13 +328,23 @@ def normalize_brief(brief: dict) -> dict:
         branch_name = require_branch_name(original.get("branch_name") or f"{job_id}-{bid.lower()}")
         worktree_path = require_relative_path(original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path")
         max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
+        original_worker_parallelism = original.get("worker_parallelism") if isinstance(original.get("worker_parallelism"), dict) else {}
         worker_serial_reason = nonempty_text(original.get("worker_serial_reason"))
-        worker_serial_reasons = normalize_reason_list(original.get("worker_serial_reasons"), worker_serial_reason)
-        worker_parallelization_rationale = nonempty_text(original.get("worker_parallelization_rationale"))
+        worker_serial_reasons = normalize_reason_list(
+            original.get("worker_serial_reasons", original_worker_parallelism.get("serial_reasons")),
+            worker_serial_reason,
+        )
+        worker_parallelization_rationale = (
+            nonempty_text(original.get("worker_parallelization_rationale"))
+            or nonempty_text(original_worker_parallelism.get("parallelization_rationale"))
+        )
         work_items = normalize_work_items(original.get("work_items", []), bid)
         owned_paths = derived_owned_paths(work_items)
         if max_workers < MAX_WORKER_PACKETS_PER_BRANCH and not worker_serial_reasons:
-            raise SystemExit(f"branch {bid} max_active_worker_packets below 4 requires worker_serial_reasons")
+            raise SystemExit(
+                f"branch {bid} max_active_worker_packets below 4 requires "
+                "branches[].worker_serial_reasons or branches[].worker_parallelism.serial_reasons"
+            )
         if len(work_items) == 1 and max_workers > 1 and not worker_serial_reasons:
             raise SystemExit(f"branch {bid} has one worker but max_active_worker_packets > 1; add worker_serial_reasons or lower the cap")
         if ready_width(work_items) < min(max_workers, len(work_items)) and not worker_serial_reasons:

@@ -358,6 +358,36 @@ if data["status"] == "pass":
 PY
 }}
 
+audit_failure_summary() {{
+  python3 - <<'PY'
+from pathlib import Path
+
+logs = []
+for name in ["events-primary.jsonl", "events-fallback.jsonl"]:
+    path = Path(name)
+    if not path.exists():
+        logs.append(name + ": missing")
+        continue
+    text = path.read_text(encoding="utf-8", errors="replace")
+    lowered = text.lower()
+    if "read-only file system" in lowered:
+        logs.append(name + ": codex-init-read-only-filesystem")
+    elif "unsupported" in lowered and "model" in lowered:
+        logs.append(name + ": model-unsupported")
+    elif "timed out" in lowered or "timeout" in lowered:
+        logs.append(name + ": timeout")
+    elif "schema" in lowered:
+        logs.append(name + ": schema-or-output-invalid")
+    elif text.strip():
+        tail = " | ".join(line.strip() for line in text.splitlines()[-5:] if line.strip())
+        logs.append(name + ": " + tail[:500])
+    else:
+        logs.append(name + ": empty")
+
+print("Prompt audit primary and fallback failed without producing a valid prompt-audit.json. failure_fingerprints=" + "; ".join(logs))
+PY
+}}
+
 {telemetry}
 
 write_terminal_audit() {{
@@ -419,7 +449,7 @@ if [ -s "$output_path" ] && valid_audit; then
   exit 1
 fi
 
-write_terminal_audit "Prompt audit primary and fallback failed without producing a valid prompt-audit.json."
+write_terminal_audit "$(audit_failure_summary)"
 write_telemetry
 exit 1
 """

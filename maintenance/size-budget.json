@@ -65,11 +65,11 @@
       "path": "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py"
     },
     {
-      "approx_tokens": 8192,
-      "bytes": 32768,
-      "chars": 32768,
+      "approx_tokens": 8304,
+      "bytes": 33214,
+      "chars": 33214,
       "files": 1,
-      "lines": 661,
+      "lines": 671,
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py"
     },
     {
@@ -143,11 +143,11 @@
       "lines": 5002
     },
     "goal-main-orchestrator": {
-      "approx_tokens": 42052,
-      "bytes": 168206,
-      "chars": 168206,
+      "approx_tokens": 42308,
+      "bytes": 169234,
+      "chars": 169234,
       "files": 18,
-      "lines": 3139
+      "lines": 3169
     },
     "goal-plan-amender": {
       "approx_tokens": 32908,
@@ -157,42 +157,42 @@
       "lines": 2962
     },
     "goal-preflight": {
-      "approx_tokens": 38994,
-      "bytes": 155975,
-      "chars": 155975,
+      "approx_tokens": 39105,
+      "bytes": 156421,
+      "chars": 156421,
       "files": 20,
-      "lines": 2801
+      "lines": 2811
     }
   },
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 231947,
-      "bytes": 927787,
-      "chars": 927787,
+      "approx_tokens": 232315,
+      "bytes": 929261,
+      "chars": 929261,
       "files": 74,
-      "lines": 21838
+      "lines": 21878
     },
     "skill_python": {
-      "approx_tokens": 181502,
-      "bytes": 726006,
-      "chars": 726006,
+      "approx_tokens": 181870,
+      "bytes": 727480,
+      "chars": 727480,
       "files": 65,
-      "lines": 16523
+      "lines": 16563
     },
     "skills": {
-      "approx_tokens": 220280,
-      "bytes": 881121,
-      "chars": 881121,
+      "approx_tokens": 220649,
+      "bytes": 882595,
+      "chars": 882595,
       "files": 87,
-      "lines": 18513
+      "lines": 18553
     },
     "tracked": {
-      "approx_tokens": 284596,
-      "bytes": 1138386,
-      "chars": 1138386,
+      "approx_tokens": 285096,
+      "bytes": 1140386,
+      "chars": 1140386,
       "files": 112,
-      "lines": 25164
+      "lines": 25212
     }
   },
   "skill_docs": {
