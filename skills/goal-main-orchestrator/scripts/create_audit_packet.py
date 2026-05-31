@@ -274,6 +274,7 @@ def audit_launch_config(manifest_path: Path, repo_root: Path) -> dict:
             "missing_runtime_file": "Prompt audit runtime input file is missing.",
             "command_failed": "Prompt audit command failed before producing a valid prompt-audit.json.",
             "invalid_output": "Prompt audit did not produce a valid prompt-audit.json artifact.",
+            "interrupted": "Prompt audit runner was interrupted before producing a valid prompt-audit.json.",
         },
     }
 

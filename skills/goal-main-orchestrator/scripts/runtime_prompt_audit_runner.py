@@ -5,13 +5,18 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 from typing import Any
 
 
 CONFIG_NAME = "launch-config.json"
+ACTIVE_PROCESS: subprocess.Popen[bytes] | None = None
+ACTIVE_PACKET_DIR: Path | None = None
+ACTIVE_CONFIG: dict[str, Any] | None = None
 REQUIRED_AUDIT_KEYS = {
     "manifest",
     "repo_root",
@@ -224,6 +229,7 @@ def run_with_timeout(
     prompt_path: Path,
     log_path: Path,
 ) -> int:
+    global ACTIVE_PROCESS
     if shutil.which("timeout") is None:
         log_path.write_text("timeout command not found; refusing unbounded prompt-audit attempt.\n", encoding="utf-8")
         return 127
@@ -236,21 +242,24 @@ def run_with_timeout(
     ]
     try:
         with prompt_path.open("rb") as stdin, log_path.open("wb") as stdout:
-            result = subprocess.run(
+            process = subprocess.Popen(
                 full_command,
                 cwd=cwd,
                 stdin=stdin,
                 stdout=stdout,
                 stderr=subprocess.STDOUT,
-                check=False,
+                start_new_session=True,
             )
+            ACTIVE_PROCESS = process
+            return process.wait()
     except FileNotFoundError as exc:
         log_path.write_text(f"prompt-audit command unavailable: {exc}\n", encoding="utf-8")
         return 127
     except Exception as exc:  # noqa: BLE001
         log_path.write_text(f"prompt-audit command failed before launch: {exc}\n", encoding="utf-8")
         return 1
-    return result.returncode
+    finally:
+        ACTIVE_PROCESS = None
 
 
 def candidate_event_texts(event: object) -> list[str]:
@@ -308,6 +317,7 @@ def terminal_message(config: dict[str, Any], key: str) -> str:
         "missing_runtime_file": "Prompt audit runtime input file is missing.",
         "command_failed": "Prompt audit command failed before producing a valid prompt-audit.json.",
         "invalid_output": "Prompt audit did not produce a valid prompt-audit.json artifact.",
+        "interrupted": "Prompt audit runner was interrupted before producing a valid prompt-audit.json.",
     }
     return defaults[key]
 
@@ -376,12 +386,42 @@ def repo_is_valid(path: Path) -> bool:
     return result.returncode == 0
 
 
+def terminate_active_process() -> None:
+    process = ACTIVE_PROCESS
+    if process is None or process.poll() is not None:
+        return
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except Exception:  # noqa: BLE001
+        try:
+            process.terminate()
+        except Exception:  # noqa: BLE001
+            return
+
+
+def handle_interrupt(signum: int, _frame: object) -> None:
+    terminate_active_process()
+    if ACTIVE_PACKET_DIR is not None and ACTIVE_CONFIG is not None:
+        write_terminal_audit(
+            ACTIVE_PACKET_DIR,
+            ACTIVE_CONFIG,
+            f"{terminal_message(ACTIVE_CONFIG, 'interrupted')} signal={signum}",
+        )
+        write_telemetry(ACTIVE_PACKET_DIR, ACTIVE_CONFIG)
+    raise SystemExit(128 + signum)
+
+
 def run_packet(packet_dir: Path) -> int:
+    global ACTIVE_CONFIG, ACTIVE_PACKET_DIR
     config = read_json(packet_dir / CONFIG_NAME)
     if config.get("schema_version") != 1:
         raise SystemExit(f"{CONFIG_NAME} schema_version must be 1")
     if config.get("role") != "prompt-auditor":
         raise SystemExit(f"{CONFIG_NAME} role must be 'prompt-auditor'")
+    ACTIVE_PACKET_DIR = packet_dir
+    ACTIVE_CONFIG = config
+    signal.signal(signal.SIGTERM, handle_interrupt)
+    signal.signal(signal.SIGINT, handle_interrupt)
 
     clean_outputs(packet_dir, config)
     output_path = packet_path(packet_dir, config, "output_name")

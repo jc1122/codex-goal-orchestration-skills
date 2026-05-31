@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import hashlib
 import importlib.util
 from pathlib import Path
@@ -2318,6 +2319,53 @@ def main() -> int:
         blocked_audit = read_json(tmp_path / "audit" / "prompt-audit.json")
         if blocked_audit.get("status") != "blocked" or blocked_audit.get("can_start") is not False:
             raise SystemExit(f"fake-codex audit launcher did not write a terminal blocked audit: {blocked_audit!r}")
+
+        audit_signal = tmp_path / "audit-signal"
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--out-dir",
+                audit_signal.as_posix(),
+            ]
+        )
+        fake_codex.write_text("#!/usr/bin/env bash\nsleep 30\n", encoding="utf-8")
+        fake_codex.chmod(0o755)
+        process = subprocess.Popen(
+            [(audit_signal / "launch.sh").as_posix()],
+            cwd=ROOT,
+            env=audit_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        time.sleep(0.5)
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            raise SystemExit("audit launcher did not exit after SIGTERM")
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+                "--audit",
+                (audit_signal / "prompt-audit.json").as_posix(),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+            ]
+        )
+        interrupted_audit = read_json(audit_signal / "prompt-audit.json")
+        interrupted_summary = str(interrupted_audit.get("summary", ""))
+        if interrupted_audit.get("status") != "blocked" or "interrupted" not in interrupted_summary:
+            raise SystemExit(f"SIGTERM audit launcher did not write interrupted blocked audit: {interrupted_audit!r}")
 
         run(
             [

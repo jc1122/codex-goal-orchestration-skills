@@ -1,11 +1,11 @@
 {
   "largest_files": [
     {
-      "approx_tokens": 25217,
-      "bytes": 100867,
-      "chars": 100867,
+      "approx_tokens": 25672,
+      "bytes": 102687,
+      "chars": 102687,
       "files": 1,
-      "lines": 2506,
+      "lines": 2554,
       "path": "scripts/check_preparedness_fixtures.py"
     },
     {
@@ -143,11 +143,11 @@
       "lines": 5391
     },
     "goal-main-orchestrator": {
-      "approx_tokens": 41286,
-      "bytes": 165144,
-      "chars": 165144,
+      "approx_tokens": 41656,
+      "bytes": 166626,
+      "chars": 166626,
       "files": 21,
-      "lines": 3297
+      "lines": 3338
     },
     "goal-plan-amender": {
       "approx_tokens": 32301,
@@ -167,32 +167,32 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 259229,
-      "bytes": 1036915,
-      "chars": 1036915,
+      "approx_tokens": 260054,
+      "bytes": 1040217,
+      "chars": 1040217,
       "files": 86,
-      "lines": 24156
+      "lines": 24245
     },
     "skill_python": {
-      "approx_tokens": 201390,
-      "bytes": 805559,
-      "chars": 805559,
+      "approx_tokens": 201760,
+      "bytes": 807041,
+      "chars": 807041,
       "files": 77,
-      "lines": 18310
+      "lines": 18351
     },
     "skills": {
-      "approx_tokens": 226031,
-      "bytes": 904125,
-      "chars": 904125,
+      "approx_tokens": 226402,
+      "bytes": 905607,
+      "chars": 905607,
       "files": 99,
-      "lines": 19649
+      "lines": 19690
     },
     "tracked": {
-      "approx_tokens": 299484,
-      "bytes": 1197936,
-      "chars": 1197936,
+      "approx_tokens": 300310,
+      "bytes": 1201238,
+      "chars": 1201238,
       "files": 124,
-      "lines": 26910
+      "lines": 26999
     }
   },
   "skill_docs": {
