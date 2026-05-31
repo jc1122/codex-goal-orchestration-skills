@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:5bbb2c30aa0993b43ab4f67a2d7f0ca09dfca356b3cc881e252a28cfef5b0df8"
+    "source_fingerprint": "sha256:7939159f9e813fd33f10f14a2e5ccb0d9a404659111a4206f629b87514b66cd0"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -227,6 +227,7 @@
         "skills/goal-branch-orchestrator/scripts/runtime_lite_runner.py",
         "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
+        "skills/goal-branch-orchestrator/scripts/script_only_repair_gate.py",
         "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
         "skills/goal-branch-orchestrator/scripts/validate_lite_advice.py"
       ]
@@ -269,6 +270,7 @@
         "skills/goal-main-orchestrator/scripts/runtime_lite_runner.py",
         "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
+        "skills/goal-main-orchestrator/scripts/script_only_repair_gate.py",
         "skills/goal-main-orchestrator/scripts/validate_lite_advice.py",
         "skills/goal-main-orchestrator/scripts/validate_main_status.py",
         "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py"
@@ -314,6 +316,7 @@
         "skills/goal-plan-amender/scripts/runtime_lite_runner.py",
         "skills/goal-plan-amender/scripts/runtime_phase_manifest.py",
         "skills/goal-plan-amender/scripts/scheduler_tick.py",
+        "skills/goal-plan-amender/scripts/script_only_repair_gate.py",
         "skills/goal-plan-amender/scripts/validate_lite_advice.py"
       ]
     },
@@ -352,6 +355,7 @@
         "skills/goal-preflight/scripts/runtime_lite_runner.py",
         "skills/goal-preflight/scripts/runtime_phase_manifest.py",
         "skills/goal-preflight/scripts/scheduler_tick.py",
+        "skills/goal-preflight/scripts/script_only_repair_gate.py",
         "skills/goal-preflight/scripts/validate_lite_advice.py"
       ]
     },
