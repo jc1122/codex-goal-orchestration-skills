@@ -59,6 +59,8 @@ REQUIRED_PACKAGE_FILES = {
     "skills/goal-branch-orchestrator/SKILL.md",
     "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
     "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+    "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+    "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
     "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py",
     "skills/goal-main-orchestrator/SKILL.md",
     "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py",

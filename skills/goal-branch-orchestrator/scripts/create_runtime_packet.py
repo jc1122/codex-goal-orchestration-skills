@@ -275,6 +275,25 @@ def telemetry_function(role: str, packet_id: str, output_name: str, attempts: li
     )
 
 
+def runtime_runner_path() -> Path:
+    return Path(__file__).resolve().parent / "runtime_packet_runner.py"
+
+
+def compact_launch_script() -> str:
+    runner = runtime_runner_path()
+    return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")"
+runner={shell_quote(runner.as_posix())}
+if [[ ! -f "$runner" ]]; then
+  echo "runtime packet runner missing: $runner" >&2
+  exit 127
+fi
+exec python3 "$runner" --packet-dir "$(pwd)"
+"""
+
+
 def exact_string_schema(value: str) -> dict:
     return {"type": "string", "const": value}
 
@@ -913,219 +932,11 @@ def launch_for(
     review_semantic_hashes: dict[str, str] | None = None,
     review_reuse_policy: dict | None = None,
 ) -> str:
-    sandbox = "read-only" if role == "reviewer" else "workspace-write"
     if role == "research-worker":
-        research_telemetry = telemetry_function("research-worker", packet_id, output_name, research_telemetry_attempts())
-        return f"""#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-
-git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
-
-packet_dir="$(pwd)"
-output_path="$packet_dir/{output_name}"
-attempt_timeout_seconds={RESEARCH_ATTEMPT_TIMEOUT_SECONDS}
-timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
-rm -f "$output_path" "$packet_dir/events-primary.jsonl" "$packet_dir/events-fallback.jsonl" "$packet_dir/telemetry.json"
-
-run_with_timeout() {{
-  local seconds="$1"
-  shift
-  if ! command -v timeout >/dev/null 2>&1; then
-    echo "timeout command not found; refusing unbounded research-worker attempt." >&2
-    return 127
-  fi
-  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
-}}
-
-write_terminal_research() {{
-  local message="$1"
-  python3 - "$output_path" {shell_quote(packet_id)} {shell_quote(branch)} {shell_quote(worktree)} "$message" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-output_path = Path(sys.argv[1])
-packet_id = sys.argv[2]
-branch = sys.argv[3]
-worktree = sys.argv[4]
-message = sys.argv[5]
-data = {{
-    "packet_id": packet_id,
-    "role": "research-worker",
-    "status": "blocked",
-    "branch": branch,
-    "worktree": worktree,
-    "search_queries": [],
-    "source_urls": [],
-    "tools_used": [],
-    "local_files_read": [],
-    "commands_run": [
-        "codex --search exec --ephemeral -m {RESEARCH_MODEL} -s read-only --json --output-schema research.schema.json -o research.json",
-        "codex --search exec --ephemeral -m {RESEARCH_FALLBACK_MODEL} -s read-only --json --output-schema research.schema.json -o research.json",
-    ],
-    "findings": [message],
-    "blockers": [message, "Inspect research-worker event logs in this packet directory for the underlying CLI or schema error."],
-    "handoff": message + " Inspect research-worker event logs in this packet directory for the underlying CLI or schema error.",
-}}
-output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-PY
-}}
-
-{research_telemetry}
-
-run_model() {{
-  local label="$1"
-  local model="$2"
-  run_with_timeout "$attempt_timeout_seconds" codex --search exec --ephemeral \\
-    -m "$model" \\
-    -C {shell_quote(worktree)} \\
-    -s read-only \\
-    --json \\
-    --output-schema "$(pwd)/{schema_name}" \\
-    -o "$(pwd)/{output_name}" \\
-    - < "$(pwd)/prompt.md" \\
-    > "$(pwd)/events-${{label}}.jsonl" 2>&1
-}}
-
-if run_model primary {shell_quote(RESEARCH_MODEL)}; then
-  write_telemetry
-  exit 0
-fi
-
-if [ -s "$(pwd)/{output_name}" ]; then
-  write_telemetry
-  exit 1
-fi
-
-if run_model fallback {shell_quote(RESEARCH_FALLBACK_MODEL)}; then
-  write_telemetry
-  exit 0
-fi
-
-if [ -s "$output_path" ]; then
-  write_telemetry
-  exit 1
-fi
-
-write_terminal_research "Research worker primary and fallback failed without producing {output_name}."
-write_telemetry
-exit 1
-"""
+        return compact_launch_script()
 
     if role == "reviewer":
-        review_route = review_route or {
-            "selected_ladder": CONTRACT.review_route_for_tier("standard"),
-            "selection_reason": "Default standard reviewer route.",
-        }
-        reviewer_ladder = [
-            item for item in review_route.get("selected_ladder", [])
-            if isinstance(item, str) and item in REVIEW_ROUTE_MODELS
-        ] or CONTRACT.review_route_for_tier("standard")
-        reviewer_telemetry = telemetry_function("reviewer", packet_id, output_name, reviewer_telemetry_attempts(reviewer_ladder))
-        reviewer_commands = [
-            f"codex exec --ephemeral -m {REVIEW_ROUTE_MODELS[alias]} -s read-only"
-            for alias in reviewer_ladder
-        ]
-        reviewer_attempt_lines = []
-        for alias in reviewer_ladder:
-            label = CONTRACT.codex_event_label(alias)
-            model = REVIEW_ROUTE_MODELS[alias]
-            reviewer_attempt_lines.extend(
-                [
-                    f"if run_model {shell_quote(label)} {shell_quote(model)}; then",
-                    "  write_telemetry",
-                    "  exit 0",
-                    "fi",
-                    "",
-                    "if [ -s \"$output_path\" ]; then",
-                    "  write_telemetry",
-                    "  exit 1",
-                    "fi",
-                    "",
-                ]
-            )
-        reviewer_attempt_script = "\n".join(reviewer_attempt_lines)
-        terminal_semantic_hashes = review_semantic_hashes or {}
-        terminal_reuse_policy = review_reuse_policy or {
-            "mode": "new",
-            "accepted": False,
-            "semantic_hashes_match": False,
-            "source_review_path": None,
-            "source_telemetry_path": None,
-        }
-        return f"""#!/usr/bin/env bash
-set -euo pipefail
-
-cd "$(dirname "$0")"
-
-git -C {shell_quote(worktree)} rev-parse --show-toplevel >/dev/null
-
-packet_dir="$(pwd)"
-output_path="$packet_dir/{output_name}"
-attempt_timeout_seconds={REVIEWER_ATTEMPT_TIMEOUT_SECONDS}
-timeout_kill_after_seconds={TIMEOUT_KILL_AFTER_SECONDS}
-rm -f "$output_path" "$packet_dir"/events-*.jsonl "$packet_dir/telemetry.json"
-
-run_with_timeout() {{
-  local seconds="$1"
-  shift
-  if ! command -v timeout >/dev/null 2>&1; then
-    echo "timeout command not found; refusing unbounded reviewer attempt." >&2
-    return 127
-  fi
-  timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
-}}
-
-write_terminal_review() {{
-  local message="$1"
-  python3 - "$output_path" {shell_quote(packet_id)} "$message" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-output_path = Path(sys.argv[1])
-packet_id = sys.argv[2]
-message = sys.argv[3]
-data = {{
-    "packet_id": packet_id,
-    "role": "reviewer",
-    "verdict": "blocked",
-    "findings": [message],
-    "commands_run": {json.dumps(reviewer_commands)},
-    "verification_gaps": [message, "Inspect reviewer event logs in this packet directory for the underlying CLI or schema error."],
-    "residual_risks": [],
-    "semantic_input_hashes": {json.dumps(terminal_semantic_hashes, sort_keys=True)},
-    "reuse_policy": {json.dumps(terminal_reuse_policy, sort_keys=True)},
-    "summary": message,
-}}
-output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
-PY
-}}
-
-{reviewer_telemetry}
-
-run_model() {{
-  local label="$1"
-  local model="$2"
-  run_with_timeout "$attempt_timeout_seconds" codex exec --ephemeral \\
-    -m "$model" \\
-    -C {shell_quote(worktree)} \\
-    -s {sandbox} \\
-    --json \\
-    --output-schema "$(pwd)/{schema_name}" \\
-    -o "$(pwd)/{output_name}" \\
-    - < "$(pwd)/prompt.md" \\
-    > "$(pwd)/events-${{label}}.jsonl" 2>&1
-}}
-
-{reviewer_attempt_script}
-
-write_terminal_review "Reviewer primary and fallback failed without producing {output_name}."
-write_telemetry
-exit 1
-"""
+        return compact_launch_script()
 
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
     selected_commands = worker_route_commands(selected_ladder)
@@ -1558,6 +1369,78 @@ run_codex() {{
 """
 
 
+def reviewer_ladder_from_route(review_route: dict | None) -> list[str]:
+    route = review_route or {
+        "selected_ladder": CONTRACT.review_route_for_tier("standard"),
+        "selection_reason": "Default standard reviewer route.",
+    }
+    return [
+        item for item in route.get("selected_ladder", [])
+        if isinstance(item, str) and item in REVIEW_ROUTE_MODELS
+    ] or CONTRACT.review_route_for_tier("standard")
+
+
+def compact_launch_config(
+    role: str,
+    packet_id: str,
+    branch: str,
+    worktree: str,
+    schema_name: str,
+    output_name: str,
+    review_route: dict | None = None,
+    review_semantic_hashes: dict[str, str] | None = None,
+    review_reuse_policy: dict | None = None,
+) -> dict | None:
+    telemetry_script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
+    if role == "research-worker":
+        return {
+            "schema_version": 1,
+            "role": "research-worker",
+            "packet_id": packet_id,
+            "branch": branch,
+            "worktree": worktree,
+            "schema_name": schema_name,
+            "output_name": output_name,
+            "sandbox": "read-only",
+            "attempt_timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
+            "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+            "attempts": research_telemetry_attempts(),
+            "telemetry_script": telemetry_script,
+            "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
+        }
+    if role == "reviewer":
+        reviewer_ladder = reviewer_ladder_from_route(review_route)
+        terminal_commands = [
+            f"codex exec --ephemeral -m {REVIEW_ROUTE_MODELS[alias]} -s read-only"
+            for alias in reviewer_ladder
+        ]
+        return {
+            "schema_version": 1,
+            "role": "reviewer",
+            "packet_id": packet_id,
+            "branch": branch,
+            "worktree": worktree,
+            "schema_name": schema_name,
+            "output_name": output_name,
+            "sandbox": "read-only",
+            "attempt_timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
+            "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+            "attempts": reviewer_telemetry_attempts(reviewer_ladder),
+            "telemetry_script": telemetry_script,
+            "semantic_input_hashes": review_semantic_hashes or {},
+            "reuse_policy": review_reuse_policy or {
+                "mode": "new",
+                "accepted": False,
+                "semantic_hashes_match": False,
+                "source_review_path": None,
+                "source_telemetry_path": None,
+            },
+            "terminal_commands": terminal_commands,
+            "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
+        }
+    return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--role", choices=["worker", "research-worker", "reviewer"], required=True)
@@ -1722,6 +1605,22 @@ def main() -> int:
         (packet_dir / "route.json").write_text(json.dumps(route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     elif args.role == "reviewer" and review_route is not None:
         (packet_dir / "route.json").write_text(json.dumps(review_route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    launch_config = compact_launch_config(
+        args.role,
+        packet_id,
+        branch,
+        str(worktree),
+        schema_name,
+        output_name,
+        review_route=review_route,
+        review_semantic_hashes=review_semantic_hashes,
+        review_reuse_policy=review_reuse_policy,
+    )
+    if launch_config is not None:
+        (packet_dir / "launch-config.json").write_text(
+            json.dumps(launch_config, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(
         launch_for(

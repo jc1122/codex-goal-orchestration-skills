@@ -32,6 +32,13 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def read_json(path: Path) -> dict:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"expected JSON object at {path}")
+    return data
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     digest.update(path.read_bytes())
@@ -285,6 +292,20 @@ def assert_not_contains(text: str, needle: str, label: str) -> None:
 
 def assert_shell_syntax(path: Path) -> None:
     run(["bash", "-n", path.as_posix()])
+
+
+def assert_compact_runtime_launcher(packet_dir: Path, role: str, timeout_seconds: int) -> dict:
+    launch = (packet_dir / "launch.sh").read_text(encoding="utf-8")
+    assert_shell_syntax(packet_dir / "launch.sh")
+    assert_contains(launch, "runtime_packet_runner.py", f"{role} launcher")
+    if len(launch) > 800:
+        raise SystemExit(f"{role} launcher should stay compact, got {len(launch)} chars")
+    config = read_json(packet_dir / "launch-config.json")
+    if config.get("role") != role:
+        raise SystemExit(f"{role} launch-config role mismatch: {config.get('role')!r}")
+    if config.get("attempt_timeout_seconds") != timeout_seconds:
+        raise SystemExit(f"{role} launch-config timeout mismatch: {config.get('attempt_timeout_seconds')!r}")
+    return config
 
 
 def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None = None, diff_stats: dict | None = None) -> Path:
@@ -2032,10 +2053,15 @@ def main() -> int:
                 task_file.as_posix(),
             ]
         )
-        research_launch = (packet_root / "B01-W03" / "launch.sh").read_text(encoding="utf-8")
-        assert_shell_syntax(packet_root / "B01-W03" / "launch.sh")
-        assert_contains(research_launch, "timeout --foreground", "research launcher")
-        assert_contains(research_launch, "attempt_timeout_seconds=1200", "research launcher")
+        research_config = assert_compact_runtime_launcher(packet_root / "B01-W03", "research-worker", 1200)
+        research_event_logs = [
+            log
+            for attempt in research_config.get("attempts", [])
+            if isinstance(attempt, dict)
+            for log in attempt.get("event_logs", [])
+        ]
+        if research_event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
+            raise SystemExit(f"research launch-config event log mismatch: {research_event_logs!r}")
 
         run(
             [
@@ -2108,10 +2134,15 @@ def main() -> int:
                 task_file.as_posix(),
             ]
         )
-        reviewer_launch = (packet_root / "B01-R01" / "launch.sh").read_text(encoding="utf-8")
-        assert_shell_syntax(packet_root / "B01-R01" / "launch.sh")
-        assert_contains(reviewer_launch, "timeout --foreground", "reviewer launcher")
-        assert_contains(reviewer_launch, "attempt_timeout_seconds=1800", "reviewer launcher")
+        reviewer_config = assert_compact_runtime_launcher(packet_root / "B01-R01", "reviewer", 1800)
+        reviewer_attempts = reviewer_config.get("attempts")
+        reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
+        if reviewer_aliases != ["gpt-5.4-mini", "gpt-5.4"]:
+            raise SystemExit(f"reviewer launch-config route mismatch: {reviewer_aliases!r}")
+        if not reviewer_config.get("semantic_input_hashes"):
+            raise SystemExit("reviewer launch-config omitted semantic_input_hashes")
+        if not reviewer_config.get("reuse_policy"):
+            raise SystemExit("reviewer launch-config omitted reuse_policy")
         assert_reviewer_route(packet_root, "B01-R01", ["gpt-5.4-mini", "gpt-5.4"])
         for packet_id, tier, expected in [
             ("B01-R02", "standard", ["gpt-5.4", "gpt-5.5"]),

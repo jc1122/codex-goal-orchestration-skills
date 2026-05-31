@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "git_head": "b158df4",
-    "source_fingerprint": "sha256:bc1515eb7388d4e521d938a0e0c16af0f9dceca8400b9d7ed654986a7ddf7472"
+    "git_head": "03615f7",
+    "source_fingerprint": "sha256:5d9b28bc794d2c60601887a78cc64158fb5c55fdea5a6d23c77e17295c65964e"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -82,6 +82,7 @@
         "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
         "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
         "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
+        "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
         "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
       ],
       "open_core_scripts_only_for": "implementation or debugging of that script surface",

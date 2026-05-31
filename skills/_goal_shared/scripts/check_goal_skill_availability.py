@@ -50,6 +50,7 @@ REQUIRED_FILES = {
         "scripts/assemble_branch_status.py",
         "scripts/create_pre_review_gate.py",
         "scripts/create_runtime_packet.py",
+        "scripts/runtime_packet_runner.py",
         "scripts/create_lite_advice_packet.py",
         "scripts/context_pack.py",
         "scripts/runtime_phase_manifest.py",

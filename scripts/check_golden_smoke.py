@@ -72,6 +72,20 @@ def read_json(path: Path) -> dict:
     return data
 
 
+def assert_compact_runtime_launcher(packet_dir: Path, role: str) -> dict:
+    launch_path = packet_dir / "launch.sh"
+    assert_shell_syntax(launch_path)
+    launch = launch_path.read_text(encoding="utf-8")
+    if "runtime_packet_runner.py" not in launch:
+        raise SystemExit(f"{role} launcher should delegate to runtime_packet_runner.py")
+    if len(launch) > 800:
+        raise SystemExit(f"{role} launcher should stay compact, got {len(launch)} chars")
+    config = read_json(packet_dir / "launch-config.json")
+    if config.get("role") != role:
+        raise SystemExit(f"{role} launch-config role mismatch: {config.get('role')!r}")
+    return config
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     digest.update(path.read_bytes())
@@ -1425,7 +1439,9 @@ def main() -> int:
                 task_file.as_posix(),
             ]
         )
-        assert_shell_syntax(bundle / "research" / RESEARCH_PACKET / "launch.sh")
+        research_config = assert_compact_runtime_launcher(bundle / "research" / RESEARCH_PACKET, "research-worker")
+        if research_config.get("attempt_timeout_seconds") != 1200:
+            raise SystemExit("research launch-config should preserve the 1200 second attempt timeout")
 
         run(
             [
@@ -1497,7 +1513,9 @@ def main() -> int:
                 task_file.as_posix(),
             ]
         )
-        assert_shell_syntax(bundle / "reviewers" / REVIEW_PACKET / "launch.sh")
+        reviewer_config = assert_compact_runtime_launcher(bundle / "reviewers" / REVIEW_PACKET, "reviewer")
+        if reviewer_config.get("attempt_timeout_seconds") != 1800:
+            raise SystemExit("reviewer launch-config should preserve the 1800 second attempt timeout")
         write_review(bundle, input_hashes)
         write_branch_and_main_status(bundle)
 
