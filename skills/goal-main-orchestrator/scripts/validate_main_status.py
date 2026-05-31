@@ -42,6 +42,7 @@ MAIN_LITE_PURPOSES = {"audit-defect-summary", "main-summary"}
 MAX_TOTAL_BRANCHES = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendments")
+AUDIT_TELEMETRY_ALIASES = ("gpt-5.5", "gpt-5.4", "deterministic-prompt-audit")
 
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
 load_json = STATUS_VALIDATION.load_json
@@ -128,7 +129,7 @@ def validate_audit_artifacts(defects: list[str], root: dict, *, manifest_path: P
         "$.audit_status.telemetry_path",
         packet_id="prompt-audit",
         role="prompt-auditor",
-        allowed_aliases=("gpt-5.5", "gpt-5.4"),
+        allowed_aliases=AUDIT_TELEMETRY_ALIASES,
         require_called=True,
     )
 

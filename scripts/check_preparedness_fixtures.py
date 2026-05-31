@@ -2380,6 +2380,23 @@ def main() -> int:
                 "--require-pass",
             ]
         )
+        ready_after_deterministic_audit = run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--audit",
+                (deterministic_audit_phase / "prompt-audit.json").as_posix(),
+                "--list-ready",
+                "--limit",
+                "1",
+            ]
+        ).stdout.strip().splitlines()
+        if ready_after_deterministic_audit != ["B01"]:
+            raise SystemExit(f"deterministic prompt-audit telemetry did not unlock branch scheduling: {ready_after_deterministic_audit!r}")
 
         audit_phase = tmp_path / "audit-phase"
         run(

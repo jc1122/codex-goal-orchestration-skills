@@ -49,6 +49,9 @@ MAX_WAVES = CONTRACT.MAX_WAVES
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
 TERMINAL_STATUSES = {"pass", "partial", "blocked", "failed"}
+MODEL_AUDIT_LADDER = ["gpt-5.5", "gpt-5.4"]
+DETERMINISTIC_AUDIT_LADDER = ["deterministic-prompt-audit"]
+AUDIT_LADDERS = [MODEL_AUDIT_LADDER, DETERMINISTIC_AUDIT_LADDER]
 
 
 def git_ok(repo_root: Path, *args: str) -> bool:
@@ -80,10 +83,10 @@ def validate_audit_telemetry(audit_path: Path) -> None:
     if not isinstance(attempts, list) or not attempts:
         raise SystemExit("prompt audit telemetry attempts must be a non-empty array")
     aliases = [item.get("alias") for item in attempts if isinstance(item, dict)]
-    if aliases != ["gpt-5.5", "gpt-5.4"]:
-        raise SystemExit("prompt audit telemetry attempts must declare gpt-5.5 then gpt-5.4")
+    if aliases not in AUDIT_LADDERS:
+        raise SystemExit(f"prompt audit telemetry attempts must declare one audit ladder: {AUDIT_LADDERS!r}")
     called = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("called") is True]
-    if not called or called != aliases[: len(called)]:
+    if not called or not any(called == ladder[: len(called)] for ladder in AUDIT_LADDERS):
         raise SystemExit("prompt audit telemetry called attempts must be a non-empty prefix of the audit ladder")
     accepted = [item.get("alias") for item in attempts if isinstance(item, dict) and item.get("accepted") is True]
     if len(accepted) != 1 or telemetry.get("accepted_alias") != accepted[0]:
