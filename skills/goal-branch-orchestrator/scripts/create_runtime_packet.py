@@ -391,6 +391,188 @@ def load_json(path: Path) -> dict:
     return data
 
 
+def first_markdown_heading(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            return stripped.removeprefix("# ").strip()
+    return ""
+
+
+def markdown_section(text: str, heading: str, *, max_chars: int = 800) -> str:
+    marker = f"## {heading}"
+    lines = text.splitlines()
+    collecting = False
+    collected: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped == marker:
+            collecting = True
+            continue
+        if collecting and stripped.startswith("## "):
+            break
+        if collecting:
+            collected.append(line)
+    value = "\n".join(collected).strip()
+    if len(value) > max_chars:
+        return value[:max_chars].rstrip() + "\n[truncated]"
+    return value
+
+
+def find_manifest_context(context_files: list[str], branch_id: str, packet_id: str) -> tuple[Path, dict, dict, dict] | None:
+    for value in context_files:
+        path = Path(value)
+        if path.name != "job.manifest.json":
+            continue
+        try:
+            manifest = load_json(path)
+        except Exception:  # noqa: BLE001
+            continue
+        branch_data = branch_entry(manifest, branch_id)
+        if not branch_data:
+            continue
+        work_items = branch_data.get("work_items") if isinstance(branch_data.get("work_items"), list) else []
+        matches = [
+            item
+            for item in work_items
+            if isinstance(item, dict) and item.get("packet_id") == packet_id
+        ]
+        if len(matches) != 1:
+            continue
+        return path, manifest, branch_data, matches[0]
+    return None
+
+
+def compact_list(values: object) -> list[str]:
+    if not isinstance(values, list):
+        return []
+    return [item for item in values if isinstance(item, str) and item.strip()]
+
+
+def bullet_list(values: list[str]) -> str:
+    if not values:
+        return "- none"
+    return "\n".join(f"- {value}" for value in values)
+
+
+def compact_worker_context(
+    *,
+    branch_id: str,
+    packet_id: str,
+    task_file: Path | None,
+    task_text: str,
+    owned_files: list[str],
+    context_files: list[str],
+) -> tuple[str, list[str], dict] | None:
+    found = find_manifest_context(context_files, branch_id, packet_id)
+    if found is None:
+        return None
+    manifest_path, manifest, branch_data, work_item = found
+    task_sha = CONTEXT_PACK.sha256_file(task_file) if task_file else None
+    manifest_sha = CONTEXT_PACK.sha256_file(manifest_path)
+    branch_objective = markdown_section(task_text, "Objective", max_chars=500)
+    branch_scope = markdown_section(task_text, "Scope", max_chars=500)
+    stop_conditions = markdown_section(task_text, "Stop Conditions", max_chars=500)
+    work_owned_paths = compact_list(work_item.get("owned_paths")) or owned_files
+    work_context_files = compact_list(work_item.get("context_files"))
+    verification = compact_list(work_item.get("verification"))
+    dod = compact_list(work_item.get("dod"))
+    depends_on = compact_list(work_item.get("depends_on"))
+    worker_parallelism = branch_data.get("worker_parallelism") if isinstance(branch_data.get("worker_parallelism"), dict) else {}
+    artifact = {
+        "schema_version": 1,
+        "kind": "compact_worker_context",
+        "source": "job.manifest.json branch/work-item slice",
+        "manifest_path": manifest_path.as_posix(),
+        "manifest_sha256": manifest_sha,
+        "task_file": task_file.as_posix() if task_file else None,
+        "task_file_sha256": task_sha,
+        "job_id": manifest.get("job_id"),
+        "base_ref": manifest.get("base_ref"),
+        "branch": {
+            "id": branch_data.get("id"),
+            "branch_name": branch_data.get("branch_name"),
+            "worktree_path": branch_data.get("worktree_path"),
+            "prompt": branch_data.get("prompt"),
+            "status_path": branch_data.get("status_path"),
+            "review_path": branch_data.get("review_path"),
+            "pre_review_gate_path": branch_data.get("pre_review_gate_path"),
+            "owned_paths": compact_list(branch_data.get("owned_paths")),
+            "max_active_worker_packets": branch_data.get("max_active_worker_packets"),
+            "worker_scheduler_path": worker_parallelism.get("scheduler_path"),
+        },
+        "work_item": {
+            "id": work_item.get("id"),
+            "packet_id": work_item.get("packet_id"),
+            "worker_type": work_item.get("worker_type", "worker"),
+            "objective": work_item.get("objective"),
+            "owned_paths": work_owned_paths,
+            "context_files": work_context_files,
+            "depends_on": depends_on,
+            "verification": verification,
+            "dod": dod,
+        },
+    }
+    task_lines = [
+        "# Compact Worker Task",
+        "",
+        "This task was generated deterministically from `packet-context.json`; use the full branch prompt or manifest only if this compact task is insufficient or a validator/launcher fails.",
+        "",
+        f"Job: {manifest.get('job_id', '')}",
+        f"Base ref: {manifest.get('base_ref', '')}",
+        f"Branch prompt: {branch_data.get('prompt', '')}",
+        f"Manifest: {manifest_path.as_posix()} ({manifest_sha})",
+    ]
+    heading = first_markdown_heading(task_text)
+    if heading:
+        task_lines.append(f"Branch heading: {heading}")
+    if branch_objective:
+        task_lines.extend(["", "Branch objective:", branch_objective])
+    if branch_scope:
+        task_lines.extend(["", "Branch scope:", branch_scope])
+    task_lines.extend(
+        [
+            "",
+            f"Work item: {work_item.get('id', '')} / {packet_id}",
+            f"Worker type: {work_item.get('worker_type', 'worker')}",
+            f"Objective: {work_item.get('objective', '')}",
+            "",
+            "Owned paths:",
+            bullet_list(work_owned_paths),
+            "",
+            "Context files:",
+            bullet_list(work_context_files),
+            "",
+            "Depends on:",
+            bullet_list(depends_on),
+            "",
+            "Verification commands:",
+            bullet_list(verification),
+            "",
+            "Definition of Done:",
+            bullet_list(dod),
+        ]
+    )
+    if stop_conditions:
+        task_lines.extend(["", "Stop conditions:", stop_conditions])
+    task_lines.extend(
+        [
+            "",
+            "Worker rules:",
+            "- Edit only owned paths unless returning `blocked` explains why broader ownership is required.",
+            "- Run the listed verification commands or record the concrete blocker.",
+            "- Use `git diff --check <base-ref>...HEAD` before claiming readiness when the base ref is available.",
+            "- Do not read skill Python source unless a script or validator fails and source-level debugging is required.",
+        ]
+    )
+    filtered_context_files = [
+        value
+        for value in context_files
+        if Path(value).resolve() != manifest_path.resolve()
+    ]
+    return "\n".join(task_lines).rstrip() + "\n", filtered_context_files, artifact
+
+
 def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
     if not packet_dir.exists():
         return
@@ -1252,7 +1434,7 @@ run_gemini() {{
       --model "$model" \\
       --approval-mode "$gemini_approval_mode" \\
       --skip-trust \\
-      -p "$(cat "$prompt_path")"
+      -p "Follow the complete worker packet instructions provided on stdin." < "$prompt_path"
   ) > "$raw_path" 2>&1
   extract_status_json "$raw_path"
 }}
@@ -1483,7 +1665,26 @@ def main() -> int:
         output_name = "status.json"
         schema = status_schema(packet_id, branch, str(worktree))
 
+    task_text = load_task(task_file)
+    packet_context: dict | None = None
+    if args.role == "worker":
+        compact_context = compact_worker_context(
+            branch_id=branch,
+            packet_id=packet_id,
+            task_file=task_file,
+            task_text=task_text,
+            owned_files=owned_files,
+            context_files=context_files,
+        )
+        if compact_context is not None:
+            task_text, context_files, packet_context = compact_context
+
     (packet_dir / schema_name).write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if packet_context is not None:
+        (packet_dir / "packet-context.json").write_text(
+            json.dumps(packet_context, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     (packet_dir / "prompt.md").write_text(
         prompt_for(
             args.role,
@@ -1493,7 +1694,7 @@ def main() -> int:
             schema_name,
             owned_files,
             context_files,
-            load_task(task_file),
+            task_text,
             selected_ladder,
             selection_reason,
         ),
