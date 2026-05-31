@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.15
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.16
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -111,7 +111,7 @@ python3 "$CODEX_HOME/skills/goal-main-orchestrator/scripts/runtime_phase_manifes
 python3 "$CODEX_HOME/skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py" --markdown
 ```
 
-Runtime agents should follow those phase tables, script `--help` output, JSON artifacts, and validator defects before opening long references. Python script source is an implementation/debug surface, not normal runtime context.
+Runtime agents should follow those phase tables, script `--help` output, JSON artifacts, and validator defects before opening long references. Python script source is an implementation/debug surface, not normal runtime context; do not search it with `rg` or `grep` during ordinary runs.
 
 Preflight brief shape is available from deterministic script output, so agents do not need to inspect `create_goal_bundle.py`:
 

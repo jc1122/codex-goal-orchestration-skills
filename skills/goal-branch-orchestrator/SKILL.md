@@ -33,7 +33,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/runtime_phase_manife
 - Do not poll active worker/research/reviewer packet logs. Inspect artifacts only after launchers exit or return terminal status.
 - Create reviewer packets only after deterministic pre-review gate passes.
 - Use `context_pack.py`/packet context excerpts instead of broad reads.
-- Do not read `skills/*/scripts/*.py` during normal orchestration. Inspect Python source only when a script failed and debugging that script is the assigned task.
+- Do not read or search `skills/*/scripts/*.py` during normal orchestration, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 
 ## Details On Demand
 

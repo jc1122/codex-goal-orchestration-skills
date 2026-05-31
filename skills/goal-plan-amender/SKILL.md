@@ -31,7 +31,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-plan-amender/scripts/runtime_phase_manifest.py" 
 - Prefer deterministic `recommend_amendment_decision.py` and `create_blocker_repair_packet.py` when their conditions apply.
 - Model packets must be route-bound, read-only, validated, and limited to future unstarted manifest work.
 - Apply only after packet and proposal validation pass.
-- Do not read `skills/*/scripts/*.py` during normal runtime. Inspect Python source only when a script failed and debugging that script is the assigned task.
+- Do not read or search `skills/*/scripts/*.py` during normal runtime, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 
 ## Details On Demand
 

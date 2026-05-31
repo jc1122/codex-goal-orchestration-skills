@@ -32,7 +32,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/runtime_phase_manifest.py" --m
 - Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
 - Use Lite only as optional context routing for large/vague source material or lint repair.
 - Return the exact `goal-bootloader.md` text after lint passes.
-- Do not read `skills/*/scripts/*.py` during normal preflight. Inspect Python source only when a script failed and debugging that script is the assigned task.
+- Do not read or search `skills/*/scripts/*.py` during normal preflight, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 
 ## Details On Demand
 

@@ -18,7 +18,7 @@ def current_skill_name() -> str:
 
 COMMON_RULES = [
     "Use script outputs, JSON artifacts, and validator defects before opening prose references.",
-    "Do not read skills/*/scripts/*.py during runtime unless a script itself failed and script debugging is the assigned task.",
+    "Do not read or search skills/*/scripts/*.py with cat/sed/head/rg/grep during runtime unless a script failed and script debugging is assigned.",
     "Record exact commands run and preserve blocked/partial evidence.",
     "Parallelism is default; under-capacity requires structured scheduler evidence.",
 ]
@@ -131,7 +131,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "worker_packets",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch branch-Wyy --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
                 "agent_does": "run packet launch.sh; do not inspect active logs while running",
             },
             {

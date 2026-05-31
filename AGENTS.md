@@ -4,7 +4,7 @@ Read `maintenance/agent-context-index.json` before broad repository scans.
 
 Use `tasks.<task>.read` for first context, then run `skills.<skill>.phase_manifest_command` for runtime flow before expanding to references or `core_scripts`. If the index is stale after file moves/additions/deletions, run:
 
-During runtime orchestration, prefer generated JSON artifacts, script `--help`, and validator output. Do not read `skills/*/scripts/*.py` unless implementing or debugging those scripts.
+During runtime orchestration, prefer generated JSON artifacts, script `--help`, and validator output. Do not read or search `skills/*/scripts/*.py` with `cat`, `sed`, `head`, `rg`, `grep`, or similar commands unless implementing or debugging those scripts.
 
 ```bash
 npm run generate:context

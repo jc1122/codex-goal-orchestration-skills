@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "git_head": "d9edfa4",
-    "source_fingerprint": "sha256:f8685afccb97eef8f27bc19b6d40294fd354f77c94eb05b5d106b7bab03591ce"
+    "git_head": "b158df4",
+    "source_fingerprint": "sha256:bc1515eb7388d4e521d938a0e0c16af0f9dceca8400b9d7ed654986a7ddf7472"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",

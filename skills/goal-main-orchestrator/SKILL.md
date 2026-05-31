@@ -32,7 +32,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest
 - Keep branch orchestrator slots saturated up to `max_active_branch_agents`; waves are scheduling order, not dependency barriers.
 - Wait on active branch agents; do not poll branch worktrees, worker packets, reviewer packets, or logs while branch agents are active.
 - Use `goal-plan-amender` only after validated terminal branch evidence and only for future unstarted work.
-- Do not read `skills/*/scripts/*.py` during normal runtime. Inspect Python source only when a script failed and debugging that script is the assigned task.
+- Do not read or search `skills/*/scripts/*.py` during normal runtime, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 
 ## Details On Demand
 

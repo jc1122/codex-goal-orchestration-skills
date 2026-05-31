@@ -1910,6 +1910,8 @@ def main() -> int:
         ).stdout
         if len(compact_phase_manifest) >= len(full_phase_manifest):
             raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
+        assert_contains(compact_phase_manifest, "--manifest /abs/bundle/job.manifest.json", "compact phase manifest")
+        assert_contains(compact_phase_manifest, "rg/grep", "compact phase manifest")
         brief_schema = json.loads(
             run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
         )
