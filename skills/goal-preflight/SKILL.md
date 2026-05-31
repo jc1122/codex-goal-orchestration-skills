@@ -27,6 +27,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/runtime_phase_manifest.py" --m
 ## Runtime Rules
 
 - Produce a structured brief JSON, then let scripts generate and lint the bundle.
+- If brief shape is unclear, run `create_goal_bundle.py --brief-schema-json` or `--example-brief`; do not inspect script source for schema.
 - Parallelism is default: prefer independent branches and worker-sized work items; record serial reasons when capacity is intentionally underfilled.
 - Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
 - Use Lite only as optional context routing for large/vague source material or lint repair.

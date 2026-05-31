@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.11
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.14
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
@@ -113,9 +113,18 @@ python3 "$CODEX_HOME/skills/goal-branch-orchestrator/scripts/runtime_phase_manif
 
 Runtime agents should follow those phase tables, script `--help` output, JSON artifacts, and validator defects before opening long references. Python script source is an implementation/debug surface, not normal runtime context.
 
+Preflight brief shape is available from deterministic script output, so agents do not need to inspect `create_goal_bundle.py`:
+
+```bash
+python3 "$CODEX_HOME/skills/goal-preflight/scripts/create_goal_bundle.py" --brief-schema-json
+python3 "$CODEX_HOME/skills/goal-preflight/scripts/create_goal_bundle.py" --example-brief
+```
+
 Generated `main.prompt.md`, branch prompts, prompt-audit packets, and `goal-bootloader.md` are intentionally compact. They carry job-specific data and point runtime agents at `job.manifest.json`, phase manifests, script outputs, and validators instead of repeating long orchestration policy in every prompt. Bundle lint now checks that generated prompts point agents at `runtime_phase_manifest.py --markdown` and explicitly discourage reading skill Python source during normal runtime.
 
 Generated worker packets are compact too: when `create_runtime_packet.py` receives `job.manifest.json`, it writes a deterministic `packet-context.json` branch/work-item slice and removes the full manifest excerpt from `prompt.md`. Gemini worker launchers pass the full prompt on stdin so process inspection does not expose or re-tokenize the worker prompt.
+
+Lite advisory launchers use the same stdin pattern for Gemini prompts and keep the full prompt out of process command lines.
 
 Optional quality tooling is pinned separately from runtime code:
 

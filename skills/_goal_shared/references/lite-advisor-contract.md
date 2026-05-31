@@ -45,7 +45,7 @@ Generated launchers capture the absolute Gemini CLI path, Gemini version, Gemini
   --approval-mode plan \
   --skip-trust \
   --output-format text \
-  -p "$(cat prompt.md)"
+  -p "Follow the complete Lite advisory packet instructions provided on stdin." < prompt.md
 ```
 
 The launcher rehashes every input, rehashes `task.md`, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. It writes `telemetry.json` next to `advice.json` on every terminal path. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, verifies packet telemetry, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.

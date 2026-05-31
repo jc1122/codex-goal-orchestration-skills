@@ -1446,6 +1446,11 @@ def main() -> int:
             ]
         )
         assert_shell_syntax(bundle / "lite" / LITE_PACKET / "launch.sh")
+        lite_launch = (bundle / "lite" / LITE_PACKET / "launch.sh").read_text(encoding="utf-8")
+        if "provided on stdin" not in lite_launch:
+            raise SystemExit("Lite launcher should pass full prompt on stdin")
+        if '-p "$(cat "$prompt_path")"' in lite_launch:
+            raise SystemExit("Lite launcher must not expose full prompt through command-line substitution")
 
         lite_record = write_lite_advice(bundle / "lite" / LITE_PACKET)
         write_audit(bundle)

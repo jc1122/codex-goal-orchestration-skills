@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import re
+import sys
 from pathlib import Path
 
 from render_goal_bootloader import render_bootloader
@@ -62,6 +63,151 @@ LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
 RESEARCH_WORKER_POLICY = CONTRACT.RESEARCH_WORKER_POLICY
 REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
 ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
+
+
+def example_brief() -> dict:
+    return {
+        "job_id": "toy-performance-optimization",
+        "title": "Toy performance optimization",
+        "base_ref": "main",
+        "goal": "Reduce latency in the deterministic toy workflow without changing public behavior.",
+        "source_summary": "The repository has two independent slow paths with existing tests that cover output compatibility.",
+        "max_active_branch_agents": MAX_ACTIVE_BRANCH_AGENTS,
+        "parallelization_rationale": "The branches own separate files and can run concurrently as a saturated pool.",
+        "required_evidence": [
+            "Each branch records exact verification commands and passing test evidence.",
+            "Final status preserves any blocked, partial, or failed branch evidence.",
+        ],
+        "final_dod": [
+            "Existing behavior remains covered by targeted tests.",
+            "No new runtime dependencies are added.",
+        ],
+        "branches": [
+            {
+                "id": "B01",
+                "branch_name": "optimize-kernel",
+                "objective": "Optimize the pure computation path while preserving exact outputs and function signatures.",
+                "worktree_path": ".worktrees/optimize-kernel",
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Replace avoidable repeated computation in src/kernel.py with a deterministic cache.",
+                        "owned_paths": ["src/kernel.py"],
+                        "context_files": ["tests/test_kernel.py"],
+                        "depends_on": [],
+                        "verification": ["pytest tests/test_kernel.py"],
+                        "dod": [
+                            "Kernel tests pass without output changes.",
+                            "Public function signatures in src/kernel.py are unchanged.",
+                        ],
+                    },
+                    {
+                        "id": "W02",
+                        "objective": "Add or tighten focused regression coverage for the optimized kernel behavior.",
+                        "owned_paths": ["tests/test_kernel.py"],
+                        "context_files": ["src/kernel.py"],
+                        "depends_on": [],
+                        "verification": ["pytest tests/test_kernel.py"],
+                        "dod": [
+                            "Tests fail against an obvious legacy output regression.",
+                            "Coverage stays focused on observable behavior.",
+                        ],
+                    },
+                ],
+            },
+            {
+                "id": "B02",
+                "branch_name": "optimize-cli",
+                "objective": "Reduce avoidable CLI overhead while preserving exact command output and exit codes.",
+                "worktree_path": ".worktrees/optimize-cli",
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Simplify src/cli.py work performed per invocation without changing output format.",
+                        "owned_paths": ["src/cli.py"],
+                        "context_files": ["tests/test_cli.py"],
+                        "depends_on": [],
+                        "verification": ["pytest tests/test_cli.py"],
+                        "dod": [
+                            "CLI tests pass for text and JSON output modes.",
+                            "Exit code behavior remains unchanged.",
+                        ],
+                    },
+                    {
+                        "id": "W02",
+                        "objective": "Add focused CLI regression coverage for output and error behavior.",
+                        "owned_paths": ["tests/test_cli.py"],
+                        "context_files": ["src/cli.py"],
+                        "depends_on": [],
+                        "verification": ["pytest tests/test_cli.py"],
+                        "dod": [
+                            "CLI regression tests cover the optimized code path.",
+                            "No tests depend on wall-clock timing.",
+                        ],
+                    },
+                ],
+            },
+        ],
+    }
+
+
+def brief_schema_summary() -> dict:
+    return {
+        "schema_version": 1,
+        "purpose": "Structured input for create_goal_bundle.py; use this instead of reading script source.",
+        "top_level_required": {
+            "job_id": "stable slug-like job id",
+            "goal": "concrete falsifiable objective",
+            "source_summary": "short summary of source report or repo diagnosis",
+            "required_evidence": ["falsifiable evidence item"],
+            "final_dod": ["final definition-of-done item"],
+            "branches": ["one to twenty branch objects; prefer independent ready branches"],
+        },
+        "top_level_optional": {
+            "title": "display title",
+            "base_ref": "git base ref; defaults to main",
+            "max_active_branch_agents": f"integer 1-{MAX_ACTIVE_BRANCH_AGENTS}; default {MAX_ACTIVE_BRANCH_AGENTS}",
+            "serial_reasons": "required when intentionally underfilling branch capacity",
+            "parallelization_rationale": "why branches can run as a rolling saturated pool",
+            "merge_policy": "operator-controlled merge instructions",
+            "artifact_policy": "artifact retention policy; deterministic default is supplied",
+            "cleanup_policy": "cleanup policy; deterministic default preserves non-pass evidence",
+            "preflight_lite_advice": "array; use [] when no Lite packet was used",
+        },
+        "branch_required": {
+            "objective": "branch-level objective",
+            "work_items": [f"one to {MAX_WORKER_PACKETS_PER_BRANCH} worker-sized objects"],
+        },
+        "branch_optional": {
+            "id": "B01-style id; defaults by order",
+            "branch_name": "safe git branch name; defaults from job id and branch id",
+            "worktree_path": "repo-relative worktree path",
+            "depends_on": "prior branch ids only; omit or [] for parallel branches",
+            "max_active_worker_packets": f"integer 1-{MAX_WORKER_PACKETS_PER_BRANCH}; default {MAX_WORKER_PACKETS_PER_BRANCH}",
+            "worker_serial_reasons": "required when intentionally underfilling worker capacity",
+            "scope": "branch-specific boundary text",
+            "dod": "branch-level DoD; worker DoD is still required",
+            "stop_conditions": "branch stop conditions",
+        },
+        "work_item_required": {
+            "objective": "worker-sized objective",
+            "owned_paths": ["repo-relative paths the worker may edit"],
+            "verification": ["exact command strings the worker should run"],
+            "dod": ["falsifiable worker DoD item"],
+        },
+        "work_item_optional": {
+            "id": "W01-style id; defaults by order",
+            "worker_type": "worker or research-worker; default worker",
+            "context_files": ["repo-relative read-first files"],
+            "depends_on": "prior work item ids only; omit or [] for parallel workers",
+        },
+        "commands": {
+            "print_example": "python3 create_goal_bundle.py --example-brief",
+            "print_schema": "python3 create_goal_bundle.py --brief-schema-json",
+            "lint": "python3 lint_preflight_brief.py --brief /abs/brief.json --repo-root /abs/repo --json",
+            "create_bundle": "python3 create_goal_bundle.py --brief /abs/brief.json --repo-root /abs/repo --out-dir /abs/bundle",
+        },
+    }
 
 
 def require_agent_limit(value: object) -> int:
@@ -653,11 +799,39 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--brief", required=True)
-    parser.add_argument("--repo-root", required=True)
+    parser = argparse.ArgumentParser(
+        description="Create a compact /goal orchestration bundle from a structured brief.",
+        epilog=(
+            "For agent-readable brief shape, run --brief-schema-json. "
+            "For a valid compact starter brief, run --example-brief."
+        ),
+    )
+    parser.add_argument("--brief")
+    parser.add_argument("--repo-root")
     parser.add_argument("--out-dir")
+    parser.add_argument(
+        "--example-brief",
+        "--brief-template-json",
+        dest="example_brief",
+        action="store_true",
+        help="Print a valid compact brief JSON template and exit.",
+    )
+    parser.add_argument(
+        "--brief-schema-json",
+        action="store_true",
+        help="Print an agent-readable brief field guide and exit.",
+    )
     args = parser.parse_args()
+
+    if args.example_brief:
+        print(json.dumps(example_brief(), indent=2, sort_keys=True))
+        return 0
+    if args.brief_schema_json:
+        print(json.dumps(brief_schema_summary(), indent=2, sort_keys=True))
+        return 0
+    if not args.brief or not args.repo_root:
+        parser.print_usage(sys.stderr)
+        raise SystemExit("--brief and --repo-root are required unless printing --example-brief or --brief-schema-json")
 
     brief_path = resolve_absolute_path(args.brief, "--brief", must_exist=True)
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)

@@ -206,13 +206,41 @@ def should_fail(defects: list[dict], fail_on: str) -> bool:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--brief", required=True)
+    parser = argparse.ArgumentParser(
+        description="Lint a structured preflight brief before bundle generation.",
+        epilog=(
+            "For agent-readable brief shape, run --brief-schema-json. "
+            "For a valid compact starter brief, run --example-brief."
+        ),
+    )
+    parser.add_argument("--brief")
     parser.add_argument("--repo-root")
     parser.add_argument("--output")
     parser.add_argument("--fail-on", choices=["minor", "major", "critical"], default="major")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--example-brief",
+        "--brief-template-json",
+        dest="example_brief",
+        action="store_true",
+        help="Print a valid compact brief JSON template and exit.",
+    )
+    parser.add_argument(
+        "--brief-schema-json",
+        action="store_true",
+        help="Print an agent-readable brief field guide and exit.",
+    )
     args = parser.parse_args()
+
+    if args.example_brief:
+        print(json.dumps(CREATE_GOAL_BUNDLE.example_brief(), indent=2, sort_keys=True))
+        return 0
+    if args.brief_schema_json:
+        print(json.dumps(CREATE_GOAL_BUNDLE.brief_schema_summary(), indent=2, sort_keys=True))
+        return 0
+    if not args.brief:
+        parser.print_usage(sys.stderr)
+        raise SystemExit("--brief is required unless printing --example-brief or --brief-schema-json")
 
     brief_path = resolve_absolute_path(args.brief, "--brief", must_exist=True)
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True) if args.repo_root else None

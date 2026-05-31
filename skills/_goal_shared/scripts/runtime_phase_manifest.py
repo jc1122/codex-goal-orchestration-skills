@@ -37,8 +37,9 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "brief",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --brief-schema-json && python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --example-brief",
                 "agent_does": "write one structured brief JSON with concrete branches/work_items/DoD; prefer 3-4 independent branches when safe",
-                "avoid": "do not inspect runtime contracts unless lint output names a missing field",
+                "avoid": "do not inspect Python source or runtime contracts for brief shape; use --brief-schema-json, --example-brief, and lint defects",
             },
             {
                 "id": "brief_lint",
@@ -196,7 +197,29 @@ def manifest_for(skill: str) -> dict[str, Any]:
     }
 
 
-def markdown(data: dict[str, Any]) -> str:
+def markdown(data: dict[str, Any], *, compact: bool = False) -> str:
+    if compact:
+        lines = [
+            f"# {data['skill']} phases",
+            data["role"],
+            "Rules: " + "; ".join(data["token_rules"]),
+            "Read first: " + ", ".join(data["first_artifacts"]),
+            "Phases:",
+        ]
+        for phase in data["phases"]:
+            parts = [str(phase["id"])]
+            for key in ["run", "agent_does", "artifacts", "pass", "on_fail", "avoid"]:
+                if key not in phase:
+                    continue
+                value = phase[key]
+                if isinstance(value, list):
+                    value = ", ".join(str(item) for item in value)
+                parts.append(f"{key}={value}")
+            lines.append("- " + " | ".join(parts))
+        if data.get("details"):
+            lines.append("Details on demand: " + "; ".join(str(item) for item in data["details"]))
+        return "\n".join(lines) + "\n"
+
     lines = [
         f"# Runtime Phase Manifest: {data['skill']}",
         "",
@@ -228,15 +251,23 @@ def main() -> int:
     parser.add_argument("--skill", default=current_skill_name(), help="Skill name; defaults to current installed skill wrapper.")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--markdown", action="store_true")
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Accepted for agent ergonomics; phase manifests are compact by default.",
+    )
     args = parser.parse_args()
 
     if bool(args.json) == bool(args.markdown):
         raise SystemExit("choose exactly one of --json or --markdown")
     data = manifest_for(args.skill)
     if args.json:
-        print(json.dumps(data, indent=2, sort_keys=True) + "\n", end="")
+        if args.compact:
+            print(json.dumps(data, sort_keys=True, separators=(",", ":")) + "\n", end="")
+        else:
+            print(json.dumps(data, indent=2, sort_keys=True) + "\n", end="")
     else:
-        print(markdown(data), end="")
+        print(markdown(data, compact=args.compact), end="")
     return 0
 
 

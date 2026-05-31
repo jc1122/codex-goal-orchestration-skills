@@ -544,7 +544,7 @@ fi
     --approval-mode "$approval_mode" \\
     --skip-trust \\
     --output-format text \\
-    -p "$(cat "$prompt_path")"
+    -p "Follow the complete Lite advisory packet instructions provided on stdin." < "$prompt_path"
 ) > "$raw_path" 2>&1 || {{
   write_terminal_advice blocked "Lite advisor command failed. Inspect advice.raw.txt for CLI, quota, auth, or model errors."
   write_telemetry

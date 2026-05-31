@@ -1,11 +1,11 @@
 {
   "largest_files": [
     {
-      "approx_tokens": 20689,
-      "bytes": 82757,
-      "chars": 82757,
+      "approx_tokens": 21287,
+      "bytes": 85149,
+      "chars": 85149,
       "files": 1,
-      "lines": 2167,
+      "lines": 2214,
       "path": "scripts/check_preparedness_fixtures.py"
     },
     {
@@ -25,11 +25,11 @@
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py"
     },
     {
-      "approx_tokens": 15951,
-      "bytes": 63805,
-      "chars": 63805,
+      "approx_tokens": 16049,
+      "bytes": 64195,
+      "chars": 64195,
       "files": 1,
-      "lines": 1654,
+      "lines": 1659,
       "path": "scripts/check_golden_smoke.py"
     },
     {
@@ -49,6 +49,14 @@
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py"
     },
     {
+      "approx_tokens": 10521,
+      "bytes": 42085,
+      "chars": 42085,
+      "files": 1,
+      "lines": 845,
+      "path": "skills/goal-preflight/scripts/create_goal_bundle.py"
+    },
+    {
       "approx_tokens": 10174,
       "bytes": 40697,
       "chars": 40697,
@@ -63,14 +71,6 @@
       "files": 1,
       "lines": 657,
       "path": "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py"
-    },
-    {
-      "approx_tokens": 8338,
-      "bytes": 33354,
-      "chars": 33354,
-      "files": 1,
-      "lines": 671,
-      "path": "skills/goal-preflight/scripts/create_goal_bundle.py"
     },
     {
       "approx_tokens": 6826,
@@ -113,9 +113,9 @@
       "path": "skills/goal-plan-amender/scripts/create_blocker_repair_packet.py"
     },
     {
-      "approx_tokens": 5482,
-      "bytes": 21926,
-      "chars": 21926,
+      "approx_tokens": 5498,
+      "bytes": 21994,
+      "chars": 21994,
       "files": 1,
       "lines": 649,
       "path": "skills/_goal_shared/scripts/create_lite_advice_packet.py"
@@ -129,11 +129,11 @@
   ],
   "per_skill": {
     "_goal_shared": {
-      "approx_tokens": 50639,
-      "bytes": 202556,
-      "chars": 202556,
+      "approx_tokens": 51050,
+      "bytes": 204199,
+      "chars": 204199,
       "files": 13,
-      "lines": 4897
+      "lines": 4928
     },
     "goal-branch-orchestrator": {
       "approx_tokens": 57102,
@@ -157,42 +157,42 @@
       "lines": 2911
     },
     "goal-preflight": {
-      "approx_tokens": 35271,
-      "bytes": 141084,
-      "chars": 141084,
+      "approx_tokens": 37754,
+      "bytes": 151016,
+      "chars": 151016,
       "files": 21,
-      "lines": 2724
+      "lines": 2927
     }
   },
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 240442,
-      "bytes": 961768,
-      "chars": 961768,
+      "approx_tokens": 243979,
+      "bytes": 975917,
+      "chars": 975917,
       "files": 79,
-      "lines": 22655
+      "lines": 22940
     },
     "skill_python": {
-      "approx_tokens": 189494,
-      "bytes": 757976,
-      "chars": 757976,
+      "approx_tokens": 192336,
+      "bytes": 769343,
+      "chars": 769343,
       "files": 70,
-      "lines": 17311
+      "lines": 17544
     },
     "skills": {
-      "approx_tokens": 213937,
-      "bytes": 855748,
-      "chars": 855748,
+      "approx_tokens": 216831,
+      "bytes": 867323,
+      "chars": 867323,
       "files": 92,
-      "lines": 18649
+      "lines": 18883
     },
     "tracked": {
-      "approx_tokens": 279832,
-      "bytes": 1119326,
-      "chars": 1119326,
+      "approx_tokens": 283534,
+      "bytes": 1134135,
+      "chars": 1134135,
       "files": 117,
-      "lines": 25387
+      "lines": 25682
     }
   },
   "skill_docs": {
@@ -218,11 +218,11 @@
       "lines": 38
     },
     "goal-preflight": {
-      "approx_tokens": 561,
-      "bytes": 2244,
-      "chars": 2244,
+      "approx_tokens": 596,
+      "bytes": 2384,
+      "chars": 2384,
       "files": 1,
-      "lines": 43
+      "lines": 44
     }
   },
   "thresholds": {

@@ -278,6 +278,11 @@ def assert_contains(text: str, needle: str, label: str) -> None:
         raise SystemExit(f"{label} missing expected text: {needle}")
 
 
+def assert_not_contains(text: str, needle: str, label: str) -> None:
+    if needle in text:
+        raise SystemExit(f"{label} contains forbidden text: {needle}")
+
+
 def assert_shell_syntax(path: Path) -> None:
     run(["bash", "-n", path.as_posix()])
 
@@ -1897,6 +1902,46 @@ def main() -> int:
             ]
         )
         run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+        full_phase_manifest = run(
+            ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
+        ).stdout
+        compact_phase_manifest = run(
+            ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--compact", "--markdown"]
+        ).stdout
+        if len(compact_phase_manifest) >= len(full_phase_manifest):
+            raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
+        brief_schema = json.loads(
+            run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
+        )
+        if "work_item_required" not in brief_schema or "commands" not in brief_schema:
+            raise SystemExit("brief schema output is missing required agent guidance")
+        lint_schema = json.loads(
+            run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
+        )
+        if lint_schema != brief_schema:
+            raise SystemExit("brief schema output drifted between create and lint helpers")
+        example_brief_path = tmp_path / "example-brief.json"
+        example_brief_path.write_text(
+            run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--example-brief"]).stdout,
+            encoding="utf-8",
+        )
+        lint_example = json.loads(
+            run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--example-brief"]).stdout
+        )
+        if lint_example != json.loads(example_brief_path.read_text(encoding="utf-8")):
+            raise SystemExit("brief example output drifted between create and lint helpers")
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_preflight_brief.py",
+                "--brief",
+                example_brief_path.as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--fail-on",
+                "critical",
+            ]
+        )
         run_scheduler_fixtures(bundle / "job.manifest.json")
         run_scheduler_tick_fixture(tmp_path)
         run_launch_ready_helper_fixtures(tmp_path)
@@ -2004,6 +2049,8 @@ def main() -> int:
         assert_shell_syntax(tmp_path / "lite" / "B01-L01" / "launch.sh")
         assert_contains(lite_launch, "timeout --foreground", "Lite launcher")
         assert_contains(lite_launch, "attempt_timeout_seconds=600", "Lite launcher")
+        assert_contains(lite_launch, "provided on stdin", "Lite launcher")
+        assert_not_contains(lite_launch, '-p "$(cat "$prompt_path")"', "Lite launcher")
 
         write_valid_research_fixture(bundle)
         write_worker_scheduler(bundle)
