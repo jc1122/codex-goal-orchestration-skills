@@ -23,7 +23,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release tag:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.17
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.18
 ```
 
 The installer copies bundled skills to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.

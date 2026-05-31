@@ -226,10 +226,6 @@ def source_fingerprint(paths: list[Path]) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def git_head() -> str:
-    return run(["git", "rev-parse", "--short", "HEAD"]).stdout.strip()
-
-
 def build_entrypoints(package: dict[str, Any]) -> dict[str, Any]:
     scripts = package.get("scripts", {})
     if not isinstance(scripts, dict):
@@ -380,7 +376,6 @@ def build_index() -> dict[str, Any]:
     return {
         "schema_version": 1,
         "generated_from": {
-            "git_head": git_head(),
             "source_fingerprint": source_fingerprint(paths),
         },
         "navigation_rules": [

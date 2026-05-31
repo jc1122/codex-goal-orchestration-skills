@@ -136,11 +136,11 @@
       "lines": 4929
     },
     "goal-branch-orchestrator": {
-      "approx_tokens": 56497,
-      "bytes": 225988,
-      "chars": 225988,
-      "files": 18,
-      "lines": 4929
+      "approx_tokens": 58967,
+      "bytes": 235869,
+      "chars": 235869,
+      "files": 19,
+      "lines": 5214
     },
     "goal-main-orchestrator": {
       "approx_tokens": 38951,
@@ -167,32 +167,32 @@
   "schema_version": 1,
   "scopes": {
     "executable": {
-      "approx_tokens": 244401,
-      "bytes": 977603,
-      "chars": 977603,
-      "files": 79,
-      "lines": 22928
+      "approx_tokens": 246838,
+      "bytes": 987352,
+      "chars": 987352,
+      "files": 80,
+      "lines": 23208
     },
     "skill_python": {
-      "approx_tokens": 191752,
-      "bytes": 767006,
-      "chars": 767006,
-      "files": 70,
-      "lines": 17454
+      "approx_tokens": 194222,
+      "bytes": 776887,
+      "chars": 776887,
+      "files": 71,
+      "lines": 17739
     },
     "skills": {
-      "approx_tokens": 216310,
-      "bytes": 865242,
-      "chars": 865242,
-      "files": 92,
-      "lines": 18793
+      "approx_tokens": 218781,
+      "bytes": 875123,
+      "chars": 875123,
+      "files": 93,
+      "lines": 19078
     },
     "tracked": {
-      "approx_tokens": 284226,
-      "bytes": 1136906,
-      "chars": 1136906,
-      "files": 117,
-      "lines": 25675
+      "approx_tokens": 286657,
+      "bytes": 1146628,
+      "chars": 1146628,
+      "files": 118,
+      "lines": 25954
     }
   },
   "skill_docs": {
