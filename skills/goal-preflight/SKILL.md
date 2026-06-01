@@ -1,6 +1,6 @@
 ---
 name: goal-preflight
-version: 0.2.52
+version: 0.2.53
 description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize rolling-scheduled branch groups and worker-sized work items when missing, enforce reproducible manifest paths and telemetry requirements, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
@@ -28,6 +28,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/runtime_phase_manifest.py" --m
 ## Runtime Rules
 
 - Produce a structured brief JSON, then let scripts generate and lint the bundle.
+- If the user asks for debug mode or debug telemetry, set `telemetry_mode: "debug"` in the structured brief; bundle creation expands the full safe debug telemetry policy.
 - If brief shape is unclear, run `create_goal_bundle.py --brief-schema-json` or `--example-brief`; do not inspect script source for schema.
 - Parallelism is default: prefer independent branches and worker-sized work items; record serial reasons when capacity is intentionally underfilled.
 - Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.

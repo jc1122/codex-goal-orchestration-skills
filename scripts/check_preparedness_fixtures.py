@@ -2229,6 +2229,9 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
 
 
 def run_phase_manifest_and_schema_fixtures() -> None:
+    preflight_phase_manifest = run(
+        ["python3", "skills/goal-preflight/scripts/runtime_phase_manifest.py", "--markdown"]
+    ).stdout
     full_phase_manifest = run(
         ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
     ).stdout
@@ -2241,6 +2244,7 @@ def run_phase_manifest_and_schema_fixtures() -> None:
     if len(compact_phase_manifest) >= len(full_phase_manifest):
         raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
     assert_all_contains(compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest")
+    assert_all_contains(preflight_phase_manifest, ["telemetry_mode=debug", "debug mode"], "preflight phase manifest")
     assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit"], "main phase manifest")
     assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
     brief_schema = json.loads(
@@ -2250,6 +2254,9 @@ def run_phase_manifest_and_schema_fixtures() -> None:
         raise SystemExit("brief schema output is missing required agent guidance")
     if "current git branch" not in str(brief_schema.get("top_level_optional", {}).get("base_ref", "")):
         raise SystemExit("brief schema should describe current-branch base_ref default")
+    top_level_optional = brief_schema.get("top_level_optional", {})
+    if "telemetry_mode" not in top_level_optional or "debug_telemetry" not in top_level_optional:
+        raise SystemExit("brief schema should expose lean debug telemetry shorthands")
     lint_schema = json.loads(
         run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
     )
@@ -2298,6 +2305,55 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     branch_default_manifest = read_json(branch_default_bundle / "job.manifest.json")
     if branch_default_manifest.get("base_ref") != "trunk":
         raise SystemExit(f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}")
+
+    debug_mode_brief = {**branch_default_brief, "job_id": "debug-mode-shorthand-fixture", "telemetry_mode": "debug"}
+    debug_mode_brief_path = tmp_path / "debug-mode-brief.json"
+    debug_mode_bundle = tmp_path / "debug-mode-bundle"
+    write_json(debug_mode_brief_path, debug_mode_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            debug_mode_brief_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            debug_mode_bundle.as_posix(),
+        ]
+    )
+    debug_policy = read_json(debug_mode_bundle / "job.manifest.json").get("telemetry_policy", {})
+    expected_collect = [
+        "route_decisions",
+        "token_usage",
+        "timings",
+        "scheduler_utilization",
+        "context_pack_stats",
+        "validator_runs",
+        "artifact_hashes",
+    ]
+    if debug_policy.get("mode") != "debug" or debug_policy.get("raw_text") is not False or debug_policy.get("collect") != expected_collect:
+        raise SystemExit(f"telemetry_mode=debug did not expand to full safe debug policy: {debug_policy!r}")
+
+    debug_bool_brief = {**branch_default_brief, "job_id": "debug-bool-shorthand-fixture", "debug_telemetry": True}
+    debug_bool_brief_path = tmp_path / "debug-bool-brief.json"
+    debug_bool_bundle = tmp_path / "debug-bool-bundle"
+    write_json(debug_bool_brief_path, debug_bool_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            debug_bool_brief_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            debug_bool_bundle.as_posix(),
+        ]
+    )
+    debug_bool_policy = read_json(debug_bool_bundle / "job.manifest.json").get("telemetry_policy", {})
+    if debug_bool_policy.get("mode") != "debug" or debug_bool_policy.get("collect") != expected_collect:
+        raise SystemExit(f"debug_telemetry=true did not expand to full safe debug policy: {debug_bool_policy!r}")
 
 
 def run_context_pack_fixtures(tmp_path: Path) -> None:

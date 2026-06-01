@@ -1,57 +1,373 @@
 # Codex Goal Orchestration Skills
 
-Install four Codex skills for file-backed `/goal` orchestration:
+This repository packages four Codex skills for file-backed `/goal` orchestration:
 
 - `goal-preflight`
 - `goal-main-orchestrator`
 - `goal-branch-orchestrator`
 - `goal-plan-amender`
 
-These are packaged in one repository and reference each other by skill name, not by separate repository URLs:
-
-- `goal-preflight` creates linted, path-safe job bundles and a location-bound `/goal` bootloader for `$goal-main-orchestrator`; it can optionally use CLI-only Lite advisory packets for source digestion or lint-repair advice.
-- `goal-main-orchestrator` runs bootstrap and prompt audit, can optionally use Lite only after audit or completed branch artifacts for summaries, creates validated branch worktrees, dispatches `$goal-branch-orchestrator` sessions as a rolling saturated pool within the hard active-agent limit, launches route-bound `$goal-plan-amender` packets only after validated terminal branch results when future-work adaptation is needed, and records branch scheduler evidence without loading the branch skill body into main context.
-- `goal-branch-orchestrator` can optionally use Lite for packet planning, context packing, completed-worker summaries, or blocked triage; it creates path-safe worker, research-worker, deterministic route-gated reviewer packets, dispatches normal workers through an allowed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` high-effort -> Codex mini ladder, dispatches research workers through broad read-only information retrieval with Codex native search, configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and local read-only file access, waits on active packet launchers without polling their logs, integrates results, sends read-only reviewer packets only after deterministic pre-review gates pass, and assembles branch status from manifest-owned artifacts.
-- `goal-plan-amender` creates file-backed adaptation packets with selected amender model ladders and telemetry, can create deterministic local-script blocker-repair packets from terminal status artifacts, validates amendment proposals against the live manifest and terminal/active branch immutability rules, applies accepted changes only as new unstarted work, archives prior manifests, regenerates changed future branch prompts through preflight helpers, and reruns bundle lint.
+The package is intentionally script-and-artifact driven. Agents should use this README, `AGENTS.md`, `maintenance/agent-context-index.json`, each skill's `runtime_phase_manifest.py --markdown`, script `--help`, JSON artifacts, and validator defects before opening implementation source.
 
 ## Install
+
+Install the latest repository version:
 
 ```bash
 npx github:jc1122/codex-goal-orchestration-skills
 ```
 
-Install a pinned release tag:
+Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.34
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.53
 ```
 
-The installer copies bundled skills plus root agent-navigation metadata (`AGENTS.md` and `maintenance/agent-context-index.json`) to `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise to `~/.codex/skills`. The destination must resolve to an absolute path.
-
-Use a custom destination:
+Install to a custom absolute skills root:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills -- --dest /path/to/skills
+npx github:jc1122/codex-goal-orchestration-skills -- --dest /absolute/path/to/skills --force
 ```
 
-Custom destinations must be absolute and must not contain `..` traversal.
-
-List bundled skills:
+Useful installer commands:
 
 ```bash
 npx github:jc1122/codex-goal-orchestration-skills -- --list
-```
-
-Dry run:
-
-```bash
+npx github:jc1122/codex-goal-orchestration-skills -- --version
 npx github:jc1122/codex-goal-orchestration-skills -- --dry-run
 ```
 
+From a local checkout:
+
+```bash
+node bin/install-goal-skills.js --dest /absolute/path/to/skills --force
+```
+
+The default destination is `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`. The installer copies all four public skills, `_goal_shared`, root `AGENTS.md`, and `maintenance/agent-context-index.json`.
+
+Resolve the installed skills root in runtime instructions:
+
+```bash
+GOAL_SKILLS_ROOT="${CODEX_HOME:-$HOME/.codex}/skills"
+if [ ! -d "$GOAL_SKILLS_ROOT/goal-preflight" ] && [ -d "$HOME/.agents/skills/goal-preflight" ]; then
+  GOAL_SKILLS_ROOT="$HOME/.agents/skills"
+fi
+```
+
+## Agent Start
+
+1. Read `AGENTS.md`, then `maintenance/agent-context-index.json`.
+2. Read the relevant skill `SKILL.md`.
+3. Print and follow the skill phase manifest:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/runtime_phase_manifest.py" --markdown
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest.py" --markdown
+python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/runtime_phase_manifest.py" --markdown
+python3 "$GOAL_SKILLS_ROOT/goal-plan-amender/scripts/runtime_phase_manifest.py" --markdown
+```
+
+Do not read or search `skills/*/scripts/*.py` during normal runtime. Use script outputs, `--help`, generated artifacts, and validators. Open Python source only when implementing or debugging that script surface.
+
+## Architecture
+
+| Layer | Skill | Responsibility |
+| --- | --- | --- |
+| Preflight | `goal-preflight` | Turn a report, roadmap, diagnosis, or rough brief into a linted bundle with `job.manifest.json`, `main.prompt.md`, branch prompts, and a location-bound `goal-bootloader.md`. |
+| Main runtime | `goal-main-orchestrator` | Consume an existing bundle, bootstrap skills/model catalog, fail-closed prompt audit, create branch worktrees, schedule branch agents, summarize telemetry, assemble and validate final status. |
+| Branch runtime | `goal-branch-orchestrator` | Run one audited branch worktree, create worker/research/reviewer packets, keep worker slots saturated, integrate results, gate review, assemble and validate branch status. |
+| Amendment runtime | `goal-plan-amender` | After validated terminal branch evidence, propose, validate, and optionally apply future-work-only manifest amendments or deterministic blocker-repair branches. |
+
+Shared `_goal_shared` support includes skill availability checks, model catalog checks, path rules, runtime phase manifests, Lite packet creation/validation, telemetry extraction, context packing, scheduler ledgers, status validation helpers, and script-only repair gates.
+
+The bundle is the data plane. Runtime agents exchange manifest-owned files rather than hidden chat state. Prompt audit, branch statuses, reviews, scheduler ledgers, telemetry, Lite advice, and amendments must be validated from disk before pass claims.
+
+## End-To-End Flow
+
+1. `goal-preflight` writes a structured brief, lints it, creates the bundle, lints the bundle, and returns the exact `goal-bootloader.md` text.
+2. The user launches `/goal` with the bootloader. The bootloader points to absolute bundle and repository roots, so it must be regenerated if either path moves.
+3. `goal-main-orchestrator` runs bootstrap, live model catalog, script-only repair gate, deterministic or model prompt audit, branch scheduling, and main scheduler ledger updates.
+4. Main launches eligible branch orchestrator sessions as a rolling saturated pool up to `max_active_branch_agents` and waits for terminal artifacts rather than polling active branch internals.
+5. `goal-branch-orchestrator` creates worker or research-worker packets, runs launchers, integrates diffs or research findings, updates worker scheduler evidence, creates a pre-review gate, launches or reuses reviewer evidence, and validates branch status.
+6. After each validated terminal branch result, main records an amendment launch-or-skip decision. `goal-plan-amender` may add or adjust only future unstarted work through validated amendments.
+7. Main closes by running scheduler finalization, `summarize_telemetry.py`, `assemble_main_status.py`, and `validate_main_status.py`.
+
+Status semantics:
+
+- `pass`: every manifest branch and worker/research item launched, validated, reviewed where required, and satisfies DoD.
+- `partial`: some work completed, with structured unlaunched or blocked remainder.
+- `blocked`: progress is stopped by a concrete blocker with preserved evidence.
+- `failed`: attempted work produced a terminal negative result.
+
+## Preflight Briefs
+
+Ask for clarification only when branch boundaries, DoD, merge policy, cleanup policy, required evidence, or runtime safety cannot be inferred safely. Conservative defaults include current branch as `base_ref` with fallback to `main`, `max_active_branch_agents: 4`, branch worker cap `4`, parallelism by default, and prompt audit as mandatory/fail-closed.
+
+Use deterministic schema output instead of reading source:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" --brief-schema-json
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" --example-brief
+```
+
+Core preflight commands:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_preflight_brief.py" \
+  --brief /abs/brief.json \
+  --repo-root /abs/repo
+
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
+  --brief /abs/brief.json \
+  --repo-root /abs/repo \
+  --out-dir /abs/bundle
+
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py" \
+  --bundle-dir /abs/bundle
+
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py" \
+  --bundle-dir /abs/bundle
+```
+
+## Bundle Layout
+
+```text
+plans/orchestration/<job-id>/
+  job.manifest.json
+  main.prompt.md
+  goal-bootloader.md
+  PREFLIGHT_REPORT.md
+  preflight.lint.json
+  telemetry.summary.json              # runtime-created before final pass
+  telemetry.debug.summary.json        # debug mode only
+  audit/
+  branches/
+  workers/
+  research/
+  reviewers/
+  schedulers/
+  lite/
+  amendments/
+```
+
+All manifest-owned paths are POSIX-relative to the bundle unless explicitly documented as repo-relative worktree or owned-file paths. Absolute paths, backslashes, `.` segments, `..`, path collisions, and unsafe packet ids are rejected. Worker artifacts live under `workers/<packet_id>/`; research artifacts under `research/<packet_id>/`; reviewers under `reviewers/<packet_id>/`; Lite packets under `lite/<packet_id>/`; amendments under `amendments/`.
+
+Important manifest policies:
+
+- `artifact_policy` and `cleanup_policy` preserve pass, partial, blocked, failed, unresolved, negative, and probe-only evidence unless the user authorizes cleanup.
+- `parallelization` and branch `worker_parallelism` define rolling saturated scheduling.
+- `worker_model_policy`, `research_worker_policy`, `review_model_policy`, `amender_model_policy`, and `lite_model_policy` define allowed model routes.
+- `adaptation_policy` allows only future-work manifest amendments.
+- `telemetry_policy` controls standard or debug telemetry.
+
+## Scheduling
+
+Branch and worker parallelism are rolling saturated pools:
+
+- `max_active_branch_agents` is hard capped at 4.
+- each branch has 1 to 4 work items and `max_active_worker_packets` capped at 4.
+- waves are scheduling/order groups, not dependency barriers.
+- `depends_on` is the only dependency mechanism and must reference prior ids.
+- downstream work unlocks only after dependencies finish with `pass`.
+- non-pass dependencies require `dependency_failed` scheduler evidence.
+- under-capacity, defer, blocked, finish, close, and refill events belong in schema v2 scheduler ledgers.
+
+Use scheduler helpers rather than hand-editing ledgers:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py" --help
+python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/render_worker_schedule.py" --help
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py" --help
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/append_scheduler_event.py" --help
+```
+
+## Model Routing
+
+Prompt audit is read-only and runs before branch creation. Its route is `gpt-5.5 -> gpt-5.4`, with deterministic audit available through `run_prompt_audit_phase.py --deterministic`.
+
+Normal worker aliases, in default order:
+
+1. `gemini-pro` (`gemini-3.1-pro-preview`)
+2. `gemini-flash` (`gemini-3-flash-preview`)
+3. `codex-spark` (`gpt-5.3-codex-spark`)
+4. `copilot-gpt-5.4` (`gpt-5.4`, high effort)
+5. `codex-mini` (`gpt-5.4-mini`)
+
+Worker route classes:
+
+- `mechanical` and `docs`: `codex-mini`
+- `small-edit` and `normal-code`: `codex-spark -> codex-mini`
+- `complex-code` and `custom`: full ordered ladder when justified
+
+The branch orchestrator may choose a non-empty ordered subsequence with a concrete `selection_reason`. Passing the fresh `model-catalog.json` lets packet generation prune unsupported Codex aliases and reject unavailable explicit selections.
+
+Research workers use `codex --search exec --ephemeral -s read-only` with user config loaded. They may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, remote APIs, package metadata, shell/network inspection, and local read-only files. They must not edit files, inspect secrets or unrelated private files, or perform state-changing actions.
+
+Reviewer routes are selected from `review_model_policy`:
+
+- `light`: `gpt-5.4-mini -> gpt-5.4`
+- `standard`: `gpt-5.4 -> gpt-5.5`
+- `heavy`: `gpt-5.5 -> gpt-5.4`
+
+Reviewers are read-only and require a passing `pre_review_gate.json`. Reviewer reuse is valid only when semantic hashes match and both source review and source telemetry exist.
+
+Plan-amender default route is `gpt-5.4 -> gpt-5.4-mini`; `gpt-5.5` is allowed only with a concrete reason. Deterministic blocker-repair packets use local status-artifact parsing and alias `deterministic-blocker-repair` instead of a model call.
+
+Check the local Codex model catalog:
+
+```bash
+npm run check:models
+npm run models:catalog
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py" --json --require-codex
+```
+
+## Telemetry
+
+Every prompt-audit, worker, research-worker, reviewer, plan-amender, and Lite launcher writes packet-local `telemetry.json`. Telemetry records model aliases, provider/model ids, declared/called/accepted attempts, prompt/output/log character and byte counts, best-effort token usage when provider logs expose it, timeout seconds, and terminal attempt status.
+
+Costs are measured as text and time, not USD. Do not add pricing, dollar amounts, or USD budget fields.
+
+Summarize standard telemetry before final status validation:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py" \
+  --bundle-dir /abs/bundle
+```
+
+Enable debug telemetry in the preflight brief. There is no runtime flag; `job.manifest.json.telemetry_policy` owns the mode. The lean user-facing shorthand is:
+
+```json
+"telemetry_mode": "debug"
+```
+
+`debug_telemetry: true` is also accepted for compatibility. Both shorthands expand to:
+
+```json
+"telemetry_policy": {
+  "schema_version": 1,
+  "mode": "debug",
+  "raw_text": false,
+  "collect": [
+    "route_decisions",
+    "token_usage",
+    "timings",
+    "scheduler_utilization",
+    "context_pack_stats",
+    "validator_runs",
+    "artifact_hashes"
+  ]
+}
+```
+
+If a user says "use goal-preflight in debug mode," the preflight agent should set `telemetry_mode: "debug"` in the structured brief. Debug mode is passive: it must not change route selection, polling cadence, scheduling, watchdog thresholds, or validation outcomes. It adds packet-level `telemetry.debug.json`, append-only `debug.events.jsonl`, and bundle-level `telemetry.debug.summary.json`. Raw prompts, raw model outputs, full logs, secrets, and USD/pricing fields remain prohibited; `raw_text` must be `false`.
+
+Generate or refresh the debug summary:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py" \
+  --bundle-dir /abs/bundle \
+  --debug
+```
+
+## Lite Advisors
+
+Lite advisors are optional Gemini Flash Lite packets for context routing only. They cannot satisfy prompt audit, worker pass, reviewer pass, mergeability, scientific claim support, or DoD evidence. Always validate Lite output before use and then open only cited original files or spans needed for verification.
+
+Allowed purposes:
+
+| Skill | Purposes |
+| --- | --- |
+| `goal-preflight` | `preflight-decomposition`, `lint-repair` |
+| `goal-main-orchestrator` | `audit-defect-summary`, `main-summary` |
+| `goal-branch-orchestrator` | `branch-packet-planning`, `context-pack`, `worker-summary`, `blocked-triage` |
+| `goal-plan-amender` | `amendment-summary`, `amendment-defect-summary` |
+
+Create and validate Lite packets through the skill wrapper:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/create_lite_advice_packet.py" --help
+python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/validate_lite_advice.py" --help
+```
+
+Lite packets capture the Gemini binary path, version, binary sha256, input hashes, task hash, prompt hash, advice, and telemetry. Runtime status files must record every used or ignored relevant Lite packet; validators scan `lite/` for unrecorded packets.
+
+## Validation Gates
+
+| Gate | Required command family |
+| --- | --- |
+| Skill bootstrap | `check_goal_skill_availability.py` |
+| Brief lint | `lint_preflight_brief.py` |
+| Bundle lint | `lint_goal_bundle.py` |
+| Prompt audit | `run_prompt_audit_phase.py`, `validate_prompt_audit.py` |
+| Branch scheduling | `render_branch_worktree_commands.py`, `scheduler_tick.py` |
+| Worker scheduling | `render_worker_schedule.py`, `scheduler_tick.py` |
+| Worker/research/reviewer packets | `create_runtime_packet.py`, packet `launch.sh`, `runtime_packet_runner.py` |
+| Branch assembly | `assemble_branch_status.py`, `validate_branch_status.py` |
+| Pre-review gate | `create_pre_review_gate.py` |
+| Main assembly | `summarize_telemetry.py`, `assemble_main_status.py`, `validate_main_status.py` |
+| Amendments | `recommend_amendment_decision.py`, `create_amendment_decision.py`, `create_adaptation_packet.py`, `validate_amender_packet.py`, `validate_manifest_amendment.py`, `apply_manifest_amendment.py` |
+
+Use exact absolute paths for script arguments when the phase manifest requires them. Validate artifacts before reporting `pass`. Do not hand-author final branch or main status when assemblers can derive it from manifest-owned artifacts.
+
+## CLI Surface
+
+Preflight:
+
+- `lint_preflight_brief.py`: validate a structured brief before bundle generation.
+- `create_goal_bundle.py`: print schema/examples or generate `job.manifest.json`, prompts, bootloader, and report.
+- `lint_goal_bundle.py`: validate generated bundle structure and policy.
+- `render_goal_bootloader.py`: render or rewrite location-bound bootloader paths.
+
+Main:
+
+- `create_audit_packet.py`, `runtime_prompt_audit_runner.py`, `deterministic_prompt_audit.py`, `run_prompt_audit_phase.py`, `validate_prompt_audit.py`.
+- `render_branch_worktree_commands.py`: list/create eligible branch worktrees after audit.
+- `assemble_main_status.py`, `validate_main_status.py`.
+- `summarize_telemetry.py`: write standard or debug telemetry summaries.
+
+Branch:
+
+- `render_worker_schedule.py`: list ready workers under the branch cap.
+- `context_pack.py`: create bounded context packs.
+- `create_runtime_packet.py`, `runtime_packet_runner.py`: create/run worker, research-worker, and reviewer packets.
+- `create_pre_review_gate.py`: bind review to current branch evidence and semantic hashes.
+- `assemble_branch_status.py`, `validate_branch_status.py`.
+
+Plan amendment:
+
+- `recommend_amendment_decision.py`, `create_amendment_decision.py`.
+- `create_blocker_repair_packet.py`: deterministic repair proposal from terminal blocker evidence.
+- `create_adaptation_packet.py`, `validate_amender_packet.py`.
+- `validate_manifest_amendment.py`, `apply_manifest_amendment.py`.
+
+Shared wrappers available under each installed skill:
+
+- `runtime_phase_manifest.py`
+- `check_goal_skill_availability.py`
+- `check_model_catalog.py`
+- `scheduler_tick.py`
+- `append_scheduler_event.py`
+- `script_only_repair_gate.py`
+- `create_lite_advice_packet.py`
+- `validate_lite_advice.py`
+- `runtime_lite_runner.py`
+- `extract_telemetry.py`
+- `context_pack.py`
+
+Internal support modules such as `amendment_lib.py`, `orchestration_contract.py`, `path_rules.py`, and `status_validation.py` define shared contracts and helpers. They are not normal runtime entrypoints; prefer phase manifests, CLI `--help`, and validator output unless implementing or debugging those modules.
+
 ## Maintainer Checks
+
+Run the full deterministic gate before release-oriented changes:
 
 ```bash
 npm run check
+git diff --check
+```
+
+Focused checks:
+
+```bash
 npm run check:shared
 npm run check:fixtures
 npm run check:golden
@@ -61,19 +377,7 @@ npm run check:models
 npm run check:context
 ```
 
-`check:fixtures` validates the preparedness fixture bundle without launching live model CLIs. It covers timeout-wrapped launcher generation, valid broad-access research-worker artifacts, preflight brief linting, schema v2 scheduler refill/under-capacity/stuck-worker/stuck-branch/dependency-failed/watchdog closeout fixtures, deterministic pre-review gate creation, conservative branch status assembly, review router tiers including premium escalation, failed pre-review gate blocking reviewer launch, topology lint failures, amendment validation/apply fixtures, rejection of old self-reported saturation without a ledger, rejection of obsolete narrow research policy text, and rejection of unsafe research-worker command evidence.
-
-`check:golden` installs the skills into a temporary skills root, creates a temporary git repository, builds a complete offline smoke bundle from that installed copy, generates audit, scheduler, worker, research-worker, pre-review gate, reviewer route, reviewer, Lite, branch, main, amendment, and telemetry-summary artifacts, then validates them with the installed runtime validators. It also checks negative stale-telemetry, reviewer route/telemetry mismatch, reviewer semantic-hash mismatch, accepted reviewer reuse without a fresh model call, missing reuse-source telemetry, and partial-subset fixtures.
-
-`check:release` validates release metadata, installer `--list`/`--version`, temp install parity, and `npm pack --dry-run --json` package contents.
-
-`check:maintenance` runs warning-first repository guardrails. It reports tracked file counts, lines, characters, approximate tokens, per-skill size, runtime dependency policy, Dependabot coverage, and local Codex model catalog compatibility. The model catalog check uses `codex debug models` when available, then falls back to `codex debug models --bundled`; absence of the Codex CLI is reported as skipped so CI remains portable. The size budget is stored in `maintenance/size-budget.json` and uses `git ls-files`, so ignored caches and untracked scratch files do not count. Refresh the budget only for intentional growth:
-
-```bash
-python3 scripts/check_size_budget.py --update
-```
-
-Machine-readable maintenance reports are available with:
+Machine-readable maintenance reports:
 
 ```bash
 python3 scripts/generate_agent_context_index.py --json
@@ -82,59 +386,15 @@ python3 scripts/check_size_budget.py --json
 python3 scripts/check_dependency_policy.py --json
 ```
 
-### Codex Model Catalog
+`check:fixtures` validates deterministic fixtures without launching live model CLIs. `check:golden` installs into a temporary skills root, creates an offline smoke bundle, generates audit/scheduler/worker/research/reviewer/Lite/amendment/telemetry artifacts, and validates them. `check:release` validates package metadata, installer behavior, temp install parity, and `npm pack --dry-run`.
 
-Model route aliases are defined in `skills/_goal_shared/scripts/orchestration_contract.py` and are checked against the local Codex catalog:
-
-```bash
-npm run check:models
-npm run models:catalog
-```
-
-`scripts/check_model_catalog.py` prefers `codex debug models`, which returns the refreshed account-visible catalog. It falls back to `codex debug models --bundled` only when the live catalog is unavailable, because the bundled catalog is shipped with the CLI binary and can lag behind models available to the current account. Runtime worker packet generation treats Codex route aliases with `supported_in_api=false` as unavailable for fresh packet launches, pruning them from default ladders and rejecting them when explicitly selected.
-
-The same checker is installed into each skill as `scripts/check_model_catalog.py`, so runtime bootstraps can record a fresh `model-catalog.json` before prompt audit, branch scheduling, worker route selection, or reviewer route selection.
-
-Do not update packet validators just because the local model bundle changed. Validators should preserve alias and telemetry consistency for already-created artifacts. Update route aliases only when `npm run check:models` shows the live catalog no longer contains a configured model or when intentionally adopting a new route.
-
-Agent navigation is generated for token-efficient repo entry. Agents should read `AGENTS.md`, then `maintenance/agent-context-index.json`, before broad scans. Regenerate it after moving, adding, or deleting navigation-relevant files:
+`check:maintenance` runs generated context index checks, size-budget warnings, dependency policy, and local model catalog compatibility. Size-budget growth is warning-first and uses `git ls-files`; update `maintenance/size-budget.json` only for intentional growth:
 
 ```bash
-npm run generate:context
-npm run check:context
+python3 scripts/check_size_budget.py --update
 ```
 
-Runtime skill entrypoints are intentionally small wrappers. Each installed skill exposes a compact phase table:
-
-```bash
-python3 "$CODEX_HOME/skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py" --markdown
-python3 "$CODEX_HOME/skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py" --markdown
-```
-
-Runtime agents should follow those phase tables, script `--help` output, JSON artifacts, and validator defects before opening long references. Python script source is an implementation/debug surface, not normal runtime context; do not search it with `rg` or `grep` during ordinary runs.
-
-Preflight brief shape is available from deterministic script output, so agents do not need to inspect `create_goal_bundle.py`:
-
-```bash
-python3 "$CODEX_HOME/skills/goal-preflight/scripts/create_goal_bundle.py" --brief-schema-json
-python3 "$CODEX_HOME/skills/goal-preflight/scripts/create_goal_bundle.py" --example-brief
-```
-
-Generated `main.prompt.md`, branch prompts, prompt-audit packets, and `goal-bootloader.md` are intentionally compact. They carry job-specific data and point runtime agents at `job.manifest.json`, phase manifests, script outputs, and validators instead of repeating long orchestration policy in every prompt. Bundle lint now checks that generated prompts point agents at `runtime_phase_manifest.py --markdown` and explicitly discourage reading skill Python source during normal runtime. When a brief omits `base_ref`, preflight uses the current git branch and falls back to `main` only when the branch cannot be detected.
-
-Generated prompt-audit launchers are compact wrappers too. Runtime agents should use `run_prompt_audit_phase.py` for the whole create/launch/validate flow; the phase manifest uses `--deterministic` so script-provable bundle, prompt, path, telemetry, and git whitespace checks can produce `prompt-audit.json` without spending model tokens. The wrapper writes `audit/prompt-audit-phase.json` so agents have one small artifact to read before raw event logs. `audit/launch.sh` still delegates to `runtime_prompt_audit_runner.py` when model audit attempts are explicitly requested.
-
-Generated worker packets are compact too: when `create_runtime_packet.py` receives `job.manifest.json`, it writes a deterministic `packet-context.json` branch/work-item slice, normalizes manifest branch ids to `branch_name` for worker status compatibility, and removes the full manifest excerpt from `prompt.md`. When it also receives a fresh `--model-catalog`, it prunes unsupported Codex aliases from the default worker ladder before writing `route.json`. Normal worker `launch.sh` files are tiny wrappers; provider attempts, probes, selected route commands, timeout policy, and terminal blocked metadata live in packet-local `launch-config.json`. Normal Codex worker attempts use `--ignore-user-config --ignore-rules` to avoid loading the parent session's maintenance context, and the packet runner normalizes marker-wrapped worker JSON before telemetry is extracted. Gemini worker attempts still pass the full prompt on stdin so process inspection does not expose or re-tokenize the worker prompt. Main and branch ready-list helpers clamp `--limit` to remaining capacity, so phase-manifest commands can use `--limit 4` without forcing agents to compute slots manually.
-
-Main closeout is assembled deterministically too. Runtime agents should run `summarize_telemetry.py`, then `assemble_main_status.py`, then `validate_main_status.py --status`; they should not hand-author `main.status.json` from branch artifacts. `telemetry.summary.json` lists discovered artifacts in `telemetry_files`, exposes `telemetry_count`, and includes warning-only `token_pressure.warnings` when known child-session input tokens greatly exceed packet prompt estimates; inspect those fields before opening raw event logs.
-
-Scheduler ledgers should also be artifact-driven where possible. After worker or branch status artifacts exist, use `scheduler_tick.py --close-from-artifacts --validate-final` to append launch, finish, close, and refill evidence from manifest-owned artifacts instead of editing scheduler JSON by hand.
-
-Generated research-worker and reviewer packets use the same wrapper pattern. Runtime attempt policy, telemetry inputs, semantic hashes, and terminal blocked metadata live in packet-local `launch-config.json`, and `runtime_packet_runner.py` performs deterministic execution. Reviewer Codex attempts also use `--ignore-user-config --ignore-rules`; research-worker attempts intentionally keep user config loaded for search, MCP, connector, and documentation access. Agents should inspect `launch-config.json` and generated artifacts instead of opening launcher implementation source.
-
-Lite advisory launchers use the same compact wrapper pattern: `launch.sh` delegates to `runtime_lite_runner.py`, packet-local `launch-config.json` carries the Gemini command, timeout, telemetry, marker, and terminal-message policy, and the full prompt is passed on stdin rather than exposed in process command lines.
-
-Optional quality tooling is pinned separately from runtime code:
+Optional quality tools:
 
 ```bash
 npm ci
@@ -144,32 +404,30 @@ python -m pip install -r requirements-dev.txt
 npm run check:quality
 ```
 
-Agent-assisted maintenance should follow `maintenance/AGENT_MAINTENANCE.md`: read deterministic reports first, prefer consolidation over new prose, and leave size-budget updates explicit.
+Runtime npm dependencies are forbidden unless explicitly allowlisted in `maintenance/dependency-policy.json`. Development tooling belongs in `devDependencies` or `requirements-dev.txt`, and Dependabot must cover every dependency manifest.
 
 ## Release
 
-Before creating a production candidate tag:
+Before tagging:
 
 ```bash
 npm run check
 npm run check:release -- --require-clean
-git tag v<package.json version>
+git diff --check
+```
+
+Update the `package.json` version, `package-lock.json` version, and all public skill `SKILL.md` frontmatter versions together. Regenerate `maintenance/agent-context-index.json` after tracked file additions, removals, or navigation-relevant edits:
+
+```bash
+npm run generate:context
+npm run check:context
+```
+
+Tag from a clean tree:
+
+```bash
+git tag -a v<package.json version> -m "Release v<package.json version>"
 git push origin main v<package.json version>
 ```
 
-Update `package.json` version before tagging. Do not tag from a dirty tree.
-
-## Workflow
-
-1. Use `goal-preflight` to turn a roadmap, diagnosis, report, or rough brief into a linted goal bundle.
-2. Paste the generated `goal-bootloader.md` text into Copilot `/goal`.
-3. The `/goal` runtime uses `goal-main-orchestrator`.
-4. Runtime bootstrap checks that required skills and scripts are available before prompt audit.
-5. The main orchestrator launches branch sessions that use `goal-branch-orchestrator`.
-6. After each validated terminal branch result, main records an amender launch-or-skip decision; launch decisions run `goal-plan-amender` to adapt future work or add deterministic blocker-repair branches through accepted amendment artifacts.
-
-The runtime enforces skill availability bootstrap, absolute CLI entry paths, reproducible and collision-free manifest paths, fixed prompt-audit and allowed worker model fallback chains, prompt audit before branch work, rolling branch orchestration, rolling worker orchestration, explicit amendment launch-or-skip decisions for every terminal branch checkpoint, route-bound amendment proposals for future unstarted work plus deterministic blocker-repair packets that add new repair branches, wait-not-poll branch supervision, a hard limit of 4 active branch orchestrator agents, deterministic worker packet ids, artifact-backed manifest-bound branch and main status validation, deterministic schema v2 scheduler ledgers, deterministic packet telemetry, bounded launcher attempt timeouts, research-worker security checks, deterministic pre-review gates, deterministic branch status assembly, route-bound reviewer and plan-amender telemetry, semantic-hash-bound reviewer reuse, and a hard limit of 4 worker packets per branch. `max_active_branch_agents` is the real branch concurrency cap: main keeps slots saturated up to that cap, launches the next eligible branch when one finishes with `pass`, closes finished branch orchestrator agents before replacements, records `schedulers/main.scheduler.json`, and defers only branches with incomplete explicit manifest `depends_on` branch ids or a structured reason. `partial`, `blocked`, and `failed` dependencies do not unlock downstream work; downstream ids must be blocked or deferred with `reason_code: "dependency_failed"` evidence unless an accepted amendment adds a valid recovery path as future work. Waves are scheduling/order groups, not implicit dependency barriers. Accepted amendments write `amendments/Axxx.decision.json`, `amendments/Axxx.packet/route.json`, `amendments/Axxx.packet/telemetry.json`, `amendments/Axxx.packet/packet.validation.json`, `amendments/Axxx.proposal.json`, `Axxx.validation.json`, `Axxx.accepted.json`, archive the prior manifest, regenerate changed future branch prompts, rerun lint, and must not mutate active or terminal branch evidence. `max_active_worker_packets` is the real branch-local worker concurrency cap: branch keeps worker launcher slots saturated up to that cap, launches the next eligible worker when one finishes with `pass` and is integrated, records `schedulers/<branch-id>.worker.scheduler.json`, and defers only workers with incomplete explicit manifest work-item `depends_on` ids or a structured reason. Scheduler v2 events require ordered `seq`, `timestamp`, `runtime_ref`, and enum `reason_code` for `defer`, `under_capacity`, and `blocked`; `scheduler_tick.py` handles normal ready/launch/finish/close/refill bookkeeping and `append_scheduler_event.py` remains available for explicit unusual events. A manifest worker id may be relaunched after a non-pass attempt is finished and closed, which enables reviewer-feedback repairs with `create_runtime_packet.py --replace` while preserving the old packet under `attempts/`; undeclared repair worker ids remain invalid. Validators reconstruct active counts from scheduler events and reject duplicate active launches, missing finishes/closes, cap overflow, missing refill events, stale manifest hashes, non-pass dependency launches, vague reason text, and eligible-idle gaps without structured evidence. Default normal-worker fallback order is Gemini Pro, Gemini Flash, Codex Spark, GitHub Copilot `gpt-5.4` high effort, then Codex mini; branch orchestrators may choose a non-empty ordered subsequence per normal worker packet with a recorded `selection_reason`, and validators reject route drift from manifest-owned `workers/<packet_id>/route.json`. Normal Codex worker and reviewer attempts run with `--ignore-user-config --ignore-rules` so child Codex sessions do not preload the parent maintenance context. Plan-amender packets default to `gpt-5.4 -> gpt-5.4-mini`, may select allowed `gpt-5.5` routes with a recorded reason, and use read-only bounded Codex attempts; deterministic blocker-repair packets use local status-artifact parsing with alias `deterministic-blocker-repair` and do not call a model. Research-worker packets are declared with `worker_type: "research-worker"` and run `codex --search exec --ephemeral -s read-only` with user config loaded; they may use broad read-only information retrieval through Codex native search, configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and local read-only file inspection, and their artifacts must live under `research/<packet_id>/research.json` with search queries when used, source URLs, tools used, local files read, command evidence, and telemetry. Every audit, worker, research-worker, reviewer, plan-amender, and Lite launcher writes packet-local `telemetry.json` with declared/called/accepted model aliases, provider/model ids, prompt/output/log character and byte counts, attempt timeout seconds, and best-effort token usage parsed from provider logs when exposed; main writes a current `telemetry.summary.json` with bundle-level totals and separate premium `gpt-5.5` audit/reviewer attempt accounting before final validation. Reviewer packet generation requires a passing schema v2 branch-local `pre_review_gate.json`; the generated `reviewers/<packet_id>/route.json` selects `light` (`gpt-5.4-mini -> gpt-5.4`), `standard` (`gpt-5.4 -> gpt-5.5`), or `heavy` (`gpt-5.5 -> gpt-5.4`) from `review_model_policy`, and reviewer telemetry aliases must match that route exactly. Reviewer outputs must copy gate `semantic_input_hashes` exactly. Reuse is accepted only when semantic hashes match and both source review and source telemetry exist; no fresh reviewer model call is required for accepted reuse. Lite advisory packets, when used, run Gemini Flash Lite through the CLI in read-only plan mode, capture the absolute Gemini binary, version, and binary sha256 at packet creation, rehash source inputs, `task.md`, `prompt.md`, and the Gemini binary before launch and validation, regenerate prompts from `input-files.json` plus `task.md`, enforce skill-specific purpose allowlists, reject silent packet overwrites, and write validated `advice.json`; Lite is a context router only and cannot satisfy audit, review, mergeability, scientific claim, or DoD evidence. Preflight manifests require `adaptation_policy`, `amender_model_policy`, `review_model_policy`, `orchestration_watchdog`, branch `owned_paths`, and `preflight_lite_advice` provenance; preflight/main/branch validators scan manifest-owned `lite/` for relevant unrecorded Lite packet directories. Branch and main status validators require manifest-owned `lite_advice` audit records, empty only when no relevant runtime Lite packet exists, and reject obvious state-changing or secret-inspection research commands. Preflight defaults to parallel decomposition, allows at most 5 scheduling groups of 4 branches, records explicit `serial_reasons` when branch or worker topology underfills capacity, synthesizes deterministic serial reasons and cleanup/artifact policy defaults when the brief omits them, and writes explicit cleanup/artifact policies so partial or blocked runs preserve inspection evidence unless the user authorizes cleanup. `partial` means some work completed with structured unlaunched or blocked remainder; `pass` requires all manifest branches and workers launched and validated. Bundle prompt/status/review/pre-review-gate/scheduler/amendment paths are relative to the bundle root; worktree paths are relative to the repository root; normal worker status artifacts must live at manifest-owned `workers/<packet_id>/status.json` paths and research-worker status artifacts must live at manifest-owned `research/<packet_id>/research.json` paths.
-
-Generated `goal-bootloader.md` files are location-bound because they embed absolute bundle and repository roots. If a bundle or repository checkout is moved, rerun `goal-preflight` or run `render_goal_bootloader.py --repo-root /absolute/path/to/repo --write`; do not hand-edit the bootloader paths.
-
-When a plan-amender packet selects `gpt-5.5`, `telemetry.summary.json` records it in a dedicated `premium_usage.amender_gpt_5_5` bucket alongside audit and reviewer premium buckets.
+CI has two jobs: a deterministic gate that compiles scripts, runs `npm run check`, verifies generated files/package contents/temp install parity, and checks whitespace; and a maintenance report job that uploads size, dependency, model-catalog, Ruff, and Pyright reports.

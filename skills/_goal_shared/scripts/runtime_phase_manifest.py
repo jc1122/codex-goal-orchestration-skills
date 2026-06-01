@@ -38,7 +38,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "brief",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --brief-schema-json && python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --example-brief",
-                "agent_does": "write one structured brief JSON with concrete branches/work_items/DoD; prefer 3-4 independent branches when safe",
+                "agent_does": "write one structured brief JSON with concrete branches/work_items/DoD; prefer 3-4 independent branches when safe; if the user asks for debug mode, set telemetry_mode=debug",
                 "avoid": "do not inspect Python source or runtime contracts for brief shape; use --brief-schema-json, --example-brief, and lint defects",
             },
             {

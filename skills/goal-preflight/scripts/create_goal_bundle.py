@@ -234,6 +234,8 @@ def brief_schema_summary() -> dict:
             "cleanup_policy": "cleanup policy; deterministic default preserves non-pass evidence",
             "preflight_lite_advice": "array; use [] when no Lite packet was used",
             "telemetry_policy": "manifest-owned opt-in telemetry policy object; supported modes are standard and debug, raw_text must be false, collect names debug metric groups",
+            "telemetry_mode": "lean shorthand; set to debug to expand the full safe debug telemetry policy",
+            "debug_telemetry": "boolean shorthand; true means telemetry_mode=debug, false means standard unless telemetry_policy says otherwise",
         },
         "branch_required": {
             "objective": "branch-level objective",
@@ -369,6 +371,49 @@ def normalize_telemetry_policy(value: object) -> dict:
         raise SystemExit(f"telemetry_policy contains unsupported keys: {unknown}")
 
     return normalized
+
+
+def telemetry_policy_for_mode(mode: str) -> dict:
+    policy = dict(TELEMETRY_POLICY_DEFAULT)
+    policy["mode"] = mode
+    policy["collect"] = list(TELEMETRY_COLLECT_ITEMS) if mode == "debug" else []
+    return policy
+
+
+def normalize_telemetry_mode(value: object, *, field: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{field} must be one of {', '.join(TELEMETRY_POLICY_MODES)}")
+    mode = value.strip().lower()
+    if mode not in TELEMETRY_POLICY_MODES:
+        raise SystemExit(f"{field} must be one of {', '.join(TELEMETRY_POLICY_MODES)}")
+    return mode
+
+
+def normalize_debug_telemetry(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise SystemExit("debug_telemetry must be a boolean")
+    return "debug" if value else "standard"
+
+
+def normalize_brief_telemetry_policy(brief: dict) -> dict:
+    telemetry_mode = normalize_telemetry_mode(brief.get("telemetry_mode"), field="telemetry_mode")
+    debug_mode = normalize_debug_telemetry(brief.get("debug_telemetry"))
+    if telemetry_mode is not None and debug_mode is not None and telemetry_mode != debug_mode:
+        raise SystemExit("telemetry_mode and debug_telemetry request conflicting modes")
+
+    requested_mode = telemetry_mode or debug_mode
+    raw_policy = brief.get("telemetry_policy")
+    if raw_policy is None and requested_mode is not None:
+        raw_policy = telemetry_policy_for_mode(requested_mode)
+
+    policy = normalize_telemetry_policy(raw_policy)
+    if requested_mode is not None and policy["mode"] != requested_mode:
+        raise SystemExit("telemetry_mode/debug_telemetry conflicts with telemetry_policy.mode")
+    return policy
 
 
 def normalize_reason_list(value: object, fallback: str = "") -> list[str]:
@@ -830,7 +875,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
     preflight_lite_advice = brief.get("preflight_lite_advice", [])
     if not isinstance(preflight_lite_advice, list):
         raise SystemExit("preflight_lite_advice must be an array when supplied")
-    telemetry_policy = normalize_telemetry_policy(brief.get("telemetry_policy"))
+    telemetry_policy = normalize_brief_telemetry_policy(brief)
 
     waves = brief.get("waves") or chunk_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
