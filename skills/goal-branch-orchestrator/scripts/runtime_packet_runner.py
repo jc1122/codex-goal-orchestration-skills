@@ -6,8 +6,10 @@ from __future__ import annotations
 import argparse
 import glob
 import json
+import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import time
@@ -124,6 +126,92 @@ def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, A
         remove_if_exists(Path(path))
     for path in glob.glob((packet_dir / "events-*.log").as_posix()):
         remove_if_exists(Path(path))
+    for path in glob.glob((packet_dir / "events-*-opencode-readback.json").as_posix()):
+        remove_if_exists(Path(path))
+
+
+def opencode_db_path() -> Path:
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    if xdg_data:
+        return Path(xdg_data) / "opencode" / "opencode.db"
+    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def parse_session_id(stdout: str) -> str | None:
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            session_id = event.get("sessionID")
+            if isinstance(session_id, str) and session_id:
+                return session_id
+            part = event.get("part")
+            if isinstance(part, dict):
+                session_id = part.get("sessionID")
+                if isinstance(session_id, str) and session_id:
+                    return session_id
+    return None
+
+
+def safe_json(data: str) -> dict[str, Any]:
+    try:
+        value = json.loads(data)
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def read_opencode_assistant_text(session_id: str, db_path: Path) -> tuple[str, dict[str, Any]]:
+    if not db_path.exists():
+        return "", {"status": "missing_db", "db_path": db_path.as_posix()}
+    con = sqlite3.connect(db_path)
+    try:
+        row = con.execute(
+            """
+            select id, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write
+            from session where id=?
+            """,
+            (session_id,),
+        ).fetchone()
+        if row is None:
+            return "", {"status": "missing_session", "session_id": session_id}
+        roles: dict[str, str] = {}
+        for message_id, message_data in con.execute(
+            "select id, data from message where session_id=? order by time_created",
+            (session_id,),
+        ):
+            parsed = safe_json(message_data)
+            role = parsed.get("role")
+            if isinstance(role, str):
+                roles[message_id] = role
+        texts: list[str] = []
+        for message_id, part_data in con.execute(
+            "select message_id, data from part where session_id=? order by time_created",
+            (session_id,),
+        ):
+            if roles.get(message_id) != "assistant":
+                continue
+            part = safe_json(part_data)
+            if part.get("type") == "text" and isinstance(part.get("text"), str):
+                texts.append(part["text"])
+        return "".join(texts), {
+            "status": "pass",
+            "session_id": row[0],
+            "tokens": {
+                "input": row[1],
+                "output": row[2],
+                "reasoning": row[3],
+                "cache_read": row[4],
+                "cache_write": row[5],
+            },
+        }
+    finally:
+        con.close()
 
 
 def state_artifact_name(config: dict[str, Any]) -> str:
@@ -442,8 +530,9 @@ def run_gemini_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path,
     if not isinstance(model, str) or not model:
         raise SystemExit(f"{CONFIG_NAME} missing model for {label}")
     approval = string_value(config, "gemini_approval_mode") if isinstance(config.get("gemini_approval_mode"), str) else "yolo"
+    command_binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else string_value(config, "gemini_command")
     command = [
-        string_value(config, "gemini_command"),
+        command_binary,
         "--model",
         model,
         "--approval-mode",
@@ -650,6 +739,118 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
     return 0
 
 
+def render_runtime_args(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], prompt_text: str, worktree: str, schema_path: Path, output_path: Path) -> list[str]:
+    args = attempt.get("run_args")
+    if not isinstance(args, list):
+        return []
+    context = {
+        "alias": str(attempt.get("alias", "")),
+        "model": str(attempt.get("model", "")),
+        "provider": str(attempt.get("provider_id", attempt.get("provider", ""))),
+        "role": str(config.get("role", "")),
+        "packet_id": str(config.get("packet_id", "")),
+        "worktree": worktree,
+        "packet_dir": packet_dir.as_posix(),
+        "prompt": prompt_text,
+        "prompt_file": (packet_dir / "prompt.md").as_posix(),
+        "schema_file": schema_path.as_posix(),
+        "output_file": output_path.as_posix(),
+    }
+    rendered: list[str] = []
+    for item in args:
+        if isinstance(item, str):
+            rendered.append(item.format(**context))
+    return rendered
+
+
+def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> int:
+    schema_path = packet_dir / schema_name
+    output_path = packet_dir / output_name
+    prompt_path = packet_dir / "prompt.md"
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+    timeout_seconds = int_value(attempt, "timeout_seconds")
+    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
+    binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else "opencode"
+    resolved = shutil.which(binary) if not os.path.isabs(binary) else binary
+    if not resolved:
+        print(f"opencode binary not found: {binary}", file=sys.stderr)
+        return 127
+    event_path = packet_dir / f"events-{label}.jsonl"
+    args = render_runtime_args(
+        attempt,
+        packet_dir=packet_dir,
+        config=config,
+        prompt_text=prompt_text,
+        worktree=worktree,
+        schema_path=schema_path,
+        output_path=output_path,
+    )
+    if not args:
+        args = ["run", "--pure", "--format", "json", "--model", string_value(attempt, "model"), "--dir", worktree, prompt_text]
+    rc = run_with_timeout(
+        command=[resolved, *args],
+        timeout_seconds=timeout_seconds,
+        kill_after_seconds=kill_after_seconds,
+        role=string_value(config, "role"),
+        cwd=str(packet_dir),
+        stdin_data=None,
+        stdout_path=event_path,
+    )
+    if rc != 0:
+        return rc
+    session_id = parse_session_id(event_path.read_text(encoding="utf-8", errors="replace") if event_path.exists() else "")
+    if not session_id:
+        print("opencode attempt did not emit a session id", file=sys.stderr)
+        return 1
+    assistant_text, readback = read_opencode_assistant_text(session_id, opencode_db_path())
+    (packet_dir / f"events-{label}-assistant.log").write_text(assistant_text, encoding="utf-8")
+    (packet_dir / f"events-{label}-opencode-readback.json").write_text(json.dumps(readback, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if not ensure_status_json(packet_dir, schema_path, output_path, packet_dir / f"events-{label}-assistant.log", config):
+        return 1
+    return 0
+
+
+def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> int:
+    schema_path = packet_dir / schema_name
+    output_path = packet_dir / output_name
+    prompt_path = packet_dir / "prompt.md"
+    prompt_text = prompt_path.read_text(encoding="utf-8")
+    timeout_seconds = int_value(attempt, "timeout_seconds")
+    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
+    binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else ""
+    if not binary:
+        print("generic CLI attempt missing command_binary", file=sys.stderr)
+        return 127
+    resolved = shutil.which(binary) if not os.path.isabs(binary) else binary
+    if not resolved:
+        print(f"generic CLI binary not found: {binary}", file=sys.stderr)
+        return 127
+    event_path = packet_dir / f"events-{label}.log"
+    args = render_runtime_args(
+        attempt,
+        packet_dir=packet_dir,
+        config=config,
+        prompt_text=prompt_text,
+        worktree=worktree,
+        schema_path=schema_path,
+        output_path=output_path,
+    )
+    rc = run_with_timeout(
+        command=[resolved, *args],
+        timeout_seconds=timeout_seconds,
+        kill_after_seconds=kill_after_seconds,
+        role=string_value(config, "role"),
+        cwd=worktree,
+        stdin_data=prompt_path.read_bytes(),
+        stdout_path=event_path,
+    )
+    if rc != 0:
+        return rc
+    if not ensure_status_json(packet_dir, schema_path, output_path, event_path, config):
+        return 1
+    return 0
+
+
 def collect_strings(value: Any):
     if isinstance(value, str):
         yield value
@@ -821,7 +1022,7 @@ def run_worker_attempt(
     worktree: str,
 ) -> tuple[int, Path | None]:
     label = event_label(attempt, f"attempt-{attempt_index + 1}")
-    provider = attempt.get("provider")
+    provider = attempt.get("harness_kind") or attempt.get("provider")
     if provider == "gemini":
         if run_gemini_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree) != 0:
             return 1, packet_dir / f"events-{label}.jsonl"
@@ -854,6 +1055,26 @@ def run_worker_attempt(
             worktree=worktree,
             label=label,
         ), packet_dir / f"events-{label}.jsonl"
+    if provider == "opencode":
+        return run_opencode_model(
+            attempt,
+            packet_dir=packet_dir,
+            config=config,
+            schema_name=schema_name,
+            output_name=output_name,
+            worktree=worktree,
+            label=label,
+        ), packet_dir / f"events-{label}.jsonl"
+    if provider == "generic-cli":
+        return run_generic_cli_model(
+            attempt,
+            packet_dir=packet_dir,
+            config=config,
+            schema_name=schema_name,
+            output_name=output_name,
+            worktree=worktree,
+            label=label,
+        ), packet_dir / f"events-{label}.log"
     raise SystemExit(f"{CONFIG_NAME} unsupported worker provider: {provider}")
 
 
@@ -930,7 +1151,7 @@ def run_packet(packet_dir: Path) -> int:
 
     for index, attempt in enumerate(attempts):
         _label = event_label(attempt, f"attempt-{index + 1}")
-        provider = attempt.get("provider")
+        provider = attempt.get("harness_kind") or attempt.get("provider")
         write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
         if provider == "codex":
             rc = run_codex_model(
@@ -941,6 +1162,35 @@ def run_packet(packet_dir: Path) -> int:
                 output_name=output_name,
                 worktree=worktree,
                 label=_label,
+            )
+        elif provider == "opencode":
+            rc = run_opencode_model(
+                attempt,
+                packet_dir=packet_dir,
+                config=config,
+                schema_name=schema_name,
+                output_name=output_name,
+                worktree=worktree,
+                label=_label,
+            )
+        elif provider == "generic-cli":
+            rc = run_generic_cli_model(
+                attempt,
+                packet_dir=packet_dir,
+                config=config,
+                schema_name=schema_name,
+                output_name=output_name,
+                worktree=worktree,
+                label=_label,
+            )
+        elif provider == "gemini":
+            rc = run_gemini_attempt(
+                attempt,
+                label=_label,
+                packet_dir=packet_dir,
+                config=config,
+                schema_path=packet_dir / schema_name,
+                worktree=worktree,
             )
         else:
             raise SystemExit(f"{CONFIG_NAME} unsupported {role} provider: {provider}")

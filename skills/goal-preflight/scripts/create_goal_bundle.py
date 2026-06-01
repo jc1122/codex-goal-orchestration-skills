@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -236,6 +237,8 @@ def brief_schema_summary() -> dict:
             "telemetry_policy": "manifest-owned opt-in telemetry policy object; supported modes are standard and debug, raw_text must be false, collect names debug metric groups",
             "telemetry_mode": "lean shorthand; set to debug to expand the full safe debug telemetry policy",
             "debug_telemetry": "boolean shorthand; true means telemetry_mode=debug, false means standard unless telemetry_policy says otherwise",
+            "goal_config": "optional manifest-owned model/provider/harness configuration supplied through --goal-config; do not hand-author in the brief",
+            "goal_config_check": "optional passing goal-config check report supplied through --goal-config-check; required when --goal-config is used",
         },
         "branch_required": {
             "objective": "branch-level objective",
@@ -947,6 +950,82 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
     }
 
 
+BILLING_FORBIDDEN_RE = re.compile(r"usd|dollar|pricing|price", re.IGNORECASE)
+
+
+def validate_goal_config(config: dict) -> None:
+    if config.get("schema_version") != 1:
+        raise SystemExit("goal_config.schema_version must be 1")
+    if BILLING_FORBIDDEN_RE.search(json.dumps(config, sort_keys=True)):
+        raise SystemExit("goal_config must not contain billing, price, pricing, dollar, or USD fields")
+    models = config.get("models")
+    if not isinstance(models, dict) or not models:
+        raise SystemExit("goal_config.models must be a non-empty object")
+    harnesses = config.get("harnesses")
+    if not isinstance(harnesses, dict) or not harnesses:
+        raise SystemExit("goal_config.harnesses must be a non-empty object")
+    ladders = config.get("model_ladders")
+    if not isinstance(ladders, dict) or not isinstance(ladders.get("worker"), list) or not ladders["worker"]:
+        raise SystemExit("goal_config.model_ladders.worker must be a non-empty array")
+    for ladder_name, ladder in ladders.items():
+        if not isinstance(ladder, list) or not ladder:
+            raise SystemExit(f"goal_config.model_ladders.{ladder_name} must be a non-empty array")
+        for role in ladder:
+            if role not in models:
+                raise SystemExit(f"goal_config.model_ladders.{ladder_name} references unknown role: {role}")
+    policies = config.get("model_policies")
+    if not isinstance(policies, dict):
+        raise SystemExit("goal_config.model_policies must be present; regenerate with goal-config")
+    for key in ("worker_model_policy", "review_model_policy", "amender_model_policy", "lite_model_policy"):
+        if not isinstance(policies.get(key), dict):
+            raise SystemExit(f"goal_config.model_policies.{key} must be an object")
+
+
+def load_goal_config(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"goal config must be a JSON object: {path}")
+    validate_goal_config(data)
+    return data
+
+
+def load_goal_config_check(path: Path | None) -> dict | None:
+    if path is None:
+        return None
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"goal config check must be a JSON object: {path}")
+    if data.get("status") != "pass":
+        raise SystemExit(f"goal config check must have status=pass: {path}")
+    failures = data.get("failures")
+    if failures not in ([], None):
+        raise SystemExit(f"goal config check must not contain failures: {path}")
+    return data
+
+
+def apply_goal_config_to_brief(brief: dict, config: dict | None) -> dict:
+    if config is None:
+        return brief
+    updated = dict(brief)
+    aggressiveness = config.get("aggressiveness") if isinstance(config.get("aggressiveness"), dict) else {}
+    max_active = aggressiveness.get("max_active_branch_agents")
+    if isinstance(max_active, int) and not isinstance(max_active, bool):
+        updated["max_active_branch_agents"] = max_active
+    max_workers = aggressiveness.get("max_active_worker_packets")
+    if isinstance(max_workers, int) and not isinstance(max_workers, bool):
+        branches = []
+        for branch in updated.get("branches", []):
+            if isinstance(branch, dict):
+                branch = dict(branch)
+                branch["max_active_worker_packets"] = max_workers
+            branches.append(branch)
+        updated["branches"] = branches
+    updated["goal_config"] = config
+    return updated
+
+
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -974,6 +1053,8 @@ def render_branch_dependencies(branches: list[dict]) -> str:
 
 
 def manifest_from_normalized_brief(brief: dict) -> dict:
+    goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
+    model_policies = goal_config.get("model_policies", {}) if goal_config else {}
     return {
         "job_id": brief["job_id"],
         "main_prompt": "main.prompt.md",
@@ -983,15 +1064,25 @@ def manifest_from_normalized_brief(brief: dict) -> dict:
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
         "adaptation_policy": CONTRACT.ADAPTATION_POLICY,
-        "worker_model_policy": WORKER_MODEL_POLICY,
-        "amender_model_policy": AMENDER_MODEL_POLICY,
-        "lite_model_policy": LITE_MODEL_POLICY,
+        "worker_model_policy": model_policies.get("worker_model_policy", WORKER_MODEL_POLICY),
+        "amender_model_policy": model_policies.get("amender_model_policy", AMENDER_MODEL_POLICY),
+        "lite_model_policy": model_policies.get("lite_model_policy", LITE_MODEL_POLICY),
         "lite_advisor_policy": LITE_ADVISOR_POLICY,
         "research_worker_policy": RESEARCH_WORKER_POLICY,
-        "review_model_policy": REVIEW_MODEL_POLICY,
+        "review_model_policy": model_policies.get("review_model_policy", REVIEW_MODEL_POLICY),
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
         "telemetry_policy": brief["telemetry_policy"],
+        **(
+            {
+                "goal_config_path": "goal.config.json",
+                "goal_config_check_path": "goal-config.check.json",
+                "goal_config": goal_config,
+                "goal_config_check": brief.get("goal_config_check", {}),
+            }
+            if goal_config
+            else {}
+        ),
         "branches": [
             {
                 "id": branch["id"],
@@ -1056,6 +1147,14 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     scope = branch.get("scope") or (
         f"Bounded to the owned paths, work items, verification commands, and stop conditions listed for {branch['id']}."
     )
+    goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
+    worker_policy = (
+        goal_config.get("model_policies", {}).get("worker_model_policy", WORKER_MODEL_POLICY)
+        if goal_config
+        else WORKER_MODEL_POLICY
+    )
+    default_worker_ladder = worker_policy.get("default_ladder", list(DEFAULT_WORKER_LADDER))
+    allowed_worker_routes = worker_policy.get("allowed_routes", list(DEFAULT_WORKER_LADDER))
     return branch_template.format(
         branch_id=branch["id"],
         title=branch.get("title", branch.get("objective", branch["id"])),
@@ -1068,8 +1167,8 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
         pre_review_gate_path=branch["pre_review_gate_path"],
         worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
-        default_worker_ladder=CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER),
-        allowed_worker_routes=", ".join(DEFAULT_WORKER_LADDER),
+        default_worker_ladder=CONTRACT.format_worker_ladder(default_worker_ladder),
+        allowed_worker_routes=", ".join(allowed_worker_routes),
         objective=branch.get("objective", "Objective not supplied."),
         scope=scope,
         owned_paths=bullets(branch.get("owned_paths", [])),
@@ -1109,14 +1208,37 @@ def lint_bundle(bundle_dir: Path, *, write_output: bool = True) -> dict:
     return data
 
 
-def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
+def create_bundle(
+    brief: dict,
+    repo_root: Path,
+    out_dir: Path | None,
+    *,
+    goal_config: dict | None = None,
+    goal_config_check: dict | None = None,
+    goal_config_source: Path | None = None,
+    goal_config_check_source: Path | None = None,
+) -> Path:
+    if goal_config is not None and goal_config_check is None:
+        raise SystemExit("--goal-config requires --goal-config-check with status=pass")
+    brief = apply_goal_config_to_brief(brief, goal_config)
     brief = normalize_brief(brief, default_base_ref=current_git_branch(repo_root))
+    if goal_config is not None:
+        brief["goal_config"] = goal_config
+        brief["goal_config_check"] = goal_config_check or {}
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)
 
     manifest = manifest_from_normalized_brief(brief)
     write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    if goal_config_source is not None:
+        shutil.copyfile(goal_config_source, bundle_dir / "goal.config.json")
+    elif goal_config is not None:
+        write(bundle_dir / "goal.config.json", json.dumps(goal_config, indent=2, sort_keys=True) + "\n")
+    if goal_config_check_source is not None:
+        shutil.copyfile(goal_config_check_source, bundle_dir / "goal-config.check.json")
+    elif goal_config_check is not None:
+        write(bundle_dir / "goal-config.check.json", json.dumps(goal_config_check, indent=2, sort_keys=True) + "\n")
 
     write_bundle_prompts(brief, bundle_dir)
 
@@ -1132,7 +1254,12 @@ def create_bundle(brief: dict, repo_root: Path, out_dir: Path | None) -> Path:
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
             f"Scheduling: rolling; runtime branch scheduler ledger path is {CONTRACT.MAIN_SCHEDULER_PATH}; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
-            f"Worker model policy: {CONTRACT.format_worker_ladder(DEFAULT_WORKER_LADDER)}; branches may choose an ordered subsequence with a recorded reason.",
+            f"Worker model policy: {CONTRACT.format_worker_ladder(manifest['worker_model_policy']['default_ladder'])}; branches may choose an ordered subsequence with a recorded reason.",
+            *(
+                [f"Goal config: {goal_config.get('profile', 'custom')} from goal.config.json; harness check status is pass."]
+                if goal_config
+                else []
+            ),
             "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
             f"Artifact policy: {brief['artifact_policy']}",
             f"Cleanup policy: {brief['cleanup_policy']}",
@@ -1158,6 +1285,8 @@ def main() -> int:
     parser.add_argument("--brief")
     parser.add_argument("--repo-root")
     parser.add_argument("--out-dir")
+    parser.add_argument("--goal-config", help="Absolute path to checked goal.config.json to embed and consume in the bundle.")
+    parser.add_argument("--goal-config-check", help="Absolute path to a passing check_goal_config.py report for --goal-config.")
     parser.add_argument(
         "--example-brief",
         "--brief-template-json",
@@ -1185,7 +1314,21 @@ def main() -> int:
     brief_path = resolve_absolute_path(args.brief, "--brief", must_exist=True)
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False) if args.out_dir else None
-    bundle_dir = create_bundle(load_json(brief_path), repo_root, out_dir)
+    goal_config_path = resolve_absolute_path(args.goal_config, "--goal-config", must_exist=True) if args.goal_config else None
+    goal_config_check_path = resolve_absolute_path(args.goal_config_check, "--goal-config-check", must_exist=True) if args.goal_config_check else None
+    if goal_config_check_path is not None and goal_config_path is None:
+        raise SystemExit("--goal-config-check requires --goal-config")
+    goal_config = load_goal_config(goal_config_path)
+    goal_config_check = load_goal_config_check(goal_config_check_path)
+    bundle_dir = create_bundle(
+        load_json(brief_path),
+        repo_root,
+        out_dir,
+        goal_config=goal_config,
+        goal_config_check=goal_config_check,
+        goal_config_source=goal_config_path,
+        goal_config_check_source=goal_config_check_path,
+    )
     print(bundle_dir)
     return 0
 

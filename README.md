@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.56
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.57
 ```
 
 Install to a custom absolute skills root:
@@ -87,8 +87,8 @@ The bundle is the data plane. Runtime agents exchange manifest-owned files rathe
 
 ## End-To-End Flow
 
-1. Optionally run `goal-config` to write and verify a model/provider profile before preflight or runtime work.
-2. `goal-preflight` writes a structured brief, lints it, creates the bundle, lints the bundle, and returns the exact `goal-bootloader.md` text.
+1. Optionally run `goal-config` to write and verify a model/provider/harness profile before preflight or runtime work.
+2. `goal-preflight` writes a structured brief, consumes the checked `goal.config.json` when supplied, lints it, creates the bundle, lints the bundle, and returns the exact `goal-bootloader.md` text.
 3. The user launches `/goal` with the bootloader. The bootloader points to absolute bundle and repository roots, so it must be regenerated if either path moves.
 4. `goal-main-orchestrator` runs bootstrap, live model catalog, script-only repair gate, deterministic or model prompt audit, branch scheduling, and main scheduler ledger updates.
 5. Main launches eligible branch orchestrator sessions as a rolling saturated pool up to `max_active_branch_agents` and waits for terminal artifacts rather than polling active branch internals.
@@ -123,6 +123,39 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
 
 The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. It records effort in tokens, characters, and elapsed time only.
 
+To use user-supplied models, keep roles explicit:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
+  --preset opencode-deepseek-v4 \
+  --role-model lite_agent:opencode:deepseek/deepseek-v4-flash \
+  --role-model demanding_agent:opencode:deepseek/deepseek-v4-pro \
+  --worker-ladder demanding_agent,lite_agent \
+  --reviewer-ladder demanding_agent \
+  --output /abs/goal.config.json
+```
+
+To plug in another CLI harness, provide a JSON harness spec and map roles to it. Built-in harness kinds are `opencode`, `codex`, `gemini`, and `generic-cli`; `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
+
+```json
+{
+  "name": "antigravity",
+  "kind": "generic-cli",
+  "command": "antigravity",
+  "smoke_args": ["--model", "{model}", "--prompt", "{prompt}"],
+  "run_args": ["--model", "{model}", "--prompt-file", "{prompt_file}"],
+  "run_readback": "stdout"
+}
+```
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
+  --harness-spec /abs/antigravity-harness.json \
+  --role-model lite_agent:antigravity:provider/model-lite \
+  --role-model demanding_agent:antigravity:provider/model-pro \
+  --output /abs/goal.config.json
+```
+
 Fail closed on missing opencode models:
 
 ```bash
@@ -144,7 +177,18 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --output /abs/goal-config-smoke.json
 ```
 
-The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters read back from the opencode session database. It does not read provider credentials or report provider prices.
+The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. It does not read provider credentials or report provider prices.
+
+After the check passes, pass both artifacts into preflight. This is the integration point: `create_goal_bundle.py` embeds `goal_config`, copies `goal.config.json` and `goal-config.check.json`, replaces manifest model policies with the configured ladders, and runtime packet generation turns those policies into concrete harness launch attempts.
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" \
+  --brief /abs/brief.json \
+  --repo-root /abs/repo \
+  --out-dir /abs/bundle \
+  --goal-config /abs/goal.config.json \
+  --goal-config-check /abs/goal-config-check.json
+```
 
 ## Preflight Briefs
 
@@ -371,8 +415,8 @@ Use exact absolute paths for script arguments when the phase manifest requires t
 Goal config:
 
 - `scan_configurables.py`: inventory configurable aggressiveness, model route, harness, timeout, and telemetry knobs.
-- `create_goal_config.py`: render a deterministic `goal.config.json` profile, including the `opencode-deepseek-v4` preset.
-- `check_goal_config.py`: validate provider/model availability and optionally smoke-test configured harness roles.
+- `create_goal_config.py`: render a deterministic `goal.config.json` profile, including the `opencode-deepseek-v4` preset, role-model overrides, model ladders, and custom harness specs.
+- `check_goal_config.py`: validate provider/model availability and optionally smoke-test configured harness roles; a passing report is required before preflight consumes the config.
 
 Preflight:
 

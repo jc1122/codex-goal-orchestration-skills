@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 
 
@@ -107,9 +108,16 @@ def normalize_context_files(values: list[str]) -> list[str]:
     return normalized
 
 
-def normalize_worker_ladder(values: list[str]) -> list[str]:
+def normalize_worker_ladder(
+    values: list[str],
+    *,
+    default_ladder: list[str] | None = None,
+    allowed_routes: list[str] | None = None,
+) -> list[str]:
+    default_ladder = default_ladder or list(DEFAULT_WORKER_LADDER)
+    allowed_routes = allowed_routes or list(default_ladder)
     if not values:
-        return list(DEFAULT_WORKER_LADDER)
+        return list(default_ladder)
     flattened = []
     for value in values:
         for item in value.split(","):
@@ -121,16 +129,16 @@ def normalize_worker_ladder(values: list[str]) -> list[str]:
     seen = set()
     positions = []
     for alias in flattened:
-        if alias not in ALLOWED_WORKER_ROUTES:
+        if alias not in allowed_routes:
             raise SystemExit(f"unsupported worker route alias: {alias!r}")
         if alias in seen:
             raise SystemExit(f"worker route alias repeated: {alias!r}")
         seen.add(alias)
-        positions.append(DEFAULT_WORKER_LADDER.index(alias))
+        positions.append(default_ladder.index(alias) if alias in default_ladder else len(default_ladder) + allowed_routes.index(alias))
     if positions != sorted(positions):
         raise SystemExit(
             "worker route aliases must preserve standard ladder order: "
-            + ", ".join(DEFAULT_WORKER_LADDER)
+            + ", ".join(default_ladder)
         )
     return flattened
 
@@ -147,15 +155,49 @@ def normalize_route_class(value: object, *, allow_custom: bool = True) -> str:
     return normalized
 
 
-def ladder_for_route_class(route_class: str) -> list[str]:
-    return list(WORKER_ROUTE_CLASS_LADDERS.get(route_class, WORKER_ROUTE_CLASS_LADDERS[DEFAULT_WORKER_ROUTE_CLASS]))
+def worker_policy_from_manifest(manifest: dict | None) -> dict:
+    if isinstance(manifest, dict) and isinstance(manifest.get("worker_model_policy"), dict):
+        return manifest["worker_model_policy"]
+    return CONTRACT.WORKER_MODEL_POLICY
+
+
+def goal_config_from_manifest(manifest: dict | None) -> dict | None:
+    if isinstance(manifest, dict) and isinstance(manifest.get("goal_config"), dict):
+        return manifest["goal_config"]
+    return None
+
+
+def policy_default_ladder(policy: dict) -> list[str]:
+    ladder = policy.get("default_ladder")
+    return list(ladder) if isinstance(ladder, list) and ladder else list(DEFAULT_WORKER_LADDER)
+
+
+def policy_allowed_routes(policy: dict) -> list[str]:
+    routes = policy.get("allowed_routes")
+    return list(routes) if isinstance(routes, list) and routes else policy_default_ladder(policy)
+
+
+def ladder_for_route_class(route_class: str, policy: dict | None = None) -> list[str]:
+    if policy is None:
+        return list(WORKER_ROUTE_CLASS_LADDERS.get(route_class, WORKER_ROUTE_CLASS_LADDERS[DEFAULT_WORKER_ROUTE_CLASS]))
+    route_classes = policy.get("route_classes") if isinstance(policy.get("route_classes"), dict) else {}
+    ladder = route_classes.get(route_class)
+    if isinstance(ladder, list) and ladder:
+        return list(ladder)
+    return policy_default_ladder(policy)
 
 
 def default_selection_reason(route_class: str) -> str:
     return CONTRACT.worker_route_class_reason(route_class)
 
 
-def validate_route_class_selection(route_class: str, selected_ladder: list[str], selection_reason: str) -> None:
+def validate_route_class_selection(route_class: str, selected_ladder: list[str], selection_reason: str, policy: dict | None = None) -> None:
+    if policy is not None:
+        allowed = set(ladder_for_route_class(route_class, policy))
+        disallowed = [alias for alias in selected_ladder if alias not in allowed]
+        if disallowed:
+            raise SystemExit(f"route_class {route_class!r} cannot use configured route aliases: " + ", ".join(disallowed))
+        return
     if route_class in {"mechanical", "docs", "small-edit", "normal-code"}:
         allowed = set(ladder_for_route_class(route_class))
         disallowed = [alias for alias in selected_ladder if alias not in allowed]
@@ -257,7 +299,107 @@ def worker_route_commands(selected_ladder: list[str]) -> list[str]:
     return commands
 
 
-def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
+def event_label_for_alias(alias: str) -> str:
+    if alias in WORKER_ROUTE_EVENT_LABELS:
+        return WORKER_ROUTE_EVENT_LABELS[alias]
+    label = re.sub(r"[^a-zA-Z0-9_.-]+", "-", alias).strip("-").lower()
+    return label or "configured"
+
+
+def render_attempt_args(args: object, *, context: dict[str, str]) -> list[str]:
+    if not isinstance(args, list):
+        return []
+    rendered: list[str] = []
+    for item in args:
+        if isinstance(item, str):
+            rendered.append(item.format(**context))
+    return rendered
+
+
+def configured_route_commands(selected_ladder: list[str], goal_config: dict) -> list[str]:
+    models = goal_config.get("models", {})
+    harnesses = goal_config.get("harnesses", {})
+    commands: list[str] = []
+    for alias in selected_ladder:
+        model = models.get(alias, {})
+        harness = harnesses.get(model.get("harness"), {})
+        command = harness.get("command", model.get("harness", ""))
+        args = harness.get("run_args") or harness.get("smoke_args") or []
+        rendered = render_attempt_args(
+            args,
+            context={
+                "alias": alias,
+                "model": str(model.get("model", "")),
+                "provider": str(model.get("provider", "")),
+                "role": alias,
+                "packet_id": "<packet_id>",
+                "worktree": "<worktree>",
+                "prompt": "<prompt>",
+                "prompt_file": "<prompt.md>",
+                "schema_file": "<schema.json>",
+                "output_file": "<output.json>",
+                "packet_dir": "<packet_dir>",
+            },
+        )
+        commands.append(" ".join([str(command), *rendered]).strip())
+    return commands
+
+
+def configured_telemetry_attempts(
+    selected_ladder: list[str],
+    goal_config: dict,
+    *,
+    timeout_seconds: int,
+    sandbox: str,
+) -> list[dict]:
+    models = goal_config.get("models", {})
+    harnesses = goal_config.get("harnesses", {})
+    attempts: list[dict] = []
+    for alias in selected_ladder:
+        model = models.get(alias)
+        if not isinstance(model, dict):
+            raise SystemExit(f"goal_config missing model role used by route ladder: {alias}")
+        harness_name = model.get("harness")
+        harness = harnesses.get(harness_name)
+        if not isinstance(harness, dict):
+            raise SystemExit(f"goal_config model {alias} references unknown harness: {harness_name}")
+        kind = harness.get("kind")
+        label = event_label_for_alias(alias)
+        event_suffix = "jsonl" if kind in {"codex", "opencode"} else "log"
+        attempts.append(
+            {
+                "alias": alias,
+                "provider": kind,
+                "provider_id": model.get("provider"),
+                "model": model.get("model"),
+                "harness": harness_name,
+                "harness_kind": kind,
+                "command_binary": harness.get("command"),
+                "command": configured_route_commands([alias], goal_config)[0],
+                "run_args": harness.get("run_args") or harness.get("smoke_args") or [],
+                "run_readback": harness.get("run_readback", "stdout"),
+                "effort": "",
+                "sandbox": sandbox,
+                "timeout_seconds": timeout_seconds,
+                "event_logs": [f"events-{label}.{event_suffix}"],
+                "probe_logs": [],
+                "status_markers": {
+                    "begin": GEMINI_STATUS_BEGIN,
+                    "end": GEMINI_STATUS_END,
+                },
+            }
+        )
+    return attempts
+
+
+def worker_telemetry_attempts(selected_ladder: list[str], goal_config: dict | None = None) -> list[dict]:
+    if goal_config is not None:
+        return configured_telemetry_attempts(
+            selected_ladder,
+            goal_config,
+            timeout_seconds=WORKER_ATTEMPT_TIMEOUT_SECONDS,
+            sandbox="workspace-write",
+        )
     attempts = []
     for alias in selected_ladder:
         label = WORKER_ROUTE_EVENT_LABELS[alias]
@@ -320,7 +462,14 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
     return attempts
 
 
-def reviewer_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
+def reviewer_telemetry_attempts(selected_ladder: list[str], goal_config: dict | None = None) -> list[dict]:
+    if goal_config is not None:
+        return configured_telemetry_attempts(
+            selected_ladder,
+            goal_config,
+            timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
+            sandbox="read-only",
+        )
     return CONTRACT.codex_telemetry_attempts(
         selected_ladder,
         timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
@@ -904,7 +1053,9 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
 def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id: str) -> dict:
     branch = branch_entry(manifest, branch_id)
     tier, reasons = infer_review_tier(manifest, gate, branch)
-    route = CONTRACT.review_route_for_tier(tier)
+    policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
+    routes = policy.get("routes") if isinstance(policy.get("routes"), dict) else {}
+    route = routes.get(tier) if isinstance(routes.get(tier), list) else CONTRACT.review_route_for_tier(tier)
     return {
         "schema_version": 1,
         "packet_id": packet_id,
@@ -912,8 +1063,8 @@ def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id
         "tier": tier,
         "selected_ladder": route,
         "selection_reason": "; ".join(reasons),
-        "policy_router": CONTRACT.REVIEW_MODEL_POLICY["router"],
-        "policy_routes": CONTRACT.REVIEW_MODEL_POLICY["routes"],
+        "policy_router": policy.get("router", CONTRACT.REVIEW_MODEL_POLICY["router"]),
+        "policy_routes": routes or CONTRACT.REVIEW_MODEL_POLICY["routes"],
         "heavy_triggers": reasons if tier == "heavy" else [],
         "route_classes": branch_route_classes(branch),
         "changed_paths": review_changed_paths(gate, branch),
@@ -960,6 +1111,12 @@ Read the packet-local `compact_reviewer_context` first. It lists the exact branc
 Determine the branch base ref from `compact_reviewer_context`. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
 Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
+
+If your CLI harness does not write `{schema_name}` directly, print the final review object between these exact marker lines and do not print any other JSON object between them:
+
+{GEMINI_STATUS_BEGIN}
+{{"packet_id":"{packet_id}","role":"reviewer","verdict":"blocked","findings":["replace with concrete finding"],"commands_run":["pwd","git status --short --branch"],"verification_gaps":["replace with concrete gap"],"residual_risks":[],"semantic_input_hashes":{{}},"reuse_policy":{{}},"summary":"replace with concise summary"}}
+{GEMINI_STATUS_END}
 """
 
 
@@ -1107,7 +1264,7 @@ Task:
 
 Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`. `changed_files` must contain repo-relative file paths only, without git porcelain prefixes such as `M ` or `?? `. `commands_run` and `tests` must contain exact command strings that were actually run.
 
-If you are running under Gemini CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
+If your CLI harness does not write `{schema_name}` directly, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
 {GEMINI_STATUS_BEGIN}
 {example_status}
@@ -1220,10 +1377,8 @@ def reviewer_ladder_from_route(review_route: dict | None) -> list[str]:
         "selected_ladder": CONTRACT.review_route_for_tier(CONTRACT.REVIEW_MODEL_POLICY["default_tier"]),
         "selection_reason": "Default light reviewer route.",
     }
-    return [
-        item for item in route.get("selected_ladder", [])
-        if isinstance(item, str) and item in REVIEW_ROUTE_MODELS
-    ] or CONTRACT.review_route_for_tier(CONTRACT.REVIEW_MODEL_POLICY["default_tier"])
+    selected = [item for item in route.get("selected_ladder", []) if isinstance(item, str) and item]
+    return selected or CONTRACT.review_route_for_tier(CONTRACT.REVIEW_MODEL_POLICY["default_tier"])
 
 
 def launch_config_base(
@@ -1266,6 +1421,7 @@ def compact_launch_config(
     review_semantic_hashes: dict[str, str] | None = None,
     review_reuse_policy: dict | None = None,
     telemetry_debug: bool = False,
+    goal_config: dict | None = None,
 ) -> dict | None:
     telemetry_script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
@@ -1291,8 +1447,8 @@ def compact_launch_config(
                 "begin": GEMINI_STATUS_BEGIN,
                 "end": GEMINI_STATUS_END,
             },
-            "attempts": worker_telemetry_attempts(selected_ladder),
-            "selected_commands": worker_route_commands(selected_ladder),
+            "attempts": worker_telemetry_attempts(selected_ladder, goal_config),
+            "selected_commands": configured_route_commands(selected_ladder, goal_config) if goal_config else worker_route_commands(selected_ladder),
             "model_catalog": model_catalog or {},
             "telemetry_script": telemetry_script,
             "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
@@ -1314,7 +1470,7 @@ def compact_launch_config(
     if role == "reviewer":
         reviewer_ladder = reviewer_ladder_from_route(review_route)
         terminal_commands = [
-            CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
+            configured_route_commands([alias], goal_config)[0] if goal_config else CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
             for alias in reviewer_ladder
         ]
         return {
@@ -1322,7 +1478,7 @@ def compact_launch_config(
                 "reviewer", packet_id, branch, worktree, schema_name, output_name, "read-only", REVIEWER_ATTEMPT_TIMEOUT_SECONDS
             ),
             **debug_config,
-            "attempts": reviewer_telemetry_attempts(reviewer_ladder),
+            "attempts": reviewer_telemetry_attempts(reviewer_ladder, goal_config),
             "telemetry_script": telemetry_script,
             "semantic_input_hashes": review_semantic_hashes or {},
             "reuse_policy": review_reuse_policy or {
@@ -1481,13 +1637,22 @@ def main() -> int:
         manifest_context = find_manifest_context(context_files, manifest_branch_id, packet_id)
         if manifest_context is not None:
             _manifest_path, _manifest, _branch_data, manifest_work_item = manifest_context
+            manifest = _manifest
+            manifest_path = _manifest_path
             telemetry_debug = telemetry_debug or CONTRACT.telemetry_debug_enabled(_manifest)
+        worker_policy = worker_policy_from_manifest(manifest)
+        worker_default_ladder = policy_default_ladder(worker_policy)
+        worker_allowed_routes = policy_allowed_routes(worker_policy)
         manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
         route_class = normalize_route_class(args.route_class or manifest_route_class or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS))
         selected_ladder = (
-            normalize_worker_ladder(normalized_worker_routes)
+            normalize_worker_ladder(
+                normalized_worker_routes,
+                default_ladder=worker_default_ladder,
+                allowed_routes=worker_allowed_routes,
+            )
             if normalized_worker_routes
-            else ladder_for_route_class(route_class)
+            else ladder_for_route_class(route_class, worker_policy)
         )
         catalog_path = (
             resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
@@ -1503,11 +1668,17 @@ def main() -> int:
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
         if not selection_reason:
-            selection_reason = default_selection_reason(route_class)
+            if goal_config_from_manifest(manifest):
+                selection_reason = (
+                    f"{route_class} route class selected from goal_config worker_model_policy: "
+                    + ", ".join(selected_ladder)
+                )
+            else:
+                selection_reason = default_selection_reason(route_class)
         if model_catalog and model_catalog.get("filtered_aliases"):
             aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
             selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
-        validate_route_class_selection(route_class, selected_ladder, selection_reason)
+        validate_route_class_selection(route_class, selected_ladder, selection_reason, worker_policy if goal_config_from_manifest(manifest) else None)
 
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     packet_dir = out_dir / packet_id
@@ -1586,8 +1757,8 @@ def main() -> int:
             "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
-            "default_ladder": list(DEFAULT_WORKER_LADDER),
-            "allowed_aliases": list(DEFAULT_WORKER_LADDER),
+            "default_ladder": policy_default_ladder(worker_policy_from_manifest(manifest)),
+            "allowed_aliases": policy_allowed_routes(worker_policy_from_manifest(manifest)),
             "model_catalog": model_catalog or {},
         }
         write_json(packet_dir / "route.json", route)
@@ -1608,6 +1779,7 @@ def main() -> int:
         review_semantic_hashes=review_semantic_hashes,
         review_reuse_policy=review_reuse_policy,
         telemetry_debug=telemetry_debug,
+        goal_config=goal_config_from_manifest(manifest),
     )
     if launch_config is not None:
         write_json(packet_dir / "launch-config.json", launch_config)

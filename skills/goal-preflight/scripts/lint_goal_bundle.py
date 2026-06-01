@@ -574,6 +574,63 @@ def validate_telemetry_policy(defect, manifest: dict) -> None:
         defect("job.manifest.json", "critical", f"telemetry_policy contains unsupported keys: {', '.join(unknown)}")
 
 
+def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> dict | None:
+    config = manifest.get("goal_config")
+    if config is None:
+        return None
+    if not isinstance(config, dict):
+        defect("job.manifest.json", "critical", "goal_config must be an object when present")
+        return None
+    serialized = json.dumps(config, sort_keys=True).lower()
+    for forbidden in ("usd", "dollar", "pricing", "price"):
+        if forbidden in serialized:
+            defect("job.manifest.json", "critical", f"goal_config contains unsupported billing field or unit: {forbidden}")
+    if config.get("schema_version") != 1:
+        defect("job.manifest.json", "critical", "goal_config.schema_version must be 1")
+    models = config.get("models")
+    if not isinstance(models, dict) or not models:
+        defect("job.manifest.json", "critical", "goal_config.models must be a non-empty object")
+        models = {}
+    harnesses = config.get("harnesses")
+    if not isinstance(harnesses, dict) or not harnesses:
+        defect("job.manifest.json", "critical", "goal_config.harnesses must be a non-empty object")
+    ladders = config.get("model_ladders")
+    if not isinstance(ladders, dict):
+        defect("job.manifest.json", "critical", "goal_config.model_ladders must be an object")
+        ladders = {}
+    for ladder_name, ladder in ladders.items():
+        if not isinstance(ladder, list) or not ladder:
+            defect("job.manifest.json", "critical", f"goal_config.model_ladders.{ladder_name} must be a non-empty array")
+            continue
+        for role in ladder:
+            if role not in models:
+                defect("job.manifest.json", "critical", f"goal_config.model_ladders.{ladder_name} references unknown role: {role}")
+    policies = config.get("model_policies")
+    if not isinstance(policies, dict):
+        defect("job.manifest.json", "critical", "goal_config.model_policies must be present")
+        policies = {}
+    for key in ("worker_model_policy", "review_model_policy", "amender_model_policy", "lite_model_policy"):
+        if not isinstance(policies.get(key), dict):
+            defect("job.manifest.json", "critical", f"goal_config.model_policies.{key} must be an object")
+
+    config_path = manifest.get("goal_config_path")
+    if config_path != "goal.config.json":
+        defect("job.manifest.json", "critical", "goal_config_path must be 'goal.config.json' when goal_config is present")
+    elif not (bundle_dir / "goal.config.json").is_file():
+        defect("job.manifest.json", "critical", "goal_config_path artifact is missing: goal.config.json")
+    check = manifest.get("goal_config_check")
+    if not isinstance(check, dict):
+        defect("job.manifest.json", "critical", "goal_config_check must be an object when goal_config is present")
+    elif check.get("status") != "pass":
+        defect("job.manifest.json", "critical", "goal_config_check.status must be pass")
+    check_path = manifest.get("goal_config_check_path")
+    if check_path != "goal-config.check.json":
+        defect("job.manifest.json", "critical", "goal_config_check_path must be 'goal-config.check.json' when goal_config is present")
+    elif not (bundle_dir / "goal-config.check.json").is_file():
+        defect("job.manifest.json", "critical", "goal_config_check_path artifact is missing: goal-config.check.json")
+    return config
+
+
 def lint(bundle_dir: Path) -> dict:
     defects: list[dict] = []
 
@@ -600,6 +657,7 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"missing key: {key}")
     validate_preflight_lite_records(defect, bundle_dir, manifest)
     validate_telemetry_policy(defect, manifest)
+    goal_config = validate_goal_config_manifest(defect, bundle_dir, manifest)
     if not safe_branch_name(manifest.get("base_ref")):
         defect("job.manifest.json", "critical", f"base_ref is not safe: {manifest.get('base_ref')!r}")
     for key in ["artifact_policy", "cleanup_policy"]:
@@ -661,27 +719,44 @@ def lint(bundle_dir: Path) -> dict:
     if not isinstance(worker_model_policy, dict):
         defect("job.manifest.json", "critical", "worker_model_policy must be an object")
         worker_model_policy = {}
-    if worker_model_policy.get("default_ladder") != DEFAULT_WORKER_LADDER:
-        defect("job.manifest.json", "critical", f"worker_model_policy.default_ladder must be {DEFAULT_WORKER_LADDER!r}")
-    if worker_model_policy.get("allowed_routes") != DEFAULT_WORKER_LADDER:
-        defect("job.manifest.json", "critical", f"worker_model_policy.allowed_routes must be {DEFAULT_WORKER_LADDER!r}")
-    if worker_model_policy.get("branch_may_select_worker_route") is not True:
-        defect("job.manifest.json", "critical", "worker_model_policy.branch_may_select_worker_route must be true")
-    if worker_model_policy.get("selection_reason_required") is not True:
-        defect("job.manifest.json", "critical", "worker_model_policy.selection_reason_required must be true")
-    if not isinstance(worker_model_policy.get("ordering_rule"), str) or not worker_model_policy.get("ordering_rule", "").strip():
-        defect("job.manifest.json", "critical", "worker_model_policy.ordering_rule must be non-empty")
+    if goal_config is not None:
+        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        if worker_model_policy != expected_policies.get("worker_model_policy"):
+            defect("job.manifest.json", "critical", "worker_model_policy must match goal_config.model_policies.worker_model_policy")
+    else:
+        if worker_model_policy.get("default_ladder") != DEFAULT_WORKER_LADDER:
+            defect("job.manifest.json", "critical", f"worker_model_policy.default_ladder must be {DEFAULT_WORKER_LADDER!r}")
+        if worker_model_policy.get("allowed_routes") != DEFAULT_WORKER_LADDER:
+            defect("job.manifest.json", "critical", f"worker_model_policy.allowed_routes must be {DEFAULT_WORKER_LADDER!r}")
+        if worker_model_policy.get("branch_may_select_worker_route") is not True:
+            defect("job.manifest.json", "critical", "worker_model_policy.branch_may_select_worker_route must be true")
+        if worker_model_policy.get("selection_reason_required") is not True:
+            defect("job.manifest.json", "critical", "worker_model_policy.selection_reason_required must be true")
+        if not isinstance(worker_model_policy.get("ordering_rule"), str) or not worker_model_policy.get("ordering_rule", "").strip():
+            defect("job.manifest.json", "critical", "worker_model_policy.ordering_rule must be non-empty")
 
     review_model_policy = manifest.get("review_model_policy", {})
-    if review_model_policy != REVIEW_MODEL_POLICY:
+    if goal_config is not None:
+        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        if review_model_policy != expected_policies.get("review_model_policy"):
+            defect("job.manifest.json", "critical", "review_model_policy must match goal_config.model_policies.review_model_policy")
+    elif review_model_policy != REVIEW_MODEL_POLICY:
         defect("job.manifest.json", "critical", "review_model_policy must match the shared deterministic review router policy")
 
     amender_model_policy = manifest.get("amender_model_policy", {})
-    if amender_model_policy != AMENDER_MODEL_POLICY:
+    if goal_config is not None:
+        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        if amender_model_policy != expected_policies.get("amender_model_policy"):
+            defect("job.manifest.json", "critical", "amender_model_policy must match goal_config.model_policies.amender_model_policy")
+    elif amender_model_policy != AMENDER_MODEL_POLICY:
         defect("job.manifest.json", "critical", "amender_model_policy must match the shared deterministic plan-amender router policy")
 
     lite_model_policy = manifest.get("lite_model_policy", {})
-    if lite_model_policy != LITE_MODEL_POLICY:
+    if goal_config is not None:
+        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        if lite_model_policy != expected_policies.get("lite_model_policy"):
+            defect("job.manifest.json", "critical", "lite_model_policy must match goal_config.model_policies.lite_model_policy")
+    elif lite_model_policy != LITE_MODEL_POLICY:
         defect("job.manifest.json", "critical", "lite_model_policy must match the shared deterministic Lite model policy")
 
     lite_advisor_policy = manifest.get("lite_advisor_policy", {})

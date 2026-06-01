@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:804bde5e34d7779c93a19660fe866d4d40886259339c80b65e9c7a1a963d8cb7"
+    "source_fingerprint": "sha256:df9a6e30784e071d05ec2cca112eae6e526edd68ce8b940e51f8a781aa2c4ef2"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -24,6 +24,19 @@
         "1268:run_scheduler_fixtures:221l",
         "1950:run_runtime_packet_fixtures:206l",
         "1734:run_launch_ready_helper_fixtures:193l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 1809,
+      "approx_tokens": 18945,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "1497:main:309l",
+        "709:compact_worker_context:118l",
+        "1409:compact_launch_config:86l",
+        "1123:research_worker_prompt:79l"
       ]
     },
     {
@@ -53,29 +66,16 @@
       ]
     },
     {
-      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 1637,
-      "approx_tokens": 16976,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "1341:main:293l",
-        "560:compact_worker_context:118l",
-        "1254:compact_launch_config:85l",
-        "966:research_worker_prompt:79l"
-      ]
-    },
-    {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 1139,
-      "approx_tokens": 14904,
+      "lines": 1214,
+      "approx_tokens": 16157,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "577:lint:530l",
+        "634:lint:548l",
         "363:validate_preflight_lite_records:152l",
         "517:validate_telemetry_policy:58l",
-        "1114:main:22l"
+        "577:validate_goal_config_manifest:55l"
       ]
     }
   ],
@@ -176,7 +176,8 @@
       ],
       "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
-        "_goal_shared"
+        "_goal_shared",
+        "goal-main-orchestrator"
       ]
     },
     "goal-main-orchestrator": {
@@ -262,6 +263,7 @@
       "depends_on": [
         "_goal_shared",
         "goal-branch-orchestrator",
+        "goal-config",
         "goal-main-orchestrator",
         "goal-plan-amender"
       ]
@@ -341,6 +343,41 @@
       "target": "goal-preflight",
       "paths": [
         "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py"
+      ]
+    },
+    {
+      "source": "goal-config",
+      "target": "_goal_shared",
+      "paths": [
+        "skills/goal-config/references/lite-advisor-contract.md",
+        "skills/goal-config/scripts/append_scheduler_event.py",
+        "skills/goal-config/scripts/check_goal_skill_availability.py",
+        "skills/goal-config/scripts/check_model_catalog.py",
+        "skills/goal-config/scripts/context_pack.py",
+        "skills/goal-config/scripts/create_goal_config.py",
+        "skills/goal-config/scripts/create_lite_advice_packet.py",
+        "skills/goal-config/scripts/extract_telemetry.py",
+        "skills/goal-config/scripts/runtime_lite_runner.py",
+        "skills/goal-config/scripts/runtime_phase_manifest.py",
+        "skills/goal-config/scripts/scan_configurables.py",
+        "skills/goal-config/scripts/scheduler_tick.py",
+        "skills/goal-config/scripts/script_only_repair_gate.py",
+        "skills/goal-config/scripts/validate_lite_advice.py"
+      ]
+    },
+    {
+      "source": "goal-config",
+      "target": "goal-main-orchestrator",
+      "paths": [
+        "skills/goal-config/scripts/create_goal_config.py"
+      ]
+    },
+    {
+      "source": "goal-config",
+      "target": "goal-preflight",
+      "paths": [
+        "skills/goal-config/SKILL.md",
+        "skills/goal-config/references/configuration-contract.md"
       ]
     },
     {
@@ -455,6 +492,15 @@
       "paths": [
         "skills/goal-preflight/assets/branch.prompt.template.md",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
+      ]
+    },
+    {
+      "source": "goal-preflight",
+      "target": "goal-config",
+      "paths": [
+        "skills/goal-preflight/SKILL.md",
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
+        "skills/goal-preflight/scripts/lint_goal_bundle.py"
       ]
     },
     {

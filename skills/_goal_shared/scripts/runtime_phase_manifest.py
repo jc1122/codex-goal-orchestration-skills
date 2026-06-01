@@ -27,7 +27,7 @@ COMMON_RULES = [
 PHASES: dict[str, dict[str, Any]] = {
     "goal-config": {
         "role": "Configure and verify model/provider profiles; do not launch goal runtime work.",
-        "first_artifacts": ["user model/provider preference", "optional existing goal.config.json"],
+        "first_artifacts": ["user harness/provider/model preference", "optional existing goal.config.json"],
         "phases": [
             {
                 "id": "scan",
@@ -36,8 +36,9 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "create",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --output /abs/goal.config.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --role-model lite_agent:opencode:provider/model --role-model demanding_agent:opencode:provider/model --harness-spec /abs/custom-harness.json --output /abs/goal.config.json",
                 "artifacts": ["goal.config.json"],
+                "agent_does": "omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit",
             },
             {
                 "id": "model_check",
@@ -50,6 +51,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --require-models --smoke --harness lite --harness demanding --output /abs/goal-config-smoke.json",
                 "pass": "status=pass with assistant smoke text, token counts, character counts, and elapsed milliseconds for each role",
                 "on_fail": "return blocked; do not silently fall back to another provider/model",
+            },
+            {
+                "id": "preflight_integration",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --brief /abs/brief.json --repo-root /abs/repo --out-dir /abs/bundle --goal-config /abs/goal.config.json --goal-config-check /abs/goal-config-check.json",
+                "pass": "bundle manifest embeds goal_config/model_policies and lint_goal_bundle.py passes",
+                "agent_does": "use the smoke report as --goal-config-check when the user requested smoke-validated harnesses",
             },
         ],
         "details": [
