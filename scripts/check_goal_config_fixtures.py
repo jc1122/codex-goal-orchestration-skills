@@ -172,18 +172,25 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     packet_dir = packet_root / "B01-W01"
     route = json.loads((packet_dir / "route.json").read_text(encoding="utf-8"))
     launch_config = json.loads((packet_dir / "launch-config.json").read_text(encoding="utf-8"))
+    status_schema = json.loads((packet_dir / "status.schema.json").read_text(encoding="utf-8"))
     require(route["selected_ladder"] == ["demanding_agent", "lite_agent"], "packet route must use configured ladder")
     require(route["default_ladder"] == ["demanding_agent", "lite_agent"], "packet default ladder must use config")
     require("goal_config" in route["selection_reason"], "packet route reason should cite goal_config")
     require("Codex Spark" not in route["selection_reason"], "configured route reason must not cite legacy Codex ladder")
+    require(
+        status_schema["properties"]["selected_ladder"].get("const") == ["demanding_agent", "lite_agent"],
+        "worker status schema must accept the configured selected ladder",
+    )
     attempts = launch_config.get("attempts", [])
     require(len(attempts) == 2, "configured worker launch should have two attempts")
     require(attempts[0]["alias"] == "demanding_agent", "first attempt should be demanding agent")
     require(attempts[0]["harness_kind"] == "opencode", "first attempt should use opencode")
     require(attempts[0]["model"] == "deepseek/deepseek-v4-pro", "first attempt model mismatch")
+    require(attempts[0]["effort"] == "configured", "configured attempt effort must be telemetry-valid")
     require(attempts[1]["alias"] == "lite_agent", "second attempt should be lite agent")
     require(attempts[1]["harness_kind"] == "opencode", "second attempt should use opencode")
     require(attempts[1]["model"] == "deepseek/deepseek-v4-flash", "second attempt model mismatch")
+    require(attempts[1]["effort"] == "configured", "configured fallback effort must be telemetry-valid")
     require(attempts[0].get("run_args"), "configured harness attempts must carry rendered run args")
 
 

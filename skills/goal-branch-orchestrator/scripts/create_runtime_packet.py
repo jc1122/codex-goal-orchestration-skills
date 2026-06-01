@@ -378,7 +378,7 @@ def configured_telemetry_attempts(
                 "command": configured_route_commands([alias], goal_config)[0],
                 "run_args": harness.get("run_args") or harness.get("smoke_args") or [],
                 "run_readback": harness.get("run_readback", "stdout"),
-                "effort": "",
+                "effort": "configured",
                 "sandbox": sandbox,
                 "timeout_seconds": timeout_seconds,
                 "event_logs": [f"events-{label}.{event_suffix}"],
@@ -524,9 +524,18 @@ def exact_string_schema(value: str) -> dict:
     return {"type": "string", "const": value}
 
 
-def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
+def status_schema(packet_id: str, branch: str, worktree: str, selected_ladder: list[str] | None = None) -> dict:
     repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
     nonempty_string = {"type": "string", "minLength": 1}
+    selected_ladder_schema = (
+        {"type": "array", "const": selected_ladder}
+        if selected_ladder
+        else {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "enum": list(DEFAULT_WORKER_LADDER)},
+        }
+    )
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -539,11 +548,7 @@ def status_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
             "route_class": {"type": "string", "enum": list(WORKER_ROUTE_CLASSES)},
-            "selected_ladder": {
-                "type": "array",
-                "minItems": 1,
-                "items": {"type": "string", "enum": list(DEFAULT_WORKER_LADDER)},
-            },
+            "selected_ladder": selected_ladder_schema,
             "selection_reason": nonempty_string,
             "changed_files": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path}},
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
@@ -1696,7 +1701,7 @@ def main() -> int:
     else:
         schema_name = "status.schema.json"
         output_name = "status.json"
-        schema = status_schema(packet_id, branch, str(worktree))
+        schema = status_schema(packet_id, branch, str(worktree), selected_ladder)
 
     task_text = load_task(task_file)
     packet_context: dict | None = None

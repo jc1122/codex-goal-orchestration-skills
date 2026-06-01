@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:df9a6e30784e071d05ec2cca112eae6e526edd68ce8b940e51f8a781aa2c4ef2"
+    "source_fingerprint": "sha256:ea01d724441edf61718274f8bad4d3603bad3a7072a0d18a976bd1ae84443e36"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,27 +29,27 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 1809,
-      "approx_tokens": 18945,
+      "lines": 1814,
+      "approx_tokens": 18996,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1497:main:309l",
-        "709:compact_worker_context:118l",
-        "1409:compact_launch_config:86l",
-        "1123:research_worker_prompt:79l"
+        "1502:main:309l",
+        "714:compact_worker_context:118l",
+        "1414:compact_launch_config:86l",
+        "1128:research_worker_prompt:79l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 1550,
-      "approx_tokens": 18338,
+      "lines": 1570,
+      "approx_tokens": 18551,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1257:validate_review_artifact_for_branch:135l",
-        "1394:validate_branch_status:119l",
-        "438:validate_worker_artifacts:116l",
-        "983:validate_manifest_branch_contract:75l"
+        "1277:validate_review_artifact_for_branch:135l",
+        "1414:validate_branch_status:119l",
+        "458:validate_worker_artifacts:116l",
+        "1003:validate_manifest_branch_contract:75l"
       ]
     },
     {

@@ -178,10 +178,19 @@ def validate_research_security(defects: list[str], commands: list[str], local_fi
                 break
 
 
-def validate_worker_ladder(defects: list[str], value: object, path: str) -> list[str]:
+def validate_worker_ladder(
+    defects: list[str],
+    value: object,
+    path: str,
+    *,
+    allowed_routes: list[str] | tuple[str, ...] | set[str] | frozenset[str] | None = None,
+    default_ladder: list[str] | tuple[str, ...] | None = None,
+) -> list[str]:
     if not isinstance(value, list) or not value:
         defect(defects, path, "must be a non-empty array")
         return []
+    allowed = list(allowed_routes) if allowed_routes is not None else []
+    order = list(default_ladder) if default_ladder is not None else []
     aliases = []
     positions = []
     seen = set()
@@ -190,15 +199,16 @@ def validate_worker_ladder(defects: list[str], value: object, path: str) -> list
         if not isinstance(item, str) or not item.strip():
             defect(defects, item_path, "must be a non-empty string")
             continue
-        if item not in ALLOWED_WORKER_ROUTES:
-            defect(defects, item_path, f"must be one of {sorted(ALLOWED_WORKER_ROUTES)}")
+        if allowed and item not in allowed:
+            defect(defects, item_path, f"must be one of {sorted(allowed)}")
             continue
         if item in seen:
             defect(defects, item_path, "must not repeat a route alias")
             continue
         seen.add(item)
         aliases.append(item)
-        positions.append(DEFAULT_WORKER_LADDER.index(item))
+        if order:
+            positions.append(order.index(item) if item in order else len(order) + allowed.index(item))
     if positions != sorted(positions):
         defect(defects, path, "must preserve standard ladder order")
     return aliases
@@ -213,6 +223,8 @@ def validate_worker_route_class(defects: list[str], value: object, path: str) ->
 
 def validate_route_class_cost(defects: list[str], route_class: str, selected_ladder: list[str], path: str, reason: object) -> None:
     if route_class not in WORKER_ROUTE_CLASS_LADDERS or not selected_ladder:
+        return
+    if any(alias not in ALLOWED_WORKER_ROUTES for alias in selected_ladder):
         return
     allowed = list(WORKER_ROUTE_CLASS_LADDERS[route_class])
     if route_class in {"mechanical", "docs", "small-edit", "normal-code"}:
@@ -242,7 +254,15 @@ def validate_worker_route_artifact(
     if route.get("role") != "worker":
         defect(defects, f"{path}.role", "must be 'worker'")
     route_class = validate_worker_route_class(defects, route.get("route_class"), f"{path}.route_class")
-    selected_ladder = validate_worker_ladder(defects, route.get("selected_ladder"), f"{path}.selected_ladder")
+    route_allowed = route.get("allowed_aliases")
+    route_default = route.get("default_ladder")
+    selected_ladder = validate_worker_ladder(
+        defects,
+        route.get("selected_ladder"),
+        f"{path}.selected_ladder",
+        allowed_routes=route_allowed if isinstance(route_allowed, list) and route_allowed else list(ALLOWED_WORKER_ROUTES),
+        default_ladder=route_default if isinstance(route_default, list) and route_default else list(DEFAULT_WORKER_LADDER),
+    )
     selection_reason = require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
     validate_route_class_cost(defects, route_class, selected_ladder, f"{path}.selected_ladder", selection_reason)
     if route.get("route_class") != worker.get("route_class"):
@@ -522,13 +542,14 @@ def validate_worker_artifacts(
                 f"{item_path}.route_path",
                 worker=artifact,
             )
+        selected_ladder = artifact.get("selected_ladder") if isinstance(artifact.get("selected_ladder"), list) else []
         telemetry = validate_telemetry_artifact(
             defects,
             status_artifact.parent / "telemetry.json",
             f"{item_path}.telemetry_path",
             packet_id=str(packet_id) if isinstance(packet_id, str) else None,
             role="worker",
-            allowed_aliases=DEFAULT_WORKER_LADDER,
+            allowed_aliases=selected_ladder or DEFAULT_WORKER_LADDER,
             require_called=True,
         )
         if telemetry.get("route_class") and telemetry.get("route_class") != artifact.get("route_class"):
@@ -539,7 +560,6 @@ def validate_worker_artifacts(
             for attempt in telemetry_attempts
             if isinstance(attempt, dict) and isinstance(attempt.get("alias"), str)
         ]
-        selected_ladder = artifact.get("selected_ladder") if isinstance(artifact.get("selected_ladder"), list) else []
         if telemetry_aliases and selected_ladder and telemetry_aliases != selected_ladder:
             defect(defects, f"{item_path}.telemetry_path.attempts", "declared telemetry attempts must match selected_ladder exactly")
         called_aliases = [
