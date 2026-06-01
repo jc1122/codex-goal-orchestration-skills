@@ -15,10 +15,17 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_BUDGET = ROOT / "maintenance" / "size-budget.json"
 EXECUTABLE_SUFFIXES = {".js", ".py"}
 SIZE_METRICS = ("files", "lines", "chars")
+FILE_SIZE_METRICS = ("chars",)
 DEFAULT_THRESHOLDS = {
     "growth_warn_ratio": 0.0,
     "growth_high_ratio": 0.02,
     "growth_review_ratio": 0.05,
+}
+WARNING_PRINT_LIMIT = 12
+WARNING_SEVERITY_ORDER = {"review": 0, "high": 1, "info": 2}
+WARNING_GROUP_ORDER = {"largest_files": 0, "scopes": 1, "per_skill": 2}
+GENERATED_LARGEST_FILE_EXCLUDES = {
+    "maintenance/agent-context-index.json",
 }
 
 
@@ -103,6 +110,7 @@ def collect_current(*, include_untracked: bool = False) -> dict[str, Any]:
         (
             {"path": rel, **finalize_stats(stats)}
             for rel, stats in file_stats.items()
+            if rel not in GENERATED_LARGEST_FILE_EXCLUDES
         ),
         key=lambda item: (item["chars"], item["lines"], item["path"]),
         reverse=True,
@@ -131,6 +139,8 @@ def load_budget(path: Path) -> dict[str, Any]:
         raise SystemExit("size budget missing scopes object")
     if not isinstance(data.get("per_skill"), dict):
         raise SystemExit("size budget missing per_skill object")
+    if not isinstance(data.get("largest_files"), list):
+        raise SystemExit("size budget missing largest_files list")
     return data
 
 
@@ -202,6 +212,59 @@ def compare_group(
     return warnings
 
 
+def compare_largest_files(
+    *,
+    current: list[dict[str, Any]],
+    baseline: list[Any],
+    thresholds: dict[str, float],
+) -> list[dict[str, Any]]:
+    warnings: list[dict[str, Any]] = []
+    baseline_by_path = {
+        str(item.get("path")): (rank, item)
+        for rank, item in enumerate(baseline, start=1)
+        if isinstance(item, dict) and item.get("path")
+    }
+    for current_rank, stats in enumerate(current, start=1):
+        path = str(stats.get("path", ""))
+        baseline_item = baseline_by_path.get(path)
+        if baseline_item is None:
+            warnings.append(
+                {
+                    "severity": "review",
+                    "group": "largest_files",
+                    "name": path,
+                    "current_rank": current_rank,
+                    "message": f"largest_files.{path} entered the current top-file set at rank {current_rank}",
+                }
+            )
+            continue
+        budgeted_rank, expected = baseline_item
+        for metric in FILE_SIZE_METRICS:
+            actual = int(stats.get(metric, 0))
+            budgeted = int(expected.get(metric, 0))
+            delta = actual - budgeted
+            if delta <= 0:
+                continue
+            ratio = delta / max(budgeted, 1)
+            if ratio >= thresholds["growth_warn_ratio"]:
+                warnings.append(
+                    {
+                        "severity": severity_for_ratio(ratio, thresholds),
+                        "group": "largest_files",
+                        "name": path,
+                        "metric": metric,
+                        "budget": budgeted,
+                        "actual": actual,
+                        "delta": delta,
+                        "growth_ratio": round(ratio, 6),
+                        "budgeted_rank": budgeted_rank,
+                        "current_rank": current_rank,
+                        "message": f"largest_files.{path}.{metric} grew by {delta} ({ratio:.2%})",
+                    }
+                )
+    return warnings
+
+
 def make_report(current: dict[str, Any], budget: dict[str, Any]) -> dict[str, Any]:
     thresholds_raw = budget.get("thresholds", DEFAULT_THRESHOLDS)
     if not isinstance(thresholds_raw, dict):
@@ -215,6 +278,13 @@ def make_report(current: dict[str, Any], budget: dict[str, Any]) -> dict[str, An
     warnings.extend(compare_group(group="scopes", current=current["scopes"], baseline=budget["scopes"], thresholds=thresholds))
     warnings.extend(
         compare_group(group="per_skill", current=current["per_skill"], baseline=budget["per_skill"], thresholds=thresholds)
+    )
+    warnings.extend(
+        compare_largest_files(
+            current=current["largest_files"],
+            baseline=budget["largest_files"],
+            thresholds=thresholds,
+        )
     )
     return {
         "status": "warn" if warnings else "pass",
@@ -234,22 +304,50 @@ def recommended_actions(warnings: list[dict[str, Any]]) -> list[str]:
         "Review largest_files before adding more prompt or validator surface.",
         "Prefer moving repeated policy text into shared references or deterministic validators.",
     ]
+    if any(item.get("group") == "largest_files" for item in warnings):
+        actions.append("Named top-file growth is present; reduce or justify those files before refreshing the budget.")
     if any(item.get("severity") == "review" for item in warnings):
         actions.append("Growth exceeded the review threshold; update the budget only with an intentional rationale.")
     return actions
 
 
-def print_human(report: dict[str, Any]) -> None:
+def warning_priority(item: dict[str, Any]) -> tuple[int, int, float, str]:
+    return (
+        WARNING_SEVERITY_ORDER.get(str(item.get("severity")), 99),
+        WARNING_GROUP_ORDER.get(str(item.get("group")), 99),
+        -float(item.get("growth_ratio", 0.0)),
+        str(item.get("message", "")),
+    )
+
+
+def warning_counts(warnings: list[dict[str, Any]], key: str) -> str:
+    counts: dict[str, int] = {}
+    for item in warnings:
+        value = str(item.get(key, "unknown"))
+        counts[value] = counts.get(value, 0) + 1
+    return " ".join(f"{name}={counts[name]}" for name in sorted(counts))
+
+
+def print_human(report: dict[str, Any], *, verbose: bool = False) -> None:
     print(f"status={report['status']}")
     for name, stats in report["scopes"].items():
         print(
             f"{name}: files={stats['files']} lines={stats['lines']} "
             f"chars={stats['chars']} approx_tokens={stats['approx_tokens']}"
         )
-    if report["warnings"]:
+    warnings = report["warnings"]
+    if warnings:
         print("warnings:")
-        for item in report["warnings"]:
+        print(f"- total={len(warnings)} severity: {warning_counts(warnings, 'severity')}")
+        print(f"- groups: {warning_counts(warnings, 'group')}")
+        shown = sorted(warnings, key=warning_priority) if not verbose else warnings
+        if not verbose:
+            shown = shown[:WARNING_PRINT_LIMIT]
+        for item in shown:
             print(f"- [{item['severity']}] {item['message']}")
+        hidden = len(warnings) - len(shown)
+        if hidden > 0:
+            print(f"- ... {hidden} more warnings hidden; use --json or --verbose for full detail")
     print("largest_files:")
     for item in report["largest_files"][:5]:
         print(f"- {item['path']}: lines={item['lines']} chars={item['chars']}")
@@ -266,6 +364,7 @@ def main() -> int:
         help="Include untracked non-ignored files; intended for creating a baseline before the first guardrail commit.",
     )
     parser.add_argument("--fail-on-warnings", action="store_true", help="Return nonzero when growth warnings are present.")
+    parser.add_argument("--verbose", action="store_true", help="Print every human-readable warning; --json always includes all.")
     args = parser.parse_args()
 
     current = collect_current(include_untracked=args.include_untracked)
@@ -279,7 +378,7 @@ def main() -> int:
     if args.json:
         print(json.dumps(report, indent=2, sort_keys=True))
     else:
-        print_human(report)
+        print_human(report, verbose=args.verbose)
     if args.fail_on_warnings and report["warnings"]:
         return 1
     return 0

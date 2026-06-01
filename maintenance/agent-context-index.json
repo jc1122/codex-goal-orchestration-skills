@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:3f6af0d4328d4bd82a29977322ed4f6667933c7cf064a3316cdbaa3f1c46a3c0"
+    "source_fingerprint": "sha256:fe98551512179754f7bd77e23637810144f703e707c4cd9e1f21cfb208acafa0"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -11,6 +11,73 @@
     "Open core_scripts only when implementing or debugging that surface.",
     "During runtime orchestration, use script outputs and validator defects before reading Python source.",
     "Run npm run generate:context after moving, adding, or deleting navigation-relevant files."
+  ],
+  "large_file_hotspots": [
+    {
+      "path": "scripts/check_preparedness_fixtures.py",
+      "owner": "repo-scripts",
+      "lines": 2803,
+      "approx_tokens": 28857,
+      "rule": "failures/function search; table repeats",
+      "top_functions": [
+        "811:run_negative_amendment_fixtures:289l",
+        "1268:run_scheduler_fixtures:221l",
+        "1734:run_launch_ready_helper_fixtures:193l",
+        "1950:run_runtime_packet_fixtures:192l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 1550,
+      "approx_tokens": 18338,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "1257:validate_review_artifact_for_branch:135l",
+        "1394:validate_branch_status:119l",
+        "438:validate_worker_artifacts:116l",
+        "983:validate_manifest_branch_contract:75l"
+      ]
+    },
+    {
+      "path": "scripts/check_golden_smoke.py",
+      "owner": "repo-scripts",
+      "lines": 1755,
+      "approx_tokens": 17422,
+      "rule": "readable smoke; consolidate repeats",
+      "top_functions": [
+        "1416:main:336l",
+        "1053:run_amendment_smoke:239l",
+        "1294:run_blocker_repair_smoke:106l",
+        "418:write_lite_advice:79l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 1656,
+      "approx_tokens": 17292,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "1366:main:287l",
+        "589:compact_worker_context:118l",
+        "1284:compact_launch_config:80l",
+        "995:research_worker_prompt:79l"
+      ]
+    },
+    {
+      "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
+      "owner": "goal-preflight",
+      "lines": 1071,
+      "approx_tokens": 14192,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "510:lint:529l",
+        "360:validate_preflight_lite_records:148l",
+        "1046:main:22l",
+        "242:lint_validator_command_snippets:18l"
+      ]
+    }
   ],
   "entrypoints": {
     "agent_start": [

@@ -21,6 +21,8 @@ SYNC_SHARED = ROOT / "scripts" / "sync_goal_shared.py"
 SKILL_TOKEN_RE = re.compile(r"(?:\$|skills/)?(goal-[a-z0-9-]+)")
 FRONTMATTER_RE = re.compile(r"^---\n(?P<body>.*?)\n---\n", re.DOTALL)
 TEXT_SUFFIXES = {".md", ".py", ".js", ".json", ".yml", ".yaml", ".toml", ".txt"}
+LARGE_FILE_HOTSPOT_LIMIT = 5
+LARGE_FILE_FUNCTION_LIMIT = 4
 EXCLUDED_FROM_FINGERPRINT = {
     "maintenance/agent-context-index.json",
     "maintenance/size-budget.json",
@@ -147,6 +149,65 @@ def source_owner(path: Path, public_skills: set[str]) -> str:
     if parts[0] == ".github":
         return "ci"
     return "repo"
+
+
+def large_file_guidance(relative: str) -> str:
+    if relative.startswith("skills/") and "/scripts/" in relative:
+        return "manifest/help/defects before source"
+    if relative.startswith("scripts/check_preparedness_fixtures.py"):
+        return "failures/function search; table repeats"
+    if relative.startswith("scripts/check_golden_smoke.py"):
+        return "readable smoke; consolidate repeats"
+    if relative.startswith("scripts/"):
+        return "--help or JSON before implementation source"
+    return "task routes before direct file reads"
+
+
+def large_file_functions(path: Path, text: str) -> list[str]:
+    if path.suffix != ".py":
+        return []
+    try:
+        module = ast.parse(text, filename=rel(path))
+    except SyntaxError:
+        return []
+    functions: list[tuple[int, int, str]] = []
+    for node in ast.walk(module):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if node.end_lineno is None:
+            continue
+        line_count = node.end_lineno - node.lineno + 1
+        functions.append((line_count, node.lineno, node.name))
+    selected = sorted(functions, key=lambda item: (item[0], -item[1], item[2]), reverse=True)[:LARGE_FILE_FUNCTION_LIMIT]
+    return [f"{line}:{name}:{line_count}l" for line_count, line, name in selected]
+
+
+def build_large_file_hotspots(paths: list[Path], public_skills: set[str]) -> list[dict[str, Any]]:
+    hotspots: list[dict[str, Any]] = []
+    for path in paths:
+        relative = rel(path)
+        if relative in EXCLUDED_FROM_FINGERPRINT or path.suffix not in TEXT_SUFFIXES or not path.is_file():
+            continue
+        raw = path.read_bytes()
+        text = raw.decode("utf-8", errors="replace")
+        chars = len(text)
+        hotspots.append(
+            {
+                "path": relative,
+                "owner": source_owner(path, public_skills),
+                "lines": text.count("\n"),
+                "_chars": chars,
+                "approx_tokens": round(chars / 4),
+                "rule": large_file_guidance(relative),
+                "top_functions": large_file_functions(path, text),
+            }
+        )
+    selected = sorted(hotspots, key=lambda item: (item["_chars"], item["lines"], item["path"]), reverse=True)[
+        :LARGE_FILE_HOTSPOT_LIMIT
+    ]
+    for item in selected:
+        item.pop("_chars")
+    return selected
 
 
 def scan_edges(paths: list[Path], public_skills: set[str]) -> list[dict[str, Any]]:
@@ -387,6 +448,7 @@ def build_index() -> dict[str, Any]:
             "During runtime orchestration, use script outputs and validator defects before reading Python source.",
             "Run npm run generate:context after moving, adding, or deleting navigation-relevant files.",
         ],
+        "large_file_hotspots": build_large_file_hotspots(paths, public_skills),
         "entrypoints": build_entrypoints(package),
         "skills": skills,
         "shared": {

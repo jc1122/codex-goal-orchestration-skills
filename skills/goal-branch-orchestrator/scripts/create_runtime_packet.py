@@ -10,45 +10,21 @@ import os
 from pathlib import Path
 
 
-def _load_contract():
-    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+def _load_shared_script(module_name: str, script_name: str, label: str):
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / script_name
     if not path.exists():
-        raise SystemExit(f"missing shared orchestration contract: {path}")
-    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+        raise SystemExit(f"missing {label}: {path}")
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise SystemExit(f"could not load shared orchestration contract: {path}")
+        raise SystemExit(f"could not load {label}: {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def _load_status_validation():
-    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "status_validation.py"
-    if not path.exists():
-        raise SystemExit(f"missing shared status validation helpers: {path}")
-    spec = importlib.util.spec_from_file_location("goal_shared_status_validation", path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"could not load shared status validation helpers: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_context_pack():
-    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "context_pack.py"
-    if not path.exists():
-        raise SystemExit(f"missing shared context pack helper: {path}")
-    spec = importlib.util.spec_from_file_location("goal_shared_context_pack", path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"could not load shared context pack helper: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-CONTRACT = _load_contract()
-STATUS_VALIDATION = _load_status_validation()
-CONTEXT_PACK = _load_context_pack()
+CONTRACT = _load_shared_script("goal_shared_orchestration_contract", "orchestration_contract.py", "shared orchestration contract")
+STATUS_VALIDATION = _load_shared_script("goal_shared_status_validation", "status_validation.py", "shared status validation helpers")
+CONTEXT_PACK = _load_shared_script("goal_shared_context_pack", "context_pack.py", "shared context pack helper")
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
 GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
@@ -115,19 +91,7 @@ REVIEW_ROUTE_MODELS = {
 }
 
 
-def _load_path_rules():
-    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "path_rules.py"
-    if not path.exists():
-        raise SystemExit(f"missing shared path rules: {path}")
-    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
-    if spec is None or spec.loader is None:
-        raise SystemExit(f"could not load shared path rules: {path}")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-PATH_RULES = _load_path_rules()
+PATH_RULES = _load_shared_script("goal_shared_path_rules", "path_rules.py", "shared path rules")
 require_safe_label = PATH_RULES.require_safe_packet_label
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 safe_branch_name = PATH_RULES.safe_branch_name
@@ -552,6 +516,10 @@ def load_json(path: Path) -> dict:
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object at {path}")
     return data
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
 def first_markdown_heading(text: str) -> str:
@@ -981,28 +949,21 @@ def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id
     }
 
 
-def prompt_for(
-    role: str,
+def reviewer_prompt(
     packet_id: str,
     branch: str,
     worktree: str,
     schema_name: str,
-    owned_files: list[str],
     context_files: list[str],
-    task_text: str,
-    selected_ladder: list[str] | None,
-    route_class: str,
-    selection_reason: str,
-    packet_context_path: str = "",
-    include_worktree_context_excerpts: bool = False,
+    packet_context_path: str,
+    include_worktree_context_excerpts: bool,
 ) -> str:
-    if role == "reviewer":
-        context_pointer = (
-            f"Packet context to read first:\n- {packet_context_path}"
-            if packet_context_path
-            else context_section(worktree, context_files, include_worktree_excerpts=include_worktree_context_excerpts)
-        )
-        return f"""# Branch Reviewer Packet {packet_id}
+    context_pointer = (
+        f"Packet context to read first:\n- {packet_context_path}"
+        if packet_context_path
+        else context_section(worktree, context_files, include_worktree_excerpts=include_worktree_context_excerpts)
+    )
+    return f"""# Branch Reviewer Packet {packet_id}
 
 You are Reviewer {packet_id}. Do not edit files.
 
@@ -1030,26 +991,36 @@ Determine the branch base ref from `compact_reviewer_context`. Before reporting 
 Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
 """
 
-    if role == "research-worker":
-        example_research = json.dumps(
-            {
-                "packet_id": packet_id,
-                "role": "research-worker",
-                "status": "blocked",
-                "branch": branch,
-                "worktree": worktree,
-                "search_queries": [],
-                "source_urls": [],
-                "tools_used": [],
-                "local_files_read": [],
-                "commands_run": ["pwd", "git status --short --branch"],
-                "findings": ["replace with concrete finding or blocker"],
-                "blockers": ["replace with concrete blocker"],
-                "handoff": "replace with concise research handoff",
-            },
-            separators=(",", ":"),
-        )
-        return f"""# Research Worker Packet {packet_id}
+
+def research_worker_prompt(
+    packet_id: str,
+    branch: str,
+    worktree: str,
+    schema_name: str,
+    owned_files: list[str],
+    context_files: list[str],
+    task_text: str,
+    include_worktree_context_excerpts: bool,
+) -> str:
+    example_research = json.dumps(
+        {
+            "packet_id": packet_id,
+            "role": "research-worker",
+            "status": "blocked",
+            "branch": branch,
+            "worktree": worktree,
+            "search_queries": [],
+            "source_urls": [],
+            "tools_used": [],
+            "local_files_read": [],
+            "commands_run": ["pwd", "git status --short --branch"],
+            "findings": ["replace with concrete finding or blocker"],
+            "blockers": ["replace with concrete blocker"],
+            "handoff": "replace with concise research handoff",
+        },
+        separators=(",", ":"),
+    )
+    return f"""# Research Worker Packet {packet_id}
 
 You are Research Worker {packet_id}. Do not edit files.
 
@@ -1101,7 +1072,20 @@ Example shape only:
 ```
 """
 
-    selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
+
+def worker_prompt(
+    packet_id: str,
+    branch: str,
+    worktree: str,
+    schema_name: str,
+    owned_files: list[str],
+    context_files: list[str],
+    task_text: str,
+    selected_ladder: list[str],
+    route_class: str,
+    selection_reason: str,
+    include_worktree_context_excerpts: bool,
+) -> str:
     example_status = json.dumps(
         {
             "packet_id": packet_id,
@@ -1120,7 +1104,6 @@ Example shape only:
         },
         separators=(",", ":"),
     )
-
     return f"""# Worker Packet {packet_id}
 
 You are Worker {packet_id}.
@@ -1159,6 +1142,35 @@ If you are running under Gemini CLI or GitHub Copilot CLI, print the final statu
 {example_status}
 {GEMINI_STATUS_END}
 """
+
+
+def prompt_for(
+    role: str,
+    packet_id: str,
+    branch: str,
+    worktree: str,
+    schema_name: str,
+    owned_files: list[str],
+    context_files: list[str],
+    task_text: str,
+    selected_ladder: list[str] | None,
+    route_class: str,
+    selection_reason: str,
+    packet_context_path: str = "",
+    include_worktree_context_excerpts: bool = False,
+) -> str:
+    if role == "reviewer":
+        return reviewer_prompt(packet_id, branch, worktree, schema_name, context_files, packet_context_path, include_worktree_context_excerpts)
+    if role == "research-worker":
+        return research_worker_prompt(
+            packet_id, branch, worktree, schema_name, owned_files, context_files, task_text, include_worktree_context_excerpts
+        )
+    if role == "worker":
+        return worker_prompt(
+            packet_id, branch, worktree, schema_name, owned_files, context_files, task_text,
+            selected_ladder or list(DEFAULT_WORKER_LADDER), route_class, selection_reason, include_worktree_context_excerpts,
+        )
+    raise SystemExit(f"unsupported role for prompt generation: {role}")
 
 
 def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
@@ -1244,6 +1256,31 @@ def reviewer_ladder_from_route(review_route: dict | None) -> list[str]:
     ] or CONTRACT.review_route_for_tier(CONTRACT.REVIEW_MODEL_POLICY["default_tier"])
 
 
+def launch_config_base(
+    role: str,
+    packet_id: str,
+    branch: str,
+    worktree: str,
+    schema_name: str,
+    output_name: str,
+    sandbox: str,
+    attempt_timeout_seconds: int,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "role": role,
+        "packet_id": packet_id,
+        "branch": branch,
+        "worktree": worktree,
+        "schema_name": schema_name,
+        "output_name": output_name,
+        "state_artifact": "launcher-state.json",
+        "sandbox": sandbox,
+        "attempt_timeout_seconds": attempt_timeout_seconds,
+        "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+    }
+
+
 def compact_launch_config(
     role: str,
     packet_id: str,
@@ -1263,20 +1300,12 @@ def compact_launch_config(
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
     if role == "worker":
         return {
-            "schema_version": 1,
-            "role": "worker",
-            "packet_id": packet_id,
+            **launch_config_base(
+                "worker", packet_id, branch, worktree, schema_name, output_name, "workspace-write", WORKER_ATTEMPT_TIMEOUT_SECONDS
+            ),
             "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
-            "branch": branch,
-            "worktree": worktree,
-            "schema_name": schema_name,
-            "output_name": output_name,
-            "state_artifact": "launcher-state.json",
-            "sandbox": "workspace-write",
-            "attempt_timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
-            "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
             "worker_prompt": WORKER_PACKET_PROMPT,
             "status_markers": {
                 "begin": GEMINI_STATUS_BEGIN,
@@ -1301,17 +1330,9 @@ def compact_launch_config(
         }
     if role == "research-worker":
         return {
-            "schema_version": 1,
-            "role": "research-worker",
-            "packet_id": packet_id,
-            "branch": branch,
-            "worktree": worktree,
-            "schema_name": schema_name,
-            "output_name": output_name,
-            "state_artifact": "launcher-state.json",
-            "sandbox": "read-only",
-            "attempt_timeout_seconds": RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
-            "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+            **launch_config_base(
+                "research-worker", packet_id, branch, worktree, schema_name, output_name, "read-only", RESEARCH_ATTEMPT_TIMEOUT_SECONDS
+            ),
             "attempts": research_telemetry_attempts(),
             "telemetry_script": telemetry_script,
             "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
@@ -1323,17 +1344,9 @@ def compact_launch_config(
             for alias in reviewer_ladder
         ]
         return {
-            "schema_version": 1,
-            "role": "reviewer",
-            "packet_id": packet_id,
-            "branch": branch,
-            "worktree": worktree,
-            "schema_name": schema_name,
-            "output_name": output_name,
-            "state_artifact": "launcher-state.json",
-            "sandbox": "read-only",
-            "attempt_timeout_seconds": REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
-            "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
+            **launch_config_base(
+                "reviewer", packet_id, branch, worktree, schema_name, output_name, "read-only", REVIEWER_ATTEMPT_TIMEOUT_SECONDS
+            ),
             "attempts": reviewer_telemetry_attempts(reviewer_ladder),
             "telemetry_script": telemetry_script,
             "semantic_input_hashes": review_semantic_hashes or {},
@@ -1563,12 +1576,9 @@ def main() -> int:
         if compact_context is not None:
             task_text, context_files, packet_context = compact_context
 
-    (packet_dir / schema_name).write_text(json.dumps(schema, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    write_json(packet_dir / schema_name, schema)
     if packet_context is not None:
-        (packet_dir / "packet-context.json").write_text(
-            json.dumps(packet_context, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_json(packet_dir / "packet-context.json", packet_context)
     (packet_dir / "prompt.md").write_text(
         prompt_for(
             args.role,
@@ -1600,9 +1610,9 @@ def main() -> int:
             "allowed_aliases": list(DEFAULT_WORKER_LADDER),
             "model_catalog": model_catalog or {},
         }
-        (packet_dir / "route.json").write_text(json.dumps(route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_json(packet_dir / "route.json", route)
     elif args.role == "reviewer" and review_route is not None:
-        (packet_dir / "route.json").write_text(json.dumps(review_route, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        write_json(packet_dir / "route.json", review_route)
     launch_config = compact_launch_config(
         args.role,
         packet_id,
@@ -1619,10 +1629,7 @@ def main() -> int:
         review_reuse_policy=review_reuse_policy,
     )
     if launch_config is not None:
-        (packet_dir / "launch-config.json").write_text(
-            json.dumps(launch_config, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
+        write_json(packet_dir / "launch-config.json", launch_config)
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(
         launch_for(

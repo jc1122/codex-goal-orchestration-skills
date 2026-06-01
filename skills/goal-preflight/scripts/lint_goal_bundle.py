@@ -73,6 +73,127 @@ STATUS_TARGET_PREFIXES = (
     "/abs/bundle/",
     "/abs/",
 )
+REQUIRED_BUNDLE_DIRS = ("branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments")
+MANIFEST_REQUIRED_KEYS = (
+    "job_id",
+    "main_prompt",
+    "base_ref",
+    "artifact_policy",
+    "cleanup_policy",
+    "branches",
+    "waves",
+    "max_active_branch_agents",
+    "parallelization",
+    "adaptation_policy",
+    "worker_model_policy",
+    "amender_model_policy",
+    "lite_model_policy",
+    "lite_advisor_policy",
+    "review_model_policy",
+    "orchestration_watchdog",
+    "preflight_lite_advice",
+)
+MAIN_PROMPT_REQUIRED_PHRASES = (
+    "manifest paths",
+    "repository root",
+    "runtime_phase_manifest.py --markdown",
+    "do not read skill Python source",
+    "skill availability bootstrap",
+    "prompt audit",
+    "prompt-audit.json",
+    "pins this manifest",
+    "max_active_branch_agents",
+    CONTRACT.MAIN_SCHEDULER_PATH,
+    "branch_parallelism.scheduler_path",
+    "Parallelism is the default",
+    "never exceed 4",
+    "Saturate branch orchestrator slots",
+    "Launch the next eligible branch",
+    "depends_on",
+    "waves as scheduling/order groups",
+    "do not poll active branch",
+    "git diff --check",
+    "Cleanup Policy",
+    "Artifact Policy",
+    "close finished branch orchestrator agents",
+    "rolling saturated pool",
+    "scheduler ledger",
+    "orchestration_watchdog.main_no_completion_wait_limit",
+    "validate_branch_status.py --manifest",
+    "summarize_telemetry.py --bundle-dir",
+    "telemetry.summary.json",
+    "validate_main_status.py --manifest",
+    "Optional Lite advisors",
+)
+BOOTLOADER_REQUIRED_PHRASES = (
+    "$goal-main-orchestrator",
+    "Bundle root",
+    "Repository root",
+    "job.manifest.json",
+    "main.prompt.md",
+    "runtime_phase_manifest.py --markdown",
+    "do not read skill Python source",
+    "skill availability",
+    "check_goal_skill_availability.py",
+    "absolute paths",
+    "pins the manifest",
+    "Parallelism is the default",
+    "never exceed 4",
+    "branch orchestrator slots saturated",
+    "depends_on",
+    "Waves are scheduling/order groups",
+    "1 to 4 worker packets",
+    "rolling saturated pool",
+)
+BRANCH_REQUIRED_KEYS = (
+    "id",
+    "wave",
+    "prompt",
+    "branch_name",
+    "worktree_path",
+    "status_path",
+    "review_path",
+    "pre_review_gate_path",
+    "depends_on",
+    "owned_paths",
+    "work_items",
+    "max_active_worker_packets",
+    "worker_parallelism",
+)
+BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER = (
+    "Objective",
+    "Scope",
+    "Depends on branches",
+    "Work Items",
+    "Reviewer Requirement",
+    "Bootstrap Requirement",
+    "Worker Parallelism",
+    "runtime_phase_manifest.py --markdown",
+    "do not read skill Python source",
+    "Max active worker packets",
+    "Max worker packets for this branch",
+    "Never exceed",
+    "active worker packets",
+    "rolling saturated pool",
+    "render_worker_schedule.py",
+)
+BRANCH_PROMPT_PHRASES_AFTER_SCHEDULER = (
+    "worker_parallelism.scheduler_path",
+    "Worker parallelization rationale",
+    "Worker Model Routing",
+    "Selected worker ladders",
+    "Worker packet id",
+    "Route class reason",
+    "telemetry.json",
+    "Lite Advisors",
+    "orchestration_watchdog.branch_no_completion_wait_limit",
+    "validate_branch_status.py --manifest",
+    "Stop Conditions",
+    "git diff --check",
+    "pre_review_gate.json",
+    "semantic_input_hashes",
+    "do not poll active",
+)
 
 
 def load_json(path: Path) -> dict:
@@ -136,6 +257,32 @@ def lint_validator_command_snippets(defect, path: str, text: str, expected_statu
                     f"line {lineno}: {script_name} command snippet must {action} on same line",
                 )
                 continue
+
+
+def require_text_phrases(
+    defect,
+    path: str,
+    text: str,
+    phrases: tuple[str, ...],
+    *,
+    severity: str,
+    message_prefix: str,
+    case_sensitive: bool = False,
+) -> None:
+    haystack = text if case_sensitive else text.lower()
+    for phrase in phrases:
+        needle = phrase if case_sensitive else phrase.lower()
+        if needle not in haystack:
+            defect(path, severity, f"{message_prefix}: {phrase}")
+
+
+def branch_prompt_required_phrases(branch_id: object) -> tuple[str, ...]:
+    scheduler_path = CONTRACT.worker_scheduler_path(str(branch_id)) if isinstance(branch_id, str) else "worker scheduler"
+    return (
+        *BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER,
+        scheduler_path,
+        *BRANCH_PROMPT_PHRASES_AFTER_SCHEDULER,
+    )
 
 
 def load_lite_validator() -> object | None:
@@ -377,29 +524,11 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
         return result(defects)
 
-    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments"]:
+    for dirname in REQUIRED_BUNDLE_DIRS:
         if not (bundle_dir / dirname).is_dir():
             defect(dirname + "/", "critical", f"required bundle directory is missing: {dirname}/")
 
-    for key in [
-        "job_id",
-        "main_prompt",
-        "base_ref",
-        "artifact_policy",
-        "cleanup_policy",
-        "branches",
-        "waves",
-        "max_active_branch_agents",
-        "parallelization",
-        "adaptation_policy",
-        "worker_model_policy",
-        "amender_model_policy",
-        "lite_model_policy",
-        "lite_advisor_policy",
-        "review_model_policy",
-        "orchestration_watchdog",
-        "preflight_lite_advice",
-    ]:
+    for key in MANIFEST_REQUIRED_KEYS:
         if key not in manifest:
             defect("job.manifest.json", "critical", f"missing key: {key}")
     validate_preflight_lite_records(defect, bundle_dir, manifest)
@@ -599,40 +728,14 @@ def lint(bundle_dir: Path) -> dict:
                 "validate_main_status.py": "main.status.json",
             },
         )
-        for phrase in [
-            "manifest paths",
-            "repository root",
-            "runtime_phase_manifest.py --markdown",
-            "do not read skill Python source",
-            "skill availability bootstrap",
-            "prompt audit",
-            "prompt-audit.json",
-            "pins this manifest",
-            "max_active_branch_agents",
-            CONTRACT.MAIN_SCHEDULER_PATH,
-            "branch_parallelism.scheduler_path",
-            "Parallelism is the default",
-            "never exceed 4",
-            "Saturate branch orchestrator slots",
-            "Launch the next eligible branch",
-            "depends_on",
-            "waves as scheduling/order groups",
-            "do not poll active branch",
-            "git diff --check",
-            "Cleanup Policy",
-            "Artifact Policy",
-            "close finished branch orchestrator agents",
-            "rolling saturated pool",
-            "scheduler ledger",
-            "orchestration_watchdog.main_no_completion_wait_limit",
-            "validate_branch_status.py --manifest",
-            "summarize_telemetry.py --bundle-dir",
-            "telemetry.summary.json",
-            "validate_main_status.py --manifest",
-            "Optional Lite advisors",
-        ]:
-            if phrase.lower() not in main_text.lower():
-                defect(str(main_path), "critical", f"main prompt missing required phrase: {phrase}")
+        require_text_phrases(
+            defect,
+            str(main_path),
+            main_text,
+            MAIN_PROMPT_REQUIRED_PHRASES,
+            severity="critical",
+            message_prefix="main prompt missing required phrase",
+        )
         if not has_dod(main_text):
             defect(str(main_path), "critical", "main prompt lacks a falsifiable Definition of Done")
 
@@ -643,49 +746,21 @@ def lint(bundle_dir: Path) -> dict:
         bootloader = bootloader_path.read_text(encoding="utf-8")
         if len(bootloader) > 4000:
             defect("goal-bootloader.md", "critical", "bootloader exceeds 4000 characters")
-        for phrase in [
-            "$goal-main-orchestrator",
-            "Bundle root",
-            "Repository root",
-            "job.manifest.json",
-            "main.prompt.md",
-            "runtime_phase_manifest.py --markdown",
-            "do not read skill Python source",
-            "skill availability",
-            "check_goal_skill_availability.py",
-            "absolute paths",
-            "pins the manifest",
-            "Parallelism is the default",
-            "never exceed 4",
-            "branch orchestrator slots saturated",
-            "depends_on",
-            "Waves are scheduling/order groups",
-            "1 to 4 worker packets",
-            "rolling saturated pool",
-        ]:
-            if phrase not in bootloader:
-                defect("goal-bootloader.md", "critical", f"bootloader missing phrase: {phrase}")
+        require_text_phrases(
+            defect,
+            "goal-bootloader.md",
+            bootloader,
+            BOOTLOADER_REQUIRED_PHRASES,
+            severity="critical",
+            message_prefix="bootloader missing phrase",
+            case_sensitive=True,
+        )
 
-    required_branch_keys = [
-        "id",
-        "wave",
-        "prompt",
-        "branch_name",
-        "worktree_path",
-        "status_path",
-        "review_path",
-        "pre_review_gate_path",
-        "depends_on",
-        "owned_paths",
-        "work_items",
-        "max_active_worker_packets",
-        "worker_parallelism",
-    ]
     has_research_work_item = False
     worker_route_class_count = 0
     default_normal_route_count = 0
     for branch in branches:
-        for key in required_branch_keys:
+        for key in BRANCH_REQUIRED_KEYS:
             if key not in branch:
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')} missing key: {key}")
         depends_on = branch.get("depends_on", [])
@@ -905,41 +980,14 @@ def lint(bundle_dir: Path) -> dict:
             text,
             {"validate_branch_status.py": expected_status_path},
         )
-        for phrase in [
-            "Objective",
-            "Scope",
-            "Depends on branches",
-            "Work Items",
-            "Reviewer Requirement",
-            "Bootstrap Requirement",
-            "Worker Parallelism",
-            "runtime_phase_manifest.py --markdown",
-            "do not read skill Python source",
-            "Max active worker packets",
-            "Max worker packets for this branch",
-            "Never exceed",
-            "active worker packets",
-            "rolling saturated pool",
-            "render_worker_schedule.py",
-            CONTRACT.worker_scheduler_path(str(branch.get("id", ""))) if isinstance(branch.get("id"), str) else "worker scheduler",
-            "worker_parallelism.scheduler_path",
-            "Worker parallelization rationale",
-            "Worker Model Routing",
-            "Selected worker ladders",
-            "Worker packet id",
-            "Route class reason",
-            "telemetry.json",
-            "Lite Advisors",
-            "orchestration_watchdog.branch_no_completion_wait_limit",
-            "validate_branch_status.py --manifest",
-            "Stop Conditions",
-            "git diff --check",
-            "pre_review_gate.json",
-            "semantic_input_hashes",
-            "do not poll active",
-        ]:
-            if phrase.lower() not in text.lower():
-                defect(str(prompt_path), "major", f"branch prompt missing section: {phrase}")
+        require_text_phrases(
+            defect,
+            str(prompt_path),
+            text,
+            branch_prompt_required_phrases(branch.get("id")),
+            severity="major",
+            message_prefix="branch prompt missing section",
+        )
         if not has_dod(text):
             defect(str(prompt_path), "critical", f"branch {branch.get('id')} lacks a falsifiable Definition of Done")
 

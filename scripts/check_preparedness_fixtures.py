@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -14,16 +15,21 @@ from pathlib import Path
 
 from fixture_support import (
     assert_all_contains,
+    assert_codex_mini_worker_route,
     assert_compact_audit_launcher,
     assert_compact_lite_launcher,
     assert_compact_runtime_launcher,
     assert_contains,
+    assert_lean_codex_attempts,
+    assert_mixed_worker_route,
     assert_not_contains,
+    assert_research_worker_preserves_user_config,
     assert_shell_syntax,
     make_scheduler_event,
     offline_gemini_env,
     read_json,
     run_command,
+    run_runtime_packet,
     sha256_file,
     telemetry,
     write_json,
@@ -255,6 +261,45 @@ def assert_reviewer_route(packet_root: Path, packet_id: str, expected: list[str]
     actual = route.get("selected_ladder")
     if actual != expected:
         raise SystemExit(f"{packet_id} route mismatch: expected {expected}, got {actual}")
+
+
+def create_runtime_packet(
+    *,
+    role: str,
+    packet_id: str,
+    branch: str,
+    out_dir: Path,
+    task_file: Path,
+    worktree: Path = ROOT,
+    owned_files: list[str] | None = None,
+    context_files: list[Path] | None = None,
+    manifest: Path | None = None,
+    pre_review_gate: Path | None = None,
+    worker_route: list[str] | None = None,
+    selection_reason: str | None = None,
+    model_catalog: Path | None = None,
+    extra_args: list[str] | None = None,
+    expect: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    return run_runtime_packet(
+        root=ROOT,
+        script="skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+        role=role,
+        packet_id=packet_id,
+        branch=branch,
+        worktree=worktree,
+        out_dir=out_dir,
+        task_file=task_file,
+        owned_files=owned_files,
+        context_files=context_files,
+        manifest=manifest,
+        pre_review_gate=pre_review_gate,
+        worker_route=worker_route,
+        selection_reason=selection_reason,
+        model_catalog=model_catalog,
+        extra_args=extra_args,
+        expect=expect,
+    )
 
 
 def branch_fixture(branch_id: str, owned_path: str, *, depends_on: list[str] | None = None) -> dict:
@@ -692,127 +737,7 @@ def write_amender_telemetry(bundle: Path, amendment_id: str, selected_ladder: li
     )
 
 
-def run_amendment_fixtures(tmp_path: Path) -> None:
-    bundle = create_amendment_bundle(tmp_path, "amendment-fixture")
-    write_json(bundle / "branches" / "B01.status.json", {"branch_id": "B01", "status": "blocked"})
-    recommendation_result = run(
-        [
-            "python3",
-            "skills/goal-plan-amender/scripts/recommend_amendment_decision.py",
-            "--manifest",
-            (bundle / "job.manifest.json").as_posix(),
-            "--terminal-branch",
-            "B01",
-            "--json",
-        ]
-    )
-    recommendation = json.loads(recommendation_result.stdout)
-    if recommendation.get("decision") != "launch" or recommendation.get("reason_code") != "blocker_stalls_downstream":
-        raise SystemExit("amendment recommendation fixture should launch for blocked downstream dependency")
-    create_amendment_decision(
-        bundle,
-        "A001",
-        reason_code="no_eligible_branch",
-        reason="Preparedness fixture launches the amender after terminal B01 evidence.",
-    )
-    run(
-        [
-            "python3",
-            "skills/goal-plan-amender/scripts/create_adaptation_packet.py",
-            "--manifest",
-            (bundle / "job.manifest.json").as_posix(),
-            "--main-prompt",
-            (bundle / "main.prompt.md").as_posix(),
-            "--repo-root",
-            ROOT.as_posix(),
-            "--amendment-id",
-            "A001",
-            "--terminal-branch",
-            "B01",
-        ]
-    )
-    packet_dir = bundle / "amendments" / "A001.packet"
-    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Terminal branch ids: B01", "adaptation packet")
-    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Selected amender ladder: gpt-5.4, gpt-5.4-mini", "adaptation packet route")
-    assert_shell_syntax(packet_dir / "launch.sh")
-    route = json.loads((packet_dir / "route.json").read_text(encoding="utf-8"))
-    if route.get("selected_ladder") != ["gpt-5.4", "gpt-5.4-mini"] or route.get("role") != "plan_amender":
-        raise SystemExit("adaptation packet default route did not match amender_model_policy")
-
-    proposal_path = bundle / "amendments" / "A001.proposal.json"
-    write_json(
-        proposal_path,
-        amendment_proposal(
-            "A001",
-            "amendment-fixture",
-            [
-                {
-                    "op": "add_branch",
-                    "branch": {
-                        **amendment_branch("B03", "skills/goal-plan-amender/SKILL.md"),
-                        "recovers_from": ["B01"],
-                    },
-                }
-            ],
-        ),
-    )
-    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
-    missing_accepted_telemetry = json.loads((packet_dir / "telemetry.json").read_text(encoding="utf-8"))
-    missing_accepted_telemetry["accepted_alias"] = None
-    for attempt_item in missing_accepted_telemetry.get("attempts", []):
-        if isinstance(attempt_item, dict):
-            attempt_item["accepted"] = False
-    write_json(packet_dir / "telemetry.json", missing_accepted_telemetry)
-    missing_accepted = run(
-        [
-            "python3",
-            "skills/goal-plan-amender/scripts/validate_amender_packet.py",
-            "--manifest",
-            (bundle / "job.manifest.json").as_posix(),
-            "--amendment-id",
-            "A001",
-            "--json",
-        ],
-        expect=1,
-    )
-    assert_contains(missing_accepted.stdout, "accepted plan-amender attempt", "amender telemetry accepted attempt fixture")
-    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
-    run(
-        [
-            "python3",
-            "skills/goal-plan-amender/scripts/validate_amender_packet.py",
-            "--manifest",
-            (bundle / "job.manifest.json").as_posix(),
-            "--amendment-id",
-            "A001",
-            "--json",
-        ]
-    )
-    validate_amendment(bundle, proposal_path, amendment_id="A001", terminal=["B01"])
-    before_sha = sha256_file(bundle / "job.manifest.json")
-    run(
-        [
-            "python3",
-            "skills/goal-plan-amender/scripts/apply_manifest_amendment.py",
-            "--manifest",
-            (bundle / "job.manifest.json").as_posix(),
-            "--proposal",
-            proposal_path.as_posix(),
-            "--validation",
-            (bundle / "amendments" / "A001.validation.json").as_posix(),
-        ]
-    )
-    if before_sha == sha256_file(bundle / "job.manifest.json"):
-        raise SystemExit("accepted amendment did not update manifest")
-    for rel_path in [
-        "amendments/A001.accepted.json",
-        "amendments/A001.job.manifest.before.json",
-        "branches/B03.prompt.md",
-    ]:
-        if not (bundle / rel_path).exists():
-            raise SystemExit(f"accepted amendment missing artifact: {rel_path}")
-    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
-
+def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
     custom_route_bundle = create_amendment_bundle(tmp_path, "amendment-custom-route-fixture")
     create_amendment_decision(
         custom_route_bundle,
@@ -882,6 +807,8 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     )
     assert_contains(skip_launch_reason.stdout, "not valid for a skip decision", "skip launch-only reason fixture")
 
+
+def run_negative_amendment_fixtures(tmp_path: Path) -> None:
     no_infer_bundle = create_amendment_bundle(tmp_path, "amendment-no-infer-fixture")
     no_infer_proposal = no_infer_bundle / "amendments" / "A009.proposal.json"
     write_json(
@@ -1170,6 +1097,131 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     assert_contains(drift_apply.stdout, "fresh amendment validation failed", "active drift apply fixture")
     if drift_before != sha256_file(drift_bundle / "job.manifest.json"):
         raise SystemExit("active drift apply mutated the live manifest")
+
+
+def run_amendment_fixtures(tmp_path: Path) -> None:
+    bundle = create_amendment_bundle(tmp_path, "amendment-fixture")
+    write_json(bundle / "branches" / "B01.status.json", {"branch_id": "B01", "status": "blocked"})
+    recommendation_result = run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/recommend_amendment_decision.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--terminal-branch",
+            "B01",
+            "--json",
+        ]
+    )
+    recommendation = json.loads(recommendation_result.stdout)
+    if recommendation.get("decision") != "launch" or recommendation.get("reason_code") != "blocker_stalls_downstream":
+        raise SystemExit("amendment recommendation fixture should launch for blocked downstream dependency")
+    create_amendment_decision(
+        bundle,
+        "A001",
+        reason_code="no_eligible_branch",
+        reason="Preparedness fixture launches the amender after terminal B01 evidence.",
+    )
+    run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/create_adaptation_packet.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--main-prompt",
+            (bundle / "main.prompt.md").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--amendment-id",
+            "A001",
+            "--terminal-branch",
+            "B01",
+        ]
+    )
+    packet_dir = bundle / "amendments" / "A001.packet"
+    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Terminal branch ids: B01", "adaptation packet")
+    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Selected amender ladder: gpt-5.4, gpt-5.4-mini", "adaptation packet route")
+    assert_shell_syntax(packet_dir / "launch.sh")
+    route = json.loads((packet_dir / "route.json").read_text(encoding="utf-8"))
+    if route.get("selected_ladder") != ["gpt-5.4", "gpt-5.4-mini"] or route.get("role") != "plan_amender":
+        raise SystemExit("adaptation packet default route did not match amender_model_policy")
+
+    proposal_path = bundle / "amendments" / "A001.proposal.json"
+    write_json(
+        proposal_path,
+        amendment_proposal(
+            "A001",
+            "amendment-fixture",
+            [
+                {
+                    "op": "add_branch",
+                    "branch": {
+                        **amendment_branch("B03", "skills/goal-plan-amender/SKILL.md"),
+                        "recovers_from": ["B01"],
+                    },
+                }
+            ],
+        ),
+    )
+    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
+    missing_accepted_telemetry = json.loads((packet_dir / "telemetry.json").read_text(encoding="utf-8"))
+    missing_accepted_telemetry["accepted_alias"] = None
+    for attempt_item in missing_accepted_telemetry.get("attempts", []):
+        if isinstance(attempt_item, dict):
+            attempt_item["accepted"] = False
+    write_json(packet_dir / "telemetry.json", missing_accepted_telemetry)
+    missing_accepted = run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/validate_amender_packet.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--amendment-id",
+            "A001",
+            "--json",
+        ],
+        expect=1,
+    )
+    assert_contains(missing_accepted.stdout, "accepted plan-amender attempt", "amender telemetry accepted attempt fixture")
+    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
+    run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/validate_amender_packet.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--amendment-id",
+            "A001",
+            "--json",
+        ]
+    )
+    validate_amendment(bundle, proposal_path, amendment_id="A001", terminal=["B01"])
+    before_sha = sha256_file(bundle / "job.manifest.json")
+    run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/apply_manifest_amendment.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--proposal",
+            proposal_path.as_posix(),
+            "--validation",
+            (bundle / "amendments" / "A001.validation.json").as_posix(),
+        ]
+    )
+    if before_sha == sha256_file(bundle / "job.manifest.json"):
+        raise SystemExit("accepted amendment did not update manifest")
+    for rel_path in [
+        "amendments/A001.accepted.json",
+        "amendments/A001.job.manifest.before.json",
+        "branches/B03.prompt.md",
+    ]:
+        if not (bundle / rel_path).exists():
+            raise SystemExit(f"accepted amendment missing artifact: {rel_path}")
+    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+
+    run_amender_route_selection_fixtures(tmp_path)
+    run_negative_amendment_fixtures(tmp_path)
 
 
 def load_status_validation():
@@ -1895,298 +1947,838 @@ def test_launcher_state_classifier() -> None:
             )
 
 
-def main() -> int:
-    with tempfile.TemporaryDirectory(prefix="goal-preparedness-fixtures-") as tmp:
-        tmp_path = Path(tmp)
-        test_launcher_state_classifier()
-        bundle = tmp_path / "bundle"
-        run(
-            [
-                "python3",
-                "skills/goal-preflight/scripts/create_goal_bundle.py",
-                "--brief",
-                BRIEF.as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--out-dir",
-                bundle.as_posix(),
-            ]
-        )
-        run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
-        stale_validator_bundle = tmp_path / "stale-validator-command"
-        shutil.copytree(bundle, stale_validator_bundle)
-        stale_prompt = stale_validator_bundle / "main.prompt.md"
-        stale_text = stale_prompt.read_text(encoding="utf-8")
-        stale_text = stale_text.replace(
-            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
-            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json",
-            1,
-        )
-        stale_text = stale_text.replace(
-            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
-            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json",
-            1,
-        )
-        stale_prompt.write_text(stale_text, encoding="utf-8")
-        stale_lint = run(
-            ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", stale_validator_bundle.as_posix(), "--no-write"],
-            expect=1,
-        )
-        assert_all_contains(stale_lint.stdout, ["validate_branch_status.py command snippet must include", "validate_main_status.py command snippet must include"], "stale validator command lint")
-        wrong_target_validator_bundle = tmp_path / "wrong-target-validator-command"
-        shutil.copytree(bundle, wrong_target_validator_bundle)
-        wrong_target_prompt = wrong_target_validator_bundle / "main.prompt.md"
-        wrong_target_text = wrong_target_prompt.read_text(encoding="utf-8")
-        wrong_target_text = wrong_target_text.replace(
-            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
-            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
-            1,
-        )
-        wrong_target_text = wrong_target_text.replace(
-            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
-            "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/main.status.json",
-            1,
-        )
-        wrong_target_prompt.write_text(wrong_target_text, encoding="utf-8")
-        wrong_target_branch_prompt = wrong_target_validator_bundle / "branches" / "B01.prompt.md"
-        wrong_target_branch_text = wrong_target_branch_prompt.read_text(encoding="utf-8").replace(
-            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B01.status.json",
-            "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B99.status.json",
-            1,
-        )
-        wrong_target_branch_prompt.write_text(wrong_target_branch_text, encoding="utf-8")
-        wrong_target_lint = run(
-            ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", wrong_target_validator_bundle.as_posix(), "--no-write"],
-            expect=1,
-        )
-        assert_all_contains(wrong_target_lint.stdout, ["branches/Bxx.status.json", "branches/B01.status.json", "validate_main_status.py command snippet"], "wrong validator status target")
-        stale_audit_dir = tmp_path / "stale-validator-audit"
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
-                "--manifest",
-                (stale_validator_bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--audit-dir",
-                stale_audit_dir.as_posix(),
-                "--deterministic",
-                "--require-pass",
-            ],
-            expect=1,
-        )
-        stale_audit = read_json(stale_audit_dir / "prompt-audit.json")
-        if stale_audit.get("status") != "failed" or stale_audit.get("can_start") is not False:
-            raise SystemExit(f"deterministic prompt audit should fail stale validator snippets: {stale_audit!r}")
-        full_phase_manifest = run(
-            ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
-        ).stdout
-        main_phase_manifest = run(
-            ["python3", "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
-        ).stdout
-        compact_phase_manifest = run(
-            ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--compact", "--markdown"]
-        ).stdout
-        if len(compact_phase_manifest) >= len(full_phase_manifest):
-            raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
-        assert_all_contains(compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest")
-        assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit"], "main phase manifest")
-        assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
-        brief_schema = json.loads(
-            run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
-        )
-        if "work_item_required" not in brief_schema or "commands" not in brief_schema:
-            raise SystemExit("brief schema output is missing required agent guidance")
-        if "current git branch" not in str(brief_schema.get("top_level_optional", {}).get("base_ref", "")):
-            raise SystemExit("brief schema should describe current-branch base_ref default")
-        lint_schema = json.loads(
-            run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
-        )
-        if lint_schema != brief_schema:
-            raise SystemExit("brief schema output drifted between create and lint helpers")
-        branch_default_repo = tmp_path / "branch-default-repo"
-        branch_default_repo.mkdir()
-        run(["git", "-C", branch_default_repo.as_posix(), "init", "-q", "--initial-branch", "trunk"])
-        (branch_default_repo / "README.md").write_text("branch default fixture\n", encoding="utf-8")
-        branch_default_brief = {
-            "job_id": "branch-default-fixture",
-            "branches": [
+def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Path]:
+    packet_root = tmp_path / "packets"
+    task_file = tmp_path / "task.md"
+    task_file.write_text("Static timeout launcher fixture.\n", encoding="utf-8")
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W02",
+        branch="preparedness-research-fixture-W02",
+        out_dir=packet_root,
+        owned_files=["README.md"],
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+        worker_route=["codex-mini"],
+        selection_reason="Fixture route selected to inspect generated timeout wrapper.",
+    )
+    assert_shell_syntax(packet_root / "B01-W02" / "launch.sh")
+    worker_config = assert_compact_runtime_launcher(packet_root / "B01-W02", "worker")
+    assert_codex_mini_worker_route(worker_config, "Fixture route selected to inspect generated timeout wrapper.")
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W04",
+        branch="preparedness-research-fixture-W04",
+        out_dir=packet_root,
+        owned_files=["README.md"],
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+        worker_route=["gemini-pro", "copilot-gpt-5.4", "codex-mini"],
+        selection_reason="Fixture route selected to validate worker probe metadata.",
+    )
+    mixed_config = assert_compact_runtime_launcher(packet_root / "B01-W04", "worker")
+    assert_mixed_worker_route(mixed_config, "mixed worker", selection_reason="Fixture route selected to validate worker probe metadata.")
+    worker_model_catalog = tmp_path / "worker-model-catalog.json"
+    write_json(
+        worker_model_catalog,
+        {
+            "schema_version": 1,
+            "status": "pass",
+            "source": "live",
+            "warnings": [],
+            "models": [],
+            "route_models": [
                 {
-                    "id": "B01",
-                    "objective": "Verify base_ref default.",
-                    "work_items": [
-                        {
-                            "id": "W01",
-                            "objective": "No-op fixture.",
-                            "owned_paths": ["README.md"],
-                            "verification": ["true"],
-                            "dod": ["Manifest base_ref defaults to the current branch."],
-                        }
-                    ],
-                }
+                    "alias": "codex-spark",
+                    "model": "gpt-5.3-codex-spark",
+                    "present": True,
+                    "supported_in_api": False,
+                    "visibility": "list",
+                },
+                {
+                    "alias": "codex-mini",
+                    "model": "gpt-5.4-mini",
+                    "present": True,
+                    "supported_in_api": True,
+                    "visibility": "list",
+                },
             ],
-        }
-        branch_default_brief_path = tmp_path / "branch-default-brief.json"
-        branch_default_bundle = tmp_path / "branch-default-bundle"
-        write_json(branch_default_brief_path, branch_default_brief)
-        run(
-            [
-                "python3",
-                "skills/goal-preflight/scripts/create_goal_bundle.py",
-                "--brief",
-                branch_default_brief_path.as_posix(),
-                "--repo-root",
-                branch_default_repo.as_posix(),
-                "--out-dir",
-                branch_default_bundle.as_posix(),
-            ]
-        )
-        branch_default_manifest = read_json(branch_default_bundle / "job.manifest.json")
-        if branch_default_manifest.get("base_ref") != "trunk":
-            raise SystemExit(f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}")
-        context_pack_out = tmp_path / "context-pack.md"
-        context_pack_result = run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/context_pack.py",
-                "--worktree",
-                ROOT.as_posix(),
-                "--context-file",
-                (ROOT / "README.md").as_posix(),
-                "--markdown",
-                "--output",
-                context_pack_out.as_posix(),
-            ]
-        )
-        if context_pack_result.stdout.strip() != context_pack_out.as_posix() or not context_pack_out.exists():
-            raise SystemExit("context_pack.py --output should write the rendered pack and print its path")
-        context_pack_text = context_pack_out.read_text(encoding="utf-8")
-        assert_all_contains(context_pack_text, ["Context files to read first:", "- README.md"], "default path-only context pack output")
-        assert_not_contains(context_pack_text, "BEGIN_CONTEXT_EXCERPT", "default path-only context pack output")
-        context_pack_excerpt_out = tmp_path / "context-pack-excerpt.md"
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/context_pack.py",
-                "--worktree",
-                ROOT.as_posix(),
-                "--context-file",
-                (ROOT / "README.md").as_posix(),
-                "--per-file-chars",
-                "80",
-                "--total-chars",
-                "80",
-                "--include-worktree-excerpts",
-                "--markdown",
-                "--output",
-                context_pack_excerpt_out.as_posix(),
-            ]
-        )
-        context_pack_excerpt_text = context_pack_excerpt_out.read_text(encoding="utf-8")
-        assert_all_contains(context_pack_excerpt_text, ["Deterministic context excerpts:", "BEGIN_CONTEXT_EXCERPT context-1: README.md"], "worktree excerpt context pack output")
-        assert_not_contains(context_pack_excerpt_text, "Context files to read first:\n- README.md", "worktree excerpt context pack output")
-        telemetry_bundle = tmp_path / "telemetry-pressure"
-        telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
-        telemetry_packet.mkdir(parents=True)
-        write_json(
-            telemetry_packet / "telemetry.json",
+            "missing_route_models": [],
+        },
+    )
+    catalog_packet_root = tmp_path / "catalog-packets"
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W05",
+        branch="preparedness-research-fixture-W05",
+        out_dir=catalog_packet_root,
+        owned_files=["README.md"],
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+        model_catalog=worker_model_catalog,
+    )
+    catalog_config = assert_compact_runtime_launcher(catalog_packet_root / "B01-W05", "worker")
+    expected_catalog_ladder = ["codex-mini"]
+    if catalog_config.get("selected_ladder") != expected_catalog_ladder:
+        raise SystemExit(f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}")
+    catalog_meta = catalog_config.get("model_catalog", {})
+    filtered_aliases = [
+        item.get("alias")
+        for item in catalog_meta.get("filtered_aliases", [])
+        if isinstance(item, dict)
+    ]
+    if filtered_aliases != ["codex-spark"]:
+        raise SystemExit(f"worker model catalog filtered aliases mismatch: {filtered_aliases!r}")
+    explicit_spark = create_runtime_packet(
+        role="worker",
+        packet_id="B01-W06",
+        branch="preparedness-research-fixture-W06",
+        out_dir=catalog_packet_root,
+        owned_files=["README.md"],
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+        worker_route=["codex-spark"],
+        selection_reason="Fixture intentionally selects unsupported Spark.",
+        model_catalog=worker_model_catalog,
+        expect=1,
+    )
+    if "model catalog rejects selected worker route" not in explicit_spark.stdout:
+        raise SystemExit("explicit unsupported Spark route did not fail with model catalog guidance")
+    manifest_packet_root = tmp_path / "manifest-packets"
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W01",
+        branch="B01",
+        out_dir=manifest_packet_root,
+        task_file=bundle / "branches" / "B01.prompt.md",
+        manifest=bundle / "job.manifest.json",
+        worker_route=["codex-mini"],
+        selection_reason="Fixture exercises marker-wrapped Codex output.",
+    )
+    manifest_packet_dir = manifest_packet_root / "B01-W01"
+    manifest_worker_prompt = (manifest_packet_dir / "prompt.md").read_text(encoding="utf-8")
+    manifest_worker_config = read_json(manifest_packet_dir / "launch-config.json")
+    if manifest_worker_config.get("branch") != "preparedness-research-fixture":
+        raise SystemExit(f"worker --manifest did not normalize branch id to branch_name: {manifest_worker_config.get('branch')!r}")
+    manifest_worker_schema = read_json(manifest_packet_dir / "status.schema.json")
+    branch_const = manifest_worker_schema.get("properties", {}).get("branch", {}).get("const")
+    if branch_const != "preparedness-research-fixture":
+        raise SystemExit(f"worker --manifest status schema branch mismatch: {branch_const!r}")
+    if not (manifest_packet_dir / "packet-context.json").exists():
+        raise SystemExit("worker --manifest did not create compact packet-context.json")
+    assert_contains(manifest_worker_prompt, "Compact Worker Task", "worker --manifest prompt")
+    excerpt_packet_root = tmp_path / "excerpt-packets"
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W99",
+        branch="preparedness-research-fixture",
+        out_dir=excerpt_packet_root,
+        task_file=bundle / "branches" / "B01.prompt.md",
+        owned_files=["README.md"],
+        context_files=[ROOT / "README.md"],
+        worker_route=["codex-mini"],
+        selection_reason="Fixture exercises bounded worktree context excerpts.",
+        extra_args=["--include-worktree-context-excerpts"],
+    )
+    excerpt_worker_prompt = (excerpt_packet_root / "B01-W99" / "prompt.md").read_text(encoding="utf-8")
+    assert_contains(excerpt_worker_prompt, "BEGIN_CONTEXT_EXCERPT context-1: README.md", "worker excerpt prompt")
+    fake_codex_dir = tmp_path / "fake-codex-worker"
+    fake_codex_dir.mkdir()
+    fake_codex = fake_codex_dir / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "out = pathlib.Path(args[args.index('-o') + 1])\n"
+        "status = {\n"
+        "  'packet_id': 'B01-W01',\n"
+        "  'role': 'worker',\n"
+        "  'status': 'pass',\n"
+        "  'branch': 'preparedness-research-fixture',\n"
+        f"  'worktree': {ROOT.as_posix()!r},\n"
+        "  'route_class': 'normal-code',\n"
+        "  'selected_ladder': ['codex-mini'],\n"
+        "  'selection_reason': 'Fixture exercises marker-wrapped Codex output.',\n"
+        "  'changed_files': [],\n"
+        "  'commands_run': ['pwd', 'git status --short --branch'],\n"
+        "  'tests': ['fixture fake codex'],\n"
+        "  'blockers': [],\n"
+        "  'handoff': 'fake codex marker-wrapped pass'\n"
+        "}\n"
+        "out.write_text('BEGIN_WORKER_STATUS_JSON\\n' + json.dumps(status) + '\\nEND_WORKER_STATUS_JSON\\n', encoding='utf-8')\n"
+        "print(json.dumps({'usage': {'input_tokens': 321, 'cached_input_tokens': 123, 'output_tokens': 45}}))\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    run(
+        [(manifest_packet_dir / "launch.sh").as_posix()],
+        env={**os.environ, "PATH": fake_codex_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+    )
+    manifest_worker_status = read_json(manifest_packet_dir / "status.json")
+    if manifest_worker_status.get("branch") != "preparedness-research-fixture":
+        raise SystemExit(f"worker runtime did not preserve normalized branch label: {manifest_worker_status!r}")
+    raw_status_text = (manifest_packet_dir / "status.json.raw").read_text(encoding="utf-8")
+    if "BEGIN_WORKER_STATUS_JSON" not in raw_status_text:
+        raise SystemExit("worker runtime did not preserve raw marker-wrapped Codex output")
+    manifest_worker_telemetry = read_json(manifest_packet_dir / "telemetry.json")
+    usage = manifest_worker_telemetry.get("totals", {}).get("known_usage", {})
+    if manifest_worker_telemetry.get("accepted_alias") != "codex-mini" or usage.get("input_tokens") != 321:
+        raise SystemExit(f"worker runtime did not extract accepted Codex telemetry after marker normalization: {manifest_worker_telemetry!r}")
+    if manifest_worker_telemetry.get("route_class") != "normal-code":
+        raise SystemExit(f"worker telemetry did not preserve route_class: {manifest_worker_telemetry!r}")
+
+    create_runtime_packet(
+        role="research-worker",
+        packet_id="B01-W03",
+        branch="preparedness-research-fixture-W03",
+        out_dir=packet_root,
+        owned_files=["README.md"],
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+    )
+    research_config = assert_compact_runtime_launcher(packet_root / "B01-W03", "research-worker", 1200)
+    assert_research_worker_preserves_user_config(research_config, expected_event_logs=["events-primary.jsonl", "events-fallback.jsonl"])
+    return packet_root, task_file
+
+
+def create_goal_fixture_bundle(tmp_path: Path) -> Path:
+    bundle = tmp_path / "bundle"
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            BRIEF.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            bundle.as_posix(),
+        ]
+    )
+    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+    return bundle
+
+
+def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
+    stale_validator_bundle = tmp_path / "stale-validator-command"
+    shutil.copytree(bundle, stale_validator_bundle)
+    stale_prompt = stale_validator_bundle / "main.prompt.md"
+    stale_text = stale_prompt.read_text(encoding="utf-8")
+    stale_text = stale_text.replace(
+        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
+        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json",
+        1,
+    )
+    stale_text = stale_text.replace(
+        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json",
+        1,
+    )
+    stale_prompt.write_text(stale_text, encoding="utf-8")
+    stale_lint = run(
+        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", stale_validator_bundle.as_posix(), "--no-write"],
+        expect=1,
+    )
+    assert_all_contains(stale_lint.stdout, ["validate_branch_status.py command snippet must include", "validate_main_status.py command snippet must include"], "stale validator command lint")
+    wrong_target_validator_bundle = tmp_path / "wrong-target-validator-command"
+    shutil.copytree(bundle, wrong_target_validator_bundle)
+    wrong_target_prompt = wrong_target_validator_bundle / "main.prompt.md"
+    wrong_target_text = wrong_target_prompt.read_text(encoding="utf-8")
+    wrong_target_text = wrong_target_text.replace(
+        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
+        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+        1,
+    )
+    wrong_target_text = wrong_target_text.replace(
+        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/main.status.json",
+        1,
+    )
+    wrong_target_prompt.write_text(wrong_target_text, encoding="utf-8")
+    wrong_target_branch_prompt = wrong_target_validator_bundle / "branches" / "B01.prompt.md"
+    wrong_target_branch_text = wrong_target_branch_prompt.read_text(encoding="utf-8").replace(
+        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B01.status.json",
+        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B99.status.json",
+        1,
+    )
+    wrong_target_branch_prompt.write_text(wrong_target_branch_text, encoding="utf-8")
+    wrong_target_lint = run(
+        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", wrong_target_validator_bundle.as_posix(), "--no-write"],
+        expect=1,
+    )
+    assert_all_contains(wrong_target_lint.stdout, ["branches/Bxx.status.json", "branches/B01.status.json", "validate_main_status.py command snippet"], "wrong validator status target")
+    stale_audit_dir = tmp_path / "stale-validator-audit"
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+            "--manifest",
+            (stale_validator_bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit-dir",
+            stale_audit_dir.as_posix(),
+            "--deterministic",
+            "--require-pass",
+        ],
+        expect=1,
+    )
+    stale_audit = read_json(stale_audit_dir / "prompt-audit.json")
+    if stale_audit.get("status") != "failed" or stale_audit.get("can_start") is not False:
+        raise SystemExit(f"deterministic prompt audit should fail stale validator snippets: {stale_audit!r}")
+
+
+def run_phase_manifest_and_schema_fixtures() -> None:
+    full_phase_manifest = run(
+        ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
+    ).stdout
+    main_phase_manifest = run(
+        ["python3", "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
+    ).stdout
+    compact_phase_manifest = run(
+        ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--compact", "--markdown"]
+    ).stdout
+    if len(compact_phase_manifest) >= len(full_phase_manifest):
+        raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
+    assert_all_contains(compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest")
+    assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit"], "main phase manifest")
+    assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
+    brief_schema = json.loads(
+        run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
+    )
+    if "work_item_required" not in brief_schema or "commands" not in brief_schema:
+        raise SystemExit("brief schema output is missing required agent guidance")
+    if "current git branch" not in str(brief_schema.get("top_level_optional", {}).get("base_ref", "")):
+        raise SystemExit("brief schema should describe current-branch base_ref default")
+    lint_schema = json.loads(
+        run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
+    )
+    if lint_schema != brief_schema:
+        raise SystemExit("brief schema output drifted between create and lint helpers")
+
+
+def run_base_ref_default_fixture(tmp_path: Path) -> None:
+    branch_default_repo = tmp_path / "branch-default-repo"
+    branch_default_repo.mkdir()
+    run(["git", "-C", branch_default_repo.as_posix(), "init", "-q", "--initial-branch", "trunk"])
+    (branch_default_repo / "README.md").write_text("branch default fixture\n", encoding="utf-8")
+    branch_default_brief = {
+        "job_id": "branch-default-fixture",
+        "branches": [
             {
-                "schema_version": 1,
-                "packet_id": "B01-W01",
-                "role": "worker",
-                "output_artifact": "status.json",
-                "prompt_artifact": "prompt.md",
-                "prompt_chars": 100,
-                "prompt_bytes": 100,
-                "output_chars": 10,
-                "output_bytes": 10,
-                "event_log_chars": 10,
-                "event_log_bytes": 10,
-                "accepted_alias": "codex-mini",
-                "attempts": [
+                "id": "B01",
+                "objective": "Verify base_ref default.",
+                "work_items": [
                     {
-                        "alias": "codex-mini",
-                        "provider": "codex",
-                        "model": "gpt-5.4-mini",
-                        "effort": "medium",
-                        "command": "codex exec --ignore-user-config --ignore-rules",
-                        "timeout_seconds": 1200,
-                        "called": True,
-                        "accepted": True,
-                        "event_logs": [],
-                        "probe_logs": [],
-                        "usage": {
-                            "input_tokens": 25000,
-                            "cached_input_tokens": 24000,
-                            "output_tokens": 100,
-                        },
+                        "id": "W01",
+                        "objective": "No-op fixture.",
+                        "owned_paths": ["README.md"],
+                        "verification": ["true"],
+                        "dod": ["Manifest base_ref defaults to the current branch."],
                     }
                 ],
-                "totals": {
-                    "attempts_declared": 1,
-                    "attempts_called": 1,
-                    "event_log_chars": 10,
-                    "event_log_bytes": 10,
-                    "known_usage": {
+            }
+        ],
+    }
+    branch_default_brief_path = tmp_path / "branch-default-brief.json"
+    branch_default_bundle = tmp_path / "branch-default-bundle"
+    write_json(branch_default_brief_path, branch_default_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            branch_default_brief_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            branch_default_bundle.as_posix(),
+        ]
+    )
+    branch_default_manifest = read_json(branch_default_bundle / "job.manifest.json")
+    if branch_default_manifest.get("base_ref") != "trunk":
+        raise SystemExit(f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}")
+
+
+def run_context_pack_fixtures(tmp_path: Path) -> None:
+    context_pack_out = tmp_path / "context-pack.md"
+    context_pack_result = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/context_pack.py",
+            "--worktree",
+            ROOT.as_posix(),
+            "--context-file",
+            (ROOT / "README.md").as_posix(),
+            "--markdown",
+            "--output",
+            context_pack_out.as_posix(),
+        ]
+    )
+    if context_pack_result.stdout.strip() != context_pack_out.as_posix() or not context_pack_out.exists():
+        raise SystemExit("context_pack.py --output should write the rendered pack and print its path")
+    context_pack_text = context_pack_out.read_text(encoding="utf-8")
+    assert_all_contains(context_pack_text, ["Context files to read first:", "- README.md"], "default path-only context pack output")
+    assert_not_contains(context_pack_text, "BEGIN_CONTEXT_EXCERPT", "default path-only context pack output")
+    context_pack_excerpt_out = tmp_path / "context-pack-excerpt.md"
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/context_pack.py",
+            "--worktree",
+            ROOT.as_posix(),
+            "--context-file",
+            (ROOT / "README.md").as_posix(),
+            "--per-file-chars",
+            "80",
+            "--total-chars",
+            "80",
+            "--include-worktree-excerpts",
+            "--markdown",
+            "--output",
+            context_pack_excerpt_out.as_posix(),
+        ]
+    )
+    context_pack_excerpt_text = context_pack_excerpt_out.read_text(encoding="utf-8")
+    assert_all_contains(context_pack_excerpt_text, ["Deterministic context excerpts:", "BEGIN_CONTEXT_EXCERPT context-1: README.md"], "worktree excerpt context pack output")
+    assert_not_contains(context_pack_excerpt_text, "Context files to read first:\n- README.md", "worktree excerpt context pack output")
+
+
+def run_telemetry_summary_fixture(tmp_path: Path) -> None:
+    telemetry_bundle = tmp_path / "telemetry-pressure"
+    telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
+    telemetry_packet.mkdir(parents=True)
+    write_json(
+        telemetry_packet / "telemetry.json",
+        {
+            "schema_version": 1,
+            "packet_id": "B01-W01",
+            "role": "worker",
+            "output_artifact": "status.json",
+            "prompt_artifact": "prompt.md",
+            "prompt_chars": 100,
+            "prompt_bytes": 100,
+            "output_chars": 10,
+            "output_bytes": 10,
+            "event_log_chars": 10,
+            "event_log_bytes": 10,
+            "accepted_alias": "codex-mini",
+            "attempts": [
+                {
+                    "alias": "codex-mini",
+                    "provider": "codex",
+                    "model": "gpt-5.4-mini",
+                    "effort": "medium",
+                    "command": "codex exec --ignore-user-config --ignore-rules",
+                    "timeout_seconds": 1200,
+                    "called": True,
+                    "accepted": True,
+                    "event_logs": [],
+                    "probe_logs": [],
+                    "usage": {
                         "input_tokens": 25000,
                         "cached_input_tokens": 24000,
                         "output_tokens": 100,
                     },
+                }
+            ],
+            "totals": {
+                "attempts_declared": 1,
+                "attempts_called": 1,
+                "event_log_chars": 10,
+                "event_log_bytes": 10,
+                "known_usage": {
+                    "input_tokens": 25000,
+                    "cached_input_tokens": 24000,
+                    "output_tokens": 100,
                 },
             },
+        },
+    )
+    run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
+    telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
+    if telemetry_summary.get("telemetry_count") != 1:
+        raise SystemExit("summarize_telemetry.py should expose top-level telemetry_count")
+    pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
+    if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
+        raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")
+
+
+def run_example_brief_fixtures(tmp_path: Path) -> None:
+    example_brief_path = tmp_path / "example-brief.json"
+    example_brief_path.write_text(
+        run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--example-brief"]).stdout,
+        encoding="utf-8",
+    )
+    lint_example = json.loads(
+        run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--example-brief"]).stdout
+    )
+    if lint_example != json.loads(example_brief_path.read_text(encoding="utf-8")):
+        raise SystemExit("brief example output drifted between create and lint helpers")
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_preflight_brief.py",
+            "--brief",
+            example_brief_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--fail-on",
+            "critical",
+        ]
+    )
+    string_bullet_brief = json.loads(example_brief_path.read_text(encoding="utf-8"))
+    string_bullet_brief["branches"][0]["stop_conditions"] = "Stop if public behavior tests fail."
+    string_bullet_brief["branches"][0]["dod"] = "Branch-level behavior remains compatible."
+    string_bullet_path = tmp_path / "string-bullet-brief.json"
+    string_bullet_path.write_text(json.dumps(string_bullet_brief, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    string_bullet_bundle = tmp_path / "string-bullet-bundle"
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            string_bullet_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            string_bullet_bundle.as_posix(),
+        ]
+    )
+    string_bullet_prompt = (string_bullet_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
+    assert_all_contains(string_bullet_prompt, ["- Stop if public behavior tests fail.", "- Branch-level behavior remains compatible."], "string bullet branch prompt")
+    if "- S\n- t\n- o\n- p" in string_bullet_prompt or "- B\n- r\n- a\n- n\n- c\n- h" in string_bullet_prompt:
+        raise SystemExit("branch prompt split a string field into one bullet per character")
+
+
+def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            (tmp_path / "audit").as_posix(),
+        ]
+    )
+    assert_compact_audit_launcher(tmp_path / "audit")
+    fake_bin = tmp_path / "fake-codex-bin"
+    fake_bin.mkdir()
+    fake_codex = fake_bin / "codex"
+    fake_codex.write_text("#!/usr/bin/env bash\necho fake codex failure >&2\nexit 42\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+    audit_env = {**os.environ, "PATH": fake_bin.as_posix() + os.pathsep + os.environ.get("PATH", "")}
+    run([(tmp_path / "audit" / "launch.sh").as_posix()], expect=1, env=audit_env)
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+            "--audit",
+            (tmp_path / "audit" / "prompt-audit.json").as_posix(),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+        ]
+    )
+    blocked_audit = read_json(tmp_path / "audit" / "prompt-audit.json")
+    if blocked_audit.get("status") != "blocked" or blocked_audit.get("can_start") is not False:
+        raise SystemExit(f"fake-codex audit launcher did not write a terminal blocked audit: {blocked_audit!r}")
+
+    deterministic_audit_phase = tmp_path / "audit-deterministic-phase"
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit-dir",
+            deterministic_audit_phase.as_posix(),
+            "--deterministic",
+            "--require-pass",
+        ]
+    )
+    deterministic_phase_report = read_json(deterministic_audit_phase / "prompt-audit-phase.json")
+    if deterministic_phase_report.get("status") != "pass":
+        raise SystemExit(f"deterministic prompt-audit phase should pass a lint-clean bundle: {deterministic_phase_report!r}")
+    deterministic_audit = read_json(deterministic_audit_phase / "prompt-audit.json")
+    if deterministic_audit.get("status") != "pass" or deterministic_audit.get("can_start") is not True:
+        raise SystemExit(f"deterministic prompt-audit did not write a passing audit: {deterministic_audit!r}")
+    deterministic_telemetry = read_json(deterministic_audit_phase / "telemetry.json")
+    if deterministic_telemetry.get("accepted_alias") != "deterministic-prompt-audit":
+        raise SystemExit(f"deterministic prompt-audit telemetry mismatch: {deterministic_telemetry!r}")
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+            "--audit",
+            (deterministic_audit_phase / "prompt-audit.json").as_posix(),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--require-pass",
+        ]
+    )
+    ready_after_deterministic_audit = run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit",
+            (deterministic_audit_phase / "prompt-audit.json").as_posix(),
+            "--list-ready",
+            "--limit",
+            "1",
+        ]
+    ).stdout.strip().splitlines()
+    if ready_after_deterministic_audit != ["B01"]:
+        raise SystemExit(f"deterministic prompt-audit telemetry did not unlock branch scheduling: {ready_after_deterministic_audit!r}")
+
+    audit_phase = tmp_path / "audit-phase"
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit-dir",
+            audit_phase.as_posix(),
+            "--attempt-timeout-seconds",
+            "7",
+            "--require-pass",
+        ],
+        expect=1,
+        env=audit_env,
+    )
+    phase_report = read_json(audit_phase / "prompt-audit-phase.json")
+    if phase_report.get("status") != "blocked":
+        raise SystemExit(f"prompt-audit phase wrapper should preserve structured blocked state: {phase_report!r}")
+    phase_audit = read_json(audit_phase / "prompt-audit.json")
+    if phase_audit.get("status") != "blocked" or phase_audit.get("can_start") is not False:
+        raise SystemExit(f"prompt-audit phase wrapper did not write blocked audit: {phase_audit!r}")
+    phase_config = read_json(audit_phase / "launch-config.json")
+    if phase_config.get("attempt_timeout_seconds") != 7:
+        raise SystemExit(f"prompt-audit phase wrapper did not pass timeout override: {phase_config!r}")
+
+    audit_signal = tmp_path / "audit-signal"
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            audit_signal.as_posix(),
+        ]
+    )
+    fake_codex_ready = audit_signal / "fake-codex-ready"
+    fake_codex.write_text(f"#!/usr/bin/env bash\nprintf ready > {shlex.quote(fake_codex_ready.as_posix())}\nsleep 30\n", encoding="utf-8")
+    fake_codex.chmod(0o755)
+    process = subprocess.Popen(
+        [(audit_signal / "launch.sh").as_posix()],
+        cwd=ROOT,
+        env=audit_env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    for _ in range(50):
+        if fake_codex_ready.exists():
+            break
+        time.sleep(0.02)
+    else:
+        process.kill()
+        raise SystemExit("fake audit command did not start before SIGTERM fixture")
+    process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        raise SystemExit("audit launcher did not exit after SIGTERM")
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+            "--audit",
+            (audit_signal / "prompt-audit.json").as_posix(),
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+        ]
+    )
+    interrupted_audit = read_json(audit_signal / "prompt-audit.json")
+    interrupted_summary = str(interrupted_audit.get("summary", ""))
+    if interrupted_audit.get("status") != "blocked" or "interrupted" not in interrupted_summary:
+        raise SystemExit(f"SIGTERM audit launcher did not write interrupted blocked audit: {interrupted_audit!r}")
+
+
+def run_lite_advice_packet_fixture(tmp_path: Path, task_file: Path) -> None:
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_lite_advice_packet.py",
+            "--packet-id",
+            "B01-L01",
+            "--purpose",
+            "branch-packet-planning",
+            "--base-dir",
+            ROOT.as_posix(),
+            "--out-dir",
+            (tmp_path / "lite").as_posix(),
+            "--input-file",
+            (ROOT / "README.md").as_posix(),
+            "--task-file",
+            task_file.as_posix(),
+        ],
+        env=offline_gemini_env(),
+    )
+    assert_compact_lite_launcher(tmp_path / "lite" / "B01-L01")
+
+
+def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path, task_file: Path) -> None:
+    write_valid_research_fixture(bundle)
+    write_worker_scheduler(bundle)
+    write_pre_review_gate(bundle)
+    create_runtime_packet(
+        role="reviewer",
+        packet_id="B01-R01",
+        branch="preparedness-research-fixture",
+        out_dir=packet_root,
+        manifest=bundle / "job.manifest.json",
+        pre_review_gate=bundle / "branches" / "B01.pre_review_gate.json",
+        context_files=[
+            bundle / "branches" / "B01.prompt.md",
+            bundle / "branches" / "B01.pre_review_gate.json",
+        ],
+        task_file=task_file,
+    )
+    reviewer_config = assert_compact_runtime_launcher(packet_root / "B01-R01", "reviewer", 1800)
+    reviewer_packet_root = packet_root / "B01-R01"
+    reviewer_packet_context = reviewer_packet_root / "packet-context.json"
+    reviewer_prompt = (reviewer_packet_root / "prompt.md").read_text(encoding="utf-8")
+    if not reviewer_packet_context.exists():
+        raise SystemExit("reviewer packet-context.json was not created")
+    reviewer_context_text = reviewer_packet_context.read_text(encoding="utf-8")
+    if "compact_reviewer_context" not in reviewer_context_text:
+        raise SystemExit(f"reviewer packet context should be compact: {reviewer_context_text!r}")
+    if f"Packet context to read first:\n- {reviewer_packet_context.as_posix()}" not in reviewer_prompt:
+        raise SystemExit("reviewer prompt should read compact_reviewer_context first")
+    reviewer_attempts = assert_lean_codex_attempts(reviewer_config.get("attempts"), "reviewer Codex attempts")
+    reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
+    if reviewer_aliases != ["gpt-5.5", "gpt-5.4"]:
+        raise SystemExit(f"reviewer launch-config route mismatch: {reviewer_aliases!r}")
+    if not reviewer_config.get("semantic_input_hashes"):
+        raise SystemExit("reviewer launch-config omitted semantic_input_hashes")
+    if not reviewer_config.get("reuse_policy"):
+        raise SystemExit("reviewer launch-config omitted reuse_policy")
+    assert_reviewer_route(packet_root, "B01-R01", ["gpt-5.5", "gpt-5.4"])
+    for packet_id, tier, expected in [
+        ("B01-R02", "standard", ["gpt-5.4", "gpt-5.5"]),
+        ("B01-R03", "heavy", ["gpt-5.5", "gpt-5.4"]),
+    ]:
+        gate_path = write_review_gate_variant(bundle, packet_id, tier=tier)
+        create_runtime_packet(
+            role="reviewer",
+            packet_id=packet_id,
+            branch="preparedness-research-fixture",
+            out_dir=packet_root,
+            manifest=bundle / "job.manifest.json",
+            pre_review_gate=gate_path,
+            context_files=[bundle / "branches" / "B01.prompt.md"],
+            task_file=task_file,
         )
-        run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
-        telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
-        if telemetry_summary.get("telemetry_count") != 1:
-            raise SystemExit("summarize_telemetry.py should expose top-level telemetry_count")
-        pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
-        if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
-            raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")
-        example_brief_path = tmp_path / "example-brief.json"
-        example_brief_path.write_text(
-            run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--example-brief"]).stdout,
-            encoding="utf-8",
-        )
-        lint_example = json.loads(
-            run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--example-brief"]).stdout
-        )
-        if lint_example != json.loads(example_brief_path.read_text(encoding="utf-8")):
-            raise SystemExit("brief example output drifted between create and lint helpers")
-        run(
-            [
-                "python3",
-                "skills/goal-preflight/scripts/lint_preflight_brief.py",
-                "--brief",
-                example_brief_path.as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--fail-on",
-                "critical",
-            ]
-        )
-        string_bullet_brief = json.loads(example_brief_path.read_text(encoding="utf-8"))
-        string_bullet_brief["branches"][0]["stop_conditions"] = "Stop if public behavior tests fail."
-        string_bullet_brief["branches"][0]["dod"] = "Branch-level behavior remains compatible."
-        string_bullet_path = tmp_path / "string-bullet-brief.json"
-        string_bullet_path.write_text(json.dumps(string_bullet_brief, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        string_bullet_bundle = tmp_path / "string-bullet-bundle"
-        run(
-            [
-                "python3",
-                "skills/goal-preflight/scripts/create_goal_bundle.py",
-                "--brief",
-                string_bullet_path.as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--out-dir",
-                string_bullet_bundle.as_posix(),
-            ]
-        )
-        string_bullet_prompt = (string_bullet_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
-        assert_all_contains(string_bullet_prompt, ["- Stop if public behavior tests fail.", "- Branch-level behavior remains compatible."], "string bullet branch prompt")
-        if "- S\n- t\n- o\n- p" in string_bullet_prompt or "- B\n- r\n- a\n- n\n- c\n- h" in string_bullet_prompt:
-            raise SystemExit("branch prompt split a string field into one bullet per character")
+        assert_reviewer_route(packet_root, packet_id, expected)
+    heavy_diff_gate = write_review_gate_variant(bundle, "B01-R04", diff_stats={"files_changed": 25, "lines_changed": 40})
+    create_runtime_packet(
+        role="reviewer",
+        packet_id="B01-R04",
+        branch="preparedness-research-fixture",
+        out_dir=packet_root,
+        manifest=bundle / "job.manifest.json",
+        pre_review_gate=heavy_diff_gate,
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+    )
+    assert_reviewer_route(packet_root, "B01-R04", ["gpt-5.5", "gpt-5.4"])
+    failed_gate = json.loads((bundle / "branches" / "B01.pre_review_gate.json").read_text(encoding="utf-8"))
+    failed_gate["status"] = "failed"
+    failed_gate["checks"]["tests"] = {"status": "failed", "reason": "Negative fixture blocks reviewer launch."}
+    write_json(bundle / "branches" / "B01.failed_pre_review_gate.json", failed_gate)
+    failed_gate_result = create_runtime_packet(
+        role="reviewer",
+        packet_id="B01-R01",
+        branch="preparedness-research-fixture",
+        out_dir=tmp_path / "blocked-reviewer",
+        manifest=bundle / "job.manifest.json",
+        pre_review_gate=bundle / "branches" / "B01.failed_pre_review_gate.json",
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+        expect=1,
+    )
+    assert_contains(failed_gate_result.stdout, "pre-review gate failed", "failed pre-review gate fixture")
+
+
+def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
+    assemble_branch_status(bundle)
+    validate_branch(bundle)
+
+    no_scheduler_bundle = tmp_path / "bad-self-reported-saturation"
+    shutil.copytree(bundle, no_scheduler_bundle)
+    (no_scheduler_bundle / "schedulers" / "B01.worker.scheduler.json").unlink()
+    no_scheduler_result = validate_branch(no_scheduler_bundle, expect=1)
+    assert_contains(no_scheduler_result.stdout, "scheduler artifact does not exist", "self-reported saturation fixture")
+
+    bad_bundle = tmp_path / "bad-security"
+    shutil.copytree(bundle, bad_bundle)
+    bad_research = research_status(bad_command="curl -X POST https://example.com/api")
+    write_json(bad_bundle / "research" / "B01-W01" / "research.json", bad_research)
+    write_json(bad_bundle / "branches" / "B01.status.json", branch_status(bad_bundle, bad_research))
+    bad_result = validate_branch(bad_bundle, expect=1)
+    assert_contains(bad_result.stdout, "violates read-only security policy", "security fixture")
+
+    old_policy_bundle = tmp_path / "bad-old-policy"
+    shutil.copytree(bundle, old_policy_bundle)
+    manifest = json.loads((old_policy_bundle / "job.manifest.json").read_text(encoding="utf-8"))
+    manifest["research_worker_policy"] = {
+        "enabled": True,
+        "worker_type": "research-worker",
+        "launcher": "codex --search exec --ephemeral --ignore-user-config -s read-only",
+        "network_scope": "Native Codex general web search only. Connector tools are unavailable.",
+        "local_access": "Read-only local file access only.",
+    }
+    write_json(old_policy_bundle / "job.manifest.json", manifest)
+    lint_result = run(
+        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", old_policy_bundle.as_posix(), "--no-write"],
+        expect=1,
+    )
+    assert_contains(lint_result.stdout, "obsolete narrow-access phrase", "old-policy fixture")
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory(prefix="goal-preparedness-fixtures-") as tmp:
+        tmp_path = Path(tmp)
+        test_launcher_state_classifier()
+        bundle = create_goal_fixture_bundle(tmp_path)
+        run_validator_command_fixtures(tmp_path, bundle)
+        run_phase_manifest_and_schema_fixtures()
+        run_base_ref_default_fixture(tmp_path)
+        run_context_pack_fixtures(tmp_path)
+        run_telemetry_summary_fixture(tmp_path)
+        run_example_brief_fixtures(tmp_path)
         run_scheduler_fixtures(bundle / "job.manifest.json")
         run_scheduler_tick_fixture(tmp_path)
         run_launch_ready_helper_fixtures(tmp_path)
@@ -2194,726 +2786,14 @@ def main() -> int:
         run_topology_fixtures(tmp_path)
         run_amendment_fixtures(tmp_path)
 
-        packet_root = tmp_path / "packets"
-        task_file = tmp_path / "task.md"
-        task_file.write_text("Static timeout launcher fixture.\n", encoding="utf-8")
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W02",
-                "--branch",
-                "preparedness-research-fixture-W02",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                packet_root.as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-                "--worker-route",
-                "codex-mini",
-                "--selection-reason",
-                "Fixture route selected to inspect generated timeout wrapper.",
-            ]
-        )
-        assert_shell_syntax(packet_root / "B01-W02" / "launch.sh")
-        worker_config = assert_compact_runtime_launcher(packet_root / "B01-W02", "worker")
-        if worker_config.get("attempt_timeout_seconds") != 3600:
-            raise SystemExit("worker launch-config should preserve the 3600 second attempt timeout")
-        if worker_config.get("selected_ladder") != ["codex-mini"]:
-            raise SystemExit(f"worker launch-config ladder mismatch: {worker_config.get('selected_ladder')!r}")
-        if worker_config.get("selection_reason") != "Fixture route selected to inspect generated timeout wrapper.":
-            raise SystemExit(f"worker launch-config selection reason mismatch: {worker_config.get('selection_reason')!r}")
-        attempts = worker_config.get("attempts", [])
-        event_logs = []
-        probe_logs = []
-        for attempt in attempts:
-            if isinstance(attempt, dict):
-                event_logs.extend(attempt.get("event_logs", []))
-                probe_logs.extend(attempt.get("probe_logs", []))
-        if event_logs != ["events-mini.jsonl"]:
-            raise SystemExit(f"worker launch-config event logs mismatch: {event_logs!r}")
-        if probe_logs:
-            raise SystemExit(f"worker launch-config should not include probe logs for codex-mini-only route: {probe_logs!r}")
-        if worker_config.get("selected_commands") != ["codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"]:
-            raise SystemExit(f"worker launch-config selected commands mismatch: {worker_config.get('selected_commands')!r}")
-        if not attempts or attempts[0].get("ignore_user_config") is not True or attempts[0].get("ignore_rules") is not True:
-            raise SystemExit(f"worker Codex attempt should use lean Codex startup flags: {attempts!r}")
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W04",
-                "--branch",
-                "preparedness-research-fixture-W04",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                packet_root.as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-                "--worker-route",
-                "gemini-pro",
-                "copilot-gpt-5.4",
-                "codex-mini",
-                "--selection-reason",
-                "Fixture route selected to validate worker probe metadata.",
-            ]
-        )
-        mixed_config = assert_compact_runtime_launcher(packet_root / "B01-W04", "worker")
-        if mixed_config.get("selected_ladder") != ["gemini-pro", "copilot-gpt-5.4", "codex-mini"]:
-            raise SystemExit(f"worker launch-config mixed route mismatch: {mixed_config.get('selected_ladder')!r}")
-        if mixed_config.get("selection_reason") != "Fixture route selected to validate worker probe metadata.":
-            raise SystemExit(f"worker launch-config mixed route selection reason mismatch: {mixed_config.get('selection_reason')!r}")
-        mixed_event_logs = [
-            log
-            for attempt in mixed_config.get("attempts", [])
-            if isinstance(attempt, dict)
-            for log in attempt.get("event_logs", [])
-        ]
-        mixed_probe_logs = [
-            log
-            for attempt in mixed_config.get("attempts", [])
-            if isinstance(attempt, dict)
-            for log in attempt.get("probe_logs", [])
-        ]
-        if mixed_event_logs != ["events-gemini-pro.log", "events-copilot.jsonl", "events-mini.jsonl"]:
-            raise SystemExit(f"worker launch-config mixed event log mismatch: {mixed_event_logs!r}")
-        if mixed_probe_logs != [
-            "events-gemini-pro-probe.log",
-            "events-copilot-probe.jsonl",
-            "events-copilot-version.log",
-        ]:
-            raise SystemExit(f"worker launch-config mixed probe log mismatch: {mixed_probe_logs!r}")
-        mixed_codex_attempts = [
-            attempt
-            for attempt in mixed_config.get("attempts", [])
-            if isinstance(attempt, dict) and attempt.get("provider") == "codex"
-        ]
-        if len(mixed_codex_attempts) != 1 or mixed_codex_attempts[0].get("ignore_user_config") is not True or mixed_codex_attempts[0].get("ignore_rules") is not True:
-            raise SystemExit(f"mixed worker Codex attempt should use lean Codex startup flags: {mixed_codex_attempts!r}")
-        worker_model_catalog = tmp_path / "worker-model-catalog.json"
-        write_json(
-            worker_model_catalog,
-            {
-                "schema_version": 1,
-                "status": "pass",
-                "source": "live",
-                "warnings": [],
-                "models": [],
-                "route_models": [
-                    {
-                        "alias": "codex-spark",
-                        "model": "gpt-5.3-codex-spark",
-                        "present": True,
-                        "supported_in_api": False,
-                        "visibility": "list",
-                    },
-                    {
-                        "alias": "codex-mini",
-                        "model": "gpt-5.4-mini",
-                        "present": True,
-                        "supported_in_api": True,
-                        "visibility": "list",
-                    },
-                ],
-                "missing_route_models": [],
-            },
-        )
-        catalog_packet_root = tmp_path / "catalog-packets"
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W05",
-                "--branch",
-                "preparedness-research-fixture-W05",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                catalog_packet_root.as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-                "--model-catalog",
-                worker_model_catalog.as_posix(),
-            ]
-        )
-        catalog_config = assert_compact_runtime_launcher(catalog_packet_root / "B01-W05", "worker")
-        expected_catalog_ladder = ["codex-mini"]
-        if catalog_config.get("selected_ladder") != expected_catalog_ladder:
-            raise SystemExit(f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}")
-        catalog_meta = catalog_config.get("model_catalog", {})
-        filtered_aliases = [
-            item.get("alias")
-            for item in catalog_meta.get("filtered_aliases", [])
-            if isinstance(item, dict)
-        ]
-        if filtered_aliases != ["codex-spark"]:
-            raise SystemExit(f"worker model catalog filtered aliases mismatch: {filtered_aliases!r}")
-        explicit_spark = run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W06",
-                "--branch",
-                "preparedness-research-fixture-W06",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                catalog_packet_root.as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-                "--worker-route",
-                "codex-spark",
-                "--selection-reason",
-                "Fixture intentionally selects unsupported Spark.",
-                "--model-catalog",
-                worker_model_catalog.as_posix(),
-            ],
-            expect=1,
-        )
-        if "model catalog rejects selected worker route" not in explicit_spark.stdout:
-            raise SystemExit("explicit unsupported Spark route did not fail with model catalog guidance")
-        manifest_packet_root = tmp_path / "manifest-packets"
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W01",
-                "--branch",
-                "B01",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                manifest_packet_root.as_posix(),
-                "--task-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--worker-route",
-                "codex-mini",
-                "--selection-reason",
-                "Fixture exercises marker-wrapped Codex output.",
-            ]
-        )
-        manifest_packet_dir = manifest_packet_root / "B01-W01"
-        manifest_worker_prompt = (manifest_packet_dir / "prompt.md").read_text(encoding="utf-8")
-        manifest_worker_config = read_json(manifest_packet_dir / "launch-config.json")
-        if manifest_worker_config.get("branch") != "preparedness-research-fixture":
-            raise SystemExit(f"worker --manifest did not normalize branch id to branch_name: {manifest_worker_config.get('branch')!r}")
-        manifest_worker_schema = read_json(manifest_packet_dir / "status.schema.json")
-        branch_const = manifest_worker_schema.get("properties", {}).get("branch", {}).get("const")
-        if branch_const != "preparedness-research-fixture":
-            raise SystemExit(f"worker --manifest status schema branch mismatch: {branch_const!r}")
-        if not (manifest_packet_dir / "packet-context.json").exists():
-            raise SystemExit("worker --manifest did not create compact packet-context.json")
-        assert_contains(manifest_worker_prompt, "Compact Worker Task", "worker --manifest prompt")
-        excerpt_packet_root = tmp_path / "excerpt-packets"
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W99",
-                "--branch",
-                "preparedness-research-fixture",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                excerpt_packet_root.as_posix(),
-                "--task-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (ROOT / "README.md").as_posix(),
-                "--worker-route",
-                "codex-mini",
-                "--selection-reason",
-                "Fixture exercises bounded worktree context excerpts.",
-                "--include-worktree-context-excerpts",
-            ]
-        )
-        excerpt_worker_prompt = (excerpt_packet_root / "B01-W99" / "prompt.md").read_text(encoding="utf-8")
-        assert_contains(excerpt_worker_prompt, "BEGIN_CONTEXT_EXCERPT context-1: README.md", "worker excerpt prompt")
-        fake_codex_dir = tmp_path / "fake-codex-worker"
-        fake_codex_dir.mkdir()
-        fake_codex = fake_codex_dir / "codex"
-        fake_codex.write_text(
-            "#!/usr/bin/env python3\n"
-            "import json, pathlib, sys\n"
-            "args = sys.argv[1:]\n"
-            "out = pathlib.Path(args[args.index('-o') + 1])\n"
-            "status = {\n"
-            "  'packet_id': 'B01-W01',\n"
-            "  'role': 'worker',\n"
-            "  'status': 'pass',\n"
-            "  'branch': 'preparedness-research-fixture',\n"
-            f"  'worktree': {ROOT.as_posix()!r},\n"
-            "  'route_class': 'normal-code',\n"
-            "  'selected_ladder': ['codex-mini'],\n"
-            "  'selection_reason': 'Fixture exercises marker-wrapped Codex output.',\n"
-            "  'changed_files': [],\n"
-            "  'commands_run': ['pwd', 'git status --short --branch'],\n"
-            "  'tests': ['fixture fake codex'],\n"
-            "  'blockers': [],\n"
-            "  'handoff': 'fake codex marker-wrapped pass'\n"
-            "}\n"
-            "out.write_text('BEGIN_WORKER_STATUS_JSON\\n' + json.dumps(status) + '\\nEND_WORKER_STATUS_JSON\\n', encoding='utf-8')\n"
-            "print(json.dumps({'usage': {'input_tokens': 321, 'cached_input_tokens': 123, 'output_tokens': 45}}))\n",
-            encoding="utf-8",
-        )
-        fake_codex.chmod(0o755)
-        run(
-            [(manifest_packet_dir / "launch.sh").as_posix()],
-            env={**os.environ, "PATH": fake_codex_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
-        )
-        manifest_worker_status = read_json(manifest_packet_dir / "status.json")
-        if manifest_worker_status.get("branch") != "preparedness-research-fixture":
-            raise SystemExit(f"worker runtime did not preserve normalized branch label: {manifest_worker_status!r}")
-        raw_status_text = (manifest_packet_dir / "status.json.raw").read_text(encoding="utf-8")
-        if "BEGIN_WORKER_STATUS_JSON" not in raw_status_text:
-            raise SystemExit("worker runtime did not preserve raw marker-wrapped Codex output")
-        manifest_worker_telemetry = read_json(manifest_packet_dir / "telemetry.json")
-        usage = manifest_worker_telemetry.get("totals", {}).get("known_usage", {})
-        if manifest_worker_telemetry.get("accepted_alias") != "codex-mini" or usage.get("input_tokens") != 321:
-            raise SystemExit(f"worker runtime did not extract accepted Codex telemetry after marker normalization: {manifest_worker_telemetry!r}")
-        if manifest_worker_telemetry.get("route_class") != "normal-code":
-            raise SystemExit(f"worker telemetry did not preserve route_class: {manifest_worker_telemetry!r}")
+        packet_root, task_file = run_runtime_packet_fixtures(tmp_path, bundle)
 
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "research-worker",
-                "--packet-id",
-                "B01-W03",
-                "--branch",
-                "preparedness-research-fixture-W03",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                packet_root.as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ]
-        )
-        research_config = assert_compact_runtime_launcher(packet_root / "B01-W03", "research-worker", 1200)
-        research_event_logs = [
-            log
-            for attempt in research_config.get("attempts", [])
-            if isinstance(attempt, dict)
-            for log in attempt.get("event_logs", [])
-        ]
-        if research_event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
-            raise SystemExit(f"research launch-config event log mismatch: {research_event_logs!r}")
-        if any(
-            isinstance(attempt, dict)
-            and ("ignore_user_config" in attempt or "ignore_rules" in attempt or "--ignore-user-config" in str(attempt.get("command", "")))
-            for attempt in research_config.get("attempts", [])
-        ):
-            raise SystemExit(f"research-worker attempts must keep user config/search access: {research_config.get('attempts')!r}")
+        run_prompt_audit_packet_fixtures(tmp_path, bundle)
 
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--out-dir",
-                (tmp_path / "audit").as_posix(),
-            ]
-        )
-        assert_compact_audit_launcher(tmp_path / "audit")
-        fake_bin = tmp_path / "fake-codex-bin"
-        fake_bin.mkdir()
-        fake_codex = fake_bin / "codex"
-        fake_codex.write_text("#!/usr/bin/env bash\necho fake codex failure >&2\nexit 42\n", encoding="utf-8")
-        fake_codex.chmod(0o755)
-        audit_env = {**os.environ, "PATH": fake_bin.as_posix() + os.pathsep + os.environ.get("PATH", "")}
-        run([(tmp_path / "audit" / "launch.sh").as_posix()], expect=1, env=audit_env)
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
-                "--audit",
-                (tmp_path / "audit" / "prompt-audit.json").as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-            ]
-        )
-        blocked_audit = read_json(tmp_path / "audit" / "prompt-audit.json")
-        if blocked_audit.get("status") != "blocked" or blocked_audit.get("can_start") is not False:
-            raise SystemExit(f"fake-codex audit launcher did not write a terminal blocked audit: {blocked_audit!r}")
+        run_lite_advice_packet_fixture(tmp_path, task_file)
 
-        deterministic_audit_phase = tmp_path / "audit-deterministic-phase"
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--audit-dir",
-                deterministic_audit_phase.as_posix(),
-                "--deterministic",
-                "--require-pass",
-            ]
-        )
-        deterministic_phase_report = read_json(deterministic_audit_phase / "prompt-audit-phase.json")
-        if deterministic_phase_report.get("status") != "pass":
-            raise SystemExit(f"deterministic prompt-audit phase should pass a lint-clean bundle: {deterministic_phase_report!r}")
-        deterministic_audit = read_json(deterministic_audit_phase / "prompt-audit.json")
-        if deterministic_audit.get("status") != "pass" or deterministic_audit.get("can_start") is not True:
-            raise SystemExit(f"deterministic prompt-audit did not write a passing audit: {deterministic_audit!r}")
-        deterministic_telemetry = read_json(deterministic_audit_phase / "telemetry.json")
-        if deterministic_telemetry.get("accepted_alias") != "deterministic-prompt-audit":
-            raise SystemExit(f"deterministic prompt-audit telemetry mismatch: {deterministic_telemetry!r}")
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
-                "--audit",
-                (deterministic_audit_phase / "prompt-audit.json").as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--require-pass",
-            ]
-        )
-        ready_after_deterministic_audit = run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--audit",
-                (deterministic_audit_phase / "prompt-audit.json").as_posix(),
-                "--list-ready",
-                "--limit",
-                "1",
-            ]
-        ).stdout.strip().splitlines()
-        if ready_after_deterministic_audit != ["B01"]:
-            raise SystemExit(f"deterministic prompt-audit telemetry did not unlock branch scheduling: {ready_after_deterministic_audit!r}")
-
-        audit_phase = tmp_path / "audit-phase"
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--audit-dir",
-                audit_phase.as_posix(),
-                "--attempt-timeout-seconds",
-                "7",
-                "--require-pass",
-            ],
-            expect=1,
-            env=audit_env,
-        )
-        phase_report = read_json(audit_phase / "prompt-audit-phase.json")
-        if phase_report.get("status") != "blocked":
-            raise SystemExit(f"prompt-audit phase wrapper should preserve structured blocked state: {phase_report!r}")
-        phase_audit = read_json(audit_phase / "prompt-audit.json")
-        if phase_audit.get("status") != "blocked" or phase_audit.get("can_start") is not False:
-            raise SystemExit(f"prompt-audit phase wrapper did not write blocked audit: {phase_audit!r}")
-        phase_config = read_json(audit_phase / "launch-config.json")
-        if phase_config.get("attempt_timeout_seconds") != 7:
-            raise SystemExit(f"prompt-audit phase wrapper did not pass timeout override: {phase_config!r}")
-
-        audit_signal = tmp_path / "audit-signal"
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/create_audit_packet.py",
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-                "--out-dir",
-                audit_signal.as_posix(),
-            ]
-        )
-        fake_codex.write_text("#!/usr/bin/env bash\nsleep 30\n", encoding="utf-8")
-        fake_codex.chmod(0o755)
-        process = subprocess.Popen(
-            [(audit_signal / "launch.sh").as_posix()],
-            cwd=ROOT,
-            env=audit_env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-        )
-        time.sleep(0.5)
-        process.terminate()
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            raise SystemExit("audit launcher did not exit after SIGTERM")
-        run(
-            [
-                "python3",
-                "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
-                "--audit",
-                (audit_signal / "prompt-audit.json").as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--repo-root",
-                ROOT.as_posix(),
-            ]
-        )
-        interrupted_audit = read_json(audit_signal / "prompt-audit.json")
-        interrupted_summary = str(interrupted_audit.get("summary", ""))
-        if interrupted_audit.get("status") != "blocked" or "interrupted" not in interrupted_summary:
-            raise SystemExit(f"SIGTERM audit launcher did not write interrupted blocked audit: {interrupted_audit!r}")
-
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_lite_advice_packet.py",
-                "--packet-id",
-                "B01-L01",
-                "--purpose",
-                "branch-packet-planning",
-                "--base-dir",
-                ROOT.as_posix(),
-                "--out-dir",
-                (tmp_path / "lite").as_posix(),
-                "--input-file",
-                (ROOT / "README.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ],
-            env=offline_gemini_env(),
-        )
-        assert_compact_lite_launcher(tmp_path / "lite" / "B01-L01")
-
-        write_valid_research_fixture(bundle)
-        write_worker_scheduler(bundle)
-        write_pre_review_gate(bundle)
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "reviewer",
-                "--packet-id",
-                "B01-R01",
-                "--branch",
-                "preparedness-research-fixture",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                packet_root.as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--pre-review-gate",
-                (bundle / "branches" / "B01.pre_review_gate.json").as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.pre_review_gate.json").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ]
-        )
-        reviewer_config = assert_compact_runtime_launcher(packet_root / "B01-R01", "reviewer", 1800)
-        reviewer_packet_root = packet_root / "B01-R01"
-        reviewer_packet_context = reviewer_packet_root / "packet-context.json"
-        reviewer_prompt = (reviewer_packet_root / "prompt.md").read_text(encoding="utf-8")
-        if not reviewer_packet_context.exists():
-            raise SystemExit("reviewer packet-context.json was not created")
-        reviewer_context_text = reviewer_packet_context.read_text(encoding="utf-8")
-        if "compact_reviewer_context" not in reviewer_context_text:
-            raise SystemExit(f"reviewer packet context should be compact: {reviewer_context_text!r}")
-        if f"Packet context to read first:\n- {reviewer_packet_context.as_posix()}" not in reviewer_prompt:
-            raise SystemExit("reviewer prompt should read compact_reviewer_context first")
-        reviewer_attempts = reviewer_config.get("attempts")
-        reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
-        if reviewer_aliases != ["gpt-5.5", "gpt-5.4"]:
-            raise SystemExit(f"reviewer launch-config route mismatch: {reviewer_aliases!r}")
-        if not reviewer_attempts or any(
-            not isinstance(attempt, dict)
-            or attempt.get("ignore_user_config") is not True
-            or attempt.get("ignore_rules") is not True
-            for attempt in reviewer_attempts
-        ):
-            raise SystemExit(f"reviewer Codex attempts should use lean Codex startup flags: {reviewer_attempts!r}")
-        if not reviewer_config.get("semantic_input_hashes"):
-            raise SystemExit("reviewer launch-config omitted semantic_input_hashes")
-        if not reviewer_config.get("reuse_policy"):
-            raise SystemExit("reviewer launch-config omitted reuse_policy")
-        assert_reviewer_route(packet_root, "B01-R01", ["gpt-5.5", "gpt-5.4"])
-        for packet_id, tier, expected in [
-            ("B01-R02", "standard", ["gpt-5.4", "gpt-5.5"]),
-            ("B01-R03", "heavy", ["gpt-5.5", "gpt-5.4"]),
-        ]:
-            gate_path = write_review_gate_variant(bundle, packet_id, tier=tier)
-            run(
-                [
-                    "python3",
-                    "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                    "--role",
-                    "reviewer",
-                    "--packet-id",
-                    packet_id,
-                    "--branch",
-                    "preparedness-research-fixture",
-                    "--worktree",
-                    ROOT.as_posix(),
-                    "--out-dir",
-                    packet_root.as_posix(),
-                    "--manifest",
-                    (bundle / "job.manifest.json").as_posix(),
-                    "--pre-review-gate",
-                    gate_path.as_posix(),
-                    "--context-file",
-                    (bundle / "branches" / "B01.prompt.md").as_posix(),
-                    "--task-file",
-                    task_file.as_posix(),
-                ]
-            )
-            assert_reviewer_route(packet_root, packet_id, expected)
-        heavy_diff_gate = write_review_gate_variant(bundle, "B01-R04", diff_stats={"files_changed": 25, "lines_changed": 40})
-        run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "reviewer",
-                "--packet-id",
-                "B01-R04",
-                "--branch",
-                "preparedness-research-fixture",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                packet_root.as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--pre-review-gate",
-                heavy_diff_gate.as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ]
-        )
-        assert_reviewer_route(packet_root, "B01-R04", ["gpt-5.5", "gpt-5.4"])
-        failed_gate = json.loads((bundle / "branches" / "B01.pre_review_gate.json").read_text(encoding="utf-8"))
-        failed_gate["status"] = "failed"
-        failed_gate["checks"]["tests"] = {"status": "failed", "reason": "Negative fixture blocks reviewer launch."}
-        write_json(bundle / "branches" / "B01.failed_pre_review_gate.json", failed_gate)
-        failed_gate_result = run(
-            [
-                "python3",
-                "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-                "--role",
-                "reviewer",
-                "--packet-id",
-                "B01-R01",
-                "--branch",
-                "preparedness-research-fixture",
-                "--worktree",
-                ROOT.as_posix(),
-                "--out-dir",
-                (tmp_path / "blocked-reviewer").as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--pre-review-gate",
-                (bundle / "branches" / "B01.failed_pre_review_gate.json").as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ],
-            expect=1,
-        )
-        assert_contains(failed_gate_result.stdout, "pre-review gate failed", "failed pre-review gate fixture")
-        assemble_branch_status(bundle)
-        validate_branch(bundle)
-
-        no_scheduler_bundle = tmp_path / "bad-self-reported-saturation"
-        shutil.copytree(bundle, no_scheduler_bundle)
-        (no_scheduler_bundle / "schedulers" / "B01.worker.scheduler.json").unlink()
-        no_scheduler_result = validate_branch(no_scheduler_bundle, expect=1)
-        assert_contains(no_scheduler_result.stdout, "scheduler artifact does not exist", "self-reported saturation fixture")
-
-        bad_bundle = tmp_path / "bad-security"
-        shutil.copytree(bundle, bad_bundle)
-        bad_research = research_status(bad_command="curl -X POST https://example.com/api")
-        write_json(bad_bundle / "research" / "B01-W01" / "research.json", bad_research)
-        write_json(bad_bundle / "branches" / "B01.status.json", branch_status(bad_bundle, bad_research))
-        bad_result = validate_branch(bad_bundle, expect=1)
-        assert_contains(bad_result.stdout, "violates read-only security policy", "security fixture")
-
-        old_policy_bundle = tmp_path / "bad-old-policy"
-        shutil.copytree(bundle, old_policy_bundle)
-        manifest = json.loads((old_policy_bundle / "job.manifest.json").read_text(encoding="utf-8"))
-        manifest["research_worker_policy"] = {
-            "enabled": True,
-            "worker_type": "research-worker",
-            "launcher": "codex --search exec --ephemeral --ignore-user-config -s read-only",
-            "network_scope": "Native Codex general web search only. Connector tools are unavailable.",
-            "local_access": "Read-only local file access only.",
-        }
-        write_json(old_policy_bundle / "job.manifest.json", manifest)
-        lint_result = run(
-            ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", old_policy_bundle.as_posix(), "--no-write"],
-            expect=1,
-        )
-        assert_contains(lint_result.stdout, "obsolete narrow-access phrase", "old-policy fixture")
+        run_reviewer_packet_fixtures(tmp_path, bundle, packet_root, task_file)
+        run_branch_status_negative_fixtures(tmp_path, bundle)
 
     print("status=pass")
     return 0

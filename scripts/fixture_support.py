@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Callable
+from typing import Any, Callable
 
 
 _MODULE_CACHE: dict[Path, ModuleType] = {}
@@ -27,6 +27,7 @@ _SAFE_SKILL_DIRS = {
 OFFLINE_GEMINI_PATH = "/usr/bin/gemini-fixture"
 OFFLINE_GEMINI_VERSION = "gemini-fixture 0.0.0"
 OFFLINE_GEMINI_SHA256 = "sha256:" + ("0" * 64)
+CODEX_MINI_WORKER_COMMAND = "codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"
 
 
 @contextlib.contextmanager
@@ -168,6 +169,169 @@ def run_command(
             print(result.stdout, file=sys.stderr)
         raise SystemExit(1)
     return result
+
+
+def runtime_packet_command(
+    *,
+    script: str,
+    role: str,
+    packet_id: str,
+    branch: str,
+    worktree: Path,
+    out_dir: Path,
+    task_file: Path,
+    owned_files: list[str] | None = None,
+    context_files: list[Path] | None = None,
+    manifest: Path | None = None,
+    pre_review_gate: Path | None = None,
+    worker_route: list[str] | None = None,
+    selection_reason: str | None = None,
+    model_catalog: Path | None = None,
+    extra_args: list[str] | None = None,
+) -> list[str]:
+    command = [
+        "python3",
+        script,
+        "--role",
+        role,
+        "--packet-id",
+        packet_id,
+        "--branch",
+        branch,
+        "--worktree",
+        worktree.as_posix(),
+        "--out-dir",
+        out_dir.as_posix(),
+    ]
+    if manifest is not None:
+        command.extend(["--manifest", manifest.as_posix()])
+    if pre_review_gate is not None:
+        command.extend(["--pre-review-gate", pre_review_gate.as_posix()])
+    for owned_file in owned_files or []:
+        command.extend(["--owned-file", owned_file])
+    for context_file in context_files or []:
+        command.extend(["--context-file", context_file.as_posix()])
+    command.extend(["--task-file", task_file.as_posix()])
+    if worker_route:
+        command.append("--worker-route")
+        command.extend(worker_route)
+    if selection_reason is not None:
+        command.extend(["--selection-reason", selection_reason])
+    if model_catalog is not None:
+        command.extend(["--model-catalog", model_catalog.as_posix()])
+    if extra_args:
+        command.extend(extra_args)
+    return command
+
+
+def run_runtime_packet(
+    *,
+    root: Path,
+    expect: int = 0,
+    **packet_kwargs: Any,
+) -> subprocess.CompletedProcess[str]:
+    return run_command(
+        runtime_packet_command(**packet_kwargs),
+        root=root,
+        expect=expect,
+    )
+
+
+def launch_attempts(config: dict, label: str) -> list[dict]:
+    attempts = config.get("attempts")
+    if not isinstance(attempts, list):
+        raise SystemExit(f"{label} launch-config attempts should be a list: {attempts!r}")
+    if not all(isinstance(attempt_item, dict) for attempt_item in attempts):
+        raise SystemExit(f"{label} launch-config attempts should contain only objects: {attempts!r}")
+    return attempts
+
+
+def launch_attempt_logs(config: dict, key: str, label: str) -> list[str]:
+    logs: list[str] = []
+    for attempt_item in launch_attempts(config, label):
+        raw_logs = attempt_item.get(key, [])
+        if not isinstance(raw_logs, list) or not all(isinstance(log, str) for log in raw_logs):
+            raise SystemExit(f"{label} launch-config {key} should be a list of strings: {raw_logs!r}")
+        logs.extend(raw_logs)
+    return logs
+
+
+def launch_attempts_by_provider(config: dict, provider: str, label: str) -> list[dict]:
+    return [attempt_item for attempt_item in launch_attempts(config, label) if attempt_item.get("provider") == provider]
+
+
+def assert_lean_codex_attempts(attempts: object, label: str, *, expected_count: int | None = None) -> list[dict]:
+    if not isinstance(attempts, list) or not all(isinstance(attempt_item, dict) for attempt_item in attempts):
+        raise SystemExit(f"{label} should be a list of launch-config attempt objects: {attempts!r}")
+    if expected_count is not None and len(attempts) != expected_count:
+        raise SystemExit(f"{label} count mismatch: expected {expected_count}, got {len(attempts)}: {attempts!r}")
+    if not attempts:
+        raise SystemExit(f"{label} should include at least one attempt")
+    if any(attempt_item.get("ignore_user_config") is not True or attempt_item.get("ignore_rules") is not True for attempt_item in attempts):
+        raise SystemExit(f"{label} should use lean Codex startup flags: {attempts!r}")
+    return attempts
+
+
+def assert_attempts_preserve_user_config(attempts: object, label: str) -> list[dict]:
+    if not isinstance(attempts, list) or not all(isinstance(attempt_item, dict) for attempt_item in attempts):
+        raise SystemExit(f"{label} should be a list of launch-config attempt objects: {attempts!r}")
+    if any(
+        "ignore_user_config" in attempt_item
+        or "ignore_rules" in attempt_item
+        or "--ignore-user-config" in str(attempt_item.get("command", ""))
+        for attempt_item in attempts
+    ):
+        raise SystemExit(f"{label} must keep user config/search access: {attempts!r}")
+    return attempts
+
+
+def assert_codex_mini_worker_route(config: dict, selection_reason: str, label: str = "worker") -> None:
+    if config.get("attempt_timeout_seconds") != 3600:
+        raise SystemExit(f"{label} launch-config should preserve the 3600 second attempt timeout")
+    if config.get("selected_ladder") != ["codex-mini"]:
+        raise SystemExit(f"{label} launch-config ladder mismatch: {config.get('selected_ladder')!r}")
+    if config.get("selection_reason") != selection_reason:
+        raise SystemExit(f"{label} launch-config selection reason mismatch: {config.get('selection_reason')!r}")
+    event_logs = launch_attempt_logs(config, "event_logs", label)
+    probe_logs = launch_attempt_logs(config, "probe_logs", label)
+    if event_logs != ["events-mini.jsonl"]:
+        raise SystemExit(f"{label} launch-config event logs mismatch: {event_logs!r}")
+    if probe_logs:
+        raise SystemExit(f"{label} launch-config should not include probe logs for codex-mini-only route: {probe_logs!r}")
+    if config.get("selected_commands") != [CODEX_MINI_WORKER_COMMAND]:
+        raise SystemExit(f"{label} launch-config selected commands mismatch: {config.get('selected_commands')!r}")
+    assert_lean_codex_attempts(config.get("attempts", []), f"{label} Codex attempt", expected_count=1)
+
+
+def assert_mixed_worker_route(config: dict, label: str, *, selection_reason: str | None = None) -> None:
+    expected_ladder = ["gemini-pro", "copilot-gpt-5.4", "codex-mini"]
+    if config.get("selected_ladder") != expected_ladder:
+        raise SystemExit(f"{label} launch-config route mismatch: {config.get('selected_ladder')!r}")
+    if selection_reason is not None and config.get("selection_reason") != selection_reason:
+        raise SystemExit(f"{label} launch-config selection reason mismatch: {config.get('selection_reason')!r}")
+    event_logs = launch_attempt_logs(config, "event_logs", label)
+    probe_logs = launch_attempt_logs(config, "probe_logs", label)
+    if event_logs != ["events-gemini-pro.log", "events-copilot.jsonl", "events-mini.jsonl"]:
+        raise SystemExit(f"{label} launch-config event log mismatch: {event_logs!r}")
+    if probe_logs != ["events-gemini-pro-probe.log", "events-copilot-probe.jsonl", "events-copilot-version.log"]:
+        raise SystemExit(f"{label} launch-config probe log mismatch: {probe_logs!r}")
+    codex_attempts = launch_attempts_by_provider(config, "codex", label)
+    assert_lean_codex_attempts(codex_attempts, f"{label} Codex attempt", expected_count=1)
+
+
+def assert_research_worker_preserves_user_config(
+    config: dict,
+    label: str = "research-worker",
+    *,
+    expected_event_logs: list[str] | None = None,
+) -> None:
+    if config.get("attempt_timeout_seconds") != 1200:
+        raise SystemExit(f"{label} launch-config should preserve the 1200 second attempt timeout")
+    if expected_event_logs is not None:
+        event_logs = launch_attempt_logs(config, "event_logs", label)
+        if event_logs != expected_event_logs:
+            raise SystemExit(f"{label} launch-config event log mismatch: {event_logs!r}")
+    assert_attempts_preserve_user_config(config.get("attempts", []), f"{label} attempts")
 
 
 def write_json(path: Path, data: dict) -> None:

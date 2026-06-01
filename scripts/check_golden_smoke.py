@@ -15,16 +15,21 @@ from pathlib import Path
 from fixture_support import (
     assert_all_contains,
     assert_any_contains,
+    assert_codex_mini_worker_route,
     assert_compact_audit_launcher,
     assert_compact_lite_launcher,
     assert_compact_runtime_launcher,
     assert_contains,
+    assert_lean_codex_attempts,
+    assert_mixed_worker_route,
+    assert_research_worker_preserves_user_config,
     assert_shell_syntax,
     attempt,
     make_scheduler_event,
     offline_gemini_env,
     read_json,
     run_command,
+    run_runtime_packet,
     sha256_file,
     telemetry,
     write_json,
@@ -56,6 +61,43 @@ def run(
 
 def skill_script(skill: str, script: str) -> str:
     return (SKILLS_ROOT / skill / "scripts" / script).as_posix()
+
+
+def create_runtime_packet(
+    *,
+    role: str,
+    packet_id: str,
+    out_dir: Path,
+    task_file: Path,
+    branch: str = BRANCH_NAME,
+    worktree: Path | None = None,
+    owned_files: list[str] | None = None,
+    context_files: list[Path] | None = None,
+    manifest: Path | None = None,
+    pre_review_gate: Path | None = None,
+    worker_route: list[str] | None = None,
+    selection_reason: str | None = None,
+    extra_args: list[str] | None = None,
+    expect: int = 0,
+) -> subprocess.CompletedProcess[str]:
+    return run_runtime_packet(
+        root=CHECKOUT_ROOT,
+        script=skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
+        role=role,
+        packet_id=packet_id,
+        branch=branch,
+        worktree=REPO_ROOT if worktree is None else worktree,
+        out_dir=out_dir,
+        task_file=task_file,
+        owned_files=owned_files,
+        context_files=context_files,
+        manifest=manifest,
+        pre_review_gate=pre_review_gate,
+        worker_route=worker_route,
+        selection_reason=selection_reason,
+        extra_args=extra_args,
+        expect=expect,
+    )
 
 
 def install_temp_skills(tmp_path: Path) -> Path:
@@ -1421,148 +1463,44 @@ def main() -> int:
         )
         assert_compact_audit_launcher(bundle / "audit")
 
-        run(
-            [
-                "python3",
-                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
-                "--role",
-                "worker",
-                "--packet-id",
-                WORKER_PACKET,
-                "--branch",
-                BRANCH_NAME,
-                "--worktree",
-                REPO_ROOT.as_posix(),
-                "--out-dir",
-                (bundle / "workers").as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-                "--worker-route",
-                "codex-mini",
-                "--selection-reason",
-                "Golden smoke uses the cheapest deterministic route alias.",
-            ]
+        create_runtime_packet(
+            role="worker",
+            packet_id=WORKER_PACKET,
+            out_dir=bundle / "workers",
+            owned_files=["README.md"],
+            context_files=[bundle / "branches" / "B01.prompt.md"],
+            task_file=task_file,
+            worker_route=["codex-mini"],
+            selection_reason="Golden smoke uses the cheapest deterministic route alias.",
         )
         assert_shell_syntax(bundle / "workers" / WORKER_PACKET / "launch.sh")
         worker_config = assert_compact_runtime_launcher(bundle / "workers" / WORKER_PACKET, "worker")
-        if worker_config.get("attempt_timeout_seconds") != 3600:
-            raise SystemExit("worker launch-config should preserve the 3600 second attempt timeout")
-        if worker_config.get("selected_ladder") != ["codex-mini"]:
-            raise SystemExit(f"worker launch-config selected_ladder mismatch: {worker_config.get('selected_ladder')!r}")
-        if worker_config.get("selection_reason") != "Golden smoke uses the cheapest deterministic route alias.":
-            raise SystemExit(f"worker launch-config selection_reason mismatch: {worker_config.get('selection_reason')!r}")
-        worker_attempts = worker_config.get("attempts", [])
-        event_logs = []
-        probe_logs = []
-        for attempt in worker_attempts:
-            if isinstance(attempt, dict):
-                event_logs.extend(attempt.get("event_logs", []))
-                probe_logs.extend(attempt.get("probe_logs", []))
-        if event_logs != ["events-mini.jsonl"]:
-            raise SystemExit(f"worker launch-config event log mismatch: {event_logs!r}")
-        if probe_logs:
-            raise SystemExit(f"worker launch-config probe logs should be empty for codex-mini-only route: {probe_logs!r}")
-        if worker_config.get("selected_commands") != ["codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"]:
-            raise SystemExit(f"worker launch-config selected command mismatch: {worker_config.get('selected_commands')!r}")
-        if not worker_attempts or worker_attempts[0].get("ignore_user_config") is not True or worker_attempts[0].get("ignore_rules") is not True:
-            raise SystemExit(f"worker Codex attempt should use lean Codex startup flags: {worker_attempts!r}")
+        assert_codex_mini_worker_route(worker_config, "Golden smoke uses the cheapest deterministic route alias.")
 
         mixed_worker = bundle / "workers" / "B01-W99"
-        run(
-            [
-                "python3",
-                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
-                "--role",
-                "worker",
-                "--packet-id",
-                "B01-W99",
-                "--branch",
-                BRANCH_NAME,
-                "--worktree",
-                REPO_ROOT.as_posix(),
-                "--out-dir",
-                (bundle / "workers").as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-                "--worker-route",
-                "gemini-pro",
-                "copilot-gpt-5.4",
-                "codex-mini",
-                "--selection-reason",
-                "Golden smoke preserves mixed route probe and log metadata.",
-            ]
+        create_runtime_packet(
+            role="worker",
+            packet_id="B01-W99",
+            out_dir=bundle / "workers",
+            owned_files=["README.md"],
+            context_files=[bundle / "branches" / "B01.prompt.md"],
+            task_file=task_file,
+            worker_route=["gemini-pro", "copilot-gpt-5.4", "codex-mini"],
+            selection_reason="Golden smoke preserves mixed route probe and log metadata.",
         )
         mixed_config = assert_compact_runtime_launcher(mixed_worker, "worker")
-        if mixed_config.get("selected_ladder") != ["gemini-pro", "copilot-gpt-5.4", "codex-mini"]:
-            raise SystemExit(f"worker launch-config mixed-route ladder mismatch: {mixed_config.get('selected_ladder')!r}")
-        mixed_event_logs = [
-            log
-            for attempt in mixed_config.get("attempts", [])
-            if isinstance(attempt, dict)
-            for log in attempt.get("event_logs", [])
-        ]
-        mixed_probe_logs = [
-            log
-            for attempt in mixed_config.get("attempts", [])
-            if isinstance(attempt, dict)
-            for log in attempt.get("probe_logs", [])
-        ]
-        if mixed_event_logs != ["events-gemini-pro.log", "events-copilot.jsonl", "events-mini.jsonl"]:
-            raise SystemExit(f"worker launch-config mixed-route event log mismatch: {mixed_event_logs!r}")
-        if mixed_probe_logs != [
-            "events-gemini-pro-probe.log",
-            "events-copilot-probe.jsonl",
-            "events-copilot-version.log",
-        ]:
-            raise SystemExit(f"worker launch-config mixed-route probe log mismatch: {mixed_probe_logs!r}")
-        mixed_codex_attempts = [
-            attempt
-            for attempt in mixed_config.get("attempts", [])
-            if isinstance(attempt, dict) and attempt.get("provider") == "codex"
-        ]
-        if len(mixed_codex_attempts) != 1 or mixed_codex_attempts[0].get("ignore_user_config") is not True or mixed_codex_attempts[0].get("ignore_rules") is not True:
-            raise SystemExit(f"mixed worker Codex attempt should use lean Codex startup flags: {mixed_codex_attempts!r}")
+        assert_mixed_worker_route(mixed_config, "mixed worker")
 
-        run(
-            [
-                "python3",
-                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
-                "--role",
-                "research-worker",
-                "--packet-id",
-                RESEARCH_PACKET,
-                "--branch",
-                BRANCH_NAME,
-                "--worktree",
-                REPO_ROOT.as_posix(),
-                "--out-dir",
-                (bundle / "research").as_posix(),
-                "--owned-file",
-                "README.md",
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ]
+        create_runtime_packet(
+            role="research-worker",
+            packet_id=RESEARCH_PACKET,
+            out_dir=bundle / "research",
+            owned_files=["README.md"],
+            context_files=[bundle / "branches" / "B01.prompt.md"],
+            task_file=task_file,
         )
         research_config = assert_compact_runtime_launcher(bundle / "research" / RESEARCH_PACKET, "research-worker")
-        if research_config.get("attempt_timeout_seconds") != 1200:
-            raise SystemExit("research launch-config should preserve the 1200 second attempt timeout")
-        research_attempts = research_config.get("attempts", [])
-        if any(
-            isinstance(attempt, dict)
-            and ("ignore_user_config" in attempt or "ignore_rules" in attempt or "--ignore-user-config" in str(attempt.get("command", "")))
-            for attempt in research_attempts
-        ):
-            raise SystemExit(f"research-worker attempts must keep user config/search access: {research_attempts!r}")
+        assert_research_worker_preserves_user_config(research_config)
 
         run(
             [
@@ -1605,43 +1543,22 @@ def main() -> int:
         write_scheduler_ledgers(bundle)
         write_pre_review_branch_status(bundle, worker, research, lite_record)
         input_hashes = write_pre_review_gate(bundle)
-        run(
-            [
-                "python3",
-                skill_script("goal-branch-orchestrator", "create_runtime_packet.py"),
-                "--role",
-                "reviewer",
-                "--packet-id",
-                REVIEW_PACKET,
-                "--branch",
-                BRANCH_NAME,
-                "--worktree",
-                REPO_ROOT.as_posix(),
-                "--out-dir",
-                (bundle / "reviewers").as_posix(),
-                "--manifest",
-                (bundle / "job.manifest.json").as_posix(),
-                "--pre-review-gate",
-                (bundle / "branches" / "B01.pre_review_gate.json").as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.prompt.md").as_posix(),
-                "--context-file",
-                (bundle / "branches" / "B01.pre_review_gate.json").as_posix(),
-                "--task-file",
-                task_file.as_posix(),
-            ]
+        create_runtime_packet(
+            role="reviewer",
+            packet_id=REVIEW_PACKET,
+            out_dir=bundle / "reviewers",
+            manifest=bundle / "job.manifest.json",
+            pre_review_gate=bundle / "branches" / "B01.pre_review_gate.json",
+            context_files=[
+                bundle / "branches" / "B01.prompt.md",
+                bundle / "branches" / "B01.pre_review_gate.json",
+            ],
+            task_file=task_file,
         )
         reviewer_config = assert_compact_runtime_launcher(bundle / "reviewers" / REVIEW_PACKET, "reviewer")
         if reviewer_config.get("attempt_timeout_seconds") != 1800:
             raise SystemExit("reviewer launch-config should preserve the 1800 second attempt timeout")
-        reviewer_attempts = reviewer_config.get("attempts", [])
-        if not reviewer_attempts or any(
-            not isinstance(attempt, dict)
-            or attempt.get("ignore_user_config") is not True
-            or attempt.get("ignore_rules") is not True
-            for attempt in reviewer_attempts
-        ):
-            raise SystemExit(f"reviewer Codex attempts should use lean Codex startup flags: {reviewer_attempts!r}")
+        assert_lean_codex_attempts(reviewer_config.get("attempts", []), "reviewer Codex attempts")
         write_review(bundle, input_hashes)
         write_branch_and_main_status(bundle)
 

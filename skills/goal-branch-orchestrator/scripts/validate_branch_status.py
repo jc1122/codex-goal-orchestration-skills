@@ -294,16 +294,28 @@ def validate_reviewer_route_artifact(
     return selected
 
 
-def validate_worker_status(defects: list[str], value: object, path: str) -> None:
+def validate_worker_payload(
+    defects: list[str],
+    value: object,
+    path: str,
+    *,
+    required: tuple[str, ...],
+    require_role: bool = False,
+    require_branch: bool = False,
+    require_status_path: bool = False,
+) -> dict:
     data = require_object(defects, value, path)
-    required = CONTRACT.WORKER_ROLLUP_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
     require_string(defects, data.get("packet_id"), f"{path}.packet_id")
+    if require_role and data.get("role") != "worker":
+        defect(defects, f"{path}.role", "must be 'worker'")
     if data.get("status") not in STATUSES:
         defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
-    status_path = require_string(defects, data.get("status_path"), f"{path}.status_path")
+    if require_branch:
+        require_string(defects, data.get("branch"), f"{path}.branch")
+    status_path = require_string(defects, data.get("status_path"), f"{path}.status_path") if require_status_path else ""
     worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
     if status_path and not is_absolute_path(status_path):
         defect(defects, f"{path}.status_path", "must be an absolute path without traversal")
@@ -322,11 +334,29 @@ def validate_worker_status(defects: list[str], value: object, path: str) -> None
     if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
         defect(defects, f"{path}.blockers", "must explain non-pass status")
     require_string(defects, data.get("handoff"), f"{path}.handoff")
+    return data
 
 
-def validate_research_status(defects: list[str], value: object, path: str) -> None:
+def validate_worker_status(defects: list[str], value: object, path: str) -> None:
+    validate_worker_payload(
+        defects,
+        value,
+        path,
+        required=CONTRACT.WORKER_ROLLUP_REQUIRED,
+        require_status_path=True,
+    )
+
+
+def validate_research_payload(
+    defects: list[str],
+    value: object,
+    path: str,
+    *,
+    required: tuple[str, ...],
+    require_branch: bool = False,
+    require_status_path: bool = False,
+) -> dict:
     data = require_object(defects, value, path)
-    required = CONTRACT.RESEARCH_ROLLUP_REQUIRED
     for key in required:
         if key not in data:
             defect(defects, path, f"missing key: {key}")
@@ -335,7 +365,9 @@ def validate_research_status(defects: list[str], value: object, path: str) -> No
         defect(defects, f"{path}.role", "must be 'research-worker'")
     if data.get("status") not in STATUSES:
         defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
-    status_path = require_string(defects, data.get("status_path"), f"{path}.status_path")
+    if require_branch:
+        require_string(defects, data.get("branch"), f"{path}.branch")
+    status_path = require_string(defects, data.get("status_path"), f"{path}.status_path") if require_status_path else ""
     worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
     if status_path and not is_absolute_path(status_path):
         defect(defects, f"{path}.status_path", "must be an absolute path without traversal")
@@ -362,6 +394,17 @@ def validate_research_status(defects: list[str], value: object, path: str) -> No
     if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
         defect(defects, f"{path}.blockers", "must explain non-pass status")
     require_string(defects, data.get("handoff"), f"{path}.handoff")
+    return data
+
+
+def validate_research_status(defects: list[str], value: object, path: str) -> None:
+    validate_research_payload(
+        defects,
+        value,
+        path,
+        required=CONTRACT.RESEARCH_ROLLUP_REQUIRED,
+        require_status_path=True,
+    )
 
 
 def validate_packet_status(defects: list[str], value: object, path: str) -> None:
@@ -372,73 +415,24 @@ def validate_packet_status(defects: list[str], value: object, path: str) -> None
 
 
 def validate_worker_artifact(defects: list[str], value: object, path: str) -> dict:
-    data = require_object(defects, value, path)
-    required = CONTRACT.WORKER_STATUS_REQUIRED
-    for key in required:
-        if key not in data:
-            defect(defects, path, f"missing key: {key}")
-    require_string(defects, data.get("packet_id"), f"{path}.packet_id")
-    if data.get("role") != "worker":
-        defect(defects, f"{path}.role", "must be 'worker'")
-    if data.get("status") not in STATUSES:
-        defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
-    require_string(defects, data.get("branch"), f"{path}.branch")
-    worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
-    if worktree and not is_absolute_path(worktree):
-        defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
-    route_class = validate_worker_route_class(defects, data.get("route_class"), f"{path}.route_class")
-    selected_ladder = validate_worker_ladder(defects, data.get("selected_ladder"), f"{path}.selected_ladder")
-    selection_reason = require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
-    validate_route_class_cost(defects, route_class, selected_ladder, f"{path}.selected_ladder", selection_reason)
-    validate_path_list(defects, data.get("changed_files"), f"{path}.changed_files")
-    validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
-    validate_command_list(defects, data.get("tests"), f"{path}.tests")
-    blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
-    if data.get("status") == "pass" and blockers:
-        defect(defects, f"{path}.blockers", "must be empty when status is pass")
-    if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
-        defect(defects, f"{path}.blockers", "must explain non-pass status")
-    require_string(defects, data.get("handoff"), f"{path}.handoff")
-    return data
+    return validate_worker_payload(
+        defects,
+        value,
+        path,
+        required=CONTRACT.WORKER_STATUS_REQUIRED,
+        require_role=True,
+        require_branch=True,
+    )
 
 
 def validate_research_artifact(defects: list[str], value: object, path: str) -> dict:
-    data = require_object(defects, value, path)
-    required = CONTRACT.RESEARCH_STATUS_REQUIRED
-    for key in required:
-        if key not in data:
-            defect(defects, path, f"missing key: {key}")
-    require_string(defects, data.get("packet_id"), f"{path}.packet_id")
-    if data.get("role") != "research-worker":
-        defect(defects, f"{path}.role", "must be 'research-worker'")
-    if data.get("status") not in STATUSES:
-        defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
-    require_string(defects, data.get("branch"), f"{path}.branch")
-    worktree = require_string(defects, data.get("worktree"), f"{path}.worktree")
-    if worktree and not is_absolute_path(worktree):
-        defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
-    require_string_list(defects, data.get("search_queries"), f"{path}.search_queries")
-    validate_url_list(defects, data.get("source_urls"), f"{path}.source_urls")
-    require_string_list(defects, data.get("tools_used"), f"{path}.tools_used")
-    local_files = require_string_list(defects, data.get("local_files_read"), f"{path}.local_files_read")
-    for index, item in enumerate(local_files):
-        if not is_repo_relative_path(item):
-            defect(defects, f"{path}.local_files_read[{index}]", "must be a repo-relative path without git porcelain status")
-    commands = require_string_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
-    validate_research_security(defects, commands, local_files, path)
-    require_string_list(defects, data.get("findings"), f"{path}.findings", min_items=1)
-    blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
-    if data.get("status") == "pass":
-        if blockers:
-            defect(defects, f"{path}.blockers", "must be empty when status is pass")
-        if not data.get("source_urls"):
-            defect(defects, f"{path}.source_urls", "must record at least one source URL when status is pass")
-        if not data.get("tools_used"):
-            defect(defects, f"{path}.tools_used", "must record at least one tool family when status is pass")
-    if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
-        defect(defects, f"{path}.blockers", "must explain non-pass status")
-    require_string(defects, data.get("handoff"), f"{path}.handoff")
-    return data
+    return validate_research_payload(
+        defects,
+        value,
+        path,
+        required=CONTRACT.RESEARCH_STATUS_REQUIRED,
+        require_branch=True,
+    )
 
 
 def validate_worker_artifacts(
