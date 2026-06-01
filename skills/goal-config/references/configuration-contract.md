@@ -16,13 +16,13 @@ If the user has not already supplied preferences, ask the missing categories bef
 - effort/aggressiveness for branch and worker caps, timeouts, and token/character pressure;
 - validation mode: model check only, smoke, or smoke plus debug telemetry for preflight.
 
-Use the JSON `interaction.ask_order` and ask one section at a time unless the user requests the full questionnaire:
+Use the JSON `interaction.ask_order`. Ask sections in order, and when the user says to continue or wants completion, ask/apply all remaining missing sections in one compact pass:
 
 1. Model profile: explain that this selects harnesses and role-to-model ladders. Show all listed choices, including checked config reuse, current default, opencode DeepSeek v4, discovery of available routes, Gemini, agy generic CLI, and mixed/custom mappings.
 2. Effort profile: explain that this controls branch/worker caps, timeouts, and token/character pressure. Show lean, balanced, thorough, and custom.
 3. Validation and debug telemetry: explain that this controls fail-closed model checks, harness smoke tests, and whether preflight should collect full debug traces. Show model check only, model check plus smoke, smoke plus debug telemetry, and custom validation.
 
-Do not silently create a default config unless the user explicitly says to use defaults. If the user chooses a custom option, collect the exact required values before creating `goal.config.json`.
+Do not silently create a default config unless the user explicitly says to use defaults. If the user chooses a custom option, collect the exact required values before creating `goal.config.json`. Write `goal-config-state.json` with create/check/discovery commands so the next step is deterministic.
 
 ## Required Shape
 
@@ -39,6 +39,13 @@ Do not silently create a default config unless the user explicitly says to use d
 - `model_policies`: worker, reviewer, amender, and Lite route policies consumed by `goal-preflight` and runtime packet generation.
 
 Create-time flags are binding. If a user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, `create_goal_config.py` must either render those values into `goal.config.json` or fail before writing a misleading config.
+
+Named profiles are first-class flags:
+
+- `create_goal_config.py --effort-profile lean|balanced|thorough`.
+- `create_goal_config.py --validation-mode model-check|smoke|debug`.
+
+`--validation-mode debug` must serialize debug telemetry intent in the config, including `telemetry.mode=debug`.
 
 Every configured model role must have a `harness_smokes` entry. The checker fails before launching smoke tests when any selected role lacks smoke configuration.
 
@@ -68,11 +75,15 @@ For opencode-backed roles, `check_goal_config.py` must:
 - read assistant text and token counters for the captured session id from the local opencode session database;
 - report token counts, response character counts, stdout/stderr character counts, elapsed milliseconds, model, provider, harness, and role separately.
 
-Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When opencode emits JSON errors, the report should preserve actionable status/message fields such as `401 AuthenticateToken authentication failed`.
+Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When opencode emits JSON errors, the report should preserve actionable provider/status/message/count fields such as status `401` and message `AuthenticateToken authentication failed`. Full raw provider payloads belong only behind `check_goal_config.py --include-raw-errors`.
 
-For `codex` and `gemini` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation.
+For `codex` and `gemini` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation. Bare provider-implied forms such as `--role-model lite_agent:gemini:gemini-3-flash-preview` are allowed.
 
-When the user asks to "use all available" models, treat it as discovery, not as a silent default. Use `check_goal_config.py --discover-provider PROVIDER [--discover-model-filter REGEX] [--discover-max N] --smoke` to list candidates from selected opencode providers, smoke candidates, and emit `candidate_routes`, `accepted_routes`, and `rejected_routes` with reasons. Use accepted routes to create a final explicit config; do not pass unreviewed discovered routes directly into preflight.
+When the user asks to "use all available" models, treat it as discovery, not as a silent default. Use `check_goal_config.py --discover-profile mixed-fast --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json` to try a fixed ranking across configured opencode, Codex, Gemini, and generic antigravity harnesses. The profile stops after enough accepted routes and stops a provider after the first auth failure. Provider-specific opencode listing remains available with `--discover-provider PROVIDER [--discover-model-filter REGEX] [--discover-max N]`.
+
+Discovery emits `candidate_routes`, `accepted_routes`, and `rejected_routes` with reasons. Use accepted routes to create a final explicit config with `create_goal_config.py --from-discovery /abs/goal-config-discovery.json --mapping auto`; do not pass unreviewed discovered routes directly into preflight.
+
+When `--output` is present, `check_goal_config.py` defaults stdout to a compact summary. Use `--stdout full` for full JSON or `--stdout none` for quiet file-only runs. Passing smoke evidence is reused by unique `(harness, provider, model)` within a run, and `--reuse-smoke-report /abs/report.json` can reuse prior passing check/discovery evidence.
 
 ## Preflight And Runtime Consumption
 

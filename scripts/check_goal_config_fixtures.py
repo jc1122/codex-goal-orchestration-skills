@@ -66,6 +66,38 @@ def build_generic_cli_config(base_path: Path, source_path: Path) -> None:
     base_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def build_counting_generic_cli_config(base_path: Path, source_path: Path, count_path: Path) -> None:
+    config = json.loads(source_path.read_text(encoding="utf-8"))
+    config["harnesses"]["antigravity"] = {
+        "kind": "generic-cli",
+        "command": "python3",
+        "smoke_args": [
+            "-c",
+            "import pathlib, sys; p = pathlib.Path(sys.argv[2]); "
+            "n = int(p.read_text() or '0') if p.exists() else 0; "
+            "p.write_text(str(n + 1)); print(sys.argv[1])",
+            "{prompt}",
+            count_path.as_posix(),
+        ],
+    }
+    for role in ("generic_agent", "generic_agent_copy"):
+        config["models"][role] = {
+            "alias": role,
+            "role": role,
+            "harness": "antigravity",
+            "provider": "local",
+            "model": "local/reused-generic-agent",
+            "purpose": "fixture route-level smoke reuse",
+        }
+        config["harness_smokes"][role] = {
+            "prompt": f"{role.upper()}_SMOKE_OK",
+            "expect": f"{role.upper()}_SMOKE_OK",
+            "timeout_seconds": 10,
+            "readback": "stdout",
+        }
+    base_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def build_fake_opencode_discovery_config(
     base_path: Path,
     source_path: Path,
@@ -274,10 +306,16 @@ def main() -> int:
         normalized_roles_path = tmp_path / "goal.config.normalized-roles.json"
         openrouter_config_path = tmp_path / "goal.config.openrouter.json"
         discover_config_path = tmp_path / "goal.config.discover.json"
+        profile_discover_config_path = tmp_path / "goal.config.profile-discover.json"
+        from_discovery_config_path = tmp_path / "goal.config.from-discovery.json"
+        thorough_debug_path = tmp_path / "goal.config.thorough-debug.json"
+        counting_generic_path = tmp_path / "goal.config.counting-generic.json"
         discover_list_script = tmp_path / "fake_opencode_models.py"
         discover_smoke_script = tmp_path / "fake_opencode_smoke.py"
         normal_cache_count_path = tmp_path / "fake-opencode-normal-model-count.txt"
         discover_count_path = tmp_path / "fake-opencode-model-count.txt"
+        profile_discover_count_path = tmp_path / "fake-opencode-profile-model-count.txt"
+        counting_smoke_count_path = tmp_path / "generic-smoke-count.txt"
         discover_db_path = tmp_path / "fake-opencode.db"
         models_path = tmp_path / "deepseek-models.txt"
         openrouter_models_path = tmp_path / "openrouter-models.txt"
@@ -355,6 +393,42 @@ def main() -> int:
             "current-default must generate smoke definitions for all roles",
         )
 
+        thorough_state_path = tmp_path / "goal-config-thorough-state.json"
+        run(
+            [
+                sys.executable,
+                CREATE.as_posix(),
+                "--preset",
+                "current-default",
+                "--effort-profile",
+                "thorough",
+                "--validation-mode",
+                "debug",
+                "--state-output",
+                thorough_state_path.as_posix(),
+                "--output",
+                thorough_debug_path.as_posix(),
+            ]
+        )
+        thorough_debug = json.loads(thorough_debug_path.read_text(encoding="utf-8"))
+        require(thorough_debug["effort_profile"] == "thorough", "thorough effort profile should be recorded")
+        require(thorough_debug["aggressiveness"]["max_active_branch_agents"] == 6, "thorough branch cap mismatch")
+        require(thorough_debug["aggressiveness"]["max_active_worker_packets"] == 6, "thorough worker cap mismatch")
+        require(thorough_debug["aggressiveness"]["max_waves"] == 8, "thorough max waves mismatch")
+        require(thorough_debug["effort"]["lite_timeout_seconds"] == 900, "thorough lite timeout mismatch")
+        require(thorough_debug["effort"]["demanding_timeout_seconds"] == 2400, "thorough demanding timeout mismatch")
+        require(thorough_debug["validation"]["mode"] == "debug", "debug validation mode should be recorded")
+        require(thorough_debug["telemetry"]["mode"] == "debug", "debug validation should set telemetry mode")
+        require(thorough_debug["telemetry"]["raw_text"] is True, "debug validation should request raw text")
+        require(
+            thorough_debug.get("preflight_intent", {}).get("telemetry_mode") == "debug",
+            "debug validation should set preflight telemetry intent",
+        )
+        thorough_state = json.loads(thorough_state_path.read_text(encoding="utf-8"))
+        require(thorough_state["phase"] == "config_created", "create state should record config_created phase")
+        require(thorough_state["complete"] is False, "create state should not mark validation complete")
+        require("--smoke" in thorough_state["next_command"], "debug validation state should route to smoke check")
+
         run(
             [
                 sys.executable,
@@ -362,9 +436,9 @@ def main() -> int:
                 "--preset",
                 "current-default",
                 "--role-model",
-                "codex_heavy:codex:openai/gpt-5.4",
+                "codex_heavy:codex:gpt-5.4",
                 "--role-model",
-                "gemini_flash:gemini:gemini/gemini-3-flash-preview",
+                "gemini_flash:gemini:gemini-3-flash-preview",
                 "--output",
                 normalized_roles_path.as_posix(),
             ]
@@ -402,7 +476,7 @@ def main() -> int:
             "opencode provider override must preserve nested OpenRouter model id",
         )
         openrouter_report_path = tmp_path / "goal-config-openrouter-check.json"
-        run(
+        check_summary = run(
             [
                 sys.executable,
                 CHECK.as_posix(),
@@ -434,7 +508,7 @@ def main() -> int:
             db_path=discover_db_path,
         )
         normal_cache_report_path = tmp_path / "goal-config-normal-cache.json"
-        run(
+        check_summary = run(
             [
                 sys.executable,
                 CHECK.as_posix(),
@@ -467,7 +541,7 @@ def main() -> int:
             db_path=discover_db_path,
         )
         discover_report_path = tmp_path / "goal-config-discover.json"
-        run(
+        check_summary = run(
             [
                 sys.executable,
                 CHECK.as_posix(),
@@ -501,6 +575,138 @@ def main() -> int:
             "candidate checks should use cached provider model listing",
         )
 
+        from_discovery_state_path = tmp_path / "goal-config-from-discovery-state.json"
+        run(
+            [
+                sys.executable,
+                CREATE.as_posix(),
+                "--from-discovery",
+                discover_report_path.as_posix(),
+                "--mapping",
+                "auto",
+                "--effort-profile",
+                "lean",
+                "--validation-mode",
+                "smoke",
+                "--state-output",
+                from_discovery_state_path.as_posix(),
+                "--output",
+                from_discovery_config_path.as_posix(),
+            ]
+        )
+        from_discovery_config = json.loads(from_discovery_config_path.read_text(encoding="utf-8"))
+        require(from_discovery_config["profile"] == "from-discovery", "from-discovery config should record profile")
+        require(
+            from_discovery_config["source_discovery"]["accepted_route_count"] == 3,
+            "from-discovery config should record accepted route count",
+        )
+        require(from_discovery_config["effort_profile"] == "lean", "from-discovery config should apply effort profile")
+        require(from_discovery_config["validation"]["mode"] == "smoke", "from-discovery config should apply validation mode")
+        require(
+            set(from_discovery_config["harness_smokes"]) == set(from_discovery_config["models"]),
+            "from-discovery config should generate smokes for all discovered roles",
+        )
+        from_discovery_state = json.loads(from_discovery_state_path.read_text(encoding="utf-8"))
+        require("--smoke" in from_discovery_state["next_command"], "from-discovery state should route to smoke check")
+
+        profile_discover_config = json.loads(config_path.read_text(encoding="utf-8"))
+        profile_discover_config["harnesses"]["opencode"]["command"] = "python3"
+        profile_discover_config["harnesses"]["opencode"]["model_list_args"] = [
+            discover_list_script.as_posix(),
+            profile_discover_count_path.as_posix(),
+            "{provider}",
+        ]
+        profile_discover_config["harnesses"]["opencode"]["smoke_args"] = [
+            discover_smoke_script.as_posix(),
+            "{role}",
+            "{prompt}",
+            discover_db_path.as_posix(),
+        ]
+        for harness_name in ("codex", "gemini", "antigravity"):
+            profile_discover_config["harnesses"][harness_name]["command"] = "python3"
+            profile_discover_config["harnesses"][harness_name]["smoke_args"] = [
+                "-c",
+                "import sys; print(sys.argv[1])",
+                "{prompt}",
+            ]
+        profile_discover_config_path.write_text(
+            json.dumps(profile_discover_config, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        profile_discover_report_path = tmp_path / "goal-config-profile-discover.json"
+        profile_discover_state_path = tmp_path / "goal-config-profile-discover-state.json"
+        profile_summary = run(
+            [
+                sys.executable,
+                CHECK.as_posix(),
+                "--config",
+                profile_discover_config_path.as_posix(),
+                "--discover-profile",
+                "mixed-fast",
+                "--smoke",
+                "--models-output",
+                models_path.as_posix(),
+                "--opencode-db",
+                discover_db_path.as_posix(),
+                "--output",
+                profile_discover_report_path.as_posix(),
+                "--state-output",
+                profile_discover_state_path.as_posix(),
+            ]
+        ).stdout
+        profile_discover_report = json.loads(profile_discover_report_path.read_text(encoding="utf-8"))
+        require(profile_summary.startswith("status=pass mode=discover"), "discovery with output should print summary")
+        require(not profile_summary.lstrip().startswith("{"), "discovery summary should not dump full JSON")
+        require(profile_discover_report["discover_profile"] == "mixed-fast", "mixed-fast report should record profile")
+        require(len(profile_discover_report["accepted_routes"]) == 4, "mixed-fast should stop after four accepted routes")
+        require(
+            any(route["harness"] == "codex" for route in profile_discover_report["accepted_routes"]),
+            "mixed-fast should include non-opencode harness candidates",
+        )
+        profile_discover_state = json.loads(profile_discover_state_path.read_text(encoding="utf-8"))
+        require(profile_discover_state["phase"] == "discovery", "discovery state should record discovery phase")
+        require(profile_discover_state["complete"] is False, "discovery state should require final config creation")
+        require("--from-discovery" in profile_discover_state["next_command"], "discovery state should point to create")
+
+        auth_stop_config = json.loads(profile_discover_config_path.read_text(encoding="utf-8"))
+        auth_stop_config["harnesses"]["opencode"]["smoke_args"] = [
+            "-c",
+            "import json, sys; print(json.dumps(dict(type='error', status=401, message='AuthenticateToken authentication failed'))); sys.exit(1)",
+        ]
+        auth_stop_path = tmp_path / "goal.config.profile-auth-stop.json"
+        auth_stop_path.write_text(json.dumps(auth_stop_config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        auth_stop_report_path = tmp_path / "goal-config-profile-auth-stop.json"
+        run(
+            [
+                sys.executable,
+                CHECK.as_posix(),
+                "--config",
+                auth_stop_path.as_posix(),
+                "--discover-profile",
+                "mixed-fast",
+                "--smoke",
+                "--models-output",
+                models_path.as_posix(),
+                "--output",
+                auth_stop_report_path.as_posix(),
+                "--stdout",
+                "none",
+            ]
+        )
+        auth_stop_report = json.loads(auth_stop_report_path.read_text(encoding="utf-8"))
+        require(auth_stop_report["status"] == "pass", "auth-stopped profile should continue with other harnesses")
+        require(
+            any(
+                "provider stopped after auth error" in " ".join(route.get("reasons", []))
+                for route in auth_stop_report["rejected_routes"]
+            ),
+            "mixed-fast should skip later routes for a provider after auth failure",
+        )
+        require(
+            any(route["harness"] == "gemini" for route in auth_stop_report["accepted_routes"]),
+            "auth-stopped profile should keep trying other harnesses",
+        )
+
         scan = run([sys.executable, SCAN.as_posix(), "--json"]).stdout
         inventory = json.loads(scan)
         for category in (
@@ -522,7 +728,11 @@ def main() -> int:
             interaction.get("ask_order") == ["model_profile", "effort_profile", "validation_mode"],
             "preference intake must ask model, effort, then validation",
         )
-        require(interaction.get("max_sections_per_turn") == 1, "preference intake should ask one section at a time")
+        require(interaction.get("max_sections_per_turn") == 3, "preference intake should support compact completion")
+        require(
+            any("one compact pass" in item for item in interaction.get("instructions", [])),
+            "preference intake should tell agents how to finish when the user says continue",
+        )
         by_id = {
             item["id"]: item
             for item in questions.get("questions", [])
@@ -552,6 +762,23 @@ def main() -> int:
             for option in options:
                 require(option.get("label"), f"{question_id} option missing label")
                 require(option.get("description"), f"{question_id} option missing description")
+        effort_options = {option["id"]: option for option in by_id["effort_profile"]["options"]}
+        require(
+            "create_goal_config.py --effort-profile thorough" in effort_options["thorough"]["maps_to"],
+            "thorough profile must map to exact create command",
+        )
+        validation_options = {option["id"]: option for option in by_id["validation_mode"]["options"]}
+        require(
+            "create_goal_config.py --validation-mode debug" in validation_options["full_debug_trace"]["maps_to"],
+            "debug validation must map to exact create command",
+        )
+        discovery_option = {
+            option["id"]: option for option in by_id["model_profile"]["options"]
+        }["discover_available"]
+        require(
+            any("--discover-profile mixed-fast" in item for item in discovery_option["maps_to"]),
+            "discovery option must use mixed-fast profile",
+        )
         require(questions.get("ask_only_missing") is True, "preference intake must ask only missing categories")
         require(
             any("do not create" in item.lower() for item in questions.get("do_not_create_until", [])),
@@ -566,9 +793,9 @@ def main() -> int:
         ).stdout
         require("preference_intake" in phase_manifest, "phase manifest must include preference intake")
         require("--questions-json" in phase_manifest, "phase manifest must point to question inventory")
-        require("ask one missing section at a time" in phase_manifest, "phase manifest must preserve sequential intake")
+        require("one compact pass" in phase_manifest, "phase manifest must support compact preference completion")
 
-        run(
+        check_summary = run(
             [
                 sys.executable,
                 CHECK.as_posix(),
@@ -580,7 +807,10 @@ def main() -> int:
                 "--output",
                 report_path.as_posix(),
             ]
-        )
+        ).stdout
+        require(check_summary.startswith("status=pass mode=check"), "check with output should print summary by default")
+        require("output=" in check_summary, "summary stdout should include output path")
+        require(not check_summary.lstrip().startswith("{"), "summary stdout should not dump JSON")
         report = json.loads(report_path.read_text(encoding="utf-8"))
         require(report["status"] == "pass", "fixture model check should pass")
         require(len(report["harnesses"]) == 2, "expected two harness reports")
@@ -590,6 +820,39 @@ def main() -> int:
                 forbidden not in report_serialized,
                 f"report must not contain billing field or unit: {forbidden}",
             )
+
+        stdout_full = run(
+            [
+                sys.executable,
+                CHECK.as_posix(),
+                "--config",
+                config_path.as_posix(),
+                "--require-models",
+                "--models-output",
+                models_path.as_posix(),
+                "--output",
+                (tmp_path / "goal-config-stdout-full.json").as_posix(),
+                "--stdout",
+                "full",
+            ]
+        ).stdout
+        require(stdout_full.lstrip().startswith("{"), "--stdout full should print full JSON")
+        stdout_none = run(
+            [
+                sys.executable,
+                CHECK.as_posix(),
+                "--config",
+                config_path.as_posix(),
+                "--require-models",
+                "--models-output",
+                models_path.as_posix(),
+                "--output",
+                (tmp_path / "goal-config-stdout-none.json").as_posix(),
+                "--stdout",
+                "none",
+            ]
+        ).stdout
+        require(stdout_none == "", "--stdout none should print nothing")
 
         run(
             [
@@ -642,6 +905,32 @@ def main() -> int:
         require(
             generic_smoke.get("contains_expected") is True,
             "generic cli smoke output must match expected",
+        )
+
+        build_counting_generic_cli_config(counting_generic_path, config_path, counting_smoke_count_path)
+        counting_report_path = tmp_path / "goal-config-counting-generic-smoke.json"
+        run(
+            [
+                sys.executable,
+                CHECK.as_posix(),
+                "--config",
+                counting_generic_path.as_posix(),
+                "--require-models",
+                "--smoke",
+                "--harness",
+                "generic_agent,generic_agent_copy",
+                "--output",
+                counting_report_path.as_posix(),
+                "--stdout",
+                "none",
+            ]
+        )
+        counting_report = json.loads(counting_report_path.read_text(encoding="utf-8"))
+        require(counting_report["status"] == "pass", "counting generic cli smoke should pass")
+        require(counting_smoke_count_path.read_text(encoding="utf-8") == "1", "duplicate route should smoke once")
+        require(
+            counting_report["harnesses"][1]["smoke"].get("reused") is True,
+            "second duplicate route should reuse cached smoke evidence",
         )
 
         comma_selected_report_path = tmp_path / "goal-config-comma-selected.json"
@@ -725,8 +1014,37 @@ def main() -> int:
             "opencode smoke should extract JSON error status",
         )
         require(
+            opencode_auth_smoke.get("opencode_errors", [{}])[0].get("provider") == "deepseek",
+            "opencode smoke should record failing provider",
+        )
+        require(
+            "raw_messages" not in opencode_auth_smoke.get("opencode_errors", [{}])[0],
+            "raw provider errors should be omitted by default",
+        )
+        require(
             any("AuthenticateToken authentication failed" in failure for failure in opencode_auth_report["failures"]),
             "opencode smoke failure should surface auth message",
+        )
+        opencode_auth_raw_failed = run(
+            [
+                sys.executable,
+                CHECK.as_posix(),
+                "--config",
+                opencode_auth_path.as_posix(),
+                "--require-models",
+                "--smoke",
+                "--harness",
+                "lite_agent",
+                "--models-output",
+                models_path.as_posix(),
+                "--include-raw-errors",
+            ],
+            expect=1,
+        ).stdout
+        opencode_auth_raw_report = json.loads(opencode_auth_raw_failed)
+        require(
+            opencode_auth_raw_report["harnesses"][0]["smoke"]["opencode_errors"][0].get("raw_messages"),
+            "--include-raw-errors should preserve raw provider messages",
         )
 
         failed = run(

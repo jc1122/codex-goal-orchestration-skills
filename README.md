@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.60
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.61
 ```
 
 Install to a custom absolute skills root:
@@ -125,19 +125,34 @@ Use the generated `interaction.ask_order` so the user is not overwhelmed:
 2. Ask the effort/aggressiveness profile second.
 3. Ask the validation/smoke/debug telemetry mode third.
 
-Ask only missing sections, one at a time, unless the user requests the full questionnaire. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
+Ask only missing sections in that order. If the user says to continue or wants completion, ask/apply all remaining missing sections in one compact pass. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
 
 Create the opencode DeepSeek v4 profile requested for Lite and demanding agents:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --preset opencode-deepseek-v4 \
+  --effort-profile balanced \
+  --validation-mode smoke \
+  --state-output /abs/goal-config-state.json \
   --output /abs/goal.config.json
 ```
 
 The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. It records effort in tokens, characters, and elapsed time only.
 
 Create flags are binding. If the user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, the rendered `goal.config.json` must apply those values or the command must fail.
+
+Effort profiles are exact create inputs:
+
+- `--effort-profile lean`: lower branch/worker caps, fewer waves, shorter Lite and demanding-agent timeouts.
+- `--effort-profile balanced`: default compact profile.
+- `--effort-profile thorough`: higher caps and longer timeouts for harder goals.
+
+Validation modes are exact create inputs:
+
+- `--validation-mode model-check`: require model availability checks.
+- `--validation-mode smoke`: require model checks and harness smoke.
+- `--validation-mode debug`: require smoke and serialize `telemetry.mode=debug` plus debug preflight intent.
 
 To use user-supplied models, keep roles explicit:
 
@@ -152,6 +167,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
 ```
 
 For `codex` and `gemini`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4` or `gemini-3-flash-preview`.
+Bare provider-implied forms also work for those harnesses, for example `--role-model lite_agent:gemini:gemini-3-flash-preview`.
 
 To plug in another CLI harness, provide a JSON harness spec and map roles to it. Built-in harness kinds are `opencode`, `codex`, `gemini`, and `generic-cli`; `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
 
@@ -180,7 +196,9 @@ Fail closed on missing opencode models:
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --config /abs/goal.config.json \
   --require-models \
-  --output /abs/goal-config-check.json
+  --stdout summary \
+  --output /abs/goal-config-check.json \
+  --state-output /abs/goal-config-state.json
 ```
 
 Smoke-test both configured harness roles:
@@ -192,27 +210,47 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --smoke \
   --harness lite \
   --harness demanding \
-  --output /abs/goal-config-smoke.json
+  --stdout summary \
+  --output /abs/goal-config-smoke.json \
+  --state-output /abs/goal-config-state.json
 ```
 
-The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. It does not read provider credentials or report provider prices.
+When `--output` is supplied, checker stdout defaults to `summary`: status, accepted routes, rejection counts, and output path. Use `--stdout full` to print the full JSON report, or `--stdout none` for quiet file-only output.
+
+The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. It does not read provider credentials or report provider prices. Passing smoke evidence is reused for duplicate `(harness, provider, model)` routes in the same run; `--reuse-smoke-report /abs/previous.json` can reuse a prior passing discovery/check report.
 
 Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. To isolate a failing route without rerunning the full matrix, pass repeated or comma-separated `--harness` values, for example `--harness lite_agent,demanding_agent`.
 
-The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and preserves JSON error status/message fields, including auth failures, in the smoke report. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
+The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Full raw provider error payloads are emitted only with `--include-raw-errors`. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
 
 Discovery mode checks provider-listed candidates without manually writing every role first:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --config /abs/goal.config.json \
-  --discover-provider openrouter \
-  --discover-model-filter 'deepseek|~openrouter/latest' \
+  --discover-profile mixed-fast \
+  --discover-model-filter 'deepseek|gpt-5.4|gemini' \
   --smoke \
-  --output /abs/goal-config-discovery.json
+  --stdout summary \
+  --output /abs/goal-config-discovery.json \
+  --state-output /abs/goal-config-state.json
 ```
 
-The discovery report includes `candidate_routes`, `accepted_routes`, and `rejected_routes`. Use the accepted route list to create the final explicit `goal.config.json`; do not pass unreviewed discovered routes directly into preflight.
+`mixed-fast` tries a fixed ranking across configured opencode, Codex, Gemini, and generic antigravity harnesses, stops after enough accepted routes, and stops a provider after the first auth failure. Provider-specific opencode listing remains available with repeated `--discover-provider PROVIDER`.
+
+The discovery report includes `candidate_routes`, `accepted_routes`, and `rejected_routes`. Use the accepted route list to create the final explicit `goal.config.json`; do not pass unreviewed discovered routes directly into preflight:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
+  --from-discovery /abs/goal-config-discovery.json \
+  --mapping auto \
+  --effort-profile balanced \
+  --validation-mode smoke \
+  --output /abs/goal.config.json \
+  --state-output /abs/goal-config-state.json
+```
+
+`goal-config-state.json` records `phase`, `missing_preferences`, `next_command`, and `complete`. Use it to answer "is the config done?" deterministically.
 
 After the check passes, pass both artifacts into preflight. This is the integration point: `create_goal_bundle.py` embeds `goal_config`, copies `goal.config.json` and `goal-config.check.json`, replaces manifest model policies with the configured ladders, and runtime packet generation turns those policies into concrete harness launch attempts.
 

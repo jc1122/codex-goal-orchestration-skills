@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:c7e185089ac457ec6397a3974106196eb3db149f10b05661d44532e0a1ba2c3e"
+    "source_fingerprint": "sha256:78a5675b6dbaf7eadc358c6b508fc7191e5af5661908be0e879040234f1e7ff1"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -177,7 +177,8 @@
       "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
-        "goal-main-orchestrator"
+        "goal-main-orchestrator",
+        "goal-preflight"
       ]
     },
     "goal-main-orchestrator": {
@@ -377,7 +378,8 @@
       "target": "goal-preflight",
       "paths": [
         "skills/goal-config/SKILL.md",
-        "skills/goal-config/references/configuration-contract.md"
+        "skills/goal-config/references/configuration-contract.md",
+        "skills/goal-config/scripts/check_goal_config.py"
       ]
     },
     {

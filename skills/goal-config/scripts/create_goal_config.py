@@ -17,6 +17,32 @@ IMPLIED_PROVIDER_BY_HARNESS = {
     "gemini": "gemini",
 }
 
+EFFORT_PROFILES: dict[str, dict[str, int]] = {
+    "lean": {
+        "max_active_branch_agents": 2,
+        "max_active_worker_packets": 2,
+        "max_waves": 3,
+        "lite_timeout_seconds": 300,
+        "demanding_timeout_seconds": 900,
+    },
+    "balanced": {
+        "max_active_branch_agents": 4,
+        "max_active_worker_packets": 4,
+        "max_waves": 5,
+        "lite_timeout_seconds": 600,
+        "demanding_timeout_seconds": 1200,
+    },
+    "thorough": {
+        "max_active_branch_agents": 6,
+        "max_active_worker_packets": 6,
+        "max_waves": 8,
+        "lite_timeout_seconds": 900,
+        "demanding_timeout_seconds": 2400,
+    },
+}
+
+VALIDATION_MODES = {"model-check", "smoke", "debug"}
+
 
 def load_contract() -> Any:
     shared_path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
@@ -33,18 +59,12 @@ def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str
     parts = spec.split(":")
     if len(parts) < 3:
         raise SystemExit(
-            "role-model spec must be ROLE:HARNESS:PROVIDER/MODEL or ROLE:HARNESS:MODEL with --provider"
+            "role-model spec must be ROLE:HARNESS:PROVIDER/MODEL, "
+            "ROLE:HARNESS:MODEL with an implied provider, or ROLE:HARNESS:MODEL with --provider"
         )
 
     role, harness, provider_model = parts[:3]
     aliases = parts[3:]
-    if "/" not in provider_model:
-        if default_provider:
-            provider_model = f"{default_provider}/{provider_model}"
-        else:
-            raise SystemExit(
-                f"model for role {role!r} must include provider/model or use --provider: {provider_model!r}"
-            )
     if len(aliases) > 2:
         raise SystemExit(f"invalid role-model spec with too many suffixes: {spec}")
 
@@ -211,6 +231,41 @@ def apply_harness_specs(config: dict[str, Any], paths: list[Path]) -> None:
             harnesses[name] = spec
 
 
+def apply_effort_profile(config: dict[str, Any], profile: str | None) -> None:
+    if profile is None:
+        return
+    values = EFFORT_PROFILES.get(profile)
+    if values is None:
+        raise SystemExit(f"unknown effort profile: {profile}")
+    aggressiveness = config.setdefault("aggressiveness", {})
+    effort = config.setdefault("effort", {})
+    for key in ("max_active_branch_agents", "max_active_worker_packets", "max_waves"):
+        aggressiveness[key] = values[key]
+    for key in ("lite_timeout_seconds", "demanding_timeout_seconds"):
+        effort[key] = values[key]
+    aggressiveness["total_branch_cap"] = values["max_active_branch_agents"] * values["max_waves"]
+    config["effort_profile"] = profile
+
+
+def apply_validation_mode(config: dict[str, Any], mode: str) -> None:
+    if mode not in VALIDATION_MODES:
+        raise SystemExit(f"unknown validation mode: {mode}")
+    config["validation"] = {
+        "mode": mode,
+        "require_models": True,
+        "smoke": mode in {"smoke", "debug"},
+        "debug_telemetry": mode == "debug",
+    }
+    telemetry = config.setdefault("telemetry", {})
+    if mode == "debug":
+        telemetry["mode"] = "debug"
+        telemetry["raw_text"] = True
+        config["preflight_intent"] = {"telemetry_mode": "debug"}
+    else:
+        telemetry.setdefault("mode", "standard")
+        config.setdefault("preflight_intent", {})["telemetry_mode"] = telemetry["mode"]
+
+
 def positive_int(value: int, field: str) -> int:
     if value <= 0:
         raise SystemExit(f"{field} must be a positive integer")
@@ -241,6 +296,14 @@ def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace) ->
         aggressiveness["total_branch_cap"] = int(aggressiveness["max_active_branch_agents"]) * int(
             aggressiveness["max_waves"]
         )
+    if any(getattr(args, name) is not None for name in (
+        "max_active_branch_agents",
+        "max_active_worker_packets",
+        "max_waves",
+        "lite_timeout_seconds",
+        "demanding_timeout_seconds",
+    )):
+        config["effort_profile"] = "custom"
 
 
 def smoke_token(role: str) -> str:
@@ -298,6 +361,169 @@ def unique(values: list[str]) -> list[str]:
             result.append(value)
             seen.add(value)
     return result
+
+
+def route_id(value: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
+    return normalized or "route"
+
+
+def load_discovery_report(path: Path) -> dict[str, Any]:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit(f"discovery report must be a JSON object: {path}")
+    routes = data.get("accepted_routes")
+    if not isinstance(routes, list) or not routes:
+        raise SystemExit(f"discovery report has no accepted_routes: {path}")
+    return data
+
+
+def route_selector_text(route: dict[str, Any]) -> str:
+    return " ".join(
+        str(route.get(key, ""))
+        for key in ("role", "alias", "harness", "provider", "model")
+    ).lower()
+
+
+def route_score(route: dict[str, Any], *, purpose: str) -> tuple[int, str]:
+    text = route_selector_text(route)
+    if purpose == "lite":
+        score = 0
+        for token, weight in {
+            "flash": -30,
+            "lite": -25,
+            "mini": -20,
+            "fast": -15,
+            "pro": 20,
+            "heavy": 25,
+        }.items():
+            if token in text:
+                score += weight
+    else:
+        score = 0
+        for token, weight in {
+            "pro": -30,
+            "heavy": -25,
+            "gpt-5.4": -20,
+            "latest": -10,
+            "flash": 20,
+            "lite": 25,
+            "mini": 20,
+        }.items():
+            if token in text:
+                score += weight
+    return score, text
+
+
+def select_route(routes: list[dict[str, Any]], *, purpose: str) -> dict[str, Any]:
+    return sorted(routes, key=lambda route: route_score(route, purpose=purpose))[0]
+
+
+def route_model_entry(role: str, route: dict[str, Any], *, alias: str | None = None, purpose: str | None = None) -> dict[str, Any]:
+    for key in ("harness", "provider", "model"):
+        if not isinstance(route.get(key), str) or not route.get(key):
+            raise SystemExit(f"accepted route missing {key}: {route}")
+    return model_entry(
+        alias=alias or str(route.get("alias") or role),
+        role=role,
+        harness=str(route["harness"]),
+        provider=str(route["provider"]),
+        model=str(route["model"]),
+        purpose=purpose or f"{role} from discovery",
+    )
+
+
+def find_route(routes: list[dict[str, Any]], selector: Any) -> dict[str, Any]:
+    if isinstance(selector, int):
+        index = selector
+        if index < 0 or index >= len(routes):
+            raise SystemExit(f"discovery mapping index out of range: {selector}")
+        return routes[index]
+    if isinstance(selector, str):
+        for route in routes:
+            if selector in {route.get("role"), route.get("alias"), route.get("model")}:
+                return route
+        raise SystemExit(f"discovery mapping selector did not match accepted route: {selector}")
+    if isinstance(selector, dict):
+        for route in routes:
+            if all(route.get(key) == value for key, value in selector.items()):
+                return route
+        if all(isinstance(selector.get(key), str) and selector.get(key) for key in ("harness", "provider", "model")):
+            return selector
+    raise SystemExit(f"unsupported discovery mapping selector: {selector!r}")
+
+
+def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None, mapping: str | None) -> None:
+    if discovery_path is None:
+        return
+    report = load_discovery_report(discovery_path)
+    routes = [route for route in report["accepted_routes"] if isinstance(route, dict)]
+    if not routes:
+        raise SystemExit(f"discovery report has no object accepted_routes: {discovery_path}")
+
+    mapping = mapping or "auto"
+    if mapping == "auto":
+        lite_route = select_route(routes, purpose="lite")
+        demanding_route = select_route(routes, purpose="demanding")
+        models = {
+            "lite_agent": route_model_entry(
+                "lite_agent",
+                lite_route,
+                alias="discovered-lite",
+                purpose="auto-selected Lite route from discovery",
+            ),
+            "demanding_agent": route_model_entry(
+                "demanding_agent",
+                demanding_route,
+                alias="discovered-demanding",
+                purpose="auto-selected demanding route from discovery",
+            ),
+        }
+        extra_roles: list[str] = []
+        seen_route_keys = {
+            (models["lite_agent"]["harness"], models["lite_agent"]["provider"], models["lite_agent"]["model"]),
+            (models["demanding_agent"]["harness"], models["demanding_agent"]["provider"], models["demanding_agent"]["model"]),
+        }
+        for route in routes:
+            key = (route.get("harness"), route.get("provider"), route.get("model"))
+            if key in seen_route_keys:
+                continue
+            role = f"discovered_{len(extra_roles) + 1}_{route_id(str(route.get('model', 'route')))}"
+            models[role] = route_model_entry(role, route)
+            extra_roles.append(role)
+            seen_route_keys.add(key)
+    else:
+        mapping_path = Path(mapping)
+        data = json.loads(mapping_path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict) or not data:
+            raise SystemExit(f"discovery mapping must be a non-empty JSON object: {mapping_path}")
+        models = {
+            role: route_model_entry(role, find_route(routes, selector), alias=role)
+            for role, selector in data.items()
+        }
+        extra_roles = [role for role in models if role not in {"lite_agent", "demanding_agent"}]
+
+    if "lite_agent" not in models:
+        models["lite_agent"] = route_model_entry("lite_agent", routes[0], alias="discovered-lite")
+    if "demanding_agent" not in models:
+        models["demanding_agent"] = route_model_entry("demanding_agent", routes[0], alias="discovered-demanding")
+
+    worker = unique(["demanding_agent", "lite_agent", *extra_roles])
+    config["profile"] = "from-discovery"
+    config["source_discovery"] = {
+        "path": discovery_path.as_posix(),
+        "mapping": mapping,
+        "accepted_route_count": len(routes),
+    }
+    config["models"] = models
+    config["model_ladders"] = {
+        "lite": ["lite_agent"],
+        "worker": worker,
+        "reviewer": ["demanding_agent"],
+        "amender": ["demanding_agent", "lite_agent"],
+        "demanding": ["demanding_agent"],
+    }
+    config["harness_smokes"] = {}
 
 
 def require_roles(config: dict[str, Any], ladder_name: str, ladder: list[str]) -> None:
@@ -383,9 +609,12 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
 
 
 def finalize_config(config: dict[str, Any], contract: Any, args: argparse.Namespace) -> dict[str, Any]:
-    apply_role_overrides(config["models"], args.role_model, args.provider)
     apply_harness_specs(config, args.harness_spec)
+    apply_discovery_mapping(config, args.from_discovery, args.mapping)
+    apply_role_overrides(config["models"], args.role_model, args.provider)
+    apply_effort_profile(config, args.effort_profile)
     apply_numeric_overrides(config, args)
+    apply_validation_mode(config, args.validation_mode)
     ladders = config.setdefault("model_ladders", {})
     for name, value in {
         "lite": args.lite_ladder,
@@ -542,6 +771,34 @@ def write_json(data: dict[str, Any], output: Path | None) -> None:
     output.write_text(text, encoding="utf-8")
 
 
+def write_state(config: dict[str, Any], output: Path | None, state_output: Path | None) -> None:
+    if state_output is None:
+        return
+    config_path = output.resolve().as_posix() if output is not None and output.as_posix() != "-" else None
+    validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
+    smoke = bool(validation.get("smoke"))
+    next_command = None
+    if config_path:
+        next_command = (
+            "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py "
+            f"--config {config_path} --require-models"
+        )
+        if smoke:
+            next_command += " --smoke"
+        next_command += " --output /abs/goal-config-check.json"
+    state = {
+        "schema_version": 1,
+        "phase": "config_created",
+        "complete": False,
+        "missing_preferences": [],
+        "config_path": config_path,
+        "validation_mode": validation.get("mode"),
+        "next_command": next_command,
+    }
+    state_output.parent.mkdir(parents=True, exist_ok=True)
+    state_output.write_text(json.dumps(state, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -552,6 +809,21 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path, help="Write goal.config.json to this path; use - for stdout.")
     parser.add_argument("--provider", help="Provider id override for provider/model strings.")
+    parser.add_argument("--from-discovery", type=Path, help="Build an explicit config from a goal-config discovery report.")
+    parser.add_argument("--mapping", help="Discovery mapping mode: auto or path to role-selector JSON.")
+    parser.add_argument(
+        "--effort-profile",
+        choices=tuple(EFFORT_PROFILES),
+        default="balanced",
+        help="Apply deterministic effort/aggressiveness defaults before numeric overrides.",
+    )
+    parser.add_argument(
+        "--validation-mode",
+        choices=tuple(sorted(VALIDATION_MODES)),
+        default="model-check",
+        help="Serialize model-check, smoke, or debug validation intent into the config.",
+    )
+    parser.add_argument("--state-output", type=Path, help="Write goal-config-state.json for UX/state handoff.")
     parser.add_argument("--lite-model", default="deepseek/deepseek-v4-flash", help="Lite opencode provider/model.")
     parser.add_argument("--demanding-model", default="deepseek/deepseek-v4-pro", help="Demanding opencode provider/model.")
     parser.add_argument("--max-active-branch-agents", type=int)
@@ -575,7 +847,8 @@ def main() -> int:
         action="append",
         default=[],
         help=(
-            "Override role mapping as ROLE:HARNESS:PROVIDER/MODEL[:ALIAS[:PURPOSE]]. "
+            "Override role mapping as ROLE:HARNESS:PROVIDER/MODEL[:ALIAS[:PURPOSE]] "
+            "or ROLE:HARNESS:MODEL for harnesses with implied providers. "
             "Repeat for each role you want to change."
         ),
     )
@@ -590,6 +863,7 @@ def main() -> int:
     finalize_config(config, contract, args)
 
     write_json(config, args.output)
+    write_state(config, args.output, args.state_output)
     return 0
 
 
