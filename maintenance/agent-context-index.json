@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:ae39206eeed7b93645a7c19cbe817329474d49d08c2d14cd3071c0f6b1d61d11"
+    "source_fingerprint": "sha256:804bde5e34d7779c93a19660fe866d4d40886259339c80b65e9c7a1a963d8cb7"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -113,7 +113,8 @@
       "bin/install-goal-skills.js"
     ],
     "npm_scripts": {
-      "check": "npm run check:shared && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
+      "check": "npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
+      "check:config": "python3 scripts/check_goal_config_fixtures.py",
       "check:context": "python3 scripts/generate_agent_context_index.py --check",
       "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
       "check:golden": "python3 scripts/check_golden_smoke.py",
@@ -155,6 +156,27 @@
       "depends_on": [
         "_goal_shared",
         "goal-preflight"
+      ]
+    },
+    "goal-config": {
+      "role": "Configure and verify goal orchestration model/provider profiles.",
+      "read_first": [
+        "skills/goal-config/SKILL.md"
+      ],
+      "phase_manifest_command": "python3 skills/goal-config/scripts/runtime_phase_manifest.py --markdown",
+      "reference_on_demand": [
+        "skills/goal-config/references/configuration-contract.md",
+        "skills/goal-config/references/lite-advisor-contract.md"
+      ],
+      "assets_on_demand": [],
+      "core_scripts": [
+        "skills/goal-config/scripts/check_goal_config.py",
+        "skills/goal-config/scripts/create_goal_config.py",
+        "skills/goal-config/scripts/scan_configurables.py"
+      ],
+      "open_core_scripts_only_for": "implementation or debugging of that script surface",
+      "depends_on": [
+        "_goal_shared"
       ]
     },
     "goal-main-orchestrator": {
@@ -269,6 +291,7 @@
       "open_shared_scripts_only_for": "implementation or debugging of shared deterministic helpers",
       "wrapped_by_public_skills": [
         "goal-branch-orchestrator",
+        "goal-config",
         "goal-main-orchestrator",
         "goal-plan-amender",
         "goal-preflight"
@@ -487,6 +510,26 @@
       "checks": [
         "npm run check:fixtures",
         "npm run check:golden"
+      ]
+    },
+    "goal_configuration": {
+      "read": [
+        "skills/goal-config/SKILL.md",
+        "skills/goal-config/references/configuration-contract.md"
+      ],
+      "commands": [
+        "python3 skills/goal-config/scripts/runtime_phase_manifest.py --markdown",
+        "python3 skills/goal-config/scripts/scan_configurables.py --json",
+        "python3 skills/goal-config/scripts/create_goal_config.py --help",
+        "python3 skills/goal-config/scripts/check_goal_config.py --help"
+      ],
+      "open_scripts_only_for": "configuration helper implementation or script debugging",
+      "write_candidates": [
+        "skills/goal-config/scripts",
+        "skills/goal-config/references"
+      ],
+      "checks": [
+        "npm run check:config"
       ]
     },
     "runtime_scheduling": {

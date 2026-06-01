@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SKILLS_ROOT = ROOT / "skills"
 SHARED_ROOT = SKILLS_ROOT / "_goal_shared"
 SKILLS = (
+    "goal-config",
     "goal-preflight",
     "goal-main-orchestrator",
     "goal-branch-orchestrator",

@@ -331,6 +331,21 @@ def build_tasks() -> dict[str, Any]:
             "write_candidates": ["skills/goal-preflight/scripts", "skills/_goal_shared/scripts/orchestration_contract.py"],
             "checks": ["npm run check:fixtures", "npm run check:golden"],
         },
+        "goal_configuration": {
+            "read": [
+                "skills/goal-config/SKILL.md",
+                "skills/goal-config/references/configuration-contract.md",
+            ],
+            "commands": [
+                "python3 skills/goal-config/scripts/runtime_phase_manifest.py --markdown",
+                "python3 skills/goal-config/scripts/scan_configurables.py --json",
+                "python3 skills/goal-config/scripts/create_goal_config.py --help",
+                "python3 skills/goal-config/scripts/check_goal_config.py --help",
+            ],
+            "open_scripts_only_for": "configuration helper implementation or script debugging",
+            "write_candidates": ["skills/goal-config/scripts", "skills/goal-config/references"],
+            "checks": ["npm run check:config"],
+        },
         "runtime_scheduling": {
             "read": [
                 "skills/goal-main-orchestrator/SKILL.md",

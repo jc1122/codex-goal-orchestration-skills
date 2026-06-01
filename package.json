@@ -1,15 +1,16 @@
 {
   "name": "codex-goal-orchestration-skills",
-  "version": "0.2.55",
-  "description": "Codex skills for goal preflight, main orchestration, branch orchestration, and plan amendment.",
+  "version": "0.2.56",
+  "description": "Codex skills for goal configuration, preflight, main orchestration, branch orchestration, and plan amendment.",
   "license": "MIT",
   "bin": {
     "codex-goal-orchestration-skills": "./bin/install-goal-skills.js",
     "install-codex-goal-skills": "./bin/install-goal-skills.js"
   },
   "scripts": {
-    "check": "npm run check:shared && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
+    "check": "npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
     "check:shared": "python3 scripts/sync_goal_shared.py",
+    "check:config": "python3 scripts/check_goal_config_fixtures.py",
     "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
     "check:golden": "python3 scripts/check_golden_smoke.py",
     "check:release": "python3 scripts/check_release.py",
@@ -30,6 +31,7 @@
     "fixtures/",
     "AGENTS.md",
     "scripts/check_golden_smoke.py",
+    "scripts/check_goal_config_fixtures.py",
     "scripts/check_dependency_policy.py",
     "scripts/check_model_catalog.py",
     "scripts/fixture_support.py",

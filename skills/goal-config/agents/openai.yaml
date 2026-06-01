@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Config"
+  short_description: "Configure and smoke-test goal orchestration model/provider profiles."
+  default_prompt: "Use $goal-config to scan configurable goal orchestration knobs, write a goal.config.json profile, verify provider/model availability, and smoke-test the configured harnesses with token, character, and elapsed-time telemetry."

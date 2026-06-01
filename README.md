@@ -1,7 +1,8 @@
 # Codex Goal Orchestration Skills
 
-This repository packages four Codex skills for file-backed `/goal` orchestration:
+This repository packages five Codex skills for file-backed `/goal` orchestration:
 
+- `goal-config`
 - `goal-preflight`
 - `goal-main-orchestrator`
 - `goal-branch-orchestrator`
@@ -20,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.55
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.56
 ```
 
 Install to a custom absolute skills root:
@@ -43,7 +44,7 @@ From a local checkout:
 node bin/install-goal-skills.js --dest /absolute/path/to/skills --force
 ```
 
-The default destination is `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`. The installer copies all four public skills, `_goal_shared`, root `AGENTS.md`, and `maintenance/agent-context-index.json`.
+The default destination is `$CODEX_HOME/skills` when `CODEX_HOME` is set, otherwise `~/.codex/skills`. The installer copies all five public skills, `_goal_shared`, root `AGENTS.md`, and `maintenance/agent-context-index.json`.
 
 Resolve the installed skills root in runtime instructions:
 
@@ -61,6 +62,7 @@ fi
 3. Print and follow the skill phase manifest:
 
 ```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/runtime_phase_manifest.py" --markdown
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/runtime_phase_manifest.py" --markdown
 python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest.py" --markdown
 python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/runtime_phase_manifest.py" --markdown
@@ -73,6 +75,7 @@ Do not read or search `skills/*/scripts/*.py` during normal runtime. Use script 
 
 | Layer | Skill | Responsibility |
 | --- | --- | --- |
+| Configuration | `goal-config` | Scan configurable model/provider, aggressiveness, token/character/time effort, telemetry, and harness knobs; write `goal.config.json`; fail-closed model availability and harness smoke reports. |
 | Preflight | `goal-preflight` | Turn a report, roadmap, diagnosis, or rough brief into a linted bundle with `job.manifest.json`, `main.prompt.md`, branch prompts, and a location-bound `goal-bootloader.md`. |
 | Main runtime | `goal-main-orchestrator` | Consume an existing bundle, bootstrap skills/model catalog, fail-closed prompt audit, create branch worktrees, schedule branch agents, summarize telemetry, assemble and validate final status. |
 | Branch runtime | `goal-branch-orchestrator` | Run one audited branch worktree, create worker/research/reviewer packets, keep worker slots saturated, integrate results, gate review, assemble and validate branch status. |
@@ -84,13 +87,14 @@ The bundle is the data plane. Runtime agents exchange manifest-owned files rathe
 
 ## End-To-End Flow
 
-1. `goal-preflight` writes a structured brief, lints it, creates the bundle, lints the bundle, and returns the exact `goal-bootloader.md` text.
-2. The user launches `/goal` with the bootloader. The bootloader points to absolute bundle and repository roots, so it must be regenerated if either path moves.
-3. `goal-main-orchestrator` runs bootstrap, live model catalog, script-only repair gate, deterministic or model prompt audit, branch scheduling, and main scheduler ledger updates.
-4. Main launches eligible branch orchestrator sessions as a rolling saturated pool up to `max_active_branch_agents` and waits for terminal artifacts rather than polling active branch internals.
-5. `goal-branch-orchestrator` creates worker or research-worker packets, runs launchers, integrates diffs or research findings, updates worker scheduler evidence, creates a pre-review gate, launches or reuses reviewer evidence, and validates branch status.
-6. After each validated terminal branch result, main records an amendment launch-or-skip decision. `goal-plan-amender` may add or adjust only future unstarted work through validated amendments.
-7. Main closes by running scheduler finalization, `summarize_telemetry.py`, `assemble_main_status.py`, and `validate_main_status.py`.
+1. Optionally run `goal-config` to write and verify a model/provider profile before preflight or runtime work.
+2. `goal-preflight` writes a structured brief, lints it, creates the bundle, lints the bundle, and returns the exact `goal-bootloader.md` text.
+3. The user launches `/goal` with the bootloader. The bootloader points to absolute bundle and repository roots, so it must be regenerated if either path moves.
+4. `goal-main-orchestrator` runs bootstrap, live model catalog, script-only repair gate, deterministic or model prompt audit, branch scheduling, and main scheduler ledger updates.
+5. Main launches eligible branch orchestrator sessions as a rolling saturated pool up to `max_active_branch_agents` and waits for terminal artifacts rather than polling active branch internals.
+6. `goal-branch-orchestrator` creates worker or research-worker packets, runs launchers, integrates diffs or research findings, updates worker scheduler evidence, creates a pre-review gate, launches or reuses reviewer evidence, and validates branch status.
+7. After each validated terminal branch result, main records an amendment launch-or-skip decision. `goal-plan-amender` may add or adjust only future unstarted work through validated amendments.
+8. Main closes by running scheduler finalization, `summarize_telemetry.py`, `assemble_main_status.py`, and `validate_main_status.py`.
 
 Status semantics:
 
@@ -98,6 +102,49 @@ Status semantics:
 - `partial`: some work completed, with structured unlaunched or blocked remainder.
 - `blocked`: progress is stopped by a concrete blocker with preserved evidence.
 - `failed`: attempted work produced a terminal negative result.
+
+## Goal Configuration
+
+Use `goal-config` when the user asks for a model/provider profile, different harnesses, lower token usage, branch/worker aggressiveness changes, or a provider smoke before orchestration.
+
+Inventory configurable knobs:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py" --json
+```
+
+Create the opencode DeepSeek v4 profile requested for Lite and demanding agents:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
+  --preset opencode-deepseek-v4 \
+  --output /abs/goal.config.json
+```
+
+The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. It records effort in tokens, characters, and elapsed time only.
+
+Fail closed on missing opencode models:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
+  --config /abs/goal.config.json \
+  --require-models \
+  --output /abs/goal-config-check.json
+```
+
+Smoke-test both configured harness roles:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
+  --config /abs/goal.config.json \
+  --require-models \
+  --smoke \
+  --harness lite \
+  --harness demanding \
+  --output /abs/goal-config-smoke.json
+```
+
+The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters read back from the opencode session database. It does not read provider credentials or report provider prices.
 
 ## Preflight Briefs
 
@@ -304,6 +351,7 @@ Lite packets capture the Gemini binary path, version, binary sha256, input hashe
 
 | Gate | Required command family |
 | --- | --- |
+| Goal configuration | `scan_configurables.py`, `create_goal_config.py`, `check_goal_config.py` |
 | Skill bootstrap | `check_goal_skill_availability.py` |
 | Brief lint | `lint_preflight_brief.py` |
 | Bundle lint | `lint_goal_bundle.py` |
@@ -319,6 +367,12 @@ Lite packets capture the Gemini binary path, version, binary sha256, input hashe
 Use exact absolute paths for script arguments when the phase manifest requires them. Validate artifacts before reporting `pass`. Do not hand-author final branch or main status when assemblers can derive it from manifest-owned artifacts.
 
 ## CLI Surface
+
+Goal config:
+
+- `scan_configurables.py`: inventory configurable aggressiveness, model route, harness, timeout, and telemetry knobs.
+- `create_goal_config.py`: render a deterministic `goal.config.json` profile, including the `opencode-deepseek-v4` preset.
+- `check_goal_config.py`: validate provider/model availability and optionally smoke-test configured harness roles.
 
 Preflight:
 
@@ -378,6 +432,7 @@ Focused checks:
 
 ```bash
 npm run check:shared
+npm run check:config
 npm run check:fixtures
 npm run check:golden
 npm run check:release
@@ -395,7 +450,7 @@ python3 scripts/check_size_budget.py --json
 python3 scripts/check_dependency_policy.py --json
 ```
 
-`check:fixtures` validates deterministic fixtures without launching live model CLIs. `check:golden` installs into a temporary skills root, creates an offline smoke bundle, generates audit/scheduler/worker/research/reviewer/Lite/amendment/telemetry artifacts, and validates them. `check:release` validates package metadata, installer behavior, temp install parity, and `npm pack --dry-run`.
+`check:config` validates goal-config fixtures without launching live model CLIs. `check:fixtures` validates deterministic fixtures without launching live model CLIs. `check:golden` installs into a temporary skills root, creates an offline smoke bundle, generates audit/scheduler/worker/research/reviewer/Lite/amendment/telemetry artifacts, and validates them. `check:release` validates package metadata, installer behavior, temp install parity, and `npm pack --dry-run`.
 
 `check:maintenance` runs generated context index checks, size-budget warnings, dependency policy, and local model catalog compatibility. Size-budget growth is warning-first and uses `git ls-files`; update `maintenance/size-budget.json` only for intentional growth:
 

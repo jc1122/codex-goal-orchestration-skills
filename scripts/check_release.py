@@ -22,6 +22,7 @@ INSTALLER = ROOT / "bin" / "install-goal-skills.js"
 SKILL_VERSION_RE = re.compile(r"(?m)^version:\s*(?P<version>\S+)\s*$")
 EXPECTED_SKILLS = [
     "goal-branch-orchestrator",
+    "goal-config",
     "goal-main-orchestrator",
     "goal-plan-amender",
     "goal-preflight",
@@ -46,6 +47,7 @@ REQUIRED_PACKAGE_FILES = {
     "maintenance/dependency-policy.json",
     "maintenance/size-budget.json",
     "scripts/check_dependency_policy.py",
+    "scripts/check_goal_config_fixtures.py",
     "scripts/check_golden_smoke.py",
     "scripts/check_model_catalog.py",
     "scripts/fixture_support.py",
@@ -67,6 +69,12 @@ REQUIRED_PACKAGE_FILES = {
     "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
     "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
     "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py",
+    "skills/goal-config/SKILL.md",
+    "skills/goal-config/references/configuration-contract.md",
+    "skills/goal-config/scripts/check_goal_config.py",
+    "skills/goal-config/scripts/create_goal_config.py",
+    "skills/goal-config/scripts/runtime_phase_manifest.py",
+    "skills/goal-config/scripts/scan_configurables.py",
     "skills/goal-main-orchestrator/SKILL.md",
     "skills/goal-main-orchestrator/scripts/assemble_main_status.py",
     "skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py",
@@ -95,6 +103,7 @@ REQUIRED_PACKAGE_FILES_ENTRIES = {
     "maintenance/dependency-policy.json",
     "maintenance/size-budget.json",
     "scripts/check_dependency_policy.py",
+    "scripts/check_goal_config_fixtures.py",
     "scripts/check_golden_smoke.py",
     "scripts/check_model_catalog.py",
     "scripts/fixture_support.py",
@@ -173,6 +182,7 @@ def check_metadata(package: dict) -> str:
     require(isinstance(scripts, dict), "package.json scripts must be an object")
     for script in (
         "check",
+        "check:config",
         "check:shared",
         "check:fixtures",
         "check:golden",

@@ -25,6 +25,37 @@ COMMON_RULES = [
 
 
 PHASES: dict[str, dict[str, Any]] = {
+    "goal-config": {
+        "role": "Configure and verify model/provider profiles; do not launch goal runtime work.",
+        "first_artifacts": ["user model/provider preference", "optional existing goal.config.json"],
+        "phases": [
+            {
+                "id": "scan",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py --json > /abs/goal-config-inventory.json",
+                "agent_does": "inspect the inventory categories instead of broad source scans before proposing knob changes",
+            },
+            {
+                "id": "create",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --output /abs/goal.config.json",
+                "artifacts": ["goal.config.json"],
+            },
+            {
+                "id": "model_check",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --require-models --output /abs/goal-config-check.json",
+                "pass": "status=pass and every selected provider/model is listed by its harness",
+                "on_fail": "return blocked with goal-config-check.json failures",
+            },
+            {
+                "id": "harness_smoke",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --require-models --smoke --harness lite --harness demanding --output /abs/goal-config-smoke.json",
+                "pass": "status=pass with assistant smoke text, token counts, character counts, and elapsed milliseconds for each role",
+                "on_fail": "return blocked; do not silently fall back to another provider/model",
+            },
+        ],
+        "details": [
+            "references/configuration-contract.md only when the config schema or checker report needs interpretation",
+        ],
+    },
     "goal-preflight": {
         "role": "Prepare a bundle only; do not launch runtime agents.",
         "first_artifacts": ["source brief/report", "repo root"],
