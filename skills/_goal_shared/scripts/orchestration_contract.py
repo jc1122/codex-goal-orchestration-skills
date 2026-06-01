@@ -278,6 +278,25 @@ LITE_AVOIDED_ACTIONS_BY_PURPOSE = {
         "expected_savings_reason": "A Lite summary can route validator defects to deterministic amendment repair scripts first.",
     },
 }
+TELEMETRY_POLICY_SCHEMA_VERSION = 1
+TELEMETRY_POLICY_MODES = ("standard", "debug")
+TELEMETRY_COLLECT_ITEMS = (
+    "route_decisions",
+    "token_usage",
+    "timings",
+    "scheduler_utilization",
+    "context_pack_stats",
+    "validator_runs",
+    "artifact_hashes",
+)
+TELEMETRY_POLICY_DEFAULT = {
+    "schema_version": TELEMETRY_POLICY_SCHEMA_VERSION,
+    "mode": "standard",
+    "raw_text": False,
+    "collect": [],
+}
+TELEMETRY_DEBUG_NAME = "telemetry.debug.json"
+TELEMETRY_DEBUG_EVENTS_NAME = "debug.events.jsonl"
 LITE_ADVISOR_POLICY = {
     "enabled": True,
     "role": "lite_advisor",
@@ -551,6 +570,22 @@ def telemetry_attempt_args(attempts: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def telemetry_debug_enabled(manifest: dict | None) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    policy = manifest.get("telemetry_policy")
+    return isinstance(policy, dict) and policy.get("mode") == "debug"
+
+
+def telemetry_debug_config(manifest: dict | None) -> dict:
+    if not telemetry_debug_enabled(manifest):
+        return {}
+    return {
+        "telemetry_debug_name": TELEMETRY_DEBUG_NAME,
+        "debug_events_name": TELEMETRY_DEBUG_EVENTS_NAME,
+    }
+
+
 def telemetry_shell_function(
     *,
     script_path: str,
@@ -560,7 +595,11 @@ def telemetry_shell_function(
     output_name: str,
     prompt_name: str,
     attempts: list[dict],
+    debug_output_name: str | None = None,
 ) -> str:
+    debug_args = ""
+    if debug_output_name:
+        debug_args = " \\\n    --debug \\\n    --debug-output " + shell_quote(debug_output_name)
     return f"""write_telemetry() {{
   python3 {shell_quote(script_path)} \\
     --packet-dir "{packet_dir_expr}" \\
@@ -568,6 +607,6 @@ def telemetry_shell_function(
     --role {shell_quote(role)} \\
     --output-name {shell_quote(output_name)} \\
     --prompt-name {shell_quote(prompt_name)} \\
-{telemetry_attempt_args(attempts)}
+{telemetry_attempt_args(attempts)}{debug_args}
 }}
 """

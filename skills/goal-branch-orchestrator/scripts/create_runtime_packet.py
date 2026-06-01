@@ -1295,14 +1295,24 @@ def compact_launch_config(
     review_route: dict | None = None,
     review_semantic_hashes: dict[str, str] | None = None,
     review_reuse_policy: dict | None = None,
+    telemetry_debug: bool = False,
 ) -> dict | None:
     telemetry_script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
+    debug_config = (
+        {
+            "telemetry_debug_name": CONTRACT.TELEMETRY_DEBUG_NAME,
+            "debug_events_name": CONTRACT.TELEMETRY_DEBUG_EVENTS_NAME,
+        }
+        if telemetry_debug
+        else {}
+    )
     if role == "worker":
         return {
             **launch_config_base(
                 "worker", packet_id, branch, worktree, schema_name, output_name, "workspace-write", WORKER_ATTEMPT_TIMEOUT_SECONDS
             ),
+            **debug_config,
             "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
@@ -1333,6 +1343,7 @@ def compact_launch_config(
             **launch_config_base(
                 "research-worker", packet_id, branch, worktree, schema_name, output_name, "read-only", RESEARCH_ATTEMPT_TIMEOUT_SECONDS
             ),
+            **debug_config,
             "attempts": research_telemetry_attempts(),
             "telemetry_script": telemetry_script,
             "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
@@ -1347,6 +1358,7 @@ def compact_launch_config(
             **launch_config_base(
                 "reviewer", packet_id, branch, worktree, schema_name, output_name, "read-only", REVIEWER_ATTEMPT_TIMEOUT_SECONDS
             ),
+            **debug_config,
             "attempts": reviewer_telemetry_attempts(reviewer_ladder),
             "telemetry_script": telemetry_script,
             "semantic_input_hashes": review_semantic_hashes or {},
@@ -1413,12 +1425,15 @@ def main() -> int:
     if not safe_branch_name(branch):
         raise SystemExit(f"branch is not a safe git branch name: {branch!r}")
     manifest_branch_id = branch
+    manifest: dict | None = None
+    telemetry_debug = False
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
     owned_files = normalize_owned_paths(args.owned_file)
     context_files = normalize_context_files(args.context_file)
     if args.manifest and args.role == "worker":
         manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
         manifest = load_json(manifest_path)
+        telemetry_debug = CONTRACT.telemetry_debug_enabled(manifest)
         branch_data = branch_entry_for_packet(manifest, branch, packet_id)
         if branch_data:
             branch_id_value = branch_data.get("id")
@@ -1454,6 +1469,7 @@ def main() -> int:
         manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
         gate_path = resolve_absolute_path(args.pre_review_gate, "--pre-review-gate", must_exist=True)
         manifest = load_json(manifest_path)
+        telemetry_debug = CONTRACT.telemetry_debug_enabled(manifest)
         gate = load_json(gate_path)
         branch_id = packet_id.split("-R", 1)[0] if "-R" in packet_id else ""
         manifest_branch_id = branch_id or manifest_branch_id
@@ -1502,6 +1518,7 @@ def main() -> int:
         manifest_context = find_manifest_context(context_files, manifest_branch_id, packet_id)
         if manifest_context is not None:
             _manifest_path, _manifest, _branch_data, manifest_work_item = manifest_context
+            telemetry_debug = telemetry_debug or CONTRACT.telemetry_debug_enabled(_manifest)
         manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
         route_class = normalize_route_class(args.route_class or manifest_route_class or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS))
         selected_ladder = (
@@ -1627,6 +1644,7 @@ def main() -> int:
         review_route=review_route,
         review_semantic_hashes=review_semantic_hashes,
         review_reuse_policy=review_reuse_policy,
+        telemetry_debug=telemetry_debug,
     )
     if launch_config is not None:
         write_json(packet_dir / "launch-config.json", launch_config)

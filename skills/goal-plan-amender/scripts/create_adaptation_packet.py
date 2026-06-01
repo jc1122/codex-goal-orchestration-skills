@@ -123,7 +123,7 @@ def amender_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
     )
 
 
-def telemetry_function(amendment_id: str, selected_ladder: list[str]) -> str:
+def telemetry_function(amendment_id: str, selected_ladder: list[str], *, telemetry_debug: bool = False) -> str:
     script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
     return CONTRACT.telemetry_shell_function(
         script_path=script,
@@ -133,6 +133,7 @@ def telemetry_function(amendment_id: str, selected_ladder: list[str]) -> str:
         output_name=AMENDER_OUTPUT_NAME.format(amendment_id=amendment_id),
         prompt_name="prompt.md",
         attempts=amender_telemetry_attempts(selected_ladder),
+        debug_output_name=CONTRACT.TELEMETRY_DEBUG_NAME if telemetry_debug else None,
     )
 
 
@@ -158,8 +159,8 @@ def task_text(amendment_id: str, manifest_path: Path, active: list[str], termina
     )
 
 
-def launch_script(amendment_id: str, job_id: str, repo_root: Path, selected_ladder: list[str]) -> str:
-    telemetry = telemetry_function(amendment_id, selected_ladder)
+def launch_script(amendment_id: str, job_id: str, repo_root: Path, selected_ladder: list[str], *, telemetry_debug: bool = False) -> str:
+    telemetry = telemetry_function(amendment_id, selected_ladder, telemetry_debug=telemetry_debug)
     attempt_lines: list[str] = []
     for alias in selected_ladder:
         label = CONTRACT.codex_event_label(alias)
@@ -401,7 +402,13 @@ def main() -> int:
         + "\nUse `proposal.schema.json` as the required output schema, `proposal.example.json` as a shape example, and write only the final proposal JSON.\n",
         encoding="utf-8",
     )
-    launch = launch_script(amendment_id, str(manifest.get("job_id", "")), repo_root, selected_ladder)
+    launch = launch_script(
+        amendment_id,
+        str(manifest.get("job_id", "")),
+        repo_root,
+        selected_ladder,
+        telemetry_debug=CONTRACT.telemetry_debug_enabled(manifest),
+    )
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(launch, encoding="utf-8")
     os.chmod(launch_path, 0o755)

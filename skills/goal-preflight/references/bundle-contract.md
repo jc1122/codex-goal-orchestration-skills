@@ -117,6 +117,12 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
     "branch_no_completion_wait_limit": 3
   },
   "preflight_lite_advice": [],
+  "telemetry_policy": {
+    "schema_version": 1,
+    "mode": "standard",
+    "raw_text": false,
+    "collect": []
+  },
   "branches": [
     {
       "id": "B01",
@@ -180,6 +186,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - Plan-amender packets live under `amendments/Axxx.packet/`, select an allowed amender model ladder in `route.json`, write `telemetry.json`, and write proposals to the sibling `amendments/Axxx.proposal.json`.
 - `main.prompt.md` requires `summarize_telemetry.py --bundle-dir <bundle>` before final validation and requires `telemetry.summary.json` for pass.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
+- `job.manifest.json` contains a `telemetry_policy` object. `schema_version` is 1 and mode is `standard` by default; debug mode is passive and must not change route selection, polling, or scheduling strategy.
 - `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `research_worker_policy` defining `research-worker` packets as broad read-only information retrieval through Codex native search plus configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and read-only local access. It must not suppress user config, and it must prohibit file edits and state-changing actions.
 - `job.manifest.json` contains `lite_model_policy` and `lite_advisor_policy`; Lite advisors are fixed-route context routers, validate through `validate_lite_advice.py`, write telemetry, and cannot satisfy audit/review/mergeability/DoD evidence.

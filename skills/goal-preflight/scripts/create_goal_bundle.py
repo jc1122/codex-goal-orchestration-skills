@@ -67,6 +67,10 @@ LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
 RESEARCH_WORKER_POLICY = CONTRACT.RESEARCH_WORKER_POLICY
 REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
 ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
+TELEMETRY_POLICY_DEFAULT = CONTRACT.TELEMETRY_POLICY_DEFAULT
+TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
+TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
+TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
 
 DOC_PATH_RE = re.compile(
     r"(^|/)(readme|changelog|license|notice|contributing|docs?|documentation)(\.|/|$)|"
@@ -229,6 +233,7 @@ def brief_schema_summary() -> dict:
             "artifact_policy": "artifact retention policy; deterministic default is supplied",
             "cleanup_policy": "cleanup policy; deterministic default preserves non-pass evidence",
             "preflight_lite_advice": "array; use [] when no Lite packet was used",
+            "telemetry_policy": "manifest-owned opt-in telemetry policy object; supported modes are standard and debug, raw_text must be false, collect names debug metric groups",
         },
         "branch_required": {
             "objective": "branch-level objective",
@@ -300,6 +305,70 @@ def require_worker_limit(value: object) -> int:
 
 def nonempty_text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def normalize_telemetry_policy(value: object) -> dict:
+    if value is None:
+        return dict(TELEMETRY_POLICY_DEFAULT)
+
+    if not isinstance(value, dict):
+        raise SystemExit("telemetry_policy must be an object")
+
+    schema_version = value.get("schema_version", TELEMETRY_POLICY_SCHEMA_VERSION)
+    if not isinstance(schema_version, int) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
+        raise SystemExit(f"telemetry_policy.schema_version must be {TELEMETRY_POLICY_SCHEMA_VERSION}")
+
+    mode = value.get("mode", "standard")
+    if not isinstance(mode, str) or mode.strip() not in TELEMETRY_POLICY_MODES:
+        raise SystemExit(f"telemetry_policy.mode must be one of {', '.join(TELEMETRY_POLICY_MODES)}")
+
+    normalized = {
+        "schema_version": schema_version,
+        "mode": mode.strip(),
+    }
+
+    raw_text = value.get("raw_text", False)
+    if raw_text is not False:
+        raise SystemExit("telemetry_policy.raw_text must be false")
+
+    for key in value:
+        lowered = str(key).lower()
+        if "usd" in lowered or "pricing" in lowered:
+            raise SystemExit("telemetry_policy must not contain usd/pricing keys")
+
+    collect = value.get("collect", [])
+    if collect is None:
+        collect = []
+    elif isinstance(collect, str):
+        collect = [collect]
+    elif not isinstance(collect, list):
+        raise SystemExit("telemetry_policy.collect must be a list of collection names")
+
+    normalized["raw_text"] = False
+    if collect:
+        normalized_collect: list[str] = []
+        for index, item in enumerate(collect):
+            if not isinstance(item, str) or not item.strip():
+                raise SystemExit(f"telemetry_policy.collect[{index}] must be a non-empty string")
+            normalized_item = item.strip()
+            if normalized_item not in TELEMETRY_COLLECT_ITEMS:
+                raise SystemExit(
+                    "telemetry_policy.collect must be one of " + ", ".join(TELEMETRY_COLLECT_ITEMS)
+                )
+            if normalized_item not in normalized_collect:
+                normalized_collect.append(normalized_item)
+        normalized["collect"] = normalized_collect
+    elif mode.strip() == "debug":
+        normalized["collect"] = list(TELEMETRY_COLLECT_ITEMS)
+    else:
+        normalized["collect"] = []
+
+    unknown_keys = set(value.keys()) - {"schema_version", "mode", "raw_text", "collect"}
+    if unknown_keys:
+        unknown = ", ".join(sorted(unknown_keys))
+        raise SystemExit(f"telemetry_policy contains unsupported keys: {unknown}")
+
+    return normalized
 
 
 def normalize_reason_list(value: object, fallback: str = "") -> list[str]:
@@ -761,6 +830,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
     preflight_lite_advice = brief.get("preflight_lite_advice", [])
     if not isinstance(preflight_lite_advice, list):
         raise SystemExit("preflight_lite_advice must be an array when supplied")
+    telemetry_policy = normalize_telemetry_policy(brief.get("telemetry_policy"))
 
     waves = brief.get("waves") or chunk_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
@@ -828,6 +898,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
         "branches": branches,
         "waves": waves,
         "preflight_lite_advice": preflight_lite_advice,
+        "telemetry_policy": telemetry_policy,
     }
 
 
@@ -875,6 +946,7 @@ def manifest_from_normalized_brief(brief: dict) -> dict:
         "review_model_policy": REVIEW_MODEL_POLICY,
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
+        "telemetry_policy": brief["telemetry_policy"],
         "branches": [
             {
                 "id": branch["id"],
@@ -929,6 +1001,7 @@ def render_main_prompt_text(brief: dict) -> str:
         cleanup_policy=brief["cleanup_policy"],
         artifact_policy=brief["artifact_policy"],
         required_evidence=bullets(brief.get("required_evidence", [])),
+        telemetry_policy_mode=brief["telemetry_policy"]["mode"],
         final_dod=bullets(brief.get("final_dod", [])),
     )
 
@@ -958,6 +1031,7 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         work_items=format_work_items(branch["id"], branch.get("work_items", [])),
         tests=bullets(branch.get("tests", [])),
         stop_conditions=bullets(branch.get("stop_conditions", [])),
+        telemetry_policy_mode=brief["telemetry_policy"]["mode"],
         dod=bullets(branch.get("dod", [])),
     )
 

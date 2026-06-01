@@ -219,7 +219,18 @@ def lite_usefulness(purpose: str, avoids_action: str | None, expected_savings_re
     return action, reason
 
 
-def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path: str, *, avoids_action: str, expected_savings_reason: str) -> dict:
+def load_optional_manifest(base_dir: Path) -> dict | None:
+    manifest_path = base_dir / "job.manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path: str, *, avoids_action: str, expected_savings_reason: str, manifest: dict | None = None) -> dict:
     return {
         "schema_version": 1,
         "role": "lite_advisor",
@@ -238,6 +249,7 @@ def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path
         "output_name": "advice.json",
         "raw_name": "advice.raw.txt",
         "telemetry_name": "telemetry.json",
+        **CONTRACT.telemetry_debug_config(manifest),
         "status_begin": LITE_STATUS_BEGIN,
         "status_end": LITE_STATUS_END,
         "runner_prompt": "Follow the complete Lite advisory packet instructions provided on stdin.",
@@ -357,6 +369,7 @@ def main() -> int:
     base_dir = resolve_absolute_path(args.base_dir, "--base-dir", must_exist=True)
     if not base_dir.is_dir():
         raise SystemExit(f"--base-dir must be a directory: {base_dir}")
+    manifest = load_optional_manifest(base_dir)
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     task_file = (
         resolve_absolute_path(args.task_file, "--task-file", must_exist=True)
@@ -431,6 +444,7 @@ def main() -> int:
                 gemini_path,
                 avoids_action=avoids_action,
                 expected_savings_reason=expected_savings_reason,
+                manifest=manifest,
             ),
             indent=2,
             sort_keys=True,

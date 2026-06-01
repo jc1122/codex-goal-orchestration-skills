@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -36,6 +37,12 @@ def file_stats(path: Path) -> dict[str, Any]:
         "chars": len(text),
         "usage": extract_usage(text),
     }
+
+
+def file_hash(path: Path) -> str | None:
+    if not path.exists():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
 def normalize_usage(data: dict[str, Any]) -> dict[str, int] | None:
@@ -156,6 +163,35 @@ def load_attempts(values: list[str]) -> list[dict[str, Any]]:
     return attempts
 
 
+def _artifact_hash_record(path: Path, kind: str) -> dict[str, Any]:
+    stats = file_stats(path)
+    return {
+        "kind": kind,
+        "path": path.name,
+        "exists": stats["exists"],
+        "bytes": stats["bytes"],
+        "chars": stats["chars"],
+        "sha256": file_hash(path),
+    }
+
+
+def _attempt_timeout_detected(log_paths: list[Path]) -> bool | None:
+    if not log_paths:
+        return None
+    for path in log_paths:
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="replace").lower()
+        except Exception:
+            continue
+        if "timed out" in text or "timeout" in text:
+            return True
+    if any(path.exists() for path in log_paths):
+        return False
+    return None
+
+
 def build_telemetry(
     *,
     packet_dir: Path,
@@ -225,6 +261,107 @@ def build_telemetry(
     }
 
 
+def build_debug_telemetry(
+    *,
+    packet_dir: Path,
+    packet_id: str,
+    role: str,
+    output_name: str,
+    prompt_name: str,
+    attempt_specs: list[dict[str, Any]],
+    output_json: dict[str, Any] | None,
+    output_stats: dict[str, Any],
+    prompt_stats: dict[str, Any],
+    telemetry: dict[str, Any],
+) -> dict[str, Any]:
+    route_class = output_json.get("route_class") if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str) else None
+    attempts: list[dict[str, Any]] = []
+    determinism_artifacts: list[dict[str, Any]] = [
+        _artifact_hash_record(packet_dir / prompt_name, "prompt"),
+        _artifact_hash_record(packet_dir / output_name, "output"),
+    ]
+    for spec in attempt_specs:
+        event_log_paths = [packet_dir / str(path) for path in spec.get("event_logs", []) if isinstance(path, str)]
+        probe_log_paths = [packet_dir / str(path) for path in spec.get("probe_logs", []) if isinstance(path, str)]
+        event_logs = [file_stats(path) for path in event_log_paths]
+        probe_logs = [file_stats(path) for path in probe_log_paths]
+        called = any(item["exists"] for item in event_logs + probe_logs)
+        timeout_seconds = spec.get("timeout_seconds")
+        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            timeout_seconds = None
+        timed_out = _attempt_timeout_detected(event_log_paths + probe_log_paths)
+        timed_out = bool(timed_out) if isinstance(timed_out, bool) else None
+        for path in event_log_paths:
+            determinism_artifacts.append(_artifact_hash_record(path, "event_logs"))
+        for path in probe_log_paths:
+            determinism_artifacts.append(_artifact_hash_record(path, "probe_logs"))
+        usage = sum_usage(event_logs + probe_logs)
+        attempts.append(
+            {
+                "alias": spec.get("alias", ""),
+                "provider": spec.get("provider", ""),
+                "model": spec.get("model", ""),
+                "effort": spec.get("effort") or None,
+                "command": spec.get("command", ""),
+                "timeout_seconds": timeout_seconds,
+                "called": called,
+                "accepted": bool(telemetry["accepted_alias"] == spec.get("alias", "")),
+                "usage": usage,
+                "timing": {
+                    "configured_timeout_seconds": timeout_seconds,
+                    "started_at": None,
+                    "completed_at": None,
+                    "elapsed_seconds": None,
+                    "timed_out": timed_out,
+                },
+            }
+        )
+
+    return {
+        "schema_version": 1,
+        "packet_id": packet_id,
+        "role": role,
+        **({"route_class": route_class} if route_class else {}),
+        "output_artifact": output_name,
+        "prompt_artifact": prompt_name,
+        "text_metrics": {
+            "prompt_chars": prompt_stats["chars"],
+            "prompt_bytes": prompt_stats["bytes"],
+            "output_chars": output_stats["chars"],
+            "output_bytes": output_stats["bytes"],
+            "event_log_chars": telemetry["event_log_chars"],
+            "event_log_bytes": telemetry["event_log_bytes"],
+            "debug_overhead_chars": 0,
+        },
+        "model_usage": {
+            "attempts": attempts,
+            "totals": telemetry["totals"]["known_usage"] if isinstance(telemetry.get("totals"), dict) else None,
+        },
+        "time_metrics": {
+            "attempts": [
+                {
+                    "alias": attempt["alias"],
+                    "provider": attempt["provider"],
+                    "model": attempt["model"],
+                    "timing": attempt["timing"],
+                }
+                for attempt in attempts
+            ],
+        },
+        "determinism": {
+            "artifacts": determinism_artifacts,
+        },
+        "success_metrics": {
+            "attempts_declared": len(attempts),
+            "attempts_called": sum(1 for attempt in attempts if attempt.get("called") is True),
+            "accepted_alias": telemetry["accepted_alias"],
+            "accepted_attempts": sum(1 for attempt in attempts if attempt.get("accepted") is True),
+            "fallback_count": max(0, sum(1 for attempt in attempts if attempt.get("called") is True) - 1),
+            "route_class": route_class,
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--packet-dir", required=True)
@@ -234,22 +371,46 @@ def main() -> int:
     parser.add_argument("--prompt-name", default="prompt.md")
     parser.add_argument("--attempt-json", action="append", default=[])
     parser.add_argument("--output", default="telemetry.json")
+    parser.add_argument("--debug", action="store_true", help="Write packet-level telemetry.debug.json with detailed timing/provenance diagnostics.")
+    parser.add_argument("--debug-output", default="telemetry.debug.json")
     args = parser.parse_args()
 
     packet_dir = Path(args.packet_dir).resolve()
     if not packet_dir.is_dir():
         raise SystemExit(f"--packet-dir must be an existing directory: {packet_dir}")
+    attempt_specs = load_attempts(args.attempt_json)
     telemetry = build_telemetry(
         packet_dir=packet_dir,
         packet_id=args.packet_id,
         role=args.role,
         output_name=args.output_name,
         prompt_name=args.prompt_name,
-        attempt_specs=load_attempts(args.attempt_json),
+        attempt_specs=attempt_specs,
     )
-    output_path = packet_dir / args.output
-    output_path.write_text(json.dumps(telemetry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(output_path)
+    prompt_path = packet_dir / args.prompt_name
+    output_path = packet_dir / args.output_name
+    prompt_stats = file_stats(prompt_path)
+    output_stats = file_stats(output_path)
+    output_json = read_json(output_path)
+    telemetry_path = packet_dir / args.output
+    telemetry_path.write_text(json.dumps(telemetry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.debug:
+        debug_path = packet_dir / args.debug_output
+        debug_telemetry = build_debug_telemetry(
+            packet_dir=packet_dir,
+            packet_id=args.packet_id,
+            role=args.role,
+            output_name=args.output_name,
+            prompt_name=args.prompt_name,
+            attempt_specs=attempt_specs,
+            output_json=output_json,
+            output_stats=output_stats,
+            prompt_stats=prompt_stats,
+            telemetry=telemetry,
+        )
+        debug_path.write_text(json.dumps(debug_telemetry, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        print(debug_path)
+    print(telemetry_path)
     return 0
 
 

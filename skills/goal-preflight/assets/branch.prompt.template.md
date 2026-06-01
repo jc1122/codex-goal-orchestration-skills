@@ -52,6 +52,8 @@ Worker route classes and route class reason are declared per work item in `job.m
 
 Selected worker ladders must be an ordered non-empty subsequence of the default ladder with a `selection_reason`; do not invent aliases or reorder providers.
 
+Telemetry policy mode is `{telemetry_policy_mode}`. In debug mode, telemetry collection remains passive and does not alter route selection, polling cadence, or watchdog thresholds.
+
 ## Lite Advisors
 
 Optional Lite Advisors are context routers only. Use them after bootstrap or completed packets, never while worker/research-worker/reviewer launchers are active, and never as pass/review/mergeability/DoD evidence.

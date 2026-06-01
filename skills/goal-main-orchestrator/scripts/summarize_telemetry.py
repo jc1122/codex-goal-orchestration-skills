@@ -28,6 +28,8 @@ PREMIUM_ALIASES = {
     "codex-research",
 }
 MINI_SPARK_ALIASES = ("codex-mini", "codex-spark")
+DEBUG_TELEMETRY_FILENAME = "telemetry.debug.json"
+DEBUG_EVENTS_FILENAME = "debug.events.jsonl"
 
 
 def zero_usage() -> dict[str, int]:
@@ -48,12 +50,13 @@ def add_number(target: dict[str, Any], key: str, value: object) -> None:
         target[key] = target.get(key, 0) + value
 
 
-def discover_telemetry_files(bundle_dir: Path) -> list[Path]:
+def discover_telemetry_files(bundle_dir: Path, *, debug: bool = False) -> list[Path]:
+    filename = DEBUG_TELEMETRY_FILENAME if debug else "telemetry.json"
     files: list[Path] = []
     for root_name in TELEMETRY_ROOTS:
         root = bundle_dir / root_name
         if root.is_dir():
-            files.extend(sorted(root.glob("**/telemetry.json")))
+            files.extend(sorted(root.glob(f"**/{filename}")))
     return sorted(files, key=lambda path: path.relative_to(bundle_dir).as_posix())
 
 
@@ -110,6 +113,15 @@ def compact_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     result = dict(bucket)
     result["known_usage"] = compact_usage(result.get("known_usage", {}))
     return result
+
+
+def compact_model_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "attempts_declared": bucket.get("attempts_declared", 0),
+        "attempts_called": bucket.get("attempts_called", 0),
+        "accepted_attempts": bucket.get("accepted_attempts", 0),
+        "known_usage": compact_usage(bucket.get("known_usage", {})),
+    }
 
 
 def attempt_group_key(role: str, attempt: dict[str, Any]) -> str:
@@ -173,7 +185,7 @@ def token_pressure_warning(
     }
 
 
-def summarize(bundle_dir: Path) -> dict[str, Any]:
+def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
     files = discover_telemetry_files(bundle_dir)
     totals = {
         "packet_count": 0,
@@ -391,6 +403,336 @@ def summarize(bundle_dir: Path) -> dict[str, Any]:
     }
 
 
+def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
+    files = discover_telemetry_files(bundle_dir, debug=True)
+    text_totals = {
+        "packet_count": 0,
+        "prompt_chars": 0,
+        "prompt_bytes": 0,
+        "output_chars": 0,
+        "output_bytes": 0,
+        "event_log_chars": 0,
+        "event_log_bytes": 0,
+        "debug_overhead_chars": 0,
+    }
+    model_totals = zero_usage()
+    model_by_alias: dict[str, dict[str, Any]] = {}
+    model_by_role: dict[str, dict[str, Any]] = {}
+    success = {
+        "packet_count": 0,
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "accepted_attempts": 0,
+        "attempts_with_known_tokens": 0,
+        "accepted_aliases": {},
+        "fallback_count": 0,
+    }
+    time_totals = {
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "attempts_with_timing": 0,
+        "attempts_missing_timing": 0,
+        "timed_out_attempts": 0,
+        "timed_out_known": 0,
+        "elapsed_seconds_sum": 0.0,
+        "elapsed_seconds_count": 0,
+        "debug_event_files": 0,
+        "debug_events": 0,
+    }
+    determinism = {
+        "packets_with_artifacts": 0,
+        "artifact_counts_by_kind": {},
+        "drift_count": 0,
+    }
+    drift_packet_ids: list[str] = []
+    packets = []
+    defects = []
+    packet_attempts: list[dict[str, Any]] = []
+
+    for path in files:
+        rel = path.relative_to(bundle_dir).as_posix()
+        try:
+            data = load_json(path)
+        except Exception as exc:  # noqa: BLE001
+            defects.append(f"{rel}: unreadable telemetry JSON: {exc}")
+            continue
+        debug_text = path.read_text(encoding="utf-8", errors="replace")
+        text_totals["debug_overhead_chars"] += len(debug_text)
+        debug_events_path = path.parent / DEBUG_EVENTS_FILENAME
+        if debug_events_path.exists():
+            events_text = debug_events_path.read_text(encoding="utf-8", errors="replace")
+            text_totals["debug_overhead_chars"] += len(events_text)
+            time_totals["debug_event_files"] += 1
+            for line in events_text.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    event = json.loads(line)
+                except Exception:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                time_totals["debug_events"] += 1
+                elapsed_ms = event.get("elapsed_ms")
+                if isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool) and elapsed_ms >= 0:
+                    time_totals["elapsed_seconds_sum"] += elapsed_ms / 1000
+                    time_totals["elapsed_seconds_count"] += 1
+        role = data.get("role") if isinstance(data.get("role"), str) else "unknown"
+        packet_id = data.get("packet_id") if isinstance(data.get("packet_id"), str) else path.parent.name
+
+        text_metrics = data.get("text_metrics") if isinstance(data.get("text_metrics"), dict) else {}
+        model_usage = data.get("model_usage") if isinstance(data.get("model_usage"), dict) else {}
+        time_metrics = data.get("time_metrics") if isinstance(data.get("time_metrics"), dict) else {}
+        success_metrics = data.get("success_metrics") if isinstance(data.get("success_metrics"), dict) else {}
+        determinism_payload = data.get("determinism") if isinstance(data.get("determinism"), dict) else {}
+        attempts = model_usage.get("attempts") if isinstance(model_usage.get("attempts"), list) else []
+
+        prompt_chars = text_metrics.get("prompt_chars")
+        prompt_bytes = text_metrics.get("prompt_bytes")
+        output_chars = text_metrics.get("output_chars")
+        output_bytes = text_metrics.get("output_bytes")
+        event_log_chars = text_metrics.get("event_log_chars")
+        event_log_bytes = text_metrics.get("event_log_bytes")
+
+        if isinstance(prompt_chars, int) and not isinstance(prompt_chars, bool):
+            text_totals["prompt_chars"] += prompt_chars
+        if isinstance(prompt_bytes, int) and not isinstance(prompt_bytes, bool):
+            text_totals["prompt_bytes"] += prompt_bytes
+        if isinstance(output_chars, int) and not isinstance(output_chars, bool):
+            text_totals["output_chars"] += output_chars
+        if isinstance(output_bytes, int) and not isinstance(output_bytes, bool):
+            text_totals["output_bytes"] += output_bytes
+        if isinstance(event_log_chars, int) and not isinstance(event_log_chars, bool):
+            text_totals["event_log_chars"] += event_log_chars
+        if isinstance(event_log_bytes, int) and not isinstance(event_log_bytes, bool):
+            text_totals["event_log_bytes"] += event_log_bytes
+        text_totals["packet_count"] += 1
+        add_usage(model_totals, model_usage.get("totals"))
+
+        attempts_declared = int(success_metrics.get("attempts_declared")) if isinstance(success_metrics.get("attempts_declared"), int) else len(attempts)
+        attempts_called = int(success_metrics.get("attempts_called")) if isinstance(success_metrics.get("attempts_called"), int) else sum(
+            1 for item in attempts if isinstance(item, dict) and item.get("called") is True
+        )
+        accepted_attempts = (
+            int(success_metrics.get("accepted_attempts"))
+            if isinstance(success_metrics.get("accepted_attempts"), int)
+            else sum(1 for item in attempts if isinstance(item, dict) and item.get("accepted") is True)
+        )
+        accepted_alias = success_metrics.get("accepted_alias") if isinstance(success_metrics.get("accepted_alias"), str) else None
+        fallback_count = (
+            int(success_metrics.get("fallback_count")) if isinstance(success_metrics.get("fallback_count"), int) else max(0, attempts_called - 1)
+        )
+        success["packet_count"] += 1
+        success["attempts_declared"] += attempts_declared
+        success["attempts_called"] += attempts_called
+        success["accepted_attempts"] += accepted_attempts
+        success["fallback_count"] += fallback_count
+        if accepted_alias is not None:
+            success["accepted_aliases"][accepted_alias] = success["accepted_aliases"].get(accepted_alias, 0) + 1
+        time_totals["attempts_declared"] += attempts_declared
+        time_totals["attempts_called"] += attempts_called
+
+        for item in attempts:
+            if not isinstance(item, dict):
+                continue
+            alias = item.get("alias")
+            if not isinstance(alias, str):
+                alias = "unknown"
+            role_bucket = model_by_role.get(role)
+            if role_bucket is None:
+                role_bucket = {
+                    "attempts_declared": 0,
+                    "attempts_called": 0,
+                    "accepted_attempts": 0,
+                    "known_usage": zero_usage(),
+                }
+                model_by_role[role] = role_bucket
+            role_bucket["attempts_declared"] += 1
+            alias_bucket = model_by_alias.get(alias)
+            if alias_bucket is None:
+                alias_bucket = {
+                    "attempts_declared": 0,
+                    "attempts_called": 0,
+                    "accepted_attempts": 0,
+                    "known_usage": zero_usage(),
+                }
+                model_by_alias[alias] = alias_bucket
+            alias_bucket["attempts_declared"] += 1
+            called = item.get("called") is True
+            if called:
+                role_bucket["attempts_called"] += 1
+                alias_bucket["attempts_called"] += 1
+            else:
+                time_totals["attempts_missing_timing"] += 1
+            if item.get("accepted") is True:
+                role_bucket["accepted_attempts"] += 1
+                alias_bucket["accepted_attempts"] += 1
+            add_usage(role_bucket["known_usage"], item.get("usage"))
+            add_usage(alias_bucket["known_usage"], item.get("usage"))
+            if called and isinstance(item.get("usage"), dict) and any(
+                isinstance(item["usage"].get(key), int) and not isinstance(item["usage"].get(key), bool)
+                for key in USAGE_KEYS
+            ):
+                success["attempts_with_known_tokens"] += 1
+
+            timing = item.get("timing") if isinstance(item.get("timing"), dict) else None
+            if called and isinstance(timing, dict):
+                elapsed = timing.get("elapsed_seconds")
+                if isinstance(elapsed, int) and elapsed >= 0 and not isinstance(elapsed, bool):
+                    time_totals["elapsed_seconds_sum"] += elapsed
+                    time_totals["elapsed_seconds_count"] += 1
+                elif isinstance(elapsed, float) and elapsed >= 0.0:
+                    time_totals["elapsed_seconds_sum"] += elapsed
+                    time_totals["elapsed_seconds_count"] += 1
+                else:
+                    time_totals["attempts_missing_timing"] += 1
+                if isinstance(elapsed, int) or isinstance(elapsed, float):
+                    time_totals["attempts_with_timing"] += 1
+                timed_out = timing.get("timed_out")
+                if isinstance(timed_out, bool):
+                    time_totals["timed_out_known"] += 1
+                    if timed_out:
+                        time_totals["timed_out_attempts"] += 1
+
+        packet_artifact_hashes: dict[str, set[str]] = {}
+        artifacts = determinism_payload.get("artifacts") if isinstance(determinism_payload.get("artifacts"), list) else []
+        has_artifact = False
+        for artifact in artifacts:
+            if not isinstance(artifact, dict):
+                continue
+            has_artifact = True
+            kind = artifact.get("kind")
+            if not isinstance(kind, str) or kind == "":
+                continue
+            determinism["artifact_counts_by_kind"][kind] = determinism["artifact_counts_by_kind"].get(kind, 0) + 1
+            sha256_value = artifact.get("sha256")
+            if isinstance(sha256_value, str):
+                packet_artifact_hashes.setdefault(kind, set()).add(sha256_value)
+        if has_artifact:
+            determinism["packets_with_artifacts"] += 1
+        drift_for_packet = any(len(values) > 1 for values in packet_artifact_hashes.values())
+        if drift_for_packet:
+            determinism["drift_count"] += 1
+            drift_packet_ids.append(packet_id)
+
+        packet_attempts.append(
+            {
+                "path": rel,
+                "packet_id": packet_id,
+                "role": role,
+                "accepted_alias": success_metrics.get("accepted_alias"),
+                "attempts_declared": attempts_declared,
+                "attempts_called": attempts_called,
+                "fallback_count": fallback_count,
+            }
+        )
+
+    known_input_tokens = model_totals.get("input_tokens", 0)
+    estimated_input_tokens = max(1, round(text_totals["prompt_chars"] / APPROX_CHARS_PER_TOKEN))
+    known_token_coverage_ratio = (
+        round(success["attempts_with_known_tokens"] / success["attempts_called"], 6)
+        if success["attempts_called"] > 0
+        else None
+    )
+    text_pressure_ratio = round(known_input_tokens / estimated_input_tokens, 6) if estimated_input_tokens else None
+    timeout_rate = (
+        round(time_totals["timed_out_attempts"] / time_totals["timed_out_known"], 6)
+        if time_totals["timed_out_known"] > 0
+        else None
+    )
+    fallback_rate = (
+        round(success["fallback_count"] / success["attempts_called"], 6) if success["attempts_called"] > 0 else None
+    )
+    average_elapsed_seconds = (
+        round(time_totals["elapsed_seconds_sum"] / time_totals["elapsed_seconds_count"], 6)
+        if time_totals["elapsed_seconds_count"] > 0
+        else None
+    )
+
+    return {
+        "schema_version": 1,
+        "bundle_dir": bundle_dir.as_posix(),
+        "telemetry_files": [path.relative_to(bundle_dir).as_posix() for path in files],
+        "telemetry_count": len(files),
+        "defects": defects,
+        "model_usage": {
+            "totals": compact_usage(model_totals),
+            "by_alias": {alias: compact_model_bucket(bucket) for alias, bucket in model_by_alias.items()},
+            "by_role": {role: compact_model_bucket(bucket) for role, bucket in model_by_role.items()},
+            "attempts_declared": success["attempts_declared"],
+            "attempts_called": success["attempts_called"],
+            "accepted_attempts": success["accepted_attempts"],
+            "known_token_coverage_ratio": known_token_coverage_ratio,
+            "known_token_coverage": {
+                "attempts_with_known_tokens": success["attempts_with_known_tokens"],
+                "called_attempts": success["attempts_called"],
+                "ratio": known_token_coverage_ratio,
+            },
+            "text_pressure": {
+                "input_tokens": known_input_tokens,
+                "estimated_prompt_tokens": estimated_input_tokens,
+                "ratio": text_pressure_ratio,
+            },
+        },
+        "text_metrics": {
+            **text_totals,
+            "debug_overhead_chars": text_totals["debug_overhead_chars"],
+        },
+        "time_metrics": {
+            "attempts_declared": time_totals["attempts_declared"],
+            "attempts_called": time_totals["attempts_called"],
+            "attempts_with_timing": time_totals["attempts_with_timing"],
+            "attempts_missing_timing": time_totals["attempts_missing_timing"],
+            "timeout_rate": timeout_rate,
+            "timed_out_attempts": time_totals["timed_out_attempts"],
+            "timed_out_known": time_totals["timed_out_known"],
+            "average_elapsed_seconds": average_elapsed_seconds,
+            "debug_event_files": time_totals["debug_event_files"],
+            "debug_events": time_totals["debug_events"],
+        },
+        "determinism": {
+            "packet_count": text_totals["packet_count"],
+            "packets_with_artifacts": determinism["packets_with_artifacts"],
+            "artifact_counts_by_kind": determinism["artifact_counts_by_kind"],
+            "drift_count": determinism["drift_count"],
+            "drift_rate": (
+                round(determinism["drift_count"] / max(1, determinism["packets_with_artifacts"]), 6)
+                if determinism["packets_with_artifacts"]
+                else None
+            ),
+            "drift_packet_ids": drift_packet_ids,
+        },
+        "success_metrics": {
+            "packet_count": success["packet_count"],
+            "attempts_declared": success["attempts_declared"],
+            "attempts_called": success["attempts_called"],
+            "accepted_attempts": success["accepted_attempts"],
+            "attempts_with_known_tokens": success["attempts_with_known_tokens"],
+            "accepted_aliases": dict(sorted(success["accepted_aliases"].items())),
+            "fallback_count": success["fallback_count"],
+            "fallback_rate": fallback_rate,
+            "text_pressure_ratio": text_pressure_ratio,
+        },
+        "packets": sorted(packet_attempts, key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]))),
+    }
+
+
+def summarize(bundle_dir: Path, *, debug: bool = False) -> dict[str, Any]:
+    return summarize_debug(bundle_dir) if debug else summarize_standard(bundle_dir)
+
+
+def manifest_debug_enabled(bundle_dir: Path) -> bool:
+    manifest_path = bundle_dir / "job.manifest.json"
+    if not manifest_path.exists():
+        return False
+    try:
+        manifest = load_json(manifest_path)
+    except Exception:
+        return False
+    policy = manifest.get("telemetry_policy")
+    return isinstance(policy, dict) and policy.get("mode") == "debug"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
@@ -400,14 +742,29 @@ def main() -> int:
     )
     parser.add_argument("--bundle-dir", required=True)
     parser.add_argument("--output", help="Defaults to <bundle-dir>/telemetry.summary.json")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Read telemetry.debug.json artifacts and write telemetry.debug.summary.json.",
+    )
     args = parser.parse_args()
 
     bundle_dir = Path(args.bundle_dir).resolve()
     if not bundle_dir.is_dir():
         raise SystemExit(f"--bundle-dir must be an existing directory: {bundle_dir}")
-    output_path = Path(args.output).resolve() if args.output else bundle_dir / "telemetry.summary.json"
-    summary = summarize(bundle_dir)
+    output_path = (
+        Path(args.output).resolve()
+        if args.output
+        else bundle_dir / ("telemetry.debug.summary.json" if args.debug else "telemetry.summary.json")
+    )
+    summary = summarize(bundle_dir, debug=args.debug)
     output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if not args.debug and manifest_debug_enabled(bundle_dir):
+        debug_summary = summarize(bundle_dir, debug=True)
+        (bundle_dir / "telemetry.debug.summary.json").write_text(
+            json.dumps(debug_summary, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
     print(output_path)
     return 0
 

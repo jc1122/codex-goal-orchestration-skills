@@ -255,9 +255,11 @@ def audit_launch_config(
     manifest_path: Path,
     repo_root: Path,
     *,
+    manifest: dict | None = None,
     attempt_timeout_seconds: int = AUDIT_ATTEMPT_TIMEOUT_SECONDS,
 ) -> dict:
     attempts = audit_telemetry_attempts(repo_root, timeout_seconds=attempt_timeout_seconds)
+    debug_config = CONTRACT.telemetry_debug_config(manifest)
     return {
         "schema_version": 1,
         "role": "prompt-auditor",
@@ -268,6 +270,7 @@ def audit_launch_config(
         "schema_name": "prompt-audit.schema.json",
         "output_name": "prompt-audit.json",
         "telemetry_name": "telemetry.json",
+        **debug_config,
         "attempt_timeout_seconds": attempt_timeout_seconds,
         "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
         "telemetry_script": (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix(),
@@ -317,7 +320,7 @@ def main() -> int:
     )
     (out_dir / "launch-config.json").write_text(
         json.dumps(
-            audit_launch_config(manifest_path, repo_root, attempt_timeout_seconds=args.attempt_timeout_seconds),
+            audit_launch_config(manifest_path, repo_root, manifest=manifest, attempt_timeout_seconds=args.attempt_timeout_seconds),
             indent=2,
             sort_keys=True,
         )

@@ -9,6 +9,8 @@ import os
 import shutil
 import signal
 import subprocess
+import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +41,21 @@ def read_json(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise SystemExit(f"JSON must be an object: {path}")
     return data
+
+
+def append_debug_event(packet_dir: Path, config: dict[str, Any], event: dict[str, Any]) -> None:
+    name = config.get("debug_events_name")
+    if not isinstance(name, str) or not name.strip():
+        return
+    payload = {
+        "schema_version": 1,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "packet_id": config.get("packet_id"),
+        "role": config.get("role"),
+        **event,
+    }
+    with (packet_dir / name).open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload, sort_keys=True) + "\n")
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
@@ -197,7 +214,11 @@ def write_telemetry(packet_dir: Path, config: dict[str, Any]) -> None:
     ]
     for attempt in list_value(config, "attempts"):
         command.extend(["--attempt-json", json.dumps(attempt, sort_keys=True)])
+    debug_name = config.get("telemetry_debug_name")
+    if isinstance(debug_name, str) and debug_name.strip():
+        command.extend(["--debug", "--debug-output", debug_name])
     subprocess.run(command, check=False)
+    append_debug_event(packet_dir, config, {"phase": "telemetry", "event": "written"})
 
 
 def command_for_attempt(packet_dir: Path, config: dict[str, Any], attempt: dict[str, Any]) -> list[str]:
@@ -424,6 +445,9 @@ def run_packet(packet_dir: Path) -> int:
     signal.signal(signal.SIGINT, handle_interrupt)
 
     clean_outputs(packet_dir, config)
+    debug_name = config.get("telemetry_debug_name")
+    if isinstance(debug_name, str) and debug_name.strip():
+        remove_if_exists(packet_dir / debug_name)
     output_path = packet_path(packet_dir, config, "output_name")
     prompt_path = packet_path(packet_dir, config, "prompt_name")
     schema_path = packet_path(packet_dir, config, "schema_name")
@@ -470,7 +494,35 @@ def main() -> int:
     packet_dir = Path(args.packet_dir).resolve()
     if not packet_dir.is_dir():
         raise SystemExit(f"--packet-dir must be an existing directory: {packet_dir}")
-    return run_packet(packet_dir)
+    config = read_json(packet_dir / CONFIG_NAME)
+    started = time.monotonic()
+    append_debug_event(packet_dir, config, {"phase": "prompt_audit", "event": "start"})
+    try:
+        rc = run_packet(packet_dir)
+    except BaseException:
+        append_debug_event(
+            packet_dir,
+            config,
+            {
+                "phase": "prompt_audit",
+                "event": "end",
+                "elapsed_ms": round((time.monotonic() - started) * 1000),
+                "status": "error",
+            },
+        )
+        raise
+    append_debug_event(
+        packet_dir,
+        config,
+        {
+            "phase": "prompt_audit",
+            "event": "end",
+            "elapsed_ms": round((time.monotonic() - started) * 1000),
+            "status": "ok" if rc == 0 else "nonzero",
+            "exit_status": rc,
+        },
+    )
+    return rc
 
 
 if __name__ == "__main__":

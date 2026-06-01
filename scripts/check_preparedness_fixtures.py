@@ -2348,22 +2348,29 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     telemetry_bundle = tmp_path / "telemetry-pressure"
     telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
     telemetry_packet.mkdir(parents=True)
-    write_json(
-        telemetry_packet / "telemetry.json",
-        {
-            "schema_version": 1,
-            "packet_id": "B01-W01",
-            "role": "worker",
-            "output_artifact": "status.json",
-            "prompt_artifact": "prompt.md",
-            "prompt_chars": 100,
-            "prompt_bytes": 100,
-            "output_chars": 10,
-            "output_bytes": 10,
-            "event_log_chars": 10,
-            "event_log_bytes": 10,
-            "accepted_alias": "codex-mini",
-            "attempts": [
+    prompt_path = telemetry_packet / "prompt.md"
+    prompt_path.write_text("telemetry pressure fixture prompt\n", encoding="utf-8")
+    status_path = telemetry_packet / "status.json"
+    status_path.write_text(json.dumps({"status": "pass"}, sort_keys=True) + "\n", encoding="utf-8")
+    (telemetry_packet / "events-primary.jsonl").write_text(
+        json.dumps({"usage": {"input_tokens": 25000, "cached_input_tokens": 24000, "output_tokens": 100}}, sort_keys=True) + "\n"
+        + json.dumps({"type": "done"}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    run(
+        [
+            "python3",
+            "skills/_goal_shared/scripts/extract_telemetry.py",
+            "--packet-dir",
+            telemetry_packet.as_posix(),
+            "--packet-id",
+            "B01-W01",
+            "--role",
+            "worker",
+            "--output-name",
+            "status.json",
+            "--attempt-json",
+            json.dumps(
                 {
                     "alias": "codex-mini",
                     "provider": "codex",
@@ -2371,30 +2378,14 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
                     "effort": "medium",
                     "command": "codex exec --ignore-user-config --ignore-rules",
                     "timeout_seconds": 1200,
-                    "called": True,
-                    "accepted": True,
-                    "event_logs": [],
-                    "probe_logs": [],
-                    "usage": {
-                        "input_tokens": 25000,
-                        "cached_input_tokens": 24000,
-                        "output_tokens": 100,
-                    },
+                    "event_logs": ["events-primary.jsonl"],
                 }
-            ],
-            "totals": {
-                "attempts_declared": 1,
-                "attempts_called": 1,
-                "event_log_chars": 10,
-                "event_log_bytes": 10,
-                "known_usage": {
-                    "input_tokens": 25000,
-                    "cached_input_tokens": 24000,
-                    "output_tokens": 100,
-                },
-            },
-        },
+            ),
+            "--debug",
+        ]
     )
+    if not (telemetry_packet / "telemetry.debug.json").exists():
+        raise SystemExit("extract_telemetry.py --debug must write telemetry.debug.json")
     run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
     telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
     if telemetry_summary.get("telemetry_count") != 1:
@@ -2402,6 +2393,17 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
     if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
         raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")
+    run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix(), "--debug"])
+    debug_summary = read_json(telemetry_bundle / "telemetry.debug.summary.json")
+    if not isinstance(debug_summary, dict) or "model_usage" not in debug_summary:
+        raise SystemExit("debug telemetry summary must expose model_usage")
+    if not isinstance(debug_summary.get("text_metrics"), dict) or "debug_overhead_chars" not in debug_summary["text_metrics"]:
+        raise SystemExit("debug telemetry summary must expose text metrics and debug_overhead_chars")
+    if not isinstance(debug_summary.get("time_metrics"), dict) or "timeout_rate" not in debug_summary["time_metrics"]:
+        raise SystemExit("debug telemetry summary must expose timeout_rate")
+    determinism = debug_summary.get("determinism")
+    if not isinstance(determinism, dict) or "drift_count" not in determinism:
+        raise SystemExit("debug telemetry summary must expose determinism drift count")
 
 
 def run_example_brief_fixtures(tmp_path: Path) -> None:

@@ -36,6 +36,7 @@ Launch the next eligible branch from that output only.
 - Before merge readiness, require `git diff --check {base_ref}...HEAD`; accept each branch after `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
 - Before final pass, run `summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` and require current `telemetry.summary.json` with `cost_summary`, `main.status.json` `cost_summary_path`, plus `validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json`.
 - Optional Lite advisors are context routers only, never audit/review/mergeability/DoD evidence. Preserve unsupported, unresolved, negative, and probe-only labels.
+- Telemetry policy mode is `{telemetry_policy_mode}`. In debug mode, telemetry is passive only: collect extra runtime telemetry context but do not change model-route selection, selection reasons, polling windows, or watchdog behavior.
 
 ## Parallelization Rationale
 

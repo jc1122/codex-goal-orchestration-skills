@@ -62,6 +62,9 @@ LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 REVIEW_MODEL_POLICY = CONTRACT.REVIEW_MODEL_POLICY
 ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
+TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
+TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
+TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
 VALIDATOR_COMMAND_STATUS_HINTS = {
     "validate_branch_status.py": "--status /absolute/path/to/bundle/branches/Bxx.status.json",
     "validate_main_status.py": "--status /absolute/path/to/bundle/main.status.json",
@@ -504,7 +507,71 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         packet_id = input_packet_id if isinstance(input_packet_id, str) and input_packet_id.strip() else packet_dir.name
         relevant = purpose in PREFLIGHT_LITE_PURPOSES or skill == "goal-preflight" or packet_dir.name.startswith("P")
         if relevant and packet_id not in reported_ids:
-            defect("job.manifest.json", "critical", f"unrecorded manifest-owned preflight Lite packet: {packet_id} at {packet_dir}")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"unrecorded manifest-owned preflight Lite packet: {packet_id} at {packet_dir}",
+            )
+
+
+def validate_telemetry_policy(defect, manifest: dict) -> None:
+    policy = manifest.get("telemetry_policy")
+    if policy is None:
+        defect(
+            "job.manifest.json",
+            "warning",
+            "telemetry_policy is missing; assuming {\"schema_version\": 1, \"mode\": \"standard\", \"raw_text\": false, \"collect\": []}",
+        )
+        return
+    if not isinstance(policy, dict):
+        defect("job.manifest.json", "critical", "telemetry_policy must be an object")
+        return
+
+    schema_version = policy.get("schema_version", TELEMETRY_POLICY_SCHEMA_VERSION)
+    if not isinstance(schema_version, int) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
+        defect("job.manifest.json", "critical", f"telemetry_policy.schema_version must be {TELEMETRY_POLICY_SCHEMA_VERSION}")
+
+    mode = policy.get("mode")
+    if mode not in TELEMETRY_POLICY_MODES:
+        mode_display = ", ".join(TELEMETRY_POLICY_MODES)
+        defect("job.manifest.json", "critical", f"telemetry_policy.mode must be one of [{mode_display}]")
+
+    raw_text = policy.get("raw_text")
+    if raw_text is not False:
+        defect("job.manifest.json", "critical", "telemetry_policy.raw_text must be false")
+
+    collect = policy.get("collect", [])
+    if collect is None:
+        collect = []
+    elif isinstance(collect, str):
+        collect = [collect]
+    elif not isinstance(collect, list):
+        defect("job.manifest.json", "critical", "telemetry_policy.collect must be a list")
+        collect = []
+
+    unsupported = []
+    for index, item in enumerate(collect):
+        if not isinstance(item, str) or not item.strip():
+            defect("job.manifest.json", "critical", f"telemetry_policy.collect[{index}] must be a non-empty string")
+            continue
+        if item not in TELEMETRY_COLLECT_ITEMS:
+            unsupported.append(item)
+    if unsupported:
+        defect(
+            "job.manifest.json",
+            "critical",
+            f"telemetry_policy.collect has unsupported names: {', '.join(sorted(unsupported))}",
+        )
+
+    for key in policy:
+        lowered = str(key).lower()
+        if "usd" in lowered or "pricing" in lowered:
+            defect("job.manifest.json", "critical", f"telemetry_policy contains unsupported billing field: {key}")
+
+    allowed_keys = {"schema_version", "mode", "raw_text", "collect"}
+    unknown = sorted(set(policy.keys()) - allowed_keys)
+    if unknown:
+        defect("job.manifest.json", "critical", f"telemetry_policy contains unsupported keys: {', '.join(unknown)}")
 
 
 def lint(bundle_dir: Path) -> dict:
@@ -532,6 +599,7 @@ def lint(bundle_dir: Path) -> dict:
         if key not in manifest:
             defect("job.manifest.json", "critical", f"missing key: {key}")
     validate_preflight_lite_records(defect, bundle_dir, manifest)
+    validate_telemetry_policy(defect, manifest)
     if not safe_branch_name(manifest.get("base_ref")):
         defect("job.manifest.json", "critical", f"base_ref is not safe: {manifest.get('base_ref')!r}")
     for key in ["artifact_policy", "cleanup_policy"]:
