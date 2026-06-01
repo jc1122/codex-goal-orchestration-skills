@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:087e74f2b5c4b9a112721bb8a2b204deba187f4c1c238c4c79b06bed3bb8b789"
+    "source_fingerprint": "sha256:ae39206eeed7b93645a7c19cbe817329474d49d08c2d14cd3071c0f6b1d61d11"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,14 +16,14 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 2923,
-      "approx_tokens": 30726,
+      "lines": 2937,
+      "approx_tokens": 30891,
       "rule": "failures/function search; table repeats",
       "top_functions": [
         "811:run_negative_amendment_fixtures:289l",
         "1268:run_scheduler_fixtures:221l",
-        "1734:run_launch_ready_helper_fixtures:193l",
-        "1950:run_runtime_packet_fixtures:192l"
+        "1950:run_runtime_packet_fixtures:206l",
+        "1734:run_launch_ready_helper_fixtures:193l"
       ]
     },
     {
@@ -40,29 +40,29 @@
       ]
     },
     {
-      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 1674,
-      "approx_tokens": 17462,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "1378:main:293l",
-        "589:compact_worker_context:118l",
-        "1284:compact_launch_config:92l",
-        "995:research_worker_prompt:79l"
-      ]
-    },
-    {
       "path": "scripts/check_golden_smoke.py",
       "owner": "repo-scripts",
       "lines": 1755,
-      "approx_tokens": 17422,
+      "approx_tokens": 17421,
       "rule": "readable smoke; consolidate repeats",
       "top_functions": [
         "1416:main:336l",
         "1053:run_amendment_smoke:239l",
         "1294:run_blocker_repair_smoke:106l",
         "418:write_lite_advice:79l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 1637,
+      "approx_tokens": 16976,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "1341:main:293l",
+        "560:compact_worker_context:118l",
+        "1254:compact_launch_config:85l",
+        "966:research_worker_prompt:79l"
       ]
     },
     {

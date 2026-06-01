@@ -157,7 +157,6 @@ DEFAULT_WORKER_LADDER = (
     "gemini-pro",
     "gemini-flash",
     "codex-spark",
-    "copilot-gpt-5.4",
     "codex-mini",
 )
 ALLOWED_WORKER_ROUTES = frozenset(DEFAULT_WORKER_LADDER)

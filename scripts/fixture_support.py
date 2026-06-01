@@ -304,19 +304,19 @@ def assert_codex_mini_worker_route(config: dict, selection_reason: str, label: s
 
 
 def assert_mixed_worker_route(config: dict, label: str, *, selection_reason: str | None = None) -> None:
-    expected_ladder = ["gemini-pro", "copilot-gpt-5.4", "codex-mini"]
+    expected_ladder = ["gemini-pro", "codex-spark", "codex-mini"]
     if config.get("selected_ladder") != expected_ladder:
         raise SystemExit(f"{label} launch-config route mismatch: {config.get('selected_ladder')!r}")
     if selection_reason is not None and config.get("selection_reason") != selection_reason:
         raise SystemExit(f"{label} launch-config selection reason mismatch: {config.get('selection_reason')!r}")
     event_logs = launch_attempt_logs(config, "event_logs", label)
     probe_logs = launch_attempt_logs(config, "probe_logs", label)
-    if event_logs != ["events-gemini-pro.log", "events-copilot.jsonl", "events-mini.jsonl"]:
+    if event_logs != ["events-gemini-pro.log", "events-spark.jsonl", "events-mini.jsonl"]:
         raise SystemExit(f"{label} launch-config event log mismatch: {event_logs!r}")
-    if probe_logs != ["events-gemini-pro-probe.log", "events-copilot-probe.jsonl", "events-copilot-version.log"]:
+    if probe_logs != ["events-gemini-pro-probe.log"]:
         raise SystemExit(f"{label} launch-config probe log mismatch: {probe_logs!r}")
     codex_attempts = launch_attempts_by_provider(config, "codex", label)
-    assert_lean_codex_attempts(codex_attempts, f"{label} Codex attempt", expected_count=1)
+    assert_lean_codex_attempts(codex_attempts, f"{label} Codex attempt", expected_count=2)
 
 
 def assert_research_worker_preserves_user_config(

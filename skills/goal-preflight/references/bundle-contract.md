@@ -71,8 +71,8 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
     "timeout_seconds": 1200
   },
   "worker_model_policy": {
-    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
-    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
+    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
+    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
     "branch_may_select_worker_route": true,
     "selection_reason_required": true,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder."
@@ -190,7 +190,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
 - `job.manifest.json` contains a `telemetry_policy` object. `schema_version` is 1 and mode is `standard` by default; debug mode is passive and must not change route selection, polling, or scheduling strategy. Debug summary generation writes `run.trace.jsonl` as a structured trace of scheduler events, packet debug events, launcher states, model attempts, packet telemetry, and terminal artifacts without duplicating raw prompts, outputs, or full logs.
 - Preflight brief shorthand `telemetry_mode: "debug"` or `debug_telemetry: true` expands deterministically to the full safe debug `telemetry_policy`.
-- `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
+- `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `research_worker_policy` defining `research-worker` packets as broad read-only information retrieval through Codex native search plus configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and read-only local access. It must not suppress user config, and it must prohibit file edits and state-changing actions.
 - `job.manifest.json` contains `lite_model_policy` and `lite_advisor_policy`; Lite advisors are fixed-route context routers, validate through `validate_lite_advice.py`, write telemetry, and cannot satisfy audit/review/mergeability/DoD evidence.
 - `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.

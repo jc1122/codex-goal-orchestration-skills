@@ -62,16 +62,16 @@ Manifest-owned paths are reproducible POSIX-relative paths only. `main_prompt`, 
     "timeout_seconds": 1200
   },
   "worker_model_policy": {
-    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
-    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
+    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
+    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
     "default_route_class": "normal-code",
     "route_classes": {
       "mechanical": ["codex-mini"],
       "docs": ["codex-mini"],
       "small-edit": ["codex-spark", "codex-mini"],
       "normal-code": ["codex-spark", "codex-mini"],
-      "complex-code": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"],
-      "custom": ["gemini-pro", "gemini-flash", "codex-spark", "copilot-gpt-5.4", "codex-mini"]
+      "complex-code": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
+      "custom": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"]
     },
     "branch_may_select_worker_route": true,
     "selection_reason_required": true,

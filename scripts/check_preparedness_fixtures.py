@@ -1973,11 +1973,25 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         owned_files=["README.md"],
         context_files=[bundle / "branches" / "B01.prompt.md"],
         task_file=task_file,
-        worker_route=["gemini-pro", "copilot-gpt-5.4", "codex-mini"],
+        worker_route=["gemini-pro", "codex-spark", "codex-mini"],
         selection_reason="Fixture route selected to validate worker probe metadata.",
     )
     mixed_config = assert_compact_runtime_launcher(packet_root / "B01-W04", "worker")
     assert_mixed_worker_route(mixed_config, "mixed worker", selection_reason="Fixture route selected to validate worker probe metadata.")
+    discontinued_route = create_runtime_packet(
+        role="worker",
+        packet_id="B01-W07",
+        branch="preparedness-research-fixture-W07",
+        out_dir=packet_root,
+        owned_files=["README.md"],
+        context_files=[bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+        worker_route=["copilot-gpt-5.4"],
+        selection_reason="Fixture intentionally selects discontinued Copilot route.",
+        expect=1,
+    )
+    if "unsupported worker route alias: 'copilot-gpt-5.4'" not in discontinued_route.stdout:
+        raise SystemExit(f"discontinued Copilot worker route should be rejected: {discontinued_route.stdout}")
     worker_model_catalog = tmp_path / "worker-model-catalog.json"
     write_json(
         worker_model_catalog,

@@ -31,13 +31,6 @@ GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
 GEMINI_FLASH_MODEL = "gemini-3-flash-preview"
 GEMINI_PROBE_TIMEOUT_SECONDS = 20
 GEMINI_PROBE_PROMPT = "Return exactly: GEMINI_MODEL_PROBE_OK"
-COPILOT_COMMAND = "gh"
-COPILOT_MODEL = "gpt-5.4"
-COPILOT_REASONING_EFFORT = "high"
-COPILOT_PROBE_MODEL = "gpt-5-mini"
-COPILOT_PROBE_REASONING_EFFORT = "low"
-COPILOT_PROBE_TIMEOUT_SECONDS = 20
-COPILOT_PROBE_PROMPT = "Return exactly: COPILOT_MODEL_PROBE_OK"
 SPARK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-spark"]
 MINI_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-mini"]
 RESEARCH_MODEL = CONTRACT.CODEX_ROUTE_MODELS[CONTRACT.RESEARCH_ALIASES[0]]
@@ -64,7 +57,6 @@ WORKER_ROUTE_LABELS = {
     "gemini-pro": "Gemini Pro",
     "gemini-flash": "Gemini Flash",
     "codex-spark": "Codex Spark",
-    "copilot-gpt-5.4": "GitHub Copilot",
     "codex-mini": "Codex mini",
 }
 CODEX_LEAN_EXEC_FLAGS_TEXT = " ".join(CONTRACT.CODEX_LEAN_EXEC_FLAGS)
@@ -72,14 +64,12 @@ WORKER_ROUTE_COMMANDS = {
     "gemini-pro": f"gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
     "gemini-flash": f"gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
     "codex-spark": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {SPARK_MODEL} -s workspace-write",
-    "copilot-gpt-5.4": f"gh copilot -- --model {COPILOT_MODEL} --effort {COPILOT_REASONING_EFFORT}",
     "codex-mini": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {MINI_MODEL} -s workspace-write",
 }
 WORKER_ROUTE_EVENT_LABELS = {
     "gemini-pro": "gemini-pro",
     "gemini-flash": "gemini-flash",
     "codex-spark": "spark",
-    "copilot-gpt-5.4": "copilot",
     "codex-mini": "mini",
 }
 CODEX_WORKER_ROUTES = frozenset({"codex-spark", "codex-mini"})
@@ -263,8 +253,6 @@ def apply_model_catalog_to_worker_ladder(
 def worker_route_commands(selected_ladder: list[str]) -> list[str]:
     commands = []
     for alias in selected_ladder:
-        if alias == "copilot-gpt-5.4":
-            commands.append(f"gh copilot -- --model {COPILOT_PROBE_MODEL} --effort {COPILOT_PROBE_REASONING_EFFORT}")
         commands.append(WORKER_ROUTE_COMMANDS[alias])
     return commands
 
@@ -311,23 +299,6 @@ def worker_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
                         "begin": GEMINI_STATUS_BEGIN,
                         "end": GEMINI_STATUS_END,
                     },
-                }
-            )
-        elif alias == "copilot-gpt-5.4":
-            attempts.append(
-                {
-                    "alias": alias,
-                    "provider": "copilot",
-                    "model": COPILOT_MODEL,
-                    "effort": COPILOT_REASONING_EFFORT,
-                    "command": WORKER_ROUTE_COMMANDS[alias],
-                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
-                    "event_logs": [f"events-{label}.jsonl"],
-                    "probe_logs": [f"events-{label}-probe.jsonl", f"events-{label}-version.log"],
-                    "probe_model": COPILOT_PROBE_MODEL,
-                    "probe_reasoning_effort": COPILOT_PROBE_REASONING_EFFORT,
-                    "probe_timeout_seconds": COPILOT_PROBE_TIMEOUT_SECONDS,
-                    "probe_prompt": COPILOT_PROBE_PROMPT,
                 }
             )
         else:
@@ -1136,7 +1107,7 @@ Task:
 
 Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`. `changed_files` must contain repo-relative file paths only, without git porcelain prefixes such as `M ` or `?? `. `commands_run` and `tests` must contain exact command strings that were actually run.
 
-If you are running under Gemini CLI or GitHub Copilot CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
+If you are running under Gemini CLI, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
 {GEMINI_STATUS_BEGIN}
 {example_status}
@@ -1178,7 +1149,6 @@ def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
         "gemini-pro": f"run_gemini gemini-pro {shell_quote(GEMINI_PRO_MODEL)}",
         "gemini-flash": f"run_gemini gemini-flash {shell_quote(GEMINI_FLASH_MODEL)}",
         "codex-spark": f"run_codex spark {shell_quote(SPARK_MODEL)}",
-        "copilot-gpt-5.4": "run_copilot copilot",
         "codex-mini": f"run_codex mini {shell_quote(MINI_MODEL)}",
     }
     lines = []
@@ -1326,17 +1296,10 @@ def compact_launch_config(
             "model_catalog": model_catalog or {},
             "telemetry_script": telemetry_script,
             "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
-            "copilot_probe_model": COPILOT_PROBE_MODEL,
-            "copilot_probe_reasoning_effort": COPILOT_PROBE_REASONING_EFFORT,
-            "copilot_probe_timeout_seconds": COPILOT_PROBE_TIMEOUT_SECONDS,
-            "copilot_probe_prompt": COPILOT_PROBE_PROMPT,
-            "copilot_model": COPILOT_MODEL,
-            "copilot_reasoning_effort": COPILOT_REASONING_EFFORT,
             "gemini_probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
             "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
             "gemini_approval_mode": GEMINI_APPROVAL_MODE,
             "gemini_command": GEMINI_COMMAND,
-            "copilot_command": COPILOT_COMMAND,
         }
     if role == "research-worker":
         return {

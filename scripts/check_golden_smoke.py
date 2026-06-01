@@ -1485,7 +1485,7 @@ def main() -> int:
             owned_files=["README.md"],
             context_files=[bundle / "branches" / "B01.prompt.md"],
             task_file=task_file,
-            worker_route=["gemini-pro", "copilot-gpt-5.4", "codex-mini"],
+            worker_route=["gemini-pro", "codex-spark", "codex-mini"],
             selection_reason="Golden smoke preserves mixed route probe and log metadata.",
         )
         mixed_config = assert_compact_runtime_launcher(mixed_worker, "worker")

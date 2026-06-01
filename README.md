@@ -20,7 +20,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.54
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.55
 ```
 
 Install to a custom absolute skills root:
@@ -191,8 +191,7 @@ Normal worker aliases, in default order:
 1. `gemini-pro` (`gemini-3.1-pro-preview`)
 2. `gemini-flash` (`gemini-3-flash-preview`)
 3. `codex-spark` (`gpt-5.3-codex-spark`)
-4. `copilot-gpt-5.4` (`gpt-5.4`, high effort)
-5. `codex-mini` (`gpt-5.4-mini`)
+4. `codex-mini` (`gpt-5.4-mini`)
 
 Worker route classes:
 
