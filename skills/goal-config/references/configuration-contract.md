@@ -16,7 +16,13 @@ If the user has not already supplied preferences, ask the missing categories bef
 - effort/aggressiveness for branch and worker caps, timeouts, and token/character pressure;
 - validation mode: model check only, smoke, or smoke plus debug telemetry for preflight.
 
-Do not silently create a default config unless the user explicitly says to use defaults.
+Use the JSON `interaction.ask_order` and ask one section at a time unless the user requests the full questionnaire:
+
+1. Model profile: explain that this selects harnesses and role-to-model ladders. Show all listed choices, including checked config reuse, current default, opencode DeepSeek v4, discovery of available routes, Gemini, agy generic CLI, and mixed/custom mappings.
+2. Effort profile: explain that this controls branch/worker caps, timeouts, and token/character pressure. Show lean, balanced, thorough, and custom.
+3. Validation and debug telemetry: explain that this controls fail-closed model checks, harness smoke tests, and whether preflight should collect full debug traces. Show model check only, model check plus smoke, smoke plus debug telemetry, and custom validation.
+
+Do not silently create a default config unless the user explicitly says to use defaults. If the user chooses a custom option, collect the exact required values before creating `goal.config.json`.
 
 ## Required Shape
 
@@ -31,6 +37,10 @@ Do not silently create a default config unless the user explicitly says to use d
 - `harness_smokes`: smoke prompt, expected text, timeout, and readback mode for each role.
 - `telemetry`: fields to collect by model role and harness.
 - `model_policies`: worker, reviewer, amender, and Lite route policies consumed by `goal-preflight` and runtime packet generation.
+
+Create-time flags are binding. If a user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, `create_goal_config.py` must either render those values into `goal.config.json` or fail before writing a misleading config.
+
+Every configured model role must have a `harness_smokes` entry. The checker fails before launching smoke tests when any selected role lacks smoke configuration.
 
 ## Custom Harness Specs
 
@@ -50,6 +60,7 @@ For opencode-backed roles, `check_goal_config.py` must:
 
 - find the `opencode` binary unless a fixture model list is supplied;
 - confirm the exact `provider/model` string appears in `opencode models <provider>`;
+- accept nested provider model ids such as `openrouter/deepseek/deepseek-v4-pro` and provider-list aliases such as the model id without the repeated provider prefix;
 - run `opencode run --pure --format json --model <provider/model>` when `--smoke` is requested;
 - for `codex` roles, run `codex exec <prompt>` when `--smoke` is requested;
 - for `gemini` roles, run `gemini <prompt>` when `--smoke` is requested;
@@ -57,7 +68,11 @@ For opencode-backed roles, `check_goal_config.py` must:
 - read assistant text and token counters for the captured session id from the local opencode session database;
 - report token counts, response character counts, stdout/stderr character counts, elapsed milliseconds, model, provider, harness, and role separately.
 
-Missing models, missing assistant text, missing harness/binary, timeout, or smoke mismatch is a failed check.
+Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When opencode emits JSON errors, the report should preserve actionable status/message fields such as `401 AuthenticateToken authentication failed`.
+
+For `codex` and `gemini` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation.
+
+When the user asks to "use all available" models, treat it as discovery, not as a silent default. Use `check_goal_config.py --discover-provider PROVIDER [--discover-model-filter REGEX] [--discover-max N] --smoke` to list candidates from selected opencode providers, smoke candidates, and emit `candidate_routes`, `accepted_routes`, and `rejected_routes` with reasons. Use accepted routes to create a final explicit config; do not pass unreviewed discovered routes directly into preflight.
 
 ## Preflight And Runtime Consumption
 

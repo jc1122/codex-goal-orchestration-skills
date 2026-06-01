@@ -10,14 +10,14 @@ import re
 import shutil
 import sqlite3
 import subprocess
-import sys
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
 
 
-MODEL_RE = re.compile(r"(?<![A-Za-z0-9_.-])([A-Za-z0-9_.-]+/[A-Za-z0-9_.:-]+)(?![A-Za-z0-9_.-])")
+MODEL_RE = re.compile(
+    r"(?<![A-Za-z0-9_.~/+-])([~A-Za-z0-9_.+-]+(?:/[~A-Za-z0-9_.:+-]+)+)(?![A-Za-z0-9_.~/+-])"
+)
 ROLE_ALIASES = {
     "lite": "lite_agent",
     "flash": "lite_agent",
@@ -80,6 +80,37 @@ def parse_models(output: str) -> set[str]:
     return set(MODEL_RE.findall(output))
 
 
+def route_id(value: str) -> str:
+    sanitized = re.sub(r"[^A-Za-z0-9]+", "_", value).strip("_").lower()
+    return sanitized or "route"
+
+
+def model_candidates(provider: str, model: str) -> set[str]:
+    candidates = {model}
+    prefix = f"{provider}/"
+    if model.startswith(prefix):
+        candidates.add(model[len(prefix):])
+    else:
+        candidates.add(f"{provider}/{model}")
+    return {candidate for candidate in candidates if candidate}
+
+
+def discovery_candidate_model(provider: str, listed_model: str) -> str:
+    if listed_model.startswith(f"{provider}/") or listed_model.startswith(f"~{provider}/"):
+        return listed_model
+    return f"{provider}/{listed_model}"
+
+
+def discovery_smoke(role: str, timeout_seconds: int) -> dict[str, Any]:
+    token = f"GOAL_CONFIG_DISCOVER_{route_id(role).upper()}_SMOKE_OK"
+    return {
+        "prompt": f"Reply with {token} and nothing else.",
+        "expect": token,
+        "timeout_seconds": timeout_seconds,
+        "readback": "opencode_session_db",
+    }
+
+
 def parse_session_id(stdout: str) -> str | None:
     for line in stdout.splitlines():
         line = line.strip()
@@ -107,6 +138,78 @@ def safe_json(data: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def compact_text(value: Any) -> str | None:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value)
+    return None
+
+
+def first_compact_value(data: dict[str, Any], keys: tuple[str, ...]) -> str | None:
+    for key in keys:
+        value = compact_text(data.get(key))
+        if value:
+            return value
+    return None
+
+
+def collect_json_errors(value: Any) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if isinstance(value, dict):
+        error_payload = value.get("error")
+        message = first_compact_value(value, ("message", "msg", "detail", "description"))
+        status = first_compact_value(value, ("status", "statusCode", "status_code", "code"))
+        error_text = compact_text(error_payload) if not isinstance(error_payload, (dict, list)) else None
+        if value.get("type") == "error" or error_payload is not None:
+            entry: dict[str, str] = {}
+            if status:
+                entry["status"] = status
+            if message:
+                entry["message"] = message
+            elif error_text:
+                entry["message"] = error_text
+            if entry:
+                errors.append(entry)
+        for child in value.values():
+            errors.extend(collect_json_errors(child))
+    elif isinstance(value, list):
+        for child in value:
+            errors.extend(collect_json_errors(child))
+    return errors
+
+
+def extract_opencode_errors(stdout: str, stderr: str) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    seen: set[tuple[str | None, str | None]] = set()
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for error in collect_json_errors(event):
+            key = (error.get("status"), error.get("message"))
+            if key not in seen:
+                errors.append(error)
+                seen.add(key)
+
+    combined = f"{stdout}\n{stderr}"
+    auth_match = re.search(r"(?i)(401|403)?[^.\n]*(AuthenticateToken|authentication failed|unauthorized)[^.\n]*", combined)
+    if auth_match:
+        message = auth_match.group(0).strip()
+        status = "401" if "401" in message else ("403" if "403" in message else "")
+        key = (status or None, message)
+        if key not in seen:
+            entry = {"message": message}
+            if status:
+                entry["status"] = status
+            errors.append(entry)
+    return errors
 
 
 def read_opencode_session(session_id: str, db_path: Path) -> dict[str, Any]:
@@ -186,7 +289,8 @@ def model_roles(config: dict[str, Any], selected: list[str]) -> list[str]:
         return sorted(models)
     roles: list[str] = []
     seen: set[str] = set()
-    for value in selected:
+    expanded = [item.strip() for value in selected for item in value.split(",") if item.strip()]
+    for value in expanded:
         role = ROLE_ALIASES.get(value, value)
         if role not in models:
             raise SystemExit(f"selected role {value!r} is not in config.models")
@@ -267,6 +371,7 @@ def check_opencode_model(
     *,
     harness: dict[str, Any],
     models_fixture: set[str] | None,
+    model_list_cache: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], list[str]]:
     provider = model.get("provider")
     provider_model = model.get("model")
@@ -298,6 +403,14 @@ def check_opencode_model(
         return result, failures
 
     model_list_args = render_model_list_args(harness, provider)
+    cache_key = json.dumps(
+        {
+            "binary": resolved_binary,
+            "provider": provider,
+            "model_list_args": model_list_args,
+        },
+        sort_keys=True,
+    )
     if models_fixture is not None:
         version = {
             "returncode": 0,
@@ -313,6 +426,18 @@ def check_opencode_model(
             "elapsed_ms": 0,
             "timed_out": False,
         }
+        cache_status = "fixture"
+    elif cache_key in model_list_cache:
+        cached = model_list_cache[cache_key]
+        version = command_result([resolved_binary, "--version"], timeout_seconds=20)
+        models = {
+            "returncode": cached["returncode"],
+            "stdout": cached["stdout"],
+            "stderr": cached["stderr"],
+            "elapsed_ms": cached["elapsed_ms"],
+            "timed_out": cached["timed_out"],
+        }
+        cache_status = "hit"
     else:
         version = command_result([resolved_binary, "--version"], timeout_seconds=20)
         models = command_result([resolved_binary, *model_list_args], timeout_seconds=60) if provider else {
@@ -322,21 +447,28 @@ def check_opencode_model(
             "elapsed_ms": 0,
             "timed_out": False,
         }
+        model_list_cache[cache_key] = dict(models)
+        cache_status = "miss"
 
     if models_fixture is not None:
         available = models_fixture
     else:
         available = parse_models(models["stdout"] + "\n" + models["stderr"])
+    candidates = model_candidates(provider, provider_model)
+    available_candidate = sorted(candidates & available)
 
     result.update(
         {
             "version": version["stdout"].strip() or version["stderr"].strip(),
             "version_returncode": version["returncode"],
             "models_returncode": models["returncode"],
+            "models_cache": cache_status,
             "models_output_chars": len(models["stdout"]) + len(models["stderr"]),
             "models_elapsed_ms": models["elapsed_ms"],
             "available_model_count": len(available),
-            "model_available": provider_model in available,
+            "model_candidates": sorted(candidates),
+            "model_available": bool(available_candidate),
+            "matched_model": available_candidate[0] if available_candidate else None,
         }
     )
     result["status"] = (
@@ -353,7 +485,7 @@ def check_opencode_model(
     if not provider_model:
         failures.append("missing model")
     elif not result["model_available"]:
-        failures.append(f"model not listed by opencode: {provider_model}")
+        failures.append(f"model not listed by opencode: {provider_model}; tried {', '.join(sorted(candidates))}")
     return result, failures
 
 
@@ -424,17 +556,16 @@ def run_harness_smoke(
         return {"status": "failed", "reason": "missing smoke_args"}, [f"{role} harness smoke command is missing"]
 
     if kind == "opencode":
-        command = [binary, *smoke_args]
         if timeout_seconds <= 0:
             timeout_seconds = 600
 
-        with tempfile.TemporaryDirectory(prefix=f"goal-config-{role}-") as tmp:
-            result = command_result(
-                [resolve_binary(binary) or binary, *smoke_args],
-                timeout_seconds=timeout_seconds,
-            )
+        result = command_result(
+            [resolve_binary(binary) or binary, *smoke_args],
+            timeout_seconds=timeout_seconds,
+        )
 
         session_id = parse_session_id(result["stdout"])
+        opencode_errors = extract_opencode_errors(result["stdout"], result["stderr"])
         readback = read_opencode_session(session_id, opencode_db) if session_id else {"status": "missing_session_id"}
         assistant_response = readback.get("assistant_response") if isinstance(readback.get("assistant_response"), str) else ""
         contains_expected = expected in assistant_response
@@ -442,11 +573,15 @@ def run_harness_smoke(
             failures.append(f"{role} opencode smoke timed out")
         if result["returncode"] != 0:
             failures.append(f"{role} opencode smoke returncode={result['returncode']}")
+        for error in opencode_errors:
+            status = f" status={error['status']}" if error.get("status") else ""
+            message = f" message={error['message']}" if error.get("message") else ""
+            failures.append(f"{role} opencode error{status}{message}")
         if not session_id:
             failures.append(f"{role} opencode smoke did not emit a session id")
         if readback.get("status") != "pass":
             failures.append(f"{role} opencode session readback failed: {readback.get('status')}")
-        if not contains_expected:
+        if not contains_expected and not opencode_errors:
             failures.append(f"{role} assistant response did not contain expected smoke text")
 
         return {
@@ -458,6 +593,7 @@ def run_harness_smoke(
             "stderr_chars": len(result["stderr"]),
             "session_id": session_id,
             "contains_expected": contains_expected,
+            "opencode_errors": opencode_errors,
             "assistant_response_chars": readback.get("assistant_response_chars", 0),
             "assistant_reasoning_chars": readback.get("assistant_reasoning_chars", 0),
             "tokens": readback.get(
@@ -515,6 +651,162 @@ def validate_config_shape(config: dict[str, Any]) -> list[str]:
     return failures
 
 
+def classify_routes(harness_reports: list[dict[str, Any]], *, smoke_requested: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    accepted: list[dict[str, Any]] = []
+    rejected: list[dict[str, Any]] = []
+    for report in harness_reports:
+        route = {
+            "role": report.get("role"),
+            "alias": report.get("alias"),
+            "harness": report.get("harness"),
+            "provider": report.get("provider"),
+            "model": report.get("model"),
+        }
+        reasons: list[str] = []
+        model_check = report.get("model_check") if isinstance(report.get("model_check"), dict) else {}
+        if model_check.get("status") != "pass":
+            reasons.append(str(model_check.get("reason") or f"model_check={model_check.get('status')}"))
+        smoke = report.get("smoke") if isinstance(report.get("smoke"), dict) else None
+        if smoke_requested:
+            if smoke is None:
+                reasons.append("smoke=missing")
+            elif smoke.get("status") != "pass":
+                reason = smoke.get("reason") or f"smoke={smoke.get('status')}"
+                reasons.append(str(reason))
+                for error in smoke.get("opencode_errors") or []:
+                    if isinstance(error, dict):
+                        status = f" status={error['status']}" if error.get("status") else ""
+                        message = f" message={error['message']}" if error.get("message") else ""
+                        reasons.append(f"opencode error{status}{message}")
+        if reasons:
+            rejected.append({**route, "reasons": reasons})
+        else:
+            accepted.append(route)
+    return accepted, rejected
+
+
+def discover_available_routes(
+    config: dict[str, Any],
+    *,
+    harness_name: str,
+    providers: list[str],
+    model_filter: str | None,
+    max_candidates: int | None,
+    smoke: bool,
+    models_fixture: set[str] | None,
+    opencode_db: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    failures: list[str] = []
+    harnesses = config.get("harnesses")
+    harness = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
+    if not isinstance(harness, dict):
+        return [], [], [f"discover harness {harness_name!r} is not configured"]
+    if harness.get("kind") != "opencode":
+        return [], [], [f"discover harness {harness_name!r} must be opencode"]
+
+    matcher = re.compile(model_filter) if model_filter else None
+    timeout_seconds = int(config.get("effort", {}).get("lite_timeout_seconds") or 600)
+    candidates: list[dict[str, Any]] = []
+    reports: list[dict[str, Any]] = []
+    model_list_cache: dict[str, dict[str, Any]] = {}
+
+    for provider in providers:
+        provider_seed = {
+            "role": f"discover_{route_id(provider)}_seed",
+            "alias": f"discover-{route_id(provider)}-seed",
+            "harness": harness_name,
+            "provider": provider,
+            "model": f"{provider}/__goal_config_discovery_seed__",
+        }
+        model_check, model_failures = check_opencode_model(
+            provider_seed,
+            harness=harness,
+            models_fixture=models_fixture,
+            model_list_cache=model_list_cache,
+        )
+        available = set(models_fixture or [])
+        if models_fixture is None:
+            cache_key = json.dumps(
+                {
+                    "binary": model_check.get("binary"),
+                    "provider": provider,
+                    "model_list_args": render_model_list_args(harness, provider),
+                },
+                sort_keys=True,
+            )
+            cached = model_list_cache.get(cache_key)
+            if cached:
+                available = parse_models(cached.get("stdout", "") + "\n" + cached.get("stderr", ""))
+        if not available:
+            failures.append(f"discover {provider}: no models listed")
+            if model_failures:
+                failures.extend(f"discover {provider}: {failure}" for failure in model_failures)
+            continue
+
+        provider_models = [
+            model
+            for model in sorted(available)
+            if model.startswith(f"{provider}/")
+            or model.startswith(f"~{provider}/")
+            or ("/" in model and not model.startswith("~") and not re.match(r"^[A-Za-z0-9_.+-]+/.+/.+", model))
+        ]
+        if not provider_models:
+            provider_models = sorted(available)
+        for listed_model in provider_models:
+            candidate_model = discovery_candidate_model(provider, listed_model)
+            if matcher and not matcher.search(candidate_model):
+                continue
+            candidates.append(
+                {
+                    "role": f"discover_{route_id(candidate_model)}",
+                    "alias": f"discover-{route_id(candidate_model)}",
+                    "harness": harness_name,
+                    "provider": provider,
+                    "model": candidate_model,
+                    "listed_model": listed_model,
+                }
+            )
+
+    if max_candidates is not None:
+        candidates = candidates[:max_candidates]
+
+    for candidate in candidates:
+        model = {
+            "role": candidate["role"],
+            "alias": candidate["alias"],
+            "harness": candidate["harness"],
+            "provider": candidate["provider"],
+            "model": candidate["model"],
+        }
+        report: dict[str, Any] = dict(model)
+        report["listed_model"] = candidate["listed_model"]
+        model_check, model_failures = check_opencode_model(
+            model,
+            harness=harness,
+            models_fixture=models_fixture,
+            model_list_cache=model_list_cache,
+        )
+        report["model_check"] = model_check
+        if smoke and model_check.get("status") == "pass":
+            smoke_report, _smoke_failures = run_harness_smoke(
+                candidate["role"],
+                model,
+                discovery_smoke(candidate["role"], timeout_seconds),
+                harness=harness,
+                opencode_db=opencode_db,
+            )
+            report["smoke"] = smoke_report
+        elif smoke:
+            report["smoke"] = {"status": "skipped", "reason": "model check failed"}
+        if model_failures:
+            report["model_failures"] = model_failures
+        reports.append(report)
+
+    if not candidates:
+        failures.append("discover produced no candidate routes")
+    return candidates, reports, failures
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path, help="Path to goal.config.json.")
@@ -525,20 +817,86 @@ def main() -> int:
         "--harness",
         action="append",
         default=[],
-        help="Role to check, such as lite, demanding, lite_agent, or demanding_agent. Defaults to all models.",
+        help="Role to check, such as lite, demanding, lite_agent, or demanding_agent. Repeat or pass comma-separated roles. Defaults to all models.",
     )
+    parser.add_argument(
+        "--discover-provider",
+        action="append",
+        default=[],
+        help="Discover opencode candidate routes for this provider. Repeat for multiple providers.",
+    )
+    parser.add_argument(
+        "--discover-harness",
+        default="opencode",
+        help="Configured opencode harness name to use for discovery.",
+    )
+    parser.add_argument("--discover-model-filter", help="Regex filter applied to discovered provider/model ids.")
+    parser.add_argument("--discover-max", type=int, help="Maximum discovered candidates to validate.")
     parser.add_argument("--models-output", type=Path, help="Use this opencode models output fixture instead of live CLI.")
     parser.add_argument("--opencode-db", type=Path, default=opencode_db_path(), help="opencode session database path.")
     args = parser.parse_args()
 
     config = load_json(args.config)
     failures = validate_config_shape(config)
-    roles = model_roles(config, args.harness) if not failures else []
     models = config.get("models", {})
     harnesses = config.get("harnesses", {})
-    smokes = config.get("harness_smokes") if isinstance(config.get("harness_smokes"), dict) else {}
     models_fixture = fixture_models(args.models_output)
+    if args.discover_max is not None and args.discover_max <= 0:
+        failures.append("--discover-max must be a positive integer")
+
+    if args.discover_provider and not failures:
+        candidates, harness_reports, discovery_failures = discover_available_routes(
+            config,
+            harness_name=args.discover_harness,
+            providers=args.discover_provider,
+            model_filter=args.discover_model_filter,
+            max_candidates=args.discover_max,
+            smoke=args.smoke,
+            models_fixture=models_fixture,
+            opencode_db=args.opencode_db,
+        )
+        accepted_routes, rejected_routes = classify_routes(harness_reports, smoke_requested=args.smoke)
+        failures.extend(discovery_failures)
+        if not accepted_routes:
+            failures.append("discover accepted no routes")
+        result = {
+            "schema_version": 1,
+            "status": "failed" if failures else "pass",
+            "mode": "discover",
+            "config_path": args.config.resolve().as_posix(),
+            "profile": config.get("profile"),
+            "discover_harness": args.discover_harness,
+            "discover_providers": args.discover_provider,
+            "discover_model_filter": args.discover_model_filter,
+            "candidate_routes": candidates,
+            "checked_roles": [candidate["role"] for candidate in candidates],
+            "accepted_routes": accepted_routes,
+            "rejected_routes": rejected_routes,
+            "opencode_binary": resolve_binary(str(harnesses.get(args.discover_harness, {}).get("command", "opencode"))) if isinstance(harnesses, dict) else None,
+            "opencode_db": args.opencode_db.as_posix(),
+            "harnesses": harness_reports,
+            "failures": failures,
+        }
+        text = json.dumps(result, indent=2, sort_keys=True) + "\n"
+        if args.output:
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(text, encoding="utf-8")
+        print(text, end="")
+        return 1 if failures else 0
+
+    roles = model_roles(config, args.harness) if not failures else []
+    smokes = config.get("harness_smokes") if isinstance(config.get("harness_smokes"), dict) else {}
     harness_reports: list[dict[str, Any]] = []
+    model_list_cache: dict[str, dict[str, Any]] = {}
+    missing_smoke_roles: set[str] = set()
+    if args.smoke:
+        missing_smoke_roles = {
+            role
+            for role in roles
+            if not isinstance(smokes.get(role), dict)
+        }
+        if missing_smoke_roles:
+            failures.append(f"missing smoke config for roles: {', '.join(sorted(missing_smoke_roles))}")
 
     for role in roles:
         model = models[role]
@@ -576,6 +934,7 @@ def main() -> int:
                 model,
                 harness=harness,
                 models_fixture=models_fixture,
+                model_list_cache=model_list_cache,
             )
         elif kind in {"codex", "gemini", "generic-cli"}:
             model_check, model_failures = check_non_opencode_model(model, harness=harness)
@@ -587,7 +946,12 @@ def main() -> int:
         if args.require_models:
             failures.extend(f"{role}: {failure}" for failure in model_failures)
 
-        if args.smoke:
+        if args.smoke and missing_smoke_roles:
+            if role in missing_smoke_roles:
+                report["smoke"] = {"status": "failed", "reason": "missing smoke config"}
+            else:
+                report["smoke"] = {"status": "skipped", "reason": "smoke preflight failed"}
+        elif args.smoke:
             smoke = smokes.get(role)
             if not isinstance(smoke, dict):
                 report["smoke"] = {"status": "failed", "reason": "missing smoke config"}
@@ -605,12 +969,15 @@ def main() -> int:
 
         harness_reports.append(report)
 
+    accepted_routes, rejected_routes = classify_routes(harness_reports, smoke_requested=args.smoke)
     result = {
         "schema_version": 1,
         "status": "failed" if failures else "pass",
         "config_path": args.config.resolve().as_posix(),
         "profile": config.get("profile"),
         "checked_roles": roles,
+        "accepted_routes": accepted_routes,
+        "rejected_routes": rejected_routes,
         "opencode_binary": resolve_binary("opencode") if isinstance(harnesses, dict) else None,
         "opencode_db": args.opencode_db.as_posix(),
         "harnesses": harness_reports,

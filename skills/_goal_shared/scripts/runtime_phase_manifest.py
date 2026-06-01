@@ -37,15 +37,22 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "preference_intake",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py --questions-json > /abs/goal-config-questions.json",
-                "agent_does": "if the user has not already specified harness/model profile, effort/aggressiveness, and validation/smoke/debug preferences, ask concise questions from goal-config-questions.json before creating a config",
+                "agent_does": "if preferences are missing, follow goal-config-questions.json interaction.ask_order; ask one missing section at a time with all listed options and short descriptions before creating a config",
                 "pass": "preferences are captured, an existing checked profile is selected, or the user explicitly says to use defaults",
                 "on_fail": "do not create goal.config.json silently from defaults",
+            },
+            {
+                "id": "route_discovery",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/seed.goal.config.json --discover-provider PROVIDER --smoke --output /abs/goal-config-discovery.json",
+                "agent_does": "only when the user chooses discovery/use-all-available; inspect candidate_routes, accepted_routes, and rejected_routes, then create a final explicit goal.config.json from accepted routes",
+                "pass": "at least one accepted route and every rejected route has reasons",
+                "on_fail": "do not pass unreviewed discovered routes to preflight",
             },
             {
                 "id": "create",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --role-model lite_agent:opencode:provider/model --role-model demanding_agent:opencode:provider/model --harness-spec /abs/custom-harness.json --output /abs/goal.config.json",
                 "artifacts": ["goal.config.json"],
-                "agent_does": "translate captured preferences into explicit flags; omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit",
+                "agent_does": "translate captured preferences into explicit flags; omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit; verify requested caps/timeouts/ladders are rendered and every role has harness_smokes",
             },
             {
                 "id": "model_check",
@@ -57,7 +64,7 @@ PHASES: dict[str, dict[str, Any]] = {
                 "id": "harness_smoke",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --require-models --smoke --harness lite --harness demanding --output /abs/goal-config-smoke.json",
                 "pass": "status=pass with assistant smoke text, token counts, character counts, and elapsed milliseconds for each role",
-                "on_fail": "return blocked; do not silently fall back to another provider/model",
+                "on_fail": "return blocked with checker failures and opencode status/message fields; do not silently fall back to another provider/model",
             },
             {
                 "id": "preflight_integration",

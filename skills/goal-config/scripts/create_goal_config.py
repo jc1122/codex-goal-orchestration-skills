@@ -6,9 +6,16 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
+
+
+IMPLIED_PROVIDER_BY_HARNESS = {
+    "codex": "openai",
+    "gemini": "gemini",
+}
 
 
 def load_contract() -> Any:
@@ -20,14 +27,6 @@ def load_contract() -> Any:
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
-
-
-def split_provider(model: str, provider: str | None = None) -> str:
-    if provider:
-        return provider
-    if "/" not in model:
-        raise SystemExit(f"model must be provider/model when provider is omitted: {model}")
-    return model.split("/", 1)[0]
 
 
 def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str, str]:
@@ -51,15 +50,46 @@ def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str
 
     alias = aliases[0] if len(aliases) >= 1 and aliases[0] else role
     purpose = aliases[1] if len(aliases) >= 2 and aliases[1] else f"{role} model"
-    provider = split_provider(provider_model, default_provider)
+    provider, model = normalize_role_model_for_harness(provider_model, harness, default_provider)
     return {
         "role": role,
         "harness": harness,
         "provider": provider,
-        "model": provider_model,
+        "model": model,
         "alias": alias,
         "purpose": purpose,
     }
+
+
+def normalize_role_model_for_harness(
+    provider_model: str,
+    harness: str,
+    default_provider: str | None = None,
+) -> tuple[str, str]:
+    implied_provider = IMPLIED_PROVIDER_BY_HARNESS.get(harness)
+    provider = default_provider or implied_provider
+    if "/" in provider_model:
+        listed_provider, model_suffix = provider_model.split("/", 1)
+        provider = provider or listed_provider
+    elif provider:
+        model_suffix = provider_model
+    else:
+        raise SystemExit(
+            f"model for role using harness {harness!r} must include provider/model, use --provider, "
+            "or use a harness with an implied provider"
+        )
+
+    if harness in IMPLIED_PROVIDER_BY_HARNESS:
+        return provider, model_suffix
+
+    if default_provider:
+        if provider_model.startswith(f"{default_provider}/"):
+            return provider, provider_model
+        return provider, f"{default_provider}/{provider_model}"
+
+    if "/" in provider_model:
+        return provider, provider_model
+    return provider, f"{provider}/{provider_model}"
 
 
 def model_entry(*, alias: str, role: str, harness: str, provider: str, model: str, purpose: str) -> dict[str, Any]:
@@ -181,6 +211,85 @@ def apply_harness_specs(config: dict[str, Any], paths: list[Path]) -> None:
             harnesses[name] = spec
 
 
+def positive_int(value: int, field: str) -> int:
+    if value <= 0:
+        raise SystemExit(f"{field} must be a positive integer")
+    return value
+
+
+def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
+    aggressiveness = config.setdefault("aggressiveness", {})
+    effort = config.setdefault("effort", {})
+    for arg_name, key in {
+        "max_active_branch_agents": "max_active_branch_agents",
+        "max_active_worker_packets": "max_active_worker_packets",
+        "max_waves": "max_waves",
+    }.items():
+        value = getattr(args, arg_name)
+        if value is not None:
+            aggressiveness[key] = positive_int(value, f"--{arg_name.replace('_', '-')}")
+
+    for arg_name, key in {
+        "lite_timeout_seconds": "lite_timeout_seconds",
+        "demanding_timeout_seconds": "demanding_timeout_seconds",
+    }.items():
+        value = getattr(args, arg_name)
+        if value is not None:
+            effort[key] = positive_int(value, f"--{arg_name.replace('_', '-')}")
+
+    if "max_active_branch_agents" in aggressiveness and "max_waves" in aggressiveness:
+        aggressiveness["total_branch_cap"] = int(aggressiveness["max_active_branch_agents"]) * int(
+            aggressiveness["max_waves"]
+        )
+
+
+def smoke_token(role: str) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", role).strip("_").upper()
+    return f"GOAL_CONFIG_{normalized or 'ROLE'}_SMOKE_OK"
+
+
+def role_smoke_timeout(role: str, config: dict[str, Any]) -> int:
+    ladders = config.get("model_ladders") if isinstance(config.get("model_ladders"), dict) else {}
+    effort = config.get("effort") if isinstance(config.get("effort"), dict) else {}
+    if role in set(ladders.get("lite") or []):
+        return int(effort.get("lite_timeout_seconds") or 600)
+    if role in set(ladders.get("worker") or []):
+        return int(effort.get("worker_timeout_seconds") or effort.get("demanding_timeout_seconds") or 1200)
+    return int(effort.get("demanding_timeout_seconds") or 1200)
+
+
+def role_smoke_readback(role: str, config: dict[str, Any]) -> str:
+    model = config.get("models", {}).get(role, {})
+    harness_name = model.get("harness") if isinstance(model, dict) else None
+    harness = config.get("harnesses", {}).get(harness_name, {}) if isinstance(config.get("harnesses"), dict) else {}
+    kind = harness.get("kind") if isinstance(harness, dict) else None
+    if kind == "opencode":
+        return "opencode_session_db"
+    return "stdout"
+
+
+def ensure_harness_smokes(config: dict[str, Any]) -> None:
+    smokes = config.setdefault("harness_smokes", {})
+    if not isinstance(smokes, dict):
+        raise SystemExit("harness_smokes must be an object")
+    models = config.get("models")
+    if not isinstance(models, dict):
+        raise SystemExit("models must be an object before smoke generation")
+    for role in sorted(models):
+        if isinstance(smokes.get(role), dict):
+            smoke = smokes[role]
+            smoke.setdefault("timeout_seconds", role_smoke_timeout(role, config))
+            smoke.setdefault("readback", role_smoke_readback(role, config))
+            continue
+        token = smoke_token(role)
+        smokes[role] = {
+            "prompt": f"Reply with {token} and nothing else.",
+            "expect": token,
+            "timeout_seconds": role_smoke_timeout(role, config),
+            "readback": role_smoke_readback(role, config),
+        }
+
+
 def unique(values: list[str]) -> list[str]:
     result: list[str] = []
     seen: set[str] = set()
@@ -276,6 +385,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
 def finalize_config(config: dict[str, Any], contract: Any, args: argparse.Namespace) -> dict[str, Any]:
     apply_role_overrides(config["models"], args.role_model, args.provider)
     apply_harness_specs(config, args.harness_spec)
+    apply_numeric_overrides(config, args)
     ladders = config.setdefault("model_ladders", {})
     for name, value in {
         "lite": args.lite_ladder,
@@ -290,6 +400,7 @@ def finalize_config(config: dict[str, Any], contract: Any, args: argparse.Namesp
         ladders["reviewer"] = list(ladders["demanding"])
     if "amender" not in ladders and "reviewer" in ladders:
         ladders["amender"] = list(ladders["reviewer"])
+    ensure_harness_smokes(config)
     config["model_policies"] = build_model_policies(config, contract)
     return config
 
@@ -386,8 +497,12 @@ def base_config(contract: Any) -> dict[str, Any]:
 
 def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict[str, Any]:
     config = base_config(contract)
-    lite_provider = split_provider(args.lite_model, args.provider)
-    demanding_provider = split_provider(args.demanding_model, args.provider)
+    lite_provider, lite_model = normalize_role_model_for_harness(args.lite_model, "opencode", args.provider)
+    demanding_provider, demanding_model = normalize_role_model_for_harness(
+        args.demanding_model,
+        "opencode",
+        args.provider,
+    )
     config["profile"] = "opencode-deepseek-v4"
     config["models"] = {
         "lite_agent": model_entry(
@@ -395,7 +510,7 @@ def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict
             role="lite_agent",
             harness="opencode",
             provider=lite_provider,
-            model=args.lite_model,
+            model=lite_model,
             purpose="low-latency advisory and small deterministic checks",
         ),
         "demanding_agent": model_entry(
@@ -403,7 +518,7 @@ def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict
             role="demanding_agent",
             harness="opencode",
             provider=demanding_provider,
-            model=args.demanding_model,
+            model=demanding_model,
             purpose="higher-effort planning, review, and complex coding checks",
         ),
     }
@@ -413,26 +528,8 @@ def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict
         "reviewer": ["demanding_agent"],
         "amender": ["demanding_agent", "lite_agent"],
     }
-    config["harness_smokes"] = {
-        "lite_agent": {
-            "prompt": "Reply with GOAL_CONFIG_LITE_SMOKE_OK and nothing else.",
-            "expect": "GOAL_CONFIG_LITE_SMOKE_OK",
-            "timeout_seconds": args.lite_timeout_seconds,
-            "readback": "opencode_session_db",
-        },
-        "demanding_agent": {
-            "prompt": "Reply with GOAL_CONFIG_DEMANDING_SMOKE_OK and nothing else.",
-            "expect": "GOAL_CONFIG_DEMANDING_SMOKE_OK",
-            "timeout_seconds": args.demanding_timeout_seconds,
-            "readback": "opencode_session_db",
-        },
-    }
-    config["effort"]["lite_timeout_seconds"] = args.lite_timeout_seconds
-    config["effort"]["demanding_timeout_seconds"] = args.demanding_timeout_seconds
-    config["aggressiveness"]["max_active_branch_agents"] = args.max_active_branch_agents
-    config["aggressiveness"]["max_active_worker_packets"] = args.max_active_worker_packets
-    config["aggressiveness"]["max_waves"] = args.max_waves
-    config["aggressiveness"]["total_branch_cap"] = args.max_active_branch_agents * args.max_waves
+    config["effort"]["lite_timeout_seconds"] = 600
+    config["effort"]["demanding_timeout_seconds"] = 1200
     return config
 
 
@@ -457,11 +554,11 @@ def main() -> int:
     parser.add_argument("--provider", help="Provider id override for provider/model strings.")
     parser.add_argument("--lite-model", default="deepseek/deepseek-v4-flash", help="Lite opencode provider/model.")
     parser.add_argument("--demanding-model", default="deepseek/deepseek-v4-pro", help="Demanding opencode provider/model.")
-    parser.add_argument("--max-active-branch-agents", type=int, default=4)
-    parser.add_argument("--max-active-worker-packets", type=int, default=4)
-    parser.add_argument("--max-waves", type=int, default=5)
-    parser.add_argument("--lite-timeout-seconds", type=int, default=600)
-    parser.add_argument("--demanding-timeout-seconds", type=int, default=1200)
+    parser.add_argument("--max-active-branch-agents", type=int)
+    parser.add_argument("--max-active-worker-packets", type=int)
+    parser.add_argument("--max-waves", type=int)
+    parser.add_argument("--lite-timeout-seconds", type=int)
+    parser.add_argument("--demanding-timeout-seconds", type=int)
     parser.add_argument("--lite-ladder", help="Comma-separated model roles for Lite routing.")
     parser.add_argument("--worker-ladder", help="Comma-separated model roles for worker routing.")
     parser.add_argument("--reviewer-ladder", help="Comma-separated model roles for reviewer routing.")

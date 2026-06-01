@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.59
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.60
 ```
 
 Install to a custom absolute skills root:
@@ -119,7 +119,13 @@ Ask for preferences before creating a profile when the user has not already supp
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py" --questions-json
 ```
 
-Use those questions to capture the model/harness profile, effort/aggressiveness, and validation/smoke/debug preference. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
+Use the generated `interaction.ask_order` so the user is not overwhelmed:
+
+1. Ask the model/harness profile first and show every listed option with its short explanation.
+2. Ask the effort/aggressiveness profile second.
+3. Ask the validation/smoke/debug telemetry mode third.
+
+Ask only missing sections, one at a time, unless the user requests the full questionnaire. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
 
 Create the opencode DeepSeek v4 profile requested for Lite and demanding agents:
 
@@ -130,6 +136,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
 ```
 
 The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. It records effort in tokens, characters, and elapsed time only.
+
+Create flags are binding. If the user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, the rendered `goal.config.json` must apply those values or the command must fail.
 
 To use user-supplied models, keep roles explicit:
 
@@ -142,6 +150,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --reviewer-ladder demanding_agent \
   --output /abs/goal.config.json
 ```
+
+For `codex` and `gemini`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4` or `gemini-3-flash-preview`.
 
 To plug in another CLI harness, provide a JSON harness spec and map roles to it. Built-in harness kinds are `opencode`, `codex`, `gemini`, and `generic-cli`; `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
 
@@ -186,6 +196,23 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
 ```
 
 The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. It does not read provider credentials or report provider prices.
+
+Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. To isolate a failing route without rerunning the full matrix, pass repeated or comma-separated `--harness` values, for example `--harness lite_agent,demanding_agent`.
+
+The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and preserves JSON error status/message fields, including auth failures, in the smoke report. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
+
+Discovery mode checks provider-listed candidates without manually writing every role first:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
+  --config /abs/goal.config.json \
+  --discover-provider openrouter \
+  --discover-model-filter 'deepseek|~openrouter/latest' \
+  --smoke \
+  --output /abs/goal-config-discovery.json
+```
+
+The discovery report includes `candidate_routes`, `accepted_routes`, and `rejected_routes`. Use the accepted route list to create the final explicit `goal.config.json`; do not pass unreviewed discovered routes directly into preflight.
 
 After the check passes, pass both artifacts into preflight. This is the integration point: `create_goal_bundle.py` embeds `goal_config`, copies `goal.config.json` and `goal-config.check.json`, replaces manifest model policies with the configured ladders, and runtime packet generation turns those policies into concrete harness launch attempts.
 
