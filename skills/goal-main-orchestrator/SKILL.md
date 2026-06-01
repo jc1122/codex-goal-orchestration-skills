@@ -1,6 +1,6 @@
 ---
 name: goal-main-orchestrator
-version: 0.2.53
+version: 0.2.54
 description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a Copilot /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit with telemetry, optionally use CLI-only Lite advisors after audit or completed branch artifacts for advisory summaries, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, summarize packet telemetry, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
 ---
 
@@ -28,6 +28,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest
 ## Runtime Rules
 
 - Use `job.manifest.json`, `main.prompt.md`, `prompt-audit.json`, scheduler JSON, branch status/review JSON, telemetry JSON, and validator defects as the working surface.
+- In debug telemetry mode, `summarize_telemetry.py` writes `telemetry.debug.summary.json` and root `run.trace.jsonl`; use those for efficiency, stall, fallback, and token-pressure analysis before raw event logs.
 - Run the model catalog phase before choosing or launching model routes.
 - Prompt audit must pass before branch worktree creation or branch dispatch.
 - Keep branch orchestrator slots saturated up to `max_active_branch_agents`; waves are scheduling order, not dependency barriers.

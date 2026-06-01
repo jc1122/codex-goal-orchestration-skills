@@ -20,7 +20,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.53
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.54
 ```
 
 Install to a custom absolute skills root:
@@ -140,6 +140,7 @@ plans/orchestration/<job-id>/
   preflight.lint.json
   telemetry.summary.json              # runtime-created before final pass
   telemetry.debug.summary.json        # debug mode only
+  run.trace.jsonl                     # debug mode structured full run trace
   audit/
   branches/
   workers/
@@ -259,14 +260,23 @@ Enable debug telemetry in the preflight brief. There is no runtime flag; `job.ma
 }
 ```
 
-If a user says "use goal-preflight in debug mode," the preflight agent should set `telemetry_mode: "debug"` in the structured brief. Debug mode is passive: it must not change route selection, polling cadence, scheduling, watchdog thresholds, or validation outcomes. It adds packet-level `telemetry.debug.json`, append-only `debug.events.jsonl`, and bundle-level `telemetry.debug.summary.json`. Raw prompts, raw model outputs, full logs, secrets, and USD/pricing fields remain prohibited; `raw_text` must be `false`.
+If a user says "use goal-preflight in debug mode," the preflight agent should set `telemetry_mode: "debug"` in the structured brief. Debug mode is passive: it must not change route selection, polling cadence, scheduling, watchdog thresholds, or validation outcomes. It adds packet-level `telemetry.debug.json`, append-only `debug.events.jsonl`, bundle-level `telemetry.debug.summary.json`, and root `run.trace.jsonl`. Raw prompts, raw model outputs, full logs, secrets, and USD/pricing fields remain prohibited; `raw_text` must be `false`.
 
-Generate or refresh the debug summary:
+`run.trace.jsonl` is the investigation artifact for efficiency and stall analysis. It indexes scheduler events, packet debug start/end events, launcher state transitions, model attempts, packet telemetry, and terminal artifacts by path, status, hashes, counts, timings, and token usage where available. It does not embed raw log lines, raw prompt text, or raw model output.
+
+Generate or refresh the debug summary and trace:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py" \
   --bundle-dir /abs/bundle \
   --debug
+```
+
+Inspect a debug run:
+
+```bash
+jq '.model_usage, .text_metrics, .time_metrics, .trace' /abs/bundle/telemetry.debug.summary.json
+jq -c 'select(.event_type=="scheduler_event" or .event_type=="launcher_state" or .event_type=="model_attempt")' /abs/bundle/run.trace.jsonl
 ```
 
 ## Lite Advisors

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,7 @@ PREMIUM_ALIASES = {
 MINI_SPARK_ALIASES = ("codex-mini", "codex-spark")
 DEBUG_TELEMETRY_FILENAME = "telemetry.debug.json"
 DEBUG_EVENTS_FILENAME = "debug.events.jsonl"
+RUN_TRACE_FILENAME = "run.trace.jsonl"
 
 
 def zero_usage() -> dict[str, int]:
@@ -65,6 +67,350 @@ def load_json(path: Path) -> dict[str, Any]:
     if not isinstance(data, dict):
         raise ValueError("telemetry artifact must be a JSON object")
     return data
+
+
+def file_sha256(path: Path) -> str | None:
+    if not path.exists() or not path.is_file():
+        return None
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def file_size(path: Path) -> int | None:
+    if not path.exists() or not path.is_file():
+        return None
+    return path.stat().st_size
+
+
+def rel_path(bundle_dir: Path, path: Path) -> str:
+    return path.relative_to(bundle_dir).as_posix()
+
+
+def read_json_object(path: Path) -> dict[str, Any] | None:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def compact_artifact_ref(bundle_dir: Path, path: Path) -> dict[str, Any]:
+    return {
+        "path": rel_path(bundle_dir, path),
+        "sha256": file_sha256(path),
+        "size_bytes": file_size(path),
+    }
+
+
+def append_trace_event(events: list[dict[str, Any]], event: dict[str, Any]) -> None:
+    event.setdefault("schema_version", 1)
+    events.append(event)
+
+
+def iter_scheduler_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    scheduler_dir = bundle_dir / "schedulers"
+    if not scheduler_dir.is_dir():
+        return events
+    for path in sorted(scheduler_dir.glob("*.json")):
+        data = read_json_object(path)
+        if data is None:
+            append_trace_event(
+                events,
+                {
+                    "event_type": "trace_defect",
+                    "source": rel_path(bundle_dir, path),
+                    "message": "scheduler ledger is not readable JSON object",
+                },
+            )
+            continue
+        ledger_events = data.get("events") if isinstance(data.get("events"), list) else []
+        for item in ledger_events:
+            if not isinstance(item, dict):
+                continue
+            trace = {
+                "event_type": "scheduler_event",
+                "source": rel_path(bundle_dir, path),
+                "scheduler_kind": data.get("scheduler_kind"),
+                "scheduler_path": data.get("scheduler_path"),
+                "capacity": data.get("capacity"),
+                "item_ids": data.get("item_ids") if isinstance(data.get("item_ids"), list) else None,
+                "scheduler_seq": item.get("seq"),
+                "timestamp": item.get("timestamp"),
+                "runtime_ref": item.get("runtime_ref"),
+                "event": item.get("event"),
+                "id": item.get("id"),
+                "status": item.get("status"),
+                "reason_code": item.get("reason_code"),
+                "reason": item.get("reason"),
+                "eligible_ids": item.get("eligible_ids") if isinstance(item.get("eligible_ids"), list) else None,
+            }
+            append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+    return events
+
+
+def iter_debug_event_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for root_name in TELEMETRY_ROOTS:
+        root = bundle_dir / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(root.glob(f"**/{DEBUG_EVENTS_FILENAME}")):
+            for line_no, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                except Exception:
+                    append_trace_event(
+                        events,
+                        {
+                            "event_type": "trace_defect",
+                            "source": rel_path(bundle_dir, path),
+                            "line": line_no,
+                            "message": "debug event line is not valid JSON",
+                        },
+                    )
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                trace = {
+                    "event_type": "packet_debug_event",
+                    "source": rel_path(bundle_dir, path),
+                    "line": line_no,
+                    "timestamp": data.get("timestamp"),
+                    "packet_id": data.get("packet_id"),
+                    "role": data.get("role"),
+                    "phase": data.get("phase"),
+                    "event": data.get("event"),
+                    "elapsed_ms": data.get("elapsed_ms"),
+                    "status": data.get("status"),
+                    "exit_status": data.get("exit_status"),
+                }
+                append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+    return events
+
+
+def iter_launcher_state_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for root_name in TELEMETRY_ROOTS:
+        root = bundle_dir / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(root.glob("**/launcher-state.json")):
+            data = read_json_object(path)
+            if data is None:
+                append_trace_event(
+                    events,
+                    {
+                        "event_type": "trace_defect",
+                        "source": rel_path(bundle_dir, path),
+                        "message": "launcher state is not readable JSON object",
+                    },
+                )
+                continue
+            state_events = data.get("events") if isinstance(data.get("events"), list) else []
+            for item in state_events:
+                if not isinstance(item, dict):
+                    continue
+                trace = {
+                    "event_type": "launcher_state",
+                    "source": rel_path(bundle_dir, path),
+                    "packet_id": data.get("packet_id"),
+                    "role": data.get("role"),
+                    "terminal_state": data.get("terminal_state"),
+                    "state_seq": item.get("seq"),
+                    "state": item.get("state"),
+                    "attempt_index": item.get("attempt_index"),
+                    "alias": item.get("alias"),
+                    "provider": item.get("provider"),
+                    "model": item.get("model"),
+                    "returncode": item.get("returncode"),
+                    "dirty": item.get("dirty"),
+                    "output_nonempty": item.get("output_nonempty"),
+                    "message": item.get("message"),
+                }
+                append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+    return events
+
+
+def iter_debug_telemetry_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for path in discover_telemetry_files(bundle_dir, debug=True):
+        data = read_json_object(path)
+        if data is None:
+            append_trace_event(
+                events,
+                {
+                    "event_type": "trace_defect",
+                    "source": rel_path(bundle_dir, path),
+                    "message": "debug telemetry is not readable JSON object",
+                },
+            )
+            continue
+        packet_id = data.get("packet_id")
+        role = data.get("role")
+        packet_event = {
+            "event_type": "packet_telemetry",
+            "source": rel_path(bundle_dir, path),
+            "packet_id": packet_id,
+            "role": role,
+            "route_class": data.get("route_class"),
+            "prompt_artifact": data.get("prompt_artifact"),
+            "output_artifact": data.get("output_artifact"),
+            "text_metrics": data.get("text_metrics") if isinstance(data.get("text_metrics"), dict) else None,
+            "success_metrics": data.get("success_metrics") if isinstance(data.get("success_metrics"), dict) else None,
+        }
+        append_trace_event(events, {key: value for key, value in packet_event.items() if value is not None})
+        model_usage = data.get("model_usage") if isinstance(data.get("model_usage"), dict) else {}
+        attempts = model_usage.get("attempts") if isinstance(model_usage.get("attempts"), list) else []
+        for index, attempt in enumerate(attempts):
+            if not isinstance(attempt, dict):
+                continue
+            timing = attempt.get("timing") if isinstance(attempt.get("timing"), dict) else {}
+            trace = {
+                "event_type": "model_attempt",
+                "source": rel_path(bundle_dir, path),
+                "packet_id": packet_id,
+                "role": role,
+                "attempt_index": index,
+                "alias": attempt.get("alias"),
+                "provider": attempt.get("provider"),
+                "model": attempt.get("model"),
+                "effort": attempt.get("effort"),
+                "timeout_seconds": attempt.get("timeout_seconds"),
+                "called": attempt.get("called"),
+                "accepted": attempt.get("accepted"),
+                "usage": attempt.get("usage") if isinstance(attempt.get("usage"), dict) else None,
+                "timed_out": timing.get("timed_out"),
+                "elapsed_seconds": timing.get("elapsed_seconds"),
+            }
+            append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+    return events
+
+
+TERMINAL_ARTIFACT_PATTERNS = (
+    "main.status.json",
+    "audit/prompt-audit.json",
+    "audit/prompt-audit-phase.json",
+    "branches/*.status.json",
+    "branches/*.review.json",
+    "branches/*.pre_review_gate.json",
+    "workers/*/status.json",
+    "research/*/research.json",
+    "reviewers/*/review.json",
+    "lite/*/advice.json",
+    "amendments/*.decision.json",
+    "amendments/*.proposal.json",
+    "amendments/*.validation.json",
+    "amendments/*.accepted.json",
+)
+
+
+def terminal_artifact_kind(path: Path) -> str:
+    parts = path.parts
+    if path.name == "prompt-audit.json":
+        return "prompt_audit"
+    if path.name == "prompt-audit-phase.json":
+        return "prompt_audit_phase"
+    if path.name == "main.status.json":
+        return "main_status"
+    if path.name == "status.json" and "workers" in parts:
+        return "worker_status"
+    if path.name.endswith(".status.json"):
+        return "branch_status"
+    if path.name.endswith(".review.json") or path.name == "review.json":
+        return "review"
+    if path.name.endswith(".pre_review_gate.json"):
+        return "pre_review_gate"
+    if path.name == "research.json":
+        return "research"
+    if path.name == "advice.json":
+        return "lite_advice"
+    if path.name.endswith(".decision.json"):
+        return "amendment_decision"
+    if path.name.endswith(".proposal.json"):
+        return "amendment_proposal"
+    if path.name.endswith(".validation.json"):
+        return "amendment_validation"
+    if path.name.endswith(".accepted.json"):
+        return "amendment_acceptance"
+    return "artifact"
+
+
+def iter_terminal_artifact_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    paths: list[Path] = []
+    for pattern in TERMINAL_ARTIFACT_PATTERNS:
+        paths.extend(sorted(bundle_dir.glob(pattern)))
+    seen: set[Path] = set()
+    for path in paths:
+        if path in seen or not path.is_file():
+            continue
+        seen.add(path)
+        data = read_json_object(path)
+        artifact = compact_artifact_ref(bundle_dir, path)
+        trace = {
+            "event_type": "terminal_artifact",
+            "source": rel_path(bundle_dir, path),
+            "artifact_kind": terminal_artifact_kind(path),
+            "artifact": artifact,
+            "status": data.get("status") if isinstance(data, dict) else None,
+            "review_status": data.get("review_status") if isinstance(data, dict) else None,
+            "can_start": data.get("can_start") if isinstance(data, dict) else None,
+            "packet_id": data.get("packet_id") if isinstance(data, dict) else None,
+            "branch_id": data.get("branch_id") if isinstance(data, dict) else None,
+            "job_id": data.get("job_id") if isinstance(data, dict) else None,
+            "amendment_id": data.get("amendment_id") if isinstance(data, dict) else None,
+        }
+        append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+    return events
+
+
+def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    for producer in (
+        iter_scheduler_trace_events,
+        iter_debug_event_trace_events,
+        iter_launcher_state_trace_events,
+        iter_debug_telemetry_trace_events,
+        iter_terminal_artifact_trace_events,
+    ):
+        events.extend(producer(bundle_dir))
+
+    def sort_key(event: dict[str, Any]) -> tuple[str, str, int, int]:
+        timestamp = event.get("timestamp") if isinstance(event.get("timestamp"), str) else ""
+        source = event.get("source") if isinstance(event.get("source"), str) else ""
+        source_seq = event.get("scheduler_seq") or event.get("state_seq") or event.get("line") or event.get("attempt_index") or 0
+        if not isinstance(source_seq, int) or isinstance(source_seq, bool):
+            source_seq = 0
+        type_order = {
+            "scheduler_event": 10,
+            "packet_debug_event": 20,
+            "launcher_state": 30,
+            "model_attempt": 40,
+            "packet_telemetry": 50,
+            "terminal_artifact": 60,
+            "trace_defect": 90,
+        }.get(str(event.get("event_type")), 80)
+        return (timestamp, source, type_order, source_seq)
+
+    ordered = sorted(events, key=sort_key)
+    for seq, event in enumerate(ordered, start=1):
+        event["trace_seq"] = seq
+    return ordered
+
+
+def trace_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
+    event_types: dict[str, int] = {}
+    for event in events:
+        event_type = event.get("event_type") if isinstance(event.get("event_type"), str) else "unknown"
+        event_types[event_type] = event_types.get(event_type, 0) + 1
+    return {
+        "path": RUN_TRACE_FILENAME,
+        "event_count": len(events),
+        "event_types": dict(sorted(event_types.items())),
+        "raw_text_included": False,
+    }
 
 
 def ensure_bucket(groups: dict[str, dict[str, Any]], key: str) -> dict[str, Any]:
@@ -405,6 +751,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
 
 def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
     files = discover_telemetry_files(bundle_dir, debug=True)
+    trace_events = build_run_trace(bundle_dir)
     text_totals = {
         "packet_count": 0,
         "prompt_chars": 0,
@@ -713,6 +1060,7 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             "fallback_rate": fallback_rate,
             "text_pressure_ratio": text_pressure_ratio,
         },
+        "trace": trace_summary(trace_events),
         "packets": sorted(packet_attempts, key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]))),
     }
 
@@ -731,6 +1079,16 @@ def manifest_debug_enabled(bundle_dir: Path) -> bool:
         return False
     policy = manifest.get("telemetry_policy")
     return isinstance(policy, dict) and policy.get("mode") == "debug"
+
+
+def write_run_trace(bundle_dir: Path) -> Path:
+    events = build_run_trace(bundle_dir)
+    output_path = bundle_dir / RUN_TRACE_FILENAME
+    output_path.write_text(
+        "".join(json.dumps(event, sort_keys=True) + "\n" for event in events),
+        encoding="utf-8",
+    )
+    return output_path
 
 
 def main() -> int:
@@ -759,12 +1117,15 @@ def main() -> int:
     )
     summary = summarize(bundle_dir, debug=args.debug)
     output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.debug:
+        write_run_trace(bundle_dir)
     if not args.debug and manifest_debug_enabled(bundle_dir):
         debug_summary = summarize(bundle_dir, debug=True)
         (bundle_dir / "telemetry.debug.summary.json").write_text(
             json.dumps(debug_summary, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        write_run_trace(bundle_dir)
     print(output_path)
     return 0
 

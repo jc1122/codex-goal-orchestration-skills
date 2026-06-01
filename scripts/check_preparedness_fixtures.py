@@ -2404,6 +2404,14 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     telemetry_bundle = tmp_path / "telemetry-pressure"
     telemetry_packet = telemetry_bundle / "workers" / "B01-W01"
     telemetry_packet.mkdir(parents=True)
+    write_json(
+        telemetry_bundle / "job.manifest.json",
+        {
+            "schema_version": 1,
+            "job_id": "telemetry-pressure",
+            "telemetry_policy": {"schema_version": 1, "mode": "debug"},
+        },
+    )
     prompt_path = telemetry_packet / "prompt.md"
     prompt_path.write_text("telemetry pressure fixture prompt\n", encoding="utf-8")
     status_path = telemetry_packet / "status.json"
@@ -2442,6 +2450,45 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     )
     if not (telemetry_packet / "telemetry.debug.json").exists():
         raise SystemExit("extract_telemetry.py --debug must write telemetry.debug.json")
+    (telemetry_packet / "debug.events.jsonl").write_text(
+        json.dumps({"schema_version": 1, "timestamp": "2026-01-01T00:00:00+00:00", "packet_id": "B01-W01", "role": "worker", "phase": "packet", "event": "start"}, sort_keys=True) + "\n"
+        + json.dumps({"schema_version": 1, "timestamp": "2026-01-01T00:00:03+00:00", "packet_id": "B01-W01", "role": "worker", "phase": "packet", "event": "end", "elapsed_ms": 3000, "status": "ok", "exit_status": 0}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    write_json(
+        telemetry_packet / "launcher-state.json",
+        {
+            "schema_version": 1,
+            "packet_id": "B01-W01",
+            "role": "worker",
+            "state_machine": "active -> timeout|fail-clean|fail-dirty|pass|blocked",
+            "terminal_state": "pass",
+            "events": [
+                {"seq": 1, "state": "active", "attempt_index": 0, "alias": "codex-mini", "provider": "codex", "model": "gpt-5.4-mini"},
+                {"seq": 2, "state": "pass", "attempt_index": 0, "alias": "codex-mini", "provider": "codex", "model": "gpt-5.4-mini", "returncode": 0, "dirty": False, "output_nonempty": True},
+            ],
+        },
+    )
+    scheduler_dir = telemetry_bundle / "schedulers"
+    scheduler_dir.mkdir(parents=True)
+    write_json(
+        scheduler_dir / "main.scheduler.json",
+        {
+            "schema_version": 2,
+            "scheduler_kind": "main-branch-pool",
+            "scheduler_path": "schedulers/main.scheduler.json",
+            "manifest_sha256": "fixture",
+            "capacity": 1,
+            "item_ids": ["B01"],
+            "events": [
+                {"seq": 1, "timestamp": "2026-01-01T00:00:00+00:00", "runtime_ref": "fixture", "event": "ready", "id": "B01"},
+                {"seq": 2, "timestamp": "2026-01-01T00:00:01+00:00", "runtime_ref": "fixture", "event": "launch", "id": "B01"},
+                {"seq": 3, "timestamp": "2026-01-01T00:00:02+00:00", "runtime_ref": "fixture", "event": "finish", "id": "B01", "status": "pass"},
+                {"seq": 4, "timestamp": "2026-01-01T00:00:03+00:00", "runtime_ref": "fixture", "event": "close", "id": "B01"},
+            ],
+        },
+    )
+    write_json(telemetry_bundle / "main.status.json", {"job_id": "telemetry-pressure", "status": "pass"})
     run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
     telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
     if telemetry_summary.get("telemetry_count") != 1:
@@ -2449,6 +2496,8 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
     if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
         raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")
+    if not (telemetry_bundle / "telemetry.debug.summary.json").exists() or not (telemetry_bundle / "run.trace.jsonl").exists():
+        raise SystemExit("summarize_telemetry.py must auto-write debug summary and run trace when manifest telemetry is debug")
     run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix(), "--debug"])
     debug_summary = read_json(telemetry_bundle / "telemetry.debug.summary.json")
     if not isinstance(debug_summary, dict) or "model_usage" not in debug_summary:
@@ -2460,6 +2509,19 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     determinism = debug_summary.get("determinism")
     if not isinstance(determinism, dict) or "drift_count" not in determinism:
         raise SystemExit("debug telemetry summary must expose determinism drift count")
+    trace = debug_summary.get("trace")
+    if not isinstance(trace, dict) or trace.get("path") != "run.trace.jsonl" or not isinstance(trace.get("event_count"), int):
+        raise SystemExit("debug telemetry summary must expose run trace metadata")
+    trace_path = telemetry_bundle / "run.trace.jsonl"
+    if not trace_path.exists():
+        raise SystemExit("debug telemetry summary must write run.trace.jsonl")
+    trace_events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    trace_types = {event.get("event_type") for event in trace_events if isinstance(event, dict)}
+    for expected_type in ["scheduler_event", "packet_debug_event", "launcher_state", "model_attempt", "packet_telemetry", "terminal_artifact"]:
+        if expected_type not in trace_types:
+            raise SystemExit(f"run.trace.jsonl missing expected event type {expected_type}: {trace_types!r}")
+    if any("raw_text" in event for event in trace_events if isinstance(event, dict)):
+        raise SystemExit("run.trace.jsonl must not include raw_text payloads")
 
 
 def run_example_brief_fixtures(tmp_path: Path) -> None:

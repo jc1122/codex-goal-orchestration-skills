@@ -10,6 +10,8 @@ plans/orchestration/<job-id>/
   preflight.lint.json
   PREFLIGHT_REPORT.md
   telemetry.summary.json        # runtime-created before final pass
+  telemetry.debug.summary.json  # debug mode runtime-created summary
+  run.trace.jsonl               # debug mode structured full run trace
   schedulers/
     main.scheduler.json         # runtime-created branch scheduler ledger
     B01.worker.scheduler.json   # runtime-created worker scheduler ledger
@@ -186,7 +188,7 @@ Preflight script entry paths are absolute only: `lint_preflight_brief.py --brief
 - Plan-amender packets live under `amendments/Axxx.packet/`, select an allowed amender model ladder in `route.json`, write `telemetry.json`, and write proposals to the sibling `amendments/Axxx.proposal.json`.
 - `main.prompt.md` requires `summarize_telemetry.py --bundle-dir <bundle>` before final validation and requires `telemetry.summary.json` for pass.
 - `main.prompt.md` says optional Lite advisors are context routers only and cannot satisfy audit, review, mergeability, or DoD evidence.
-- `job.manifest.json` contains a `telemetry_policy` object. `schema_version` is 1 and mode is `standard` by default; debug mode is passive and must not change route selection, polling, or scheduling strategy.
+- `job.manifest.json` contains a `telemetry_policy` object. `schema_version` is 1 and mode is `standard` by default; debug mode is passive and must not change route selection, polling, or scheduling strategy. Debug summary generation writes `run.trace.jsonl` as a structured trace of scheduler events, packet debug events, launcher states, model attempts, packet telemetry, and terminal artifacts without duplicating raw prompts, outputs, or full logs.
 - Preflight brief shorthand `telemetry_mode: "debug"` or `debug_telemetry: true` expands deterministically to the full safe debug `telemetry_policy`.
 - `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> GitHub Copilot `gpt-5.4` -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `research_worker_policy` defining `research-worker` packets as broad read-only information retrieval through Codex native search plus configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and read-only local access. It must not suppress user config, and it must prohibit file edits and state-changing actions.

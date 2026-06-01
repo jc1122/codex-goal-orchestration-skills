@@ -8,7 +8,7 @@ During runtime orchestration, prefer generated JSON artifacts, script `--help`, 
 
 For generated prompt-audit, runtime, and Lite advisory packets, inspect packet-local `prompt.md`, `packet-context.json`, `route.json`, `launch-config.json`, status/review/research/advice/audit outputs, and `telemetry.json` before expanding to implementation files.
 
-Debug telemetry is manifest-owned through `job.manifest.json.telemetry_policy`; it is not a runtime flag. For goal-preflight, "debug mode" means the structured brief should set `telemetry_mode: "debug"` so bundle creation expands the full safe policy. Debug mode is passive, `raw_text` must remain false, and USD/pricing fields are prohibited.
+Debug telemetry is manifest-owned through `job.manifest.json.telemetry_policy`; it is not a runtime flag. For goal-preflight, "debug mode" means the structured brief should set `telemetry_mode: "debug"` so bundle creation expands the full safe policy. Debug mode writes `run.trace.jsonl` plus debug telemetry summaries for efficiency and stall analysis, but remains passive; `raw_text` must remain false, raw logs/prompts/outputs must not be duplicated, and USD/pricing fields are prohibited.
 
 For main prompt audit, use `run_prompt_audit_phase.py` with the phase-manifest flags; inspect `audit/prompt-audit-phase.json` before raw event logs.
 
