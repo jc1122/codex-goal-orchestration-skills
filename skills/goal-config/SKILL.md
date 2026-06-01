@@ -1,6 +1,6 @@
 ---
 name: goal-config
-version: 0.2.58
+version: 0.2.59
 description: "Configure and verify goal orchestration model/provider profiles. Use when the user wants lean agent UX for model ladders, harness providers, branch/worker aggressiveness, token/character/time effort settings, or a fail-closed smoke test before goal-preflight or runtime orchestration."
 ---
 
@@ -28,6 +28,8 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/runtime_phase_manifest.py" --mark
 ## Runtime Rules
 
 - Use `scan_configurables.py --json` before proposing configuration changes.
+- Before creating a config, run `scan_configurables.py --questions-json`. If the user has not already specified the model/harness profile, effort/aggressiveness, and validation/smoke/debug preferences, ask the missing questions first; do not silently generate a default profile.
+- Keep intake lean: ask only missing categories, prefer one concise grouped question, and proceed without extra prompting when the user explicitly says to use defaults or reuse a checked profile.
 - Write an explicit `goal.config.json` with `create_goal_config.py`; do not rely on hidden defaults.
 - When the user names models or harnesses, encode them directly with `--role-model ROLE:HARNESS:PROVIDER/MODEL[:ALIAS[:PURPOSE]]`; do not substitute a different provider/model without asking.
 - For custom harnesses, pass `--harness-spec /abs/spec.json`. The spec must include a harness `name`, `kind`, `command`, smoke invocation, and runtime invocation when it will be used by worker/reviewer launchers.

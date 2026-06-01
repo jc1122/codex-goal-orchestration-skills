@@ -244,6 +244,25 @@ def main() -> int:
             "harnesses",
         ):
             require(category in inventory["categories"], f"missing inventory category: {category}")
+        questions = json.loads(run([sys.executable, SCAN.as_posix(), "--questions-json"]).stdout)
+        require(questions["status"] == "pass", "preference question inventory should pass")
+        question_ids = {item.get("id") for item in questions.get("questions", []) if isinstance(item, dict)}
+        for question_id in ("model_profile", "effort_profile", "validation_mode"):
+            require(question_id in question_ids, f"missing preference question: {question_id}")
+        require(questions.get("ask_only_missing") is True, "preference intake must ask only missing categories")
+        require(
+            any("do not create" in item.lower() for item in questions.get("do_not_create_until", [])),
+            "preference intake must block silent config creation",
+        )
+        phase_manifest = run(
+            [
+                sys.executable,
+                (GOAL_CONFIG / "scripts" / "runtime_phase_manifest.py").as_posix(),
+                "--markdown",
+            ]
+        ).stdout
+        require("preference_intake" in phase_manifest, "phase manifest must include preference intake")
+        require("--questions-json" in phase_manifest, "phase manifest must point to question inventory")
 
         run(
             [

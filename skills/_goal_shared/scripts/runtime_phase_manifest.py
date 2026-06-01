@@ -35,10 +35,17 @@ PHASES: dict[str, dict[str, Any]] = {
                 "agent_does": "inspect the inventory categories instead of broad source scans before proposing knob changes",
             },
             {
+                "id": "preference_intake",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py --questions-json > /abs/goal-config-questions.json",
+                "agent_does": "if the user has not already specified harness/model profile, effort/aggressiveness, and validation/smoke/debug preferences, ask concise questions from goal-config-questions.json before creating a config",
+                "pass": "preferences are captured, an existing checked profile is selected, or the user explicitly says to use defaults",
+                "on_fail": "do not create goal.config.json silently from defaults",
+            },
+            {
                 "id": "create",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --role-model lite_agent:opencode:provider/model --role-model demanding_agent:opencode:provider/model --harness-spec /abs/custom-harness.json --output /abs/goal.config.json",
                 "artifacts": ["goal.config.json"],
-                "agent_does": "omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit",
+                "agent_does": "translate captured preferences into explicit flags; omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit",
             },
             {
                 "id": "model_check",

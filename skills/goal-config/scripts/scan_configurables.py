@@ -145,10 +145,68 @@ def build_inventory(contract: Any) -> dict[str, Any]:
     }
 
 
+def build_preference_questions() -> dict[str, Any]:
+    return {
+        "schema_version": 1,
+        "status": "pass",
+        "purpose": "Ask before creating goal.config.json when the user has not already supplied these preferences.",
+        "do_not_create_until": [
+            "do not create goal.config.json until model_profile is answered or the user explicitly says to use defaults",
+            "do not create goal.config.json until validation_mode is answered or the user explicitly says to use defaults",
+        ],
+        "ask_only_missing": True,
+        "questions": [
+            {
+                "id": "model_profile",
+                "ask_when_missing": ["preset", "role-model", "existing checked profile path"],
+                "question": "Which harness/model profile should this goal use?",
+                "recommended_default": "reuse an existing checked profile when available; otherwise ask before using opencode-deepseek-v4",
+                "options": [
+                    "reuse existing checked goal.config.json",
+                    "opencode DeepSeek v4 Pro plus Flash",
+                    "Gemini models",
+                    "Antigravity/agy current default through generic-cli",
+                    "mixed/custom harnesses with explicit role-model mappings",
+                ],
+                "maps_to": ["--preset", "--role-model", "--harness-spec", "--lite-ladder", "--worker-ladder", "--reviewer-ladder", "--amender-ladder"],
+            },
+            {
+                "id": "effort_profile",
+                "ask_when_missing": ["aggressiveness", "timeouts", "branch/worker caps"],
+                "question": "How aggressive should orchestration be for time and token/character usage?",
+                "recommended_default": "balanced: configured default caps and timeouts",
+                "options": [
+                    "lean: fewer branches/workers and shorter timeouts",
+                    "balanced: default caps and timeouts",
+                    "thorough: higher allowed parallelism within hard caps and longer timeouts",
+                ],
+                "maps_to": ["--max-active-branch-agents", "--max-active-worker-packets", "--lite-timeout-seconds", "--demanding-timeout-seconds"],
+            },
+            {
+                "id": "validation_mode",
+                "ask_when_missing": ["model check", "smoke requirement", "debug telemetry intent"],
+                "question": "What validation and telemetry level should be used before preflight consumes this config?",
+                "recommended_default": "fail-closed model check plus smoke for new or changed harnesses",
+                "options": [
+                    "model check only for a recently checked profile",
+                    "model check plus smoke for selected roles",
+                    "model check plus smoke and debug telemetry in the preflight brief",
+                ],
+                "maps_to": ["check_goal_config.py --require-models", "check_goal_config.py --smoke", "brief telemetry_mode=debug"],
+            },
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--json", action="store_true", help="Print the inventory as JSON.")
+    parser.add_argument("--questions-json", action="store_true", help="Print preference-intake questions as JSON.")
     args = parser.parse_args()
+
+    if args.questions_json:
+        print(json.dumps(build_preference_questions(), indent=2, sort_keys=True))
+        return 0
 
     inventory = build_inventory(load_contract())
     if args.json:

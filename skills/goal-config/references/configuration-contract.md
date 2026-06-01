@@ -2,6 +2,22 @@
 
 `goal-config` produces a compact `goal.config.json` that agents can inspect before preflight or runtime orchestration.
 
+## Preference Intake
+
+Before creating `goal.config.json`, run:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py" --questions-json
+```
+
+If the user has not already supplied preferences, ask the missing categories before creating a config:
+
+- model/harness profile or existing checked profile path;
+- effort/aggressiveness for branch and worker caps, timeouts, and token/character pressure;
+- validation mode: model check only, smoke, or smoke plus debug telemetry for preflight.
+
+Do not silently create a default config unless the user explicitly says to use defaults.
+
 ## Required Shape
 
 - `schema_version`: currently `1`.

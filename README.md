@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.58
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.59
 ```
 
 Install to a custom absolute skills root:
@@ -112,6 +112,14 @@ Inventory configurable knobs:
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py" --json
 ```
+
+Ask for preferences before creating a profile when the user has not already supplied them:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/scan_configurables.py" --questions-json
+```
+
+Use those questions to capture the model/harness profile, effort/aggressiveness, and validation/smoke/debug preference. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
 
 Create the opencode DeepSeek v4 profile requested for Lite and demanding agents:
 
