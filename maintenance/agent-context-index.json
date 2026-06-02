@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:b577177cb5f1e0a31cff965aeeca11d7d2c7f52512cd200aa15e634af4ec2151"
+    "source_fingerprint": "sha256:ce242db55068372802088bd68cfa0cecca6fe9d5991a54545a18392f4717fa18"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -497,6 +497,7 @@
       "target": "goal-branch-orchestrator",
       "paths": [
         "skills/goal-preflight/assets/branch.prompt.template.md",
+        "skills/goal-preflight/assets/runtime-rules.template.md",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
     },
