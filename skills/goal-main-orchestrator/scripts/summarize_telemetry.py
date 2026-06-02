@@ -32,6 +32,7 @@ MINI_SPARK_ALIASES = ("codex-mini", "codex-spark")
 DEBUG_TELEMETRY_FILENAME = "telemetry.debug.json"
 DEBUG_EVENTS_FILENAME = "debug.events.jsonl"
 RUN_TRACE_FILENAME = "run.trace.jsonl"
+PREFLIGHT_PIPELINE_FILENAME = "preflight.pipeline.json"
 
 
 def zero_usage() -> dict[str, int]:
@@ -99,6 +100,18 @@ def compact_artifact_ref(bundle_dir: Path, path: Path) -> dict[str, Any]:
         "sha256": file_sha256(path),
         "size_bytes": file_size(path),
     }
+
+
+def relative_or_posix(bundle_dir: Path, value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path = Path(value)
+    if path.is_absolute():
+        try:
+            return path.relative_to(bundle_dir).as_posix()
+        except ValueError:
+            return path.as_posix()
+    return path.as_posix()
 
 
 def append_trace_event(events: list[dict[str, Any]], event: dict[str, Any]) -> None:
@@ -366,9 +379,109 @@ def iter_terminal_artifact_trace_events(bundle_dir: Path) -> list[dict[str, Any]
     return events
 
 
+def iter_preflight_pipeline_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    path = bundle_dir / PREFLIGHT_PIPELINE_FILENAME
+    if not path.exists():
+        return events
+    data = read_json_object(path)
+    if data is None:
+        append_trace_event(
+            events,
+            {
+                "event_type": "trace_defect",
+                "source": PREFLIGHT_PIPELINE_FILENAME,
+                "message": "preflight pipeline is not readable JSON object",
+            },
+        )
+        return events
+    commands = data.get("commands") if isinstance(data.get("commands"), list) else []
+    for index, command in enumerate(commands, start=1):
+        if not isinstance(command, dict):
+            continue
+        artifact_delta = command.get("artifact_delta") if isinstance(command.get("artifact_delta"), dict) else None
+        trace = {
+            "event_type": "preflight_phase",
+            "source": PREFLIGHT_PIPELINE_FILENAME,
+            "preflight_seq": index,
+            "phase": command.get("phase"),
+            "returncode": command.get("returncode"),
+            "elapsed_ms": command.get("elapsed_ms"),
+            "stdout_bytes": command.get("stdout_bytes"),
+            "stderr_bytes": command.get("stderr_bytes"),
+            "command_hash": command.get("command_hash"),
+            "output": relative_or_posix(bundle_dir, command.get("output")),
+            "artifact_delta": artifact_delta,
+        }
+        append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+    return events
+
+
+def preflight_pipeline_summary(bundle_dir: Path) -> dict[str, Any]:
+    path = bundle_dir / PREFLIGHT_PIPELINE_FILENAME
+    if not path.exists():
+        return {
+            "path": PREFLIGHT_PIPELINE_FILENAME,
+            "exists": False,
+            "phase_count": 0,
+            "elapsed_ms": 0,
+            "failed_phase_count": 0,
+            "phases": [],
+        }
+    data = read_json_object(path)
+    if data is None:
+        return {
+            "path": PREFLIGHT_PIPELINE_FILENAME,
+            "exists": True,
+            "readable": False,
+            "phase_count": 0,
+            "elapsed_ms": 0,
+            "failed_phase_count": 0,
+            "phases": [],
+        }
+    phases: list[dict[str, Any]] = []
+    elapsed_total = 0
+    failed_count = 0
+    commands = data.get("commands") if isinstance(data.get("commands"), list) else []
+    for command in commands:
+        if not isinstance(command, dict):
+            continue
+        elapsed_ms = command.get("elapsed_ms")
+        if isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool) and elapsed_ms >= 0:
+            elapsed_total += elapsed_ms
+        returncode = command.get("returncode")
+        if isinstance(returncode, int) and not isinstance(returncode, bool) and returncode != 0:
+            failed_count += 1
+        artifact_delta = command.get("artifact_delta") if isinstance(command.get("artifact_delta"), dict) else {}
+        phases.append(
+            {
+                "phase": command.get("phase"),
+                "elapsed_ms": elapsed_ms,
+                "returncode": returncode,
+                "stdout_bytes": command.get("stdout_bytes"),
+                "stderr_bytes": command.get("stderr_bytes"),
+                "artifact_added_count": artifact_delta.get("added_count"),
+                "artifact_modified_count": artifact_delta.get("modified_count"),
+                "artifact_removed_count": artifact_delta.get("removed_count"),
+            }
+        )
+    return {
+        "path": PREFLIGHT_PIPELINE_FILENAME,
+        "exists": True,
+        "readable": True,
+        "phase_count": len(phases),
+        "elapsed_ms": elapsed_total,
+        "failed_phase_count": failed_count,
+        "status": data.get("status"),
+        "result_kind": data.get("result_kind"),
+        "phases": phases,
+    }
+
+
 def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     for producer in (
+        iter_preflight_pipeline_trace_events,
         iter_scheduler_trace_events,
         iter_debug_event_trace_events,
         iter_launcher_state_trace_events,
@@ -384,6 +497,7 @@ def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
         if not isinstance(source_seq, int) or isinstance(source_seq, bool):
             source_seq = 0
         type_order = {
+            "preflight_phase": 5,
             "scheduler_event": 10,
             "packet_debug_event": 20,
             "launcher_state": 30,
@@ -752,6 +866,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
 def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
     files = discover_telemetry_files(bundle_dir, debug=True)
     trace_events = build_run_trace(bundle_dir)
+    preflight = preflight_pipeline_summary(bundle_dir)
     text_totals = {
         "packet_count": 0,
         "prompt_chars": 0,
@@ -785,6 +900,9 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
         "elapsed_seconds_count": 0,
         "debug_event_files": 0,
         "debug_events": 0,
+        "preflight_phase_count": preflight["phase_count"],
+        "preflight_elapsed_ms": preflight["elapsed_ms"],
+        "preflight_failed_phase_count": preflight["failed_phase_count"],
     }
     determinism = {
         "packets_with_artifacts": 0,
@@ -1034,7 +1152,11 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             "average_elapsed_seconds": average_elapsed_seconds,
             "debug_event_files": time_totals["debug_event_files"],
             "debug_events": time_totals["debug_events"],
+            "preflight_phase_count": time_totals["preflight_phase_count"],
+            "preflight_elapsed_ms": time_totals["preflight_elapsed_ms"],
+            "preflight_failed_phase_count": time_totals["preflight_failed_phase_count"],
         },
+        "preflight_pipeline": preflight,
         "determinism": {
             "packet_count": text_totals["packet_count"],
             "packets_with_artifacts": determinism["packets_with_artifacts"],

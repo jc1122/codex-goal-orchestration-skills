@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:743c3ef5b0f9a16c63b47a6663b67d35030a4acc1690413bddedc3cabf473961"
+    "source_fingerprint": "sha256:e08ca45b2686587b40db22a1983c6de7edd33d4b562e52249789dcdc4d388e91"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,11 +16,11 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 4106,
-      "approx_tokens": 46162,
+      "lines": 4149,
+      "approx_tokens": 46841,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "2790:run_base_ref_default_fixture:749l",
+        "2790:run_base_ref_default_fixture:792l",
         "1105:run_negative_amendment_fixtures:289l",
         "595:run_preflight_brief_lint_fixtures:282l",
         "328:run_topology_fixtures:265l"

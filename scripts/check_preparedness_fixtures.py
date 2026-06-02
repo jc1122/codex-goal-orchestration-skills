@@ -3172,6 +3172,49 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if debug_policy.get("mode") != "debug" or debug_policy.get("raw_text") is not False or debug_policy.get("collect") != expected_collect:
         raise SystemExit(f"telemetry_mode=debug did not expand to full safe debug policy: {debug_policy!r}")
 
+    debug_pipeline_brief = json.loads(json.dumps(pipeline_brief))
+    debug_pipeline_brief.update({"job_id": "debug-preflight-pipeline-fixture", "telemetry_mode": "debug"})
+    debug_pipeline_brief_path = tmp_path / "debug-preflight-pipeline-brief.json"
+    debug_pipeline_bundle = tmp_path / "debug-preflight-pipeline-bundle"
+    write_json(debug_pipeline_brief_path, debug_pipeline_brief)
+    debug_pipeline_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                debug_pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                debug_pipeline_bundle.as_posix(),
+                "--no-goal-config",
+                "--json",
+            ]
+        ).stdout
+    )
+    if debug_pipeline_result.get("status") != "pass":
+        raise SystemExit(f"debug preflight pipeline fixture should pass: {debug_pipeline_result!r}")
+    run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", debug_pipeline_bundle.as_posix(), "--debug"])
+    debug_pipeline_summary = read_json(debug_pipeline_bundle / "telemetry.debug.summary.json")
+    debug_pipeline_preflight = debug_pipeline_summary.get("preflight_pipeline", {})
+    if debug_pipeline_preflight.get("phase_count") != len(debug_pipeline_result.get("commands", [])):
+        raise SystemExit(f"debug summary should include preflight pipeline phase telemetry: {debug_pipeline_preflight!r}")
+    if debug_pipeline_summary.get("time_metrics", {}).get("preflight_phase_count") != debug_pipeline_preflight.get("phase_count"):
+        raise SystemExit(f"debug time metrics should expose preflight phase count: {debug_pipeline_summary.get('time_metrics')!r}")
+    debug_trace = debug_pipeline_summary.get("trace", {})
+    if debug_trace.get("event_types", {}).get("preflight_phase") != debug_pipeline_preflight.get("phase_count"):
+        raise SystemExit(f"debug run trace should include preflight phase events: {debug_trace!r}")
+    debug_trace_events = [
+        json.loads(line)
+        for line in (debug_pipeline_bundle / "run.trace.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    if not any(event.get("event_type") == "preflight_phase" for event in debug_trace_events if isinstance(event, dict)):
+        raise SystemExit("debug preflight-only run.trace.jsonl should not be empty")
+    if any("raw_text" in event for event in debug_trace_events if isinstance(event, dict)):
+        raise SystemExit("debug preflight pipeline trace must not include raw_text payloads")
+
     debug_bool_brief = {**branch_default_brief, "job_id": "debug-bool-shorthand-fixture", "debug_telemetry": True}
     debug_bool_brief_path = tmp_path / "debug-bool-brief.json"
     debug_bool_bundle = tmp_path / "debug-bool-bundle"
