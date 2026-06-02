@@ -365,10 +365,12 @@ def main() -> int:
         discover_list_script = tmp_path / "fake_opencode_models.py"
         discover_smoke_script = tmp_path / "fake_opencode_smoke.py"
         normal_cache_count_path = tmp_path / "fake-opencode-normal-model-count.txt"
+        baseline_smoke_count_path = tmp_path / "fake-opencode-baseline-model-count.txt"
         discover_count_path = tmp_path / "fake-opencode-model-count.txt"
         profile_discover_count_path = tmp_path / "fake-opencode-profile-model-count.txt"
         counting_smoke_count_path = tmp_path / "generic-smoke-count.txt"
         discover_db_path = tmp_path / "fake-opencode.db"
+        baseline_smoke_db_path = tmp_path / "fake-opencode-baseline.db"
         models_path = tmp_path / "deepseek-models.txt"
         openrouter_models_path = tmp_path / "openrouter-models.txt"
         missing_models_path = tmp_path / "missing-models.txt"
@@ -751,6 +753,14 @@ def main() -> int:
         )
 
         write_fake_opencode_discovery_scripts(discover_list_script, discover_smoke_script)
+        build_fake_opencode_discovery_config(
+            config_path,
+            config_path,
+            list_script=discover_list_script,
+            smoke_script=discover_smoke_script,
+            count_path=baseline_smoke_count_path,
+            db_path=baseline_smoke_db_path,
+        )
         build_fake_opencode_discovery_config(
             discover_config_path,
             config_path,
@@ -1343,6 +1353,8 @@ def main() -> int:
                 "--smoke",
                 "--models-output",
                 models_path.as_posix(),
+                "--opencode-db",
+                baseline_smoke_db_path.as_posix(),
                 "--output",
                 smoke_report_path.as_posix(),
                 "--state-output",

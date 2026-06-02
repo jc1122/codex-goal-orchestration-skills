@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:b73c05a0a0120f0ef9277c7bfc2b99b8eda1519fd218fadd50e682dfd964f203"
+    "source_fingerprint": "sha256:b5ef7360ca5c6d109567cbfbdf04a637b32e34783c7bf26e277cd21715231915"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,11 +29,11 @@
     {
       "path": "scripts/check_goal_config_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 1666,
-      "approx_tokens": 20226,
+      "lines": 1678,
+      "approx_tokens": 20360,
       "rule": "--help or JSON before implementation source",
       "top_functions": [
-        "339:main:1324l",
+        "339:main:1336l",
         "237:run_integration_fixture:100l",
         "126:write_fake_opencode_discovery_scripts:43l",
         "199:build_integration_brief:36l"
@@ -482,6 +482,7 @@
         "skills/goal-preflight/scripts/extract_telemetry.py",
         "skills/goal-preflight/scripts/lint_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_preflight_brief.py",
+        "skills/goal-preflight/scripts/prepare_goal_bundle.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py",
         "skills/goal-preflight/scripts/runtime_lite_runner.py",
         "skills/goal-preflight/scripts/runtime_phase_manifest.py",
@@ -504,7 +505,8 @@
       "paths": [
         "skills/goal-preflight/SKILL.md",
         "skills/goal-preflight/scripts/create_goal_bundle.py",
-        "skills/goal-preflight/scripts/lint_goal_bundle.py"
+        "skills/goal-preflight/scripts/lint_goal_bundle.py",
+        "skills/goal-preflight/scripts/prepare_goal_bundle.py"
       ]
     },
     {
