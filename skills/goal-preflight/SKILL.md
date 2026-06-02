@@ -1,6 +1,6 @@
 ---
 name: goal-preflight
-version: 0.2.69
+version: 0.2.70
 description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize rolling-scheduled branch groups and worker-sized work items when missing, enforce reproducible manifest paths and telemetry requirements, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
@@ -32,7 +32,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/prepare_goal_bundle.py" \
   --brief /abs/brief.json \
   --repo-root /abs/repo \
   --out-dir /abs/bundle \
-  --json
+  --output /abs/bundle/preflight.pipeline.json
 ```
 
 For a compact state snapshot (no jq), run:

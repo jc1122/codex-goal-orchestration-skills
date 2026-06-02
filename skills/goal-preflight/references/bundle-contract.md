@@ -18,18 +18,18 @@ plans/orchestration/<job-id>/
   telemetry.summary.json        # runtime-created before final pass
   telemetry.debug.summary.json  # debug mode runtime-created summary
   run.trace.jsonl               # debug mode structured full run trace
-  schedulers/
+  schedulers/                     # runtime-created on first scheduler write
     main.scheduler.json         # runtime-created branch scheduler ledger
     B01.worker.scheduler.json   # runtime-created worker scheduler ledger
   branches/
     B01.prompt.md
     B01.pre_review_gate.json    # runtime-created before reviewer launch
-  workers/
-  research/
-  reviewers/
-  audit/
-  lite/
-  amendments/
+  workers/                      # runtime-created on first worker packet
+  research/                     # runtime-created on first research-worker packet
+  reviewers/                    # runtime-created on reviewer dispatch
+  audit/                        # runtime-created during prompt audit
+  lite/                         # runtime-created only when Lite packets exist
+  amendments/                   # runtime-created when amendment packets/proposals exist
 ```
 
 ## Manifest

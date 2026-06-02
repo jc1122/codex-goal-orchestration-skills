@@ -389,6 +389,11 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     serial_chain_brief = {
         "job_id": "topology-serial-chain",
         "base_ref": "main",
+        "goal": "Validate serial branch topology warnings.",
+        "source_summary": "A three-branch dependency chain is used to prove low branch utilization reporting.",
+        "required_evidence": ["The bundle linter reports a low-utilization warning."],
+        "final_dod": ["Readiness reports max_ready_width=1 for the serial DAG."],
+        "parallelization_rationale": "The branches can run concurrently as a saturated pool.",
         "branches": [
             branch_fixture("B01", "README.md"),
             branch_fixture("B02", "skills/goal-preflight/SKILL.md", depends_on=["B01"]),
@@ -424,6 +429,35 @@ def run_topology_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"dependency-aware waves should not put dependent branches in the same wave: {serial_waves!r}")
     if serial_wave_by_branch.get("B03", {}).get("dependency_level") != 3:
         raise SystemExit(f"dependency-aware waves should preserve topological dependency levels: {serial_waves!r}")
+    serial_lint = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_goal_bundle.py",
+                "--bundle-dir",
+                serial_chain_bundle.as_posix(),
+                "--no-write",
+            ]
+        ).stdout
+    )
+    if not any("max ready width" in item.get("message", "") for item in serial_lint.get("defects", [])):
+        raise SystemExit(f"serial branch DAG should produce a low-utilization lint warning: {serial_lint!r}")
+    serial_readiness = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/render_goal_bootloader.py",
+                "--bundle-dir",
+                serial_chain_bundle.as_posix(),
+                "--readiness",
+                "--json",
+            ]
+        ).stdout
+    )
+    if serial_readiness.get("branch_utilization", {}).get("max_ready_width") != 1:
+        raise SystemExit(f"readiness should report serial branch max_ready_width=1: {serial_readiness!r}")
+    if not any(item.get("code") == "parallelization_rationale_dag_mismatch" for item in serial_readiness.get("warnings", [])):
+        raise SystemExit(f"readiness should warn when rationale overstates serial DAG parallelism: {serial_readiness!r}")
 
     overlap_brief = {
         "job_id": "topology-cross-overlap",
@@ -2810,6 +2844,16 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"prepare_goal_bundle.py should expose launch_allowed=true for git-backed fixture: {pipeline_result!r}")
     if "readiness_full" in pipeline_result or "config_selection_full" in pipeline_result:
         raise SystemExit(f"prepare_goal_bundle.py should keep default pipeline output compact: {pipeline_result!r}")
+    commands = pipeline_result.get("commands", [])
+    expected_phases = ["brief_lint", "runtime_gate", "config_selection", "create_bundle", "bundle_lint", "repair_gate", "readiness"]
+    if [item.get("phase") for item in commands] != expected_phases:
+        raise SystemExit(f"prepare_goal_bundle.py should record every canonical phase: {commands!r}")
+    for item in commands:
+        for key in ["elapsed_ms", "stdout_bytes", "stderr_bytes", "artifact_delta"]:
+            if key not in item:
+                raise SystemExit(f"pipeline command telemetry missing {key}: {item!r}")
+        if item.get("phase") not in {"runtime_gate", "config_selection"} and not item.get("command_hash"):
+            raise SystemExit(f"command phase should record a command_hash: {item!r}")
     for artifact in [
         "preflight.brief.lint.json",
         "preflight.lint.json",
@@ -2822,6 +2866,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     ]:
         if not (pipeline_bundle / artifact).exists():
             raise SystemExit(f"prepare_goal_bundle.py did not persist canonical artifact {artifact}")
+    for runtime_dir in ["workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments"]:
+        if (pipeline_bundle / runtime_dir).exists():
+            raise SystemExit(f"preflight should lazy-create runtime-only directory, not create {runtime_dir}/")
     pipeline_manifest = read_json(pipeline_bundle / "job.manifest.json")
     source_attachments = pipeline_manifest.get("source_attachments", [])
     if not source_attachments or source_attachments[0].get("path") != "README.md" or not source_attachments[0].get("sha256"):
@@ -2835,6 +2882,61 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     assert_all_contains(runtime_rules, ["Shared Branch Runtime Rules", "Worker Parallelism", "Reviewer Requirement", "Lite Advisors"], "runtime rules appendix")
     if pipeline_manifest.get("runtime_rules_path") != "runtime-rules.md" or not pipeline_manifest.get("runtime_rules_sha256"):
         raise SystemExit(f"manifest should pin runtime-rules.md by path and sha: {pipeline_manifest!r}")
+    pipeline_prompt = (pipeline_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
+    assert_contains(pipeline_prompt, "deferred - route availability is unverified", "no-goal-config route recommendations should be deferred")
+    pipeline_readiness = read_json(pipeline_bundle / "readiness.json")
+    if pipeline_readiness.get("route_policy", {}).get("worker_recommendations_suppressed") is not True:
+        raise SystemExit(f"readiness should suppress worker route recommendations when route availability is unverified: {pipeline_readiness!r}")
+    optional_artifacts = pipeline_readiness.get("artifact_size_report", {}).get("optional_machine_artifacts", {})
+    absent_optional = optional_artifacts.get("absent_not_counted", [])
+    if "readiness.json" not in absent_optional:
+        raise SystemExit(f"readiness should exclude circular self-accounting when rendering readiness.json: {optional_artifacts!r}")
+    if any(item.get("exists") is False for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])):
+        raise SystemExit(f"artifact size report should not count absent optional artifacts as missing entries: {pipeline_readiness!r}")
+    if pipeline_readiness.get("caps", {}).get("max_active_worker_packets_by_branch", {}).get("B01") != 4:
+        raise SystemExit(f"readiness caps should report branch worker caps, not branch wave caps: {pipeline_readiness.get('caps')!r}")
+    quiet_readiness = tmp_path / "quiet-readiness.txt"
+    quiet_result = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/render_goal_bootloader.py",
+            "--bundle-dir",
+            pipeline_bundle.as_posix(),
+            "--readiness",
+            "--output",
+            quiet_readiness.as_posix(),
+        ]
+    )
+    if quiet_result.stdout.strip() != quiet_readiness.as_posix():
+        raise SystemExit(f"render_goal_bootloader.py --output should print only the output path by default: {quiet_result.stdout!r}")
+    if not quiet_readiness.read_text(encoding="utf-8").startswith("Compact readiness summary:"):
+        raise SystemExit("render_goal_bootloader.py --output did not write the readiness payload")
+
+    inside_repo_bundle = branch_default_repo / "goal-preflight-inside-worktree"
+    inside_repo_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                inside_repo_bundle.as_posix(),
+                "--no-goal-config",
+                "--json",
+            ]
+        ).stdout
+    )
+    if inside_repo_result.get("status") != "pass":
+        raise SystemExit(f"inside-repo preflight bundle should still pass with git-ignore warning: {inside_repo_result!r}")
+    inside_lint = read_json(inside_repo_bundle / "preflight.lint.json")
+    if not any("not ignored" in item.get("message", "") for item in inside_lint.get("defects", [])):
+        raise SystemExit(f"lint JSON should surface the git-ignore warning: {inside_lint!r}")
+    inside_readiness = read_json(inside_repo_bundle / "readiness.json")
+    if not any(item.get("code") == "bundle_inside_git_worktree_not_ignored" for item in inside_readiness.get("warnings", [])):
+        raise SystemExit(f"readiness JSON should surface the git-ignore warning: {inside_readiness!r}")
 
     large_source = branch_default_repo / "large-source.txt"
     large_source.write_text("exact operation list fixture\n" + ("0123456789abcdef\n" * 700), encoding="utf-8")
@@ -3008,6 +3110,31 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if config_debug_compat.get("policy_transformation") != "raw_text_true_is_sanitized_to_manifest_raw_text_false":
         raise SystemExit(f"goal_config raw_text policy transformation should be recorded: {config_debug_compat!r}")
 
+    shutil.copyfile(config_debug_path, branch_default_repo / "goal.preflight.config.json")
+    shutil.copyfile(config_debug_path, branch_default_repo / "goal.config.json")
+    auto_config_bundle = tmp_path / "preflight-auto-config-first-compatible"
+    auto_config_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                auto_config_bundle.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    auto_selection = auto_config_result.get("config_selection", {})
+    if auto_selection.get("status") != "pass" or auto_selection.get("candidate_count") != 1:
+        raise SystemExit(f"auto config selection should stop after the first compatible candidate by default: {auto_selection!r}")
+    persisted_auto_selection = read_json(auto_config_bundle / "goal-config-selection.json")
+    if persisted_auto_selection.get("candidate_audit_mode") != "first_compatible" or len(persisted_auto_selection.get("candidates", [])) != 1:
+        raise SystemExit(f"persisted config selection should record first_compatible mode: {persisted_auto_selection!r}")
+
     bad_pipeline_config_path = tmp_path / "goal-config-pipeline-remediation.json"
     bad_pipeline_config = read_json(config_debug_path)
     bad_pipeline_config["aggressiveness"]["max_active_branch_agents"] = 6
@@ -3076,6 +3203,13 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     goal_config_summary = config_pipeline_manifest.get("goal_config_summary", {})
     if goal_config_summary.get("manifest_telemetry_policy", {}).get("raw_text") is not False:
         raise SystemExit(f"goal_config_summary should expose authoritative manifest telemetry policy: {goal_config_summary!r}")
+    config_pipeline_readiness = read_json(config_pipeline_bundle / "readiness.json")
+    if config_pipeline_readiness.get("config_compatibility") != "config_schema_pass_routes_unverified":
+        raise SystemExit(f"readiness should distinguish config schema pass from route availability: {config_pipeline_readiness!r}")
+    if config_pipeline_readiness.get("launch_allowed") is not True:
+        raise SystemExit(f"unverified route availability should warn without blocking launch: {config_pipeline_readiness!r}")
+    if not any(item.get("code") == "route_availability_unverified" for item in config_pipeline_readiness.get("warnings", [])):
+        raise SystemExit(f"readiness should warn on config route availability ambiguity: {config_pipeline_readiness!r}")
     report_text = (config_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
     assert_all_contains(
         report_text,
@@ -3083,6 +3217,44 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         "config preflight report status labels",
     )
     assert_not_contains(report_text, "harness check status is pass", "config preflight report stale harness pass label")
+
+    explicit_cap_brief = json.loads(json.dumps(pipeline_brief))
+    explicit_cap_brief["job_id"] = "preflight-explicit-cap-precedence"
+    explicit_cap_brief["max_active_branch_agents"] = 2
+    explicit_cap_brief["branches"][0]["max_active_worker_packets"] = 2
+    explicit_cap_brief_path = tmp_path / "preflight-explicit-cap-brief.json"
+    explicit_cap_bundle = tmp_path / "preflight-explicit-cap-bundle"
+    write_json(explicit_cap_brief_path, explicit_cap_brief)
+    explicit_cap_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                explicit_cap_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                explicit_cap_bundle.as_posix(),
+                "--goal-config",
+                bad_pipeline_config_path.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    if explicit_cap_result.get("status") != "pass":
+        raise SystemExit(f"explicit cap pipeline should pass through config remediation: {explicit_cap_result!r}")
+    explicit_cap_manifest = read_json(explicit_cap_bundle / "job.manifest.json")
+    if explicit_cap_manifest.get("max_active_branch_agents") != 2:
+        raise SystemExit(f"explicit max_active_branch_agents should override config default: {explicit_cap_manifest!r}")
+    explicit_branch = explicit_cap_manifest.get("branches", [{}])[0]
+    if explicit_branch.get("max_active_worker_packets") != 2:
+        raise SystemExit(f"explicit branch worker cap should override config default: {explicit_branch!r}")
+    explicit_precedence = explicit_cap_manifest.get("preflight_input_precedence", {})
+    if explicit_precedence.get("max_active_branch_agents", {}).get("source") != "brief":
+        raise SystemExit(f"global cap precedence should report source=brief: {explicit_precedence!r}")
+    if explicit_precedence.get("max_active_worker_packets_by_branch", {}).get("B01", {}).get("source") != "brief":
+        raise SystemExit(f"branch cap precedence should report source=brief: {explicit_precedence!r}")
 
     git_repo_base_ref = {**branch_default_brief, "job_id": "branch-default-invalid-git-ref"}
     git_repo_base_ref["branches"][0]["work_items"][0]["owned_paths"] = ["README.md"]

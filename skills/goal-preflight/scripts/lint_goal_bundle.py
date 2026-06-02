@@ -175,6 +175,26 @@ def git_tracks_manifest_path(repo_status: dict, rel_path: str) -> bool | None:
     return result.returncode == 0
 
 
+def bundle_inside_git_unignored(repo_status: dict, bundle_dir: Path) -> str | None:
+    if repo_status.get("repo_is_git") is not True:
+        return None
+    root = repo_status.get("repo_root")
+    if not isinstance(root, str) or not root:
+        return None
+    try:
+        relative = bundle_dir.resolve().relative_to(Path(root).resolve())
+    except ValueError:
+        return None
+    result = subprocess.run(
+        ["git", "-C", root, "check-ignore", "-q", relative.as_posix()],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return None if result.returncode == 0 else relative.as_posix()
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -210,7 +230,7 @@ STATUS_TARGET_PREFIXES = (
     "/abs/bundle/",
     "/abs/",
 )
-REQUIRED_BUNDLE_DIRS = ("branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments")
+REQUIRED_BUNDLE_DIRS = ("branches",)
 MANIFEST_REQUIRED_KEYS = (
     "job_id",
     "title",
@@ -658,6 +678,33 @@ def longest_branch_chain(branches: list[dict]) -> int:
     return max(lengths.values(), default=0)
 
 
+def branch_dependency_levels(branches: list[dict]) -> dict[str, int]:
+    levels: dict[str, int] = {}
+    remaining = {str(branch.get("id")): branch for branch in branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)}
+    while remaining:
+        progressed = False
+        for branch_id, branch in list(remaining.items()):
+            deps = [dep for dep in branch.get("depends_on", []) if isinstance(dep, str)]
+            if any(dep in remaining for dep in deps):
+                continue
+            dep_levels = [levels.get(dep, 0) for dep in deps]
+            levels[branch_id] = 1 + (max(dep_levels) if dep_levels else 0)
+            remaining.pop(branch_id)
+            progressed = True
+        if not progressed:
+            for branch_id in list(remaining):
+                levels[branch_id] = 1
+                remaining.pop(branch_id)
+    return levels
+
+
+def max_branch_ready_width(branches: list[dict]) -> int:
+    widths: dict[int, int] = {}
+    for level in branch_dependency_levels(branches).values():
+        widths[level] = widths.get(level, 0) + 1
+    return max(widths.values(), default=0)
+
+
 def ready_worker_count(work_items: list[dict]) -> int:
     return len([item for item in work_items if isinstance(item, dict) and not item.get("depends_on")])
 
@@ -1007,6 +1054,13 @@ def lint(bundle_dir: Path) -> dict:
             git_repo_status=git_status,
         )
     git_status = _manifest_git_repo_status(manifest, git_status)
+    unignored_bundle_path = bundle_inside_git_unignored(git_status, bundle_dir)
+    if unignored_bundle_path:
+        defect(
+            "job.manifest.json",
+            "warning",
+            f"bundle path {unignored_bundle_path} is inside the git work tree and is not ignored; generated artifacts may dirty the repository",
+        )
 
     for dirname in REQUIRED_BUNDLE_DIRS:
         if not (bundle_dir / dirname).is_dir():
@@ -1018,6 +1072,15 @@ def lint(bundle_dir: Path) -> dict:
     validate_preflight_lite_records(defect, bundle_dir, manifest)
     validate_telemetry_policy(defect, manifest)
     goal_config, config_check_status = validate_goal_config_manifest(defect, bundle_dir, manifest)
+    check_summary = manifest.get("goal_config_check_summary") if isinstance(manifest.get("goal_config_check_summary"), dict) else {}
+    if check_summary.get("status") == "pass":
+        accepted_routes = check_summary.get("accepted_route_count")
+        if not (isinstance(accepted_routes, int) and not isinstance(accepted_routes, bool) and accepted_routes > 0):
+            defect(
+                "job.manifest.json",
+                "warning",
+                "goal_config_check_summary.status is pass but route availability is unverified; treat this as config_schema_pass_routes_unverified, not accepted-route availability",
+            )
     compatibility_status = "not_applicable"
     if config_check_status not in {"not_configured"}:
         compatibility_status = "pass" if config_check_status == "pass" else "failed"
@@ -1124,6 +1187,27 @@ def lint(bundle_dir: Path) -> dict:
         and not has_serial_reason
     ):
         defect("job.manifest.json", "critical", "too few initially eligible branches under max_active_branch_agents requires parallelization.serial_reasons")
+    if is_strict_int(max_active) and isinstance(branches, list) and branches:
+        usable_cap = min(max_active, len(branches))
+        max_ready_width = max_branch_ready_width(branches)
+        if usable_cap > 1 and max_ready_width < usable_cap:
+            defect(
+                "job.manifest.json",
+                "warning",
+                f"branch dependency DAG reaches max ready width {max_ready_width} under usable cap {usable_cap}; branch agents may be underutilized",
+            )
+        rationale = parallelization.get("parallelization_rationale")
+        if (
+            isinstance(rationale, str)
+            and max_ready_width <= 1
+            and len(branches) > 1
+            and any(marker in rationale.lower() for marker in ("concurrent", "parallel", "saturat"))
+        ):
+            defect(
+                "job.manifest.json",
+                "warning",
+                "parallelization_rationale describes concurrent/saturated execution, but the branch dependency DAG exposes at most one ready branch at a time",
+            )
 
     worker_model_policy = manifest.get("worker_model_policy", {})
     if not isinstance(worker_model_policy, dict):
@@ -1652,8 +1736,6 @@ def lint(bundle_dir: Path) -> dict:
     if has_research_work_item:
         if research_worker_policy is None:
             defect("job.manifest.json", "critical", "research_worker_policy is required when any work item uses worker_type='research-worker'")
-        if not (bundle_dir / "research").is_dir():
-            defect("research/", "critical", "research work items require research/ packet directory")
 
     branch_owned_paths: dict[str, list[str]] = {}
     branch_deps: dict[str, list[str]] = {}
@@ -1773,6 +1855,10 @@ def result(
     git_repo_status: dict,
 ) -> dict:
     schema_status = "pass" if not any(item["severity"] in {"critical", "major"} for item in defects) else "failed"
+    severity_counts = {
+        severity: len([item for item in defects if item.get("severity") == severity])
+        for severity in ("critical", "major", "warning")
+    }
     runtime_launch_blocked_reason = None
     runtime_launch_status = "pass"
     if git_repo_status.get("repo_is_git") is False or git_repo_status.get("status") == "not_in_repo":
@@ -1804,6 +1890,7 @@ def result(
         "git_repo_status": git_repo_status,
         "compatibility_status": compatibility_status,
         "defect_count": len(defects),
+        "severity_counts": severity_counts,
         "defects": defects,
     }
 

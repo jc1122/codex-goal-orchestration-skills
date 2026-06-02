@@ -887,11 +887,13 @@ def route_availability_verified_from_check(goal_config_check: dict | None) -> bo
 
 def route_recommendations_enabled(goal_config_check: dict | None) -> bool:
     verified = route_availability_verified_from_check(goal_config_check)
-    return verified is not False
+    return verified is True
 
 
 def route_deferred_text(goal_config_check: dict | None) -> str:
     verified = route_availability_verified_from_check(goal_config_check)
+    if verified is None:
+        return "route availability is unverified because no current goal-config route check was supplied; capture a fresh model catalog or smoke-check accepted routes before selecting runtime aliases"
     if verified is False:
         return "route availability not verified by the supplied goal-config check; capture a fresh model catalog or smoke-check accepted routes before selecting runtime aliases"
     return ""
@@ -1453,7 +1455,7 @@ def apply_goal_config_to_brief(brief: dict, config: dict | None) -> dict:
     updated = dict(brief)
     aggressiveness = config.get("aggressiveness") if isinstance(config.get("aggressiveness"), dict) else {}
     max_active = aggressiveness.get("max_active_branch_agents")
-    if isinstance(max_active, int) and not isinstance(max_active, bool):
+    if "max_active_branch_agents" not in updated and isinstance(max_active, int) and not isinstance(max_active, bool):
         updated["max_active_branch_agents"] = max_active
     max_workers = aggressiveness.get("max_active_worker_packets")
     if isinstance(max_workers, int) and not isinstance(max_workers, bool):
@@ -1461,7 +1463,8 @@ def apply_goal_config_to_brief(brief: dict, config: dict | None) -> dict:
         for branch in updated.get("branches", []):
             if isinstance(branch, dict):
                 branch = dict(branch)
-                branch["max_active_worker_packets"] = max_workers
+                if "max_active_worker_packets" not in branch:
+                    branch["max_active_worker_packets"] = max_workers
             branches.append(branch)
         updated["branches"] = branches
     preflight_intent = config.get("preflight_intent") if isinstance(config.get("preflight_intent"), dict) else {}
@@ -1509,7 +1512,7 @@ def provenance_path(path: Path, bundle_dir: Path) -> dict:
 
 def ensure_bundle_dirs(bundle_dir: Path) -> None:
     bundle_dir.mkdir(parents=True, exist_ok=True)
-    for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments"]:
+    for dirname in ["branches"]:
         (bundle_dir / dirname).mkdir(exist_ok=True)
 
 
@@ -1539,12 +1542,17 @@ def repo_runtime_gate_summary(repo_status: dict) -> str:
 
 
 def bundle_git_ignore_warning(repo_root: Path, bundle_dir: Path) -> str:
+    warning = bundle_git_ignore_warning_record(repo_root, bundle_dir)
+    return str(warning.get("message", "")) if warning else ""
+
+
+def bundle_git_ignore_warning_record(repo_root: Path, bundle_dir: Path) -> dict:
     if not _is_git_repo(repo_root):
-        return ""
+        return {}
     try:
         relative = bundle_dir.resolve().relative_to(repo_root.resolve())
     except ValueError:
-        return ""
+        return {}
     result = subprocess.run(
         ["git", "-C", repo_root.as_posix(), "check-ignore", "-q", relative.as_posix()],
         check=False,
@@ -1553,8 +1561,13 @@ def bundle_git_ignore_warning(repo_root: Path, bundle_dir: Path) -> str:
         text=True,
     )
     if result.returncode == 0:
-        return ""
-    return f"Bundle git ignore warning: {relative.as_posix()} is inside the git work tree and is not ignored; generated bundle files may dirty the repository."
+        return {}
+    return {
+        "code": "bundle_inside_git_worktree_not_ignored",
+        "severity": "warning",
+        "path": relative.as_posix(),
+        "message": f"Bundle git ignore warning: {relative.as_posix()} is inside the git work tree and is not ignored; generated bundle files may dirty the repository.",
+    }
 
 
 def goal_config_report_lines(goal_config: dict | None, goal_config_check: dict | None, manifest: dict) -> list[str]:
@@ -1697,23 +1710,41 @@ def preflight_input_precedence(original_brief: dict, normalized_brief: dict, con
             continue
         bid = str(branch.get("id"))
         original = original_branch_by_id.get(bid, {})
+        branch_has_explicit_cap = isinstance(original, dict) and "max_active_worker_packets" in original
+        config_worker_cap_applied = (
+            isinstance(aggressiveness.get("max_active_worker_packets"), int)
+            and not isinstance(aggressiveness.get("max_active_worker_packets"), bool)
+            and not branch_has_explicit_cap
+        )
         branch_caps[bid] = {
             "brief_value": original.get("max_active_worker_packets") if isinstance(original, dict) else None,
             "applied_value": branch.get("max_active_worker_packets"),
-            "source": "goal_config.aggressiveness.max_active_worker_packets"
-            if isinstance(aggressiveness.get("max_active_worker_packets"), int)
-            and not isinstance(aggressiveness.get("max_active_worker_packets"), bool)
-            else "brief_or_default",
+            "source": "brief"
+            if branch_has_explicit_cap
+            else (
+                "goal_config.aggressiveness.max_active_worker_packets"
+                if config_worker_cap_applied
+                else "default"
+            ),
         }
+    branch_has_explicit_cap = "max_active_branch_agents" in original_brief
+    config_branch_cap_applied = (
+        isinstance(aggressiveness.get("max_active_branch_agents"), int)
+        and not isinstance(aggressiveness.get("max_active_branch_agents"), bool)
+        and not branch_has_explicit_cap
+    )
     return {
         "goal_config_applied": config is not None,
         "max_active_branch_agents": {
             "brief_value": original_brief.get("max_active_branch_agents"),
             "applied_value": normalized_brief.get("max_active_branch_agents"),
-            "source": "goal_config.aggressiveness.max_active_branch_agents"
-            if isinstance(aggressiveness.get("max_active_branch_agents"), int)
-            and not isinstance(aggressiveness.get("max_active_branch_agents"), bool)
-            else "brief_or_default",
+            "source": "brief"
+            if branch_has_explicit_cap
+            else (
+                "goal_config.aggressiveness.max_active_branch_agents"
+                if config_branch_cap_applied
+                else "default"
+            ),
         },
         "max_active_worker_packets_by_branch": branch_caps,
         "telemetry_policy": {
@@ -1724,7 +1755,7 @@ def preflight_input_precedence(original_brief: dict, normalized_brief: dict, con
             if any(key in original_brief for key in ("telemetry_policy", "telemetry_mode", "debug_telemetry"))
             else ("goal_config.preflight_intent.telemetry_mode" if config_preflight_intent.get("telemetry_mode") else "default"),
         },
-        "note": "goal_config aggressiveness caps override brief caps when supplied; explicit brief telemetry fields override goal_config preflight_intent.",
+        "note": "Explicit brief caps override goal_config aggressiveness defaults; goal_config caps apply only when the brief omits the corresponding cap. Explicit brief telemetry fields override goal_config preflight_intent.",
     }
 
 
@@ -1765,6 +1796,7 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
 	        "repo_status": brief.get("repo_status", {}),
         "preflight_compatibility": brief.get("preflight_compatibility", {"status": "not_configured", "defects": []}),
         "preflight_input_precedence": brief.get("preflight_input_precedence", {}),
+        "preflight_warnings": brief.get("preflight_warnings", []),
         **(
             {
                 "goal_config_path": "goal.config.json",
@@ -1987,6 +2019,11 @@ def create_bundle(
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)
+    preflight_warnings = []
+    git_ignore_warning_record = bundle_git_ignore_warning_record(repo_root, bundle_dir)
+    if git_ignore_warning_record:
+        preflight_warnings.append(git_ignore_warning_record)
+    brief["preflight_warnings"] = preflight_warnings
 
     if runtime_goal_config is not None:
         write(bundle_dir / "goal.config.json", json.dumps(runtime_goal_config, indent=2, sort_keys=True) + "\n")
@@ -2027,7 +2064,7 @@ def create_bundle(
 
     bootloader = render_bootloader(bundle_dir.resolve(), repo_root.resolve())
     write(bundle_dir / "goal-bootloader.md", bootloader)
-    git_ignore_warning = bundle_git_ignore_warning(repo_root, bundle_dir)
+    git_ignore_warning = git_ignore_warning_record.get("message", "") if git_ignore_warning_record else ""
     report = "\n".join(
         [
             f"# Preflight Report: {brief['job_id']}",

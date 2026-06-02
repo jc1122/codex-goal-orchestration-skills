@@ -62,10 +62,57 @@ def _collect_bundle_dag(manifest: dict) -> list[dict[str, list[str] | str | int]
     return branches
 
 
+def _branch_dependency_levels(branches: list[dict]) -> dict[str, int]:
+    levels: dict[str, int] = {}
+    remaining = {str(branch.get("id")): branch for branch in branches if isinstance(branch, dict)}
+    while remaining:
+        progressed = False
+        for branch_id, branch in list(remaining.items()):
+            deps = [str(dep) for dep in branch.get("depends_on", []) if isinstance(dep, str)]
+            if any(dep in remaining for dep in deps):
+                continue
+            dep_levels = [levels.get(dep, 0) for dep in deps]
+            levels[branch_id] = 1 + (max(dep_levels) if dep_levels else 0)
+            remaining.pop(branch_id)
+            progressed = True
+        if not progressed:
+            for branch_id in list(remaining):
+                levels[branch_id] = 1
+                remaining.pop(branch_id)
+    return levels
+
+
+def _branch_utilization_summary(manifest: dict) -> dict[str, object]:
+    branches = [branch for branch in manifest.get("branches", []) if isinstance(branch, dict)]
+    max_active = manifest.get("max_active_branch_agents")
+    if not isinstance(max_active, int) or isinstance(max_active, bool):
+        max_active = 0
+    levels = _branch_dependency_levels(branches)
+    widths: dict[int, int] = {}
+    for level in levels.values():
+        widths[level] = widths.get(level, 0) + 1
+    max_ready_width = max(widths.values(), default=0)
+    initial_ready = len([branch for branch in branches if not branch.get("depends_on")])
+    usable_cap = min(max_active, len(branches)) if max_active else len(branches)
+    utilization_ratio = None if usable_cap <= 0 else max_ready_width / usable_cap
+    return {
+        "branch_count": len(branches),
+        "max_active_branch_agents": max_active,
+        "initial_ready_count": initial_ready,
+        "max_ready_width": max_ready_width,
+        "usable_branch_cap": usable_cap,
+        "utilization_ratio": utilization_ratio,
+        "dependency_level_widths": {str(key): value for key, value in sorted(widths.items())},
+        "serial_reasons": manifest.get("parallelization", {}).get("serial_reasons", [])
+        if isinstance(manifest.get("parallelization"), dict)
+        else [],
+    }
+
+
 def _route_policy_summary(manifest: dict) -> dict[str, object]:
     routes: dict[str, object] = {}
     verified_routes = _verified_routes_summary(manifest)
-    recommendations_suppressed = verified_routes.get("route_model_availability_verified") is False and verified_routes.get("status") != "missing"
+    recommendations_suppressed = verified_routes.get("route_model_availability_verified") is not True
     worker_policy = manifest.get("worker_model_policy", {})
     routes["worker"] = worker_policy.get("default_ladder", [])
     routes["worker_recommendations_suppressed"] = recommendations_suppressed
@@ -88,9 +135,18 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
 
 def _caps_summary(manifest: dict) -> dict[str, object]:
     parallelization = manifest.get("parallelization", {})
+    branch_caps = {
+        str(branch.get("id")): branch.get("max_active_worker_packets")
+        for branch in manifest.get("branches", [])
+        if isinstance(branch, dict) and isinstance(branch.get("id"), str)
+    }
+    numeric_caps = [value for value in branch_caps.values() if isinstance(value, int) and not isinstance(value, bool)]
+    uniform_worker_cap = numeric_caps[0] if numeric_caps and len(set(numeric_caps)) == 1 and len(numeric_caps) == len(branch_caps) else None
     return {
         "max_active_branch_agents": manifest.get("max_active_branch_agents"),
-        "max_active_worker_packets_default": parallelization.get("max_branches_per_wave", parallelization.get("max_active_branch_agents", 0)),
+        "max_active_worker_packets_default": uniform_worker_cap,
+        "max_active_worker_packets_by_branch": branch_caps,
+        "max_active_worker_packets_max": max(numeric_caps, default=None),
         "max_branches_per_wave": parallelization.get("max_branches_per_wave", 0),
         "max_waves": parallelization.get("max_waves", 0),
         "waves": len(manifest.get("waves", [])) if isinstance(manifest.get("waves"), list) else 0,
@@ -176,7 +232,10 @@ def _config_compatibility(manifest: dict) -> str:
     if not isinstance(check_report, dict):
         return "goal config check summary malformed"
     if check_report.get("status") == "pass":
-        return "goal config check pass"
+        accepted = check_report.get("accepted_route_count")
+        if isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0:
+            return "goal config check pass"
+        return "config_schema_pass_routes_unverified"
     return f"goal config check {check_report.get('status', 'missing')}"
 
 
@@ -300,17 +359,18 @@ def _artifact_size_report(bundle_dir: Path, manifest: dict, prompt_report: dict[
     prompt_paths = [str(item.get("path")) for item in prompt_report.get("files", []) if isinstance(item, dict) and item.get("path")]
     machine_paths = [
         "job.manifest.json",
-        "goal.config.json",
-        "goal-config.check.json",
         "goal-config-selection.json",
-        "preflight.pipeline.json",
         "preflight.brief.lint.json",
         "preflight.lint.json",
         "repair-gate.json",
-        "readiness.json",
         "create-bundle-result.json",
     ]
+    if manifest.get("goal_config_path"):
+        machine_paths.extend(["goal.config.json", "goal-config.check.json"])
+    optional_machine_paths = ["preflight.pipeline.json", "readiness.json"]
+    present_optional_machine_paths = [path for path in optional_machine_paths if (bundle_dir / path).exists()]
     machine_entries = [_artifact_entry(bundle_dir, path) for path in machine_paths]
+    machine_entries.extend(_artifact_entry(bundle_dir, path) for path in present_optional_machine_paths)
     prompt_entries = [_artifact_entry(bundle_dir, path) for path in prompt_paths]
     machine_chars = sum(int(item["chars"]) for item in machine_entries)
     prompt_chars = sum(int(item["chars"]) for item in prompt_entries)
@@ -327,7 +387,20 @@ def _artifact_size_report(bundle_dir: Path, manifest: dict, prompt_report: dict[
         "runtime_contract_approx_tokens": (runtime_contract_chars + 3) // 4,
         "bundle_surface_chars": prompt_chars + machine_chars,
         "bundle_surface_approx_tokens": (prompt_chars + machine_chars + 3) // 4,
+        "optional_machine_artifacts": {
+            "counted_when_present": optional_machine_paths,
+            "present": present_optional_machine_paths,
+            "absent_not_counted": [path for path in optional_machine_paths if path not in present_optional_machine_paths],
+        },
         "note": "prompt_size_report covers prompt files only; artifact_size_report includes selected machine artifacts and the manifest runtime contract",
+    }
+
+
+def _config_status_blocks_launch(goal_config_status: str) -> bool:
+    return goal_config_status not in {
+        "no goal config supplied",
+        "goal config check pass",
+        "config_schema_pass_routes_unverified",
     }
 
 
@@ -352,7 +425,7 @@ def _launch_blockers(
     runtime_gate: dict[str, object],
 ) -> list[str]:
     blockers: list[str] = []
-    if goal_config_status != "no goal config supplied" and not goal_config_status.endswith("pass"):
+    if _config_status_blocks_launch(goal_config_status):
         blockers.append(goal_config_status)
     if lint_brief["status"] not in {"pass", "missing"}:
         blockers.append(f"brief lint {lint_brief['status']}")
@@ -363,6 +436,57 @@ def _launch_blockers(
     if runtime_gate["status"] != "pass":
         blockers.append(f"runtime gate blocked: {runtime_gate.get('reason')}")
     return blockers
+
+
+def _readiness_warnings(
+    manifest: dict,
+    *,
+    goal_config_status: str,
+    verified_routes: dict[str, object],
+    utilization: dict[str, object],
+) -> list[dict[str, object]]:
+    warnings: list[dict[str, object]] = []
+    for warning in manifest.get("preflight_warnings", []):
+        if isinstance(warning, dict):
+            warnings.append(warning)
+    if verified_routes.get("route_model_availability_verified") is not True:
+        warnings.append(
+            {
+                "code": "route_availability_unverified",
+                "severity": "warning",
+                "message": f"{goal_config_status}; worker route alias recommendations are deferred until accepted routes are verified.",
+            }
+        )
+    ratio = utilization.get("utilization_ratio")
+    usable_cap = utilization.get("usable_branch_cap")
+    max_ready = utilization.get("max_ready_width")
+    if isinstance(ratio, (int, float)) and ratio < 1 and isinstance(usable_cap, int) and usable_cap > 1:
+        warnings.append(
+            {
+                "code": "low_branch_parallelism_utilization",
+                "severity": "warning",
+                "message": f"Branch dependency DAG reaches max ready width {max_ready} under usable cap {usable_cap}; branch agents may be underutilized.",
+                "utilization_ratio": ratio,
+            }
+        )
+    rationale = ""
+    parallelization = manifest.get("parallelization")
+    if isinstance(parallelization, dict) and isinstance(parallelization.get("parallelization_rationale"), str):
+        rationale = parallelization["parallelization_rationale"].lower()
+    if (
+        isinstance(max_ready, int)
+        and max_ready <= 1
+        and any(marker in rationale for marker in ("concurrent", "parallel", "saturat"))
+        and len(manifest.get("branches", [])) > 1
+    ):
+        warnings.append(
+            {
+                "code": "parallelization_rationale_dag_mismatch",
+                "severity": "warning",
+                "message": "Parallelization rationale describes concurrent/saturated execution, but the branch dependency DAG exposes at most one ready branch at a time.",
+            }
+        )
+    return warnings
 
 
 def _readiness_next_commands(
@@ -405,7 +529,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     telemetry_mode = manifest.get("telemetry_policy", {}).get("mode", "standard")
     status = "pass"
     goal_config_status = _config_compatibility(manifest)
-    if goal_config_status != "no goal config supplied" and not goal_config_status.endswith("pass"):
+    if _config_status_blocks_launch(goal_config_status):
         status = "blocked"
     lint_brief = _lint_status(bundle_dir, "brief")
     lint_bundle = _lint_status(bundle_dir, "bundle")
@@ -432,6 +556,13 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     route_policy = _route_policy_summary(manifest)
     caps = _caps_summary(manifest)
     verified_routes = _verified_routes_summary(manifest)
+    utilization = _branch_utilization_summary(manifest)
+    warnings = _readiness_warnings(
+        manifest,
+        goal_config_status=goal_config_status,
+        verified_routes=verified_routes,
+        utilization=utilization,
+    )
     prompt_size = _prompt_size_report(bundle_dir, manifest)
     artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
     manifest_path = bundle_dir / "job.manifest.json"
@@ -455,8 +586,10 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         f"config_compatibility={goal_config_status}",
         f"telemetry_mode={telemetry_mode}",
         f"caps: max_active_branch_agents={caps['max_active_branch_agents']}, max_waves={caps['max_waves']}, max_branches_per_wave={caps['max_branches_per_wave']}, waves={caps['waves']}",
+        f"branch_utilization={json.dumps(utilization, sort_keys=True)}",
         f"route_policy={json.dumps(route_policy, sort_keys=True)}",
         f"verified_routes={json.dumps(verified_routes, sort_keys=True)}",
+        f"warnings={json.dumps(warnings, sort_keys=True)}",
         f"prompt_size_report={json.dumps(prompt_size, sort_keys=True)}",
         f"artifact_size_report={json.dumps(artifact_size, sort_keys=True)}",
         f"runtime_gate={json.dumps(runtime_gate, sort_keys=True)}",
@@ -480,7 +613,7 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     telemetry_mode = manifest.get("telemetry_policy", {}).get("mode", "standard")
     status = "pass"
     goal_config_status = _config_compatibility(manifest)
-    if goal_config_status != "no goal config supplied" and not goal_config_status.endswith("pass"):
+    if _config_status_blocks_launch(goal_config_status):
         status = "blocked"
     lint_brief = _lint_status(bundle_dir, "brief")
     lint_bundle = _lint_status(bundle_dir, "bundle")
@@ -506,6 +639,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     manifest_path = bundle_dir / "job.manifest.json"
     prompt_size = _prompt_size_report(bundle_dir, manifest)
     artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
+    verified_routes = _verified_routes_summary(manifest)
+    utilization = _branch_utilization_summary(manifest)
     payload = {
         "status": status,
         "launch_allowed": launch_allowed,
@@ -517,7 +652,14 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         "telemetry_mode": telemetry_mode,
         "caps": _caps_summary(manifest),
         "route_policy": _route_policy_summary(manifest),
-        "verified_routes": _verified_routes_summary(manifest),
+        "verified_routes": verified_routes,
+        "branch_utilization": utilization,
+        "warnings": _readiness_warnings(
+            manifest,
+            goal_config_status=goal_config_status,
+            verified_routes=verified_routes,
+            utilization=utilization,
+        ),
         "prompt_size_report": prompt_size,
         "artifact_size_report": artifact_size,
         "branch_dag": _collect_bundle_dag(manifest),
@@ -542,10 +684,13 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     return json.dumps(payload, sort_keys=True, indent=2) + "\n"
 
 
-def emit_output(text: str, output: Path | None = None) -> None:
+def emit_output(text: str, output: Path | None = None, *, stdout: bool = False, json_mode: bool = False) -> None:
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(text, encoding="utf-8")
+        if not stdout and not json_mode:
+            print(output)
+            return
     print(text, end="" if text.endswith("\n") else "\n")
 
 
@@ -657,6 +802,7 @@ def main() -> int:
     parser.add_argument("--readiness", action="store_true", help="Show a compact readiness summary for the bundle.")
     parser.add_argument("--json", action="store_true", help="With --readiness, print JSON readiness output.")
     parser.add_argument("--output", type=Path, help="Write the printed bootloader/readiness output to this path.")
+    parser.add_argument("--stdout", action="store_true", help="With --output, also print the full rendered payload to stdout.")
     parser.add_argument("--write", action="store_true", help="With --repo-root, rewrite goal-bootloader.md before printing.")
     args = parser.parse_args()
 
@@ -670,9 +816,9 @@ def main() -> int:
         if args.repo_root:
             repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
         if args.json:
-            emit_output(render_readiness_json(bundle_dir, repo_root=repo_root), args.output)
+            emit_output(render_readiness_json(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout, json_mode=True)
             return 0
-        emit_output(render_readiness(bundle_dir, repo_root=repo_root), args.output)
+        emit_output(render_readiness(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout)
         return 0
     if args.repo_root:
         repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
@@ -683,14 +829,14 @@ def main() -> int:
         text = render_bootloader(bundle_dir, repo_root)
         if args.write:
             path.write_text(text, encoding="utf-8")
-        emit_output(text, args.output)
+        emit_output(text, args.output, stdout=args.stdout)
         return 0
     if args.write:
         raise SystemExit("--write requires --repo-root")
     if not path.exists():
         raise SystemExit(f"missing bootloader: {path}")
     text = path.read_text(encoding="utf-8")
-    emit_output(text, args.output)
+    emit_output(text, args.output, stdout=args.stdout)
     return 0
 
 

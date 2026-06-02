@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:ce242db55068372802088bd68cfa0cecca6fe9d5991a54545a18392f4717fa18"
+    "source_fingerprint": "sha256:4a63263ae13159bda7a950a3d8ca0057c1f50c7e3c25b3eab339169e9b81878c"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,40 +16,40 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 3791,
-      "approx_tokens": 41809,
+      "lines": 3963,
+      "approx_tokens": 44458,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "2709:run_base_ref_default_fixture:515l",
-        "1029:run_negative_amendment_fixtures:289l",
-        "561:run_preflight_brief_lint_fixtures:240l",
-        "328:run_topology_fixtures:231l"
+        "2743:run_base_ref_default_fixture:653l",
+        "1063:run_negative_amendment_fixtures:289l",
+        "328:run_topology_fixtures:265l",
+        "595:run_preflight_brief_lint_fixtures:240l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2140,
-      "approx_tokens": 26030,
+      "lines": 2177,
+      "approx_tokens": 26447,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1151:normalize_brief:180l",
-        "1955:create_bundle:105l",
-        "1731:manifest_from_normalized_brief:101l",
+        "1153:normalize_brief:180l",
+        "1987:create_bundle:110l",
+        "1762:manifest_from_normalized_brief:102l",
         "131:example_brief:88l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 1844,
-      "approx_tokens": 23787,
+      "lines": 1931,
+      "approx_tokens": 24744,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "976:lint:787l",
-        "675:validate_preflight_lite_records:152l",
-        "889:validate_goal_config_manifest:85l",
-        "829:validate_telemetry_policy:58l"
+        "1023:lint:822l",
+        "722:validate_preflight_lite_records:152l",
+        "936:validate_goal_config_manifest:85l",
+        "876:validate_telemetry_policy:58l"
       ]
     },
     {

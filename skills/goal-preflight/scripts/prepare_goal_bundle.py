@@ -9,6 +9,7 @@ import json
 import re
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 
@@ -59,7 +60,101 @@ def safe_name(path: Path) -> str:
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+    return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+
+
+def command_hash(command: list[str] | None) -> str | None:
+    if command is None:
+        return None
+    payload = json.dumps(command, separators=(",", ":"), sort_keys=False)
+    return "sha256:" + hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def artifact_snapshot(root: Path) -> dict[str, dict[str, int | str]]:
+    if not root.exists():
+        return {}
+    snapshot: dict[str, dict[str, int | str]] = {}
+    for path in sorted(item for item in root.rglob("*") if item.is_file()):
+        rel = path.relative_to(root).as_posix()
+        stat = path.stat()
+        snapshot[rel] = {
+            "size_bytes": stat.st_size,
+            "sha256": sha256_file(path) or "",
+        }
+    return snapshot
+
+
+def artifact_delta(before: dict[str, dict[str, int | str]], after: dict[str, dict[str, int | str]]) -> dict:
+    before_keys = set(before)
+    after_keys = set(after)
+    added = sorted(after_keys - before_keys)
+    removed = sorted(before_keys - after_keys)
+    modified = sorted(path for path in before_keys & after_keys if before[path] != after[path])
+    return {
+        "added_count": len(added),
+        "modified_count": len(modified),
+        "removed_count": len(removed),
+        "added": added[:20],
+        "modified": modified[:20],
+        "removed": removed[:20],
+        "truncated": len(added) > 20 or len(modified) > 20 or len(removed) > 20,
+    }
+
+
+def phase_record(
+    phase: str,
+    *,
+    command: list[str] | None = None,
+    returncode: int = 0,
+    output: Path | None = None,
+    elapsed_ms: int = 0,
+    stdout: str = "",
+    stderr: str = "",
+    before: dict[str, dict[str, int | str]] | None = None,
+    after: dict[str, dict[str, int | str]] | None = None,
+) -> dict:
+    record = {
+        "phase": phase,
+        "returncode": returncode,
+        "elapsed_ms": elapsed_ms,
+        "stdout_bytes": len(stdout.encode("utf-8")),
+        "stderr_bytes": len(stderr.encode("utf-8")),
+        "command_hash": command_hash(command),
+    }
+    if output is not None:
+        record["output"] = output.as_posix()
+    if before is not None and after is not None:
+        record["artifact_delta"] = artifact_delta(before, after)
+    return record
+
+
+def run_tracked_phase(phase: str, command: list[str], out_dir: Path, output: Path | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+    before = artifact_snapshot(out_dir)
+    start = time.perf_counter()
+    result = run(command)
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    after = artifact_snapshot(out_dir)
+    return result, phase_record(
+        phase,
+        command=command,
+        returncode=result.returncode,
+        output=output,
+        elapsed_ms=elapsed_ms,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        before=before,
+        after=after,
+    )
+
+
+def subprocess_telemetry(command: list[str], result: subprocess.CompletedProcess[str], elapsed_ms: int) -> dict:
+    return {
+        "command_hash": command_hash(command),
+        "returncode": result.returncode,
+        "elapsed_ms": elapsed_ms,
+        "stdout_bytes": len(result.stdout.encode("utf-8")),
+        "stderr_bytes": len(result.stderr.encode("utf-8")),
+    }
 
 
 def _is_git_repo(repo_root: Path) -> bool:
@@ -182,11 +277,21 @@ def compact_config_selection(selection: dict) -> dict:
         "selection_path": selection.get("selection_path"),
         "selected_index": selection.get("selected_index"),
         "candidate_count": len(selection.get("candidates") or []),
+        "candidate_audit_mode": selection.get("candidate_audit_mode"),
         "route_model_availability_verified": selection.get("route_model_availability_verified"),
         "reason": selection.get("reason"),
     }
     result.update(selected_config_summary(candidate))
     return result
+
+
+def brief_requests_debug(brief: dict) -> bool:
+    if brief.get("debug_telemetry") is True:
+        return True
+    if brief.get("telemetry_mode") == "debug":
+        return True
+    policy = brief.get("telemetry_policy")
+    return isinstance(policy, dict) and policy.get("mode") == "debug"
 
 
 def compact_readiness(readiness: dict) -> dict:
@@ -200,6 +305,8 @@ def compact_readiness(readiness: dict) -> dict:
         "repair_gate": readiness.get("repair_gate", {}),
         "lint_status": readiness.get("lint_status", {}),
         "verified_routes": readiness.get("verified_routes", {}),
+        "warnings": readiness.get("warnings", []),
+        "branch_utilization": readiness.get("branch_utilization", {}),
         "prompt_size_summary": {
             "total_chars": prompt_size.get("total_prompt_chars", prompt_size.get("total_chars")),
             "approx_total_tokens": prompt_size.get("approx_total_tokens"),
@@ -282,8 +389,11 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
         "--remediated-output",
         remediated_config.as_posix(),
     ]
+    start = time.perf_counter()
     result = run(command)
-    original = read_json(original_report) if original_report.exists() else {"status": "failed", "failures": [result.stdout]}
+    elapsed_ms = int((time.perf_counter() - start) * 1000)
+    failure_output = "\n".join(item for item in [result.stdout, result.stderr] if item)
+    original = read_json(original_report) if original_report.exists() else {"status": "failed", "failures": [failure_output]}
     candidate = {
         "config_path": config.as_posix(),
         "original_check_path": original_report.as_posix(),
@@ -296,6 +406,7 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
         "selected_config_path": None,
         "selected_check_path": None,
         "selection_reason": None,
+        "original_check_telemetry": subprocess_telemetry(command, result, elapsed_ms),
     }
     if result.returncode == 0 and original.get("status") == "pass":
         candidate.update(
@@ -311,25 +422,28 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
 
     if remediated_config.exists() and original.get("remediation", {}).get("actions"):
         remediated_report = check_dir / f"{stem}.remediated.preflight-check.json"
-        remediated_result = run(
-            [
-                sys.executable,
-                check_script.as_posix(),
-                "--config",
-                remediated_config.as_posix(),
-                "--for-preflight",
-                "--smoke",
-                "--stdout",
-                "none",
-                "--output",
-                remediated_report.as_posix(),
-            ]
-        )
-        remediated = read_json(remediated_report) if remediated_report.exists() else {"status": "failed", "failures": [remediated_result.stdout]}
+        remediated_command = [
+            sys.executable,
+            check_script.as_posix(),
+            "--config",
+            remediated_config.as_posix(),
+            "--for-preflight",
+            "--smoke",
+            "--stdout",
+            "none",
+            "--output",
+            remediated_report.as_posix(),
+        ]
+        start = time.perf_counter()
+        remediated_result = run(remediated_command)
+        remediated_elapsed_ms = int((time.perf_counter() - start) * 1000)
+        remediated_failure_output = "\n".join(item for item in [remediated_result.stdout, remediated_result.stderr] if item)
+        remediated = read_json(remediated_report) if remediated_report.exists() else {"status": "failed", "failures": [remediated_failure_output]}
         candidate["remediated_config_path"] = remediated_config.as_posix()
         candidate["remediated_check_path"] = remediated_report.as_posix()
         candidate["remediated_status"] = remediated.get("status")
         candidate["remediated_failures"] = remediated.get("failures", [])
+        candidate["remediated_check_telemetry"] = subprocess_telemetry(remediated_command, remediated_result, remediated_elapsed_ms)
         if remediated_result.returncode == 0 and remediated.get("status") == "pass":
             candidate.update(
                 {
@@ -344,14 +458,26 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
     return candidate
 
 
-def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str], skip: bool) -> dict:
+def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str], skip: bool, *, audit_all: bool = False) -> dict:
     selection_path = out_dir / "goal-config-selection.json"
     if skip:
-        selection = {"status": "skipped", "selected_index": None, "candidates": [], "reason": "--no-goal-config", "selection_path": selection_path.as_posix()}
+        selection = {
+            "status": "skipped",
+            "selected_index": None,
+            "candidates": [],
+            "candidate_audit_mode": "skipped",
+            "reason": "--no-goal-config",
+            "selection_path": selection_path.as_posix(),
+        }
         write_json(selection_path, selection)
         return selection
     check_dir = out_dir / "config-checks"
-    candidates = [check_config_candidate(path, check_dir) for path in candidate_configs(brief, repo_root, out_dir, explicit)]
+    candidates = []
+    for path in candidate_configs(brief, repo_root, out_dir, explicit):
+        candidate = check_config_candidate(path, check_dir)
+        candidates.append(candidate)
+        if candidate.get("eligible") and not audit_all:
+            break
     selected_index = next((index for index, item in enumerate(candidates) if item.get("eligible")), None)
     for index, item in enumerate(candidates):
         item["selected"] = selected_index == index
@@ -362,6 +488,7 @@ def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[st
         "selected_index": selected_index,
         **selected_summary,
         "candidates": candidates,
+        "candidate_audit_mode": "full" if audit_all else "first_compatible",
         "selection_path": selection_path.as_posix(),
         "route_model_availability_verified": route_availability_verified(selected),
         "reason": "no compatible config candidates found" if not selected else selected.get("selection_reason"),
@@ -396,20 +523,19 @@ def main() -> int:
     commands: list[dict] = []
 
     brief_lint = out_dir / "preflight.brief.lint.json"
-    brief_lint_result = run(
-        [
-            sys.executable,
-            (SKILLS_ROOT / "goal-preflight" / "scripts" / "lint_preflight_brief.py").as_posix(),
-            "--brief",
-            brief.as_posix(),
-            "--repo-root",
-            repo_root.as_posix(),
-            "--json",
-            "--output",
-            brief_lint.as_posix(),
-        ]
-    )
-    commands.append({"phase": "brief_lint", "returncode": brief_lint_result.returncode, "output": brief_lint.as_posix()})
+    brief_lint_command = [
+        sys.executable,
+        (SKILLS_ROOT / "goal-preflight" / "scripts" / "lint_preflight_brief.py").as_posix(),
+        "--brief",
+        brief.as_posix(),
+        "--repo-root",
+        repo_root.as_posix(),
+        "--json",
+        "--output",
+        brief_lint.as_posix(),
+    ]
+    brief_lint_result, record = run_tracked_phase("brief_lint", brief_lint_command, out_dir, brief_lint)
+    commands.append(record)
     if brief_lint_result.returncode != 0:
         result = {"status": "failed", "phase": "brief_lint", "bundle_dir": out_dir.as_posix(), "commands": commands}
         write_json(Path(args.output) if args.output else out_dir / "preflight.pipeline.json", result)
@@ -418,8 +544,18 @@ def main() -> int:
         return 1
 
     brief_data = read_json(brief)
+    before = artifact_snapshot(out_dir)
+    start = time.perf_counter()
     runtime_gate = runtime_gate_precheck(repo_root, brief_data)
-    commands.append({"phase": "runtime_gate", "returncode": 0 if runtime_gate["status"] == "pass" else 2})
+    commands.append(
+        phase_record(
+            "runtime_gate",
+            returncode=0 if runtime_gate["status"] == "pass" else 2,
+            elapsed_ms=int((time.perf_counter() - start) * 1000),
+            before=before,
+            after=artifact_snapshot(out_dir),
+        )
+    )
     if runtime_gate["status"] != "pass" and not args.build_blocked_bundle:
         result = {
             "schema_version": 1,
@@ -442,7 +578,19 @@ def main() -> int:
             print(output_path)
         return 0 if args.allow_blocked_readiness else 1
 
-    config_selection = select_config(brief, repo_root, out_dir, args.goal_config, args.no_goal_config)
+    before = artifact_snapshot(out_dir)
+    start = time.perf_counter()
+    config_selection = select_config(brief, repo_root, out_dir, args.goal_config, args.no_goal_config, audit_all=args.verbose or brief_requests_debug(brief_data))
+    commands.append(
+        phase_record(
+            "config_selection",
+            returncode=0 if config_selection.get("status") in {"pass", "skipped"} else 1,
+            output=out_dir / "goal-config-selection.json",
+            elapsed_ms=int((time.perf_counter() - start) * 1000),
+            before=before,
+            after=artifact_snapshot(out_dir),
+        )
+    )
     selected = selected_candidate_from_selection(config_selection)
 
     create_command = [
@@ -460,8 +608,8 @@ def main() -> int:
     ]
     if selected:
         create_command.extend(["--goal-config", str(selected["selected_config_path"]), "--goal-config-check", str(selected["selected_check_path"])])
-    create_result = run(create_command)
-    commands.append({"phase": "create_bundle", "returncode": create_result.returncode, "output": (out_dir / "create-bundle-result.json").as_posix()})
+    create_result, record = run_tracked_phase("create_bundle", create_command, out_dir, out_dir / "create-bundle-result.json")
+    commands.append(record)
     if create_result.returncode != 0:
         result = {
             "status": "failed",
@@ -469,6 +617,7 @@ def main() -> int:
             "bundle_dir": out_dir.as_posix(),
             "config_selection": compact_config_selection(config_selection),
             "stdout": create_result.stdout,
+            "stderr": create_result.stderr,
             "commands": commands,
         }
         if args.verbose:
@@ -479,57 +628,54 @@ def main() -> int:
         return 1
 
     bundle_lint = out_dir / "preflight.lint.json"
-    lint_result = run(
-        [
-            sys.executable,
-            (SKILLS_ROOT / "goal-preflight" / "scripts" / "lint_goal_bundle.py").as_posix(),
-            "--bundle-dir",
-            out_dir.as_posix(),
-            "--json",
-            "--output",
-            bundle_lint.as_posix(),
-        ]
-    )
-    commands.append({"phase": "bundle_lint", "returncode": lint_result.returncode, "output": bundle_lint.as_posix()})
+    lint_command = [
+        sys.executable,
+        (SKILLS_ROOT / "goal-preflight" / "scripts" / "lint_goal_bundle.py").as_posix(),
+        "--bundle-dir",
+        out_dir.as_posix(),
+        "--json",
+        "--output",
+        bundle_lint.as_posix(),
+    ]
+    lint_result, record = run_tracked_phase("bundle_lint", lint_command, out_dir, bundle_lint)
+    commands.append(record)
 
     repair_gate = out_dir / "repair-gate.json"
-    repair_result = run(
-        [
-            sys.executable,
-            (SKILLS_ROOT / "_goal_shared" / "scripts" / "script_only_repair_gate.py").as_posix(),
-            "--manifest",
-            (out_dir / "job.manifest.json").as_posix(),
-            "--bundle-dir",
-            out_dir.as_posix(),
-            "--repo-root",
-            repo_root.as_posix(),
-            "--scope",
-            "preflight",
-            "--bundle-lint-report",
-            bundle_lint.as_posix(),
-            "--json",
-            "--output",
-            repair_gate.as_posix(),
-        ]
-    )
-    commands.append({"phase": "repair_gate", "returncode": repair_result.returncode, "output": repair_gate.as_posix()})
+    repair_command = [
+        sys.executable,
+        (SKILLS_ROOT / "_goal_shared" / "scripts" / "script_only_repair_gate.py").as_posix(),
+        "--manifest",
+        (out_dir / "job.manifest.json").as_posix(),
+        "--bundle-dir",
+        out_dir.as_posix(),
+        "--repo-root",
+        repo_root.as_posix(),
+        "--scope",
+        "preflight",
+        "--bundle-lint-report",
+        bundle_lint.as_posix(),
+        "--json",
+        "--output",
+        repair_gate.as_posix(),
+    ]
+    repair_result, record = run_tracked_phase("repair_gate", repair_command, out_dir, repair_gate)
+    commands.append(record)
 
     readiness = out_dir / "readiness.json"
-    readiness_result = run(
-        [
-            sys.executable,
-            (SKILLS_ROOT / "goal-preflight" / "scripts" / "render_goal_bootloader.py").as_posix(),
-            "--bundle-dir",
-            out_dir.as_posix(),
-            "--repo-root",
-            repo_root.as_posix(),
-            "--readiness",
-            "--json",
-            "--output",
-            readiness.as_posix(),
-        ]
-    )
-    commands.append({"phase": "readiness", "returncode": readiness_result.returncode, "output": readiness.as_posix()})
+    readiness_command = [
+        sys.executable,
+        (SKILLS_ROOT / "goal-preflight" / "scripts" / "render_goal_bootloader.py").as_posix(),
+        "--bundle-dir",
+        out_dir.as_posix(),
+        "--repo-root",
+        repo_root.as_posix(),
+        "--readiness",
+        "--json",
+        "--output",
+        readiness.as_posix(),
+    ]
+    readiness_result, record = run_tracked_phase("readiness", readiness_command, out_dir, readiness)
+    commands.append(record)
     readiness_data = read_json(readiness) if readiness.exists() else {"status": "missing"}
 
     status = "pass"
