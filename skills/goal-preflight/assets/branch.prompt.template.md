@@ -64,7 +64,7 @@ Telemetry policy mode is `{telemetry_policy_mode}`.
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_goal_skill_availability.py --skills-root "$GOAL_SKILLS_ROOT" --require goal-branch-orchestrator --require-codex-cli && \
-python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex > /absolute/path/to/bundle/branches/{branch_id}.model-catalog.json
+python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex > {branch_model_catalog_path_shell}
 ```
 
 Return blocked if either command fails.
@@ -85,5 +85,5 @@ Return blocked if either command fails.
 - `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
 - `{pre_review_gate_path}` passed before reviewer launch; reviewer `route.json` exists, records matching `semantic_input_hashes`, and has no verification gaps.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
-- Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/{branch_id}.status.json`.
+- Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest {manifest_path_shell} --status {branch_status_path_shell}`.
 {dod}

@@ -189,18 +189,31 @@ def lint_placeholders(defects: list[dict], brief: dict) -> None:
 
 
 def lint_policy(defects: list[dict], brief: dict) -> None:
+    policy_texts: dict[str, str] = {}
     for field in ["artifact_policy", "cleanup_policy"]:
         text = brief.get(field)
         if not isinstance(text, str) or not text.strip():
             defect(defects, f"$.{field}", "major", "must be supplied explicitly or by deterministic default")
             continue
-        if not NEGATIVE_STATE_RE.search(text):
-            defect(
-                defects,
-                f"$.{field}",
-                "major",
-                "should preserve partial/blocked/failed or unresolved/negative/probe-only states",
-            )
+        policy_texts[field] = text
+    if len(policy_texts) != 2:
+        return
+    combined = "\n".join(policy_texts.values())
+    if not NEGATIVE_STATE_RE.search(combined):
+        defect(
+            defects,
+            "$.artifact_policy",
+            "major",
+            "artifact_policy and cleanup_policy together should preserve partial/blocked/failed or unresolved/negative/probe-only states",
+        )
+
+
+def normalization_defect_path(message: str) -> str:
+    if message.startswith("runtime_cap ") or message.startswith("runtime_cap."):
+        return "$.runtime_cap"
+    if message.startswith("telemetry_policy ") or message.startswith("telemetry_policy."):
+        return "$.telemetry_policy"
+    return "$"
 
 
 def lint_goal_surface(defects: list[dict], brief: dict) -> None:
@@ -328,7 +341,8 @@ def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
     try:
         normalized = CREATE_GOAL_BUNDLE.normalize_brief(copy.deepcopy(brief))
     except SystemExit as exc:
-        defect(defects, "$", "critical", str(exc))
+        message = str(exc)
+        defect(defects, normalization_defect_path(message), "critical", message)
     except Exception as exc:  # noqa: BLE001
         defect(defects, "$", "critical", f"brief normalization failed: {exc}")
     lint_placeholders(defects, brief)

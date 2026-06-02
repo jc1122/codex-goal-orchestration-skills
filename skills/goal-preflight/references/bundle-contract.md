@@ -210,7 +210,7 @@ Preflight script entry paths are absolute only: `prepare_goal_bundle.py --brief/
 - `main.prompt.md` includes explicit cleanup and artifact policies so partial or blocked runs do not rely on runtime judgment.
 - Branch prompts define objective, scope, work items, reviewer requirement, stop conditions, and falsifiable DoD.
 - Branch prompts include base ref and require base-range whitespace validation before review or merge readiness.
-- Branch prompts require final branch status validation with `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
+- Branch prompts require final branch status validation with concrete bundle-root paths, equivalent to `validate_branch_status.py --manifest <bundle>/job.manifest.json --status <bundle>/branches/Bxx.status.json`.
 - Branch prompts require worker, research-worker, reviewer, and Lite packet `telemetry.json` artifacts for pass.
 - Branch prompts say optional Lite advisors may guide targeted context only after required checks and never while worker/research-worker/reviewer launchers are active.
 - Branch prompts define Worker Model Routing and require `selected_ladder` plus `selection_reason` in every worker status and branch rollup.

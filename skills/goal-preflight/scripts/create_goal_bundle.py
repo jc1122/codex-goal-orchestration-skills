@@ -9,6 +9,7 @@ import hashlib
 import importlib.util
 import json
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -521,8 +522,8 @@ def normalize_runtime_cap(value: object) -> object | None:
                 item = item.strip()
                 if not item:
                     continue
-            elif isinstance(item, bool) or not isinstance(item, (int, float, list, dict)):
-                raise SystemExit("runtime_cap values must be strings, numbers, arrays, or objects")
+            elif not isinstance(item, (bool, int, float, list, dict)):
+                raise SystemExit("runtime_cap values must be strings, numbers, booleans, arrays, or objects")
             normalized[key.strip()] = item
         return normalized or None
     raise SystemExit("runtime_cap must be a string or object when supplied")
@@ -1865,10 +1866,22 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
 
 def render_main_prompt_text(brief: dict) -> str:
     main_prompt = (Path(__file__).resolve().parents[1] / "assets" / "main.prompt.template.md").read_text(encoding="utf-8")
+    bundle_root = str(brief.get("bundle_root") or "/absolute/path/to/bundle")
+    repo_root = str(brief.get("repo_root") or "/absolute/path/to/repo")
+    manifest_path = f"{bundle_root}/job.manifest.json"
+    audit_path = f"{bundle_root}/audit/prompt-audit.json"
+    branch_status_glob = f"{bundle_root}/branches/Bxx.status.json"
+    main_status_path = f"{bundle_root}/main.status.json"
     return main_prompt.format(
         title=brief.get("title", brief["job_id"]),
         job_id=brief["job_id"],
         base_ref=brief["base_ref"],
+        bundle_root_shell=shlex.quote(bundle_root),
+        repo_root_shell=shlex.quote(repo_root),
+        manifest_path_shell=shlex.quote(manifest_path),
+        audit_path_shell=shlex.quote(audit_path),
+        branch_status_glob_shell=shlex.quote(branch_status_glob),
+        main_status_path_shell=shlex.quote(main_status_path),
         goal=brief.get("goal", "Goal not supplied."),
         source_summary=brief.get("source_summary", "Source summary not supplied."),
         source_attachments=render_source_attachments(brief.get("source_attachments", [])),
@@ -1891,6 +1904,10 @@ def render_main_prompt_text(brief: dict) -> str:
 def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     branch_template = (Path(__file__).resolve().parents[1] / "assets" / "branch.prompt.template.md").read_text(encoding="utf-8")
     scope = branch_scope_text(branch)
+    bundle_root = str(brief.get("bundle_root") or "/absolute/path/to/bundle")
+    manifest_path = f"{bundle_root}/job.manifest.json"
+    branch_status_path = f"{bundle_root}/{branch['status_path']}"
+    branch_model_catalog_path = f"{bundle_root}/branches/{branch['id']}.model-catalog.json"
     goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
     worker_policy = (
         goal_config.get("model_policies", {}).get("worker_model_policy", WORKER_MODEL_POLICY)
@@ -1920,6 +1937,9 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         branch_id=branch["id"],
         title=branch.get("title", branch.get("objective", branch["id"])),
         base_ref=brief["base_ref"],
+        manifest_path_shell=shlex.quote(manifest_path),
+        branch_status_path_shell=shlex.quote(branch_status_path),
+        branch_model_catalog_path_shell=shlex.quote(branch_model_catalog_path),
         branch_name=branch["branch_name"],
         worktree_path=branch["worktree_path"],
         wave=branch["wave"],
@@ -2019,6 +2039,8 @@ def create_bundle(
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)
+    brief["bundle_root"] = bundle_dir.resolve().as_posix()
+    brief["repo_root"] = repo_root.resolve().as_posix()
     preflight_warnings = []
     git_ignore_warning_record = bundle_git_ignore_warning_record(repo_root, bundle_dir)
     if git_ignore_warning_record:

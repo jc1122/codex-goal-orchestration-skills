@@ -692,6 +692,25 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
             ROOT.as_posix(),
         ]
     )
+    combined_policy_brief = {
+        **valid_brief,
+        "job_id": "brief-lint-combined-policy",
+        "artifact_policy": "Keep generated bundle artifacts under the selected orchestration directory.",
+        "cleanup_policy": "On partial, blocked, or failed runs, preserve branch worktrees, packets, and logs for inspection.",
+    }
+    combined_policy_path = tmp_path / "brief-lint-combined-policy.json"
+    write_json(combined_policy_path, combined_policy_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_preflight_brief.py",
+            "--brief",
+            combined_policy_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--json",
+        ]
+    )
     invalid_brief = {
         **valid_brief,
         "job_id": "brief-lint-invalid",
@@ -817,7 +836,7 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
         "goal": "Use the exact fixture instance provided in this brief attachment and finish within the chosen runtime cap.",
         "source_summary": "README.md is attached as the source-of-truth fixture payload for this lint check.",
         "source_attachments": [{"path": "README.md", "label": "Exact fixture source", "kind": "benchmark-data"}],
-        "runtime_cap": {"seconds": 30, "cli_flag": "--time-limit-seconds 30"},
+        "runtime_cap": {"seconds": 30, "cli_flag": "--time-limit-seconds 30", "require_cap_reporting": True},
     }
     exact_source_attached_path = tmp_path / "brief-lint-exact-source-attached.json"
     write_json(exact_source_attached_path, exact_source_attached_brief)
@@ -832,6 +851,29 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
             "--json",
         ]
     )
+    invalid_runtime_cap_brief = {
+        **valid_brief,
+        "job_id": "brief-lint-invalid-runtime-cap",
+        "runtime_cap": [30],
+    }
+    invalid_runtime_cap_path = tmp_path / "brief-lint-invalid-runtime-cap.json"
+    write_json(invalid_runtime_cap_path, invalid_runtime_cap_brief)
+    invalid_runtime_cap = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_preflight_brief.py",
+                "--brief",
+                invalid_runtime_cap_path.as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--json",
+            ],
+            expect=1,
+        ).stdout
+    )
+    if not any(item.get("path") == "$.runtime_cap" for item in invalid_runtime_cap.get("defects", [])):
+        raise SystemExit(f"runtime_cap normalization defects should be path-specific: {invalid_runtime_cap!r}")
 
 
 def amendment_branch(branch_id: str, owned_path: str, *, depends_on: list[str] | None = None, branch_name: str | None = None) -> dict:
@@ -2514,18 +2556,23 @@ def run_repair_gate_fixture(bundle: Path) -> None:
 
 
 def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
+    manifest_arg = (bundle / "job.manifest.json").as_posix()
+    branch_status_glob = (bundle / "branches" / "Bxx.status.json").as_posix()
+    main_status_path = (bundle / "main.status.json").as_posix()
+    branch_status_path = (bundle / "branches" / "B01.status.json").as_posix()
+    wrong_branch_status_path = (bundle / "branches" / "B99.status.json").as_posix()
     stale_validator_bundle = tmp_path / "stale-validator-command"
     shutil.copytree(bundle, stale_validator_bundle)
     stale_prompt = stale_validator_bundle / "main.prompt.md"
     stale_text = stale_prompt.read_text(encoding="utf-8")
     stale_text = stale_text.replace(
-        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
-        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json",
+        f"validate_branch_status.py --manifest {manifest_arg} --status {branch_status_glob}",
+        f"validate_branch_status.py --manifest {manifest_arg}",
         1,
     )
     stale_text = stale_text.replace(
-        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
-        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json",
+        f"validate_main_status.py --manifest {manifest_arg} --status {main_status_path}",
+        f"validate_main_status.py --manifest {manifest_arg}",
         1,
     )
     stale_prompt.write_text(stale_text, encoding="utf-8")
@@ -2539,20 +2586,20 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
     wrong_target_prompt = wrong_target_validator_bundle / "main.prompt.md"
     wrong_target_text = wrong_target_prompt.read_text(encoding="utf-8")
     wrong_target_text = wrong_target_text.replace(
-        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json",
-        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
+        f"validate_branch_status.py --manifest {manifest_arg} --status {branch_status_glob}",
+        f"validate_branch_status.py --manifest {manifest_arg} --status {main_status_path}",
         1,
     )
     wrong_target_text = wrong_target_text.replace(
-        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json",
-        "validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/main.status.json",
+        f"validate_main_status.py --manifest {manifest_arg} --status {main_status_path}",
+        f"validate_main_status.py --manifest {manifest_arg} --status {(bundle / 'branches' / 'main.status.json').as_posix()}",
         1,
     )
     wrong_target_prompt.write_text(wrong_target_text, encoding="utf-8")
     wrong_target_branch_prompt = wrong_target_validator_bundle / "branches" / "B01.prompt.md"
     wrong_target_branch_text = wrong_target_branch_prompt.read_text(encoding="utf-8").replace(
-        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B01.status.json",
-        "validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/B99.status.json",
+        f"validate_branch_status.py --manifest {manifest_arg} --status {branch_status_path}",
+        f"validate_branch_status.py --manifest {manifest_arg} --status {wrong_branch_status_path}",
         1,
     )
     wrong_target_branch_prompt.write_text(wrong_target_branch_text, encoding="utf-8")
@@ -2822,6 +2869,39 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     pipeline_brief_path = tmp_path / "preflight-pipeline-brief.json"
     pipeline_bundle = tmp_path / "preflight-pipeline-bundle"
     write_json(pipeline_brief_path, pipeline_brief)
+    failing_pipeline_brief = {
+        **pipeline_brief,
+        "job_id": "preflight-pipeline-failing-brief",
+        "runtime_cap": [30],
+    }
+    failing_pipeline_brief_path = tmp_path / "preflight-pipeline-failing-brief.json"
+    failing_pipeline_bundle = tmp_path / "preflight-pipeline-failing-bundle"
+    write_json(failing_pipeline_brief_path, failing_pipeline_brief)
+    failing_pipeline = subprocess.run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+            "--brief",
+            failing_pipeline_brief_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            failing_pipeline_bundle.as_posix(),
+            "--no-goal-config",
+        ],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if failing_pipeline.returncode != 1:
+        raise SystemExit(f"failing preflight pipeline should return 1: {failing_pipeline.returncode} {failing_pipeline.stdout} {failing_pipeline.stderr}")
+    assert_all_contains(
+        failing_pipeline.stderr + failing_pipeline.stdout,
+        ["goal-preflight pipeline failed: phase=brief_lint", "pipeline_result=", "top_defects:", "$.runtime_cap"],
+        "prepare_goal_bundle failed brief-lint UX",
+    )
     pipeline_result = json.loads(
         run(
             [
@@ -2878,23 +2958,82 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ["## Source Attachments", "Fixture README", "sha256="],
         "source attachments prompt section",
     )
+    assert_not_contains((pipeline_bundle / "main.prompt.md").read_text(encoding="utf-8"), "/absolute/path/to/", "main prompt concrete paths")
     runtime_rules = (pipeline_bundle / "runtime-rules.md").read_text(encoding="utf-8")
     assert_all_contains(runtime_rules, ["Shared Branch Runtime Rules", "Worker Parallelism", "Reviewer Requirement", "Lite Advisors"], "runtime rules appendix")
     if pipeline_manifest.get("runtime_rules_path") != "runtime-rules.md" or not pipeline_manifest.get("runtime_rules_sha256"):
         raise SystemExit(f"manifest should pin runtime-rules.md by path and sha: {pipeline_manifest!r}")
     pipeline_prompt = (pipeline_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
     assert_contains(pipeline_prompt, "deferred - route availability is unverified", "no-goal-config route recommendations should be deferred")
+    assert_not_contains(pipeline_prompt, "/absolute/path/to/", "branch prompt concrete paths")
     pipeline_readiness = read_json(pipeline_bundle / "readiness.json")
     if pipeline_readiness.get("route_policy", {}).get("worker_recommendations_suppressed") is not True:
         raise SystemExit(f"readiness should suppress worker route recommendations when route availability is unverified: {pipeline_readiness!r}")
+    if pipeline_readiness.get("route_policy", {}).get("worker") != []:
+        raise SystemExit(f"readiness active worker route policy should omit unverified aliases: {pipeline_readiness.get('route_policy')!r}")
+    if not pipeline_readiness.get("route_policy", {}).get("unverified_config_aliases", {}).get("worker"):
+        raise SystemExit(f"readiness should preserve unverified worker aliases separately: {pipeline_readiness.get('route_policy')!r}")
     optional_artifacts = pipeline_readiness.get("artifact_size_report", {}).get("optional_machine_artifacts", {})
-    absent_optional = optional_artifacts.get("absent_not_counted", [])
-    if "readiness.json" not in absent_optional:
-        raise SystemExit(f"readiness should exclude circular self-accounting when rendering readiness.json: {optional_artifacts!r}")
+    present_optional = optional_artifacts.get("present", [])
+    if "readiness.json" not in present_optional or "preflight.pipeline.json" not in present_optional:
+        raise SystemExit(f"final readiness should count final optional artifacts when present: {optional_artifacts!r}")
     if any(item.get("exists") is False for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])):
         raise SystemExit(f"artifact size report should not count absent optional artifacts as missing entries: {pipeline_readiness!r}")
+    machine_artifacts = {
+        item.get("path"): item
+        for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])
+        if isinstance(item, dict)
+    }
+    for rel_path in ["preflight.pipeline.json", "readiness.json"]:
+        entry = machine_artifacts.get(rel_path)
+        if not entry or entry.get("chars") != len((pipeline_bundle / rel_path).read_text(encoding="utf-8")):
+            raise SystemExit(f"final readiness size should match {rel_path}: {entry!r}")
     if pipeline_readiness.get("caps", {}).get("max_active_worker_packets_by_branch", {}).get("B01") != 4:
         raise SystemExit(f"readiness caps should report branch worker caps, not branch wave caps: {pipeline_readiness.get('caps')!r}")
+    spaced_repo = tmp_path / "branch default repo with spaces"
+    spaced_bundle = tmp_path / "preflight pipeline bundle with spaces"
+    shutil.copytree(branch_default_repo, spaced_repo)
+    spaced_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                spaced_repo.as_posix(),
+                "--out-dir",
+                spaced_bundle.as_posix(),
+                "--no-goal-config",
+                "--json",
+            ]
+        ).stdout
+    )
+    if spaced_result.get("status") != "pass":
+        raise SystemExit(f"prepare_goal_bundle.py should pass when repo/bundle paths contain spaces: {spaced_result!r}")
+    spaced_main_prompt = (spaced_bundle / "main.prompt.md").read_text(encoding="utf-8")
+    spaced_branch_prompt = (spaced_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
+    assert_all_contains(
+        spaced_main_prompt,
+        [
+            f"B={shlex.quote(spaced_bundle.as_posix())}",
+            f"--repo-root {shlex.quote(spaced_repo.as_posix())}",
+            f"--manifest {shlex.quote((spaced_bundle / 'job.manifest.json').as_posix())}",
+            f"--status {shlex.quote((spaced_bundle / 'branches' / 'Bxx.status.json').as_posix())}",
+            f"--bundle-dir {shlex.quote(spaced_bundle.as_posix())}",
+            f"--status {shlex.quote((spaced_bundle / 'main.status.json').as_posix())}",
+        ],
+        "main prompt quoted concrete paths with spaces",
+    )
+    assert_all_contains(
+        spaced_branch_prompt,
+        [
+            f"> {shlex.quote((spaced_bundle / 'branches' / 'B01.model-catalog.json').as_posix())}",
+            f"--manifest {shlex.quote((spaced_bundle / 'job.manifest.json').as_posix())}",
+            f"--status {shlex.quote((spaced_bundle / 'branches' / 'B01.status.json').as_posix())}",
+        ],
+        "branch prompt quoted concrete paths with spaces",
+    )
     quiet_readiness = tmp_path / "quiet-readiness.txt"
     quiet_result = run(
         [
@@ -3210,6 +3349,10 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"unverified route availability should warn without blocking launch: {config_pipeline_readiness!r}")
     if not any(item.get("code") == "route_availability_unverified" for item in config_pipeline_readiness.get("warnings", [])):
         raise SystemExit(f"readiness should warn on config route availability ambiguity: {config_pipeline_readiness!r}")
+    if config_pipeline_readiness.get("route_policy", {}).get("worker") != []:
+        raise SystemExit(f"config readiness should omit unverified active worker aliases: {config_pipeline_readiness.get('route_policy')!r}")
+    if not config_pipeline_readiness.get("route_policy", {}).get("unverified_config_aliases", {}).get("worker"):
+        raise SystemExit(f"config readiness should preserve unverified aliases under unverified_config_aliases: {config_pipeline_readiness.get('route_policy')!r}")
     report_text = (config_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
     assert_all_contains(
         report_text,

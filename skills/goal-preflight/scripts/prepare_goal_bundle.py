@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import re
 import subprocess
@@ -79,7 +80,7 @@ def artifact_snapshot(root: Path) -> dict[str, dict[str, int | str]]:
         stat = path.stat()
         snapshot[rel] = {
             "size_bytes": stat.st_size,
-            "sha256": sha256_file(path) or "",
+            "mtime_ns": stat.st_mtime_ns,
         }
     return snapshot
 
@@ -126,6 +127,69 @@ def phase_record(
     if before is not None and after is not None:
         record["artifact_delta"] = artifact_delta(before, after)
     return record
+
+
+def top_defects_from_report(path: Path, *, limit: int = 5) -> list[str]:
+    if not path.exists():
+        return []
+    try:
+        payload = read_json(path)
+    except Exception:  # noqa: BLE001
+        return []
+    raw_items = payload.get("defects") or payload.get("errors") or payload.get("failures") or []
+    if not isinstance(raw_items, list):
+        return []
+    defects: list[str] = []
+    for item in raw_items[:limit]:
+        if isinstance(item, dict):
+            location = item.get("path") or item.get("file") or item.get("field") or "$"
+            severity = item.get("severity")
+            message = item.get("message") or item.get("reason") or item.get("error") or item
+            prefix = f"{severity} " if isinstance(severity, str) and severity else ""
+            defects.append(f"{prefix}{location}: {message}")
+        else:
+            defects.append(str(item))
+    return defects
+
+
+def top_output_lines(*values: str, limit: int = 5) -> list[str]:
+    lines: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        for line in value.splitlines():
+            stripped = line.strip()
+            if stripped:
+                lines.append(stripped)
+            if len(lines) >= limit:
+                return lines
+    return lines
+
+
+def emit_failure_summary(
+    *,
+    phase: str,
+    pipeline_path: Path,
+    reports: dict[str, Path] | None = None,
+    stdout: str = "",
+    stderr: str = "",
+) -> None:
+    print(f"goal-preflight pipeline failed: phase={phase}", file=sys.stderr)
+    print(f"pipeline_result={pipeline_path}", file=sys.stderr)
+    report_defects: list[str] = []
+    for label, path in (reports or {}).items():
+        print(f"{label}={path}", file=sys.stderr)
+        report_defects.extend(top_defects_from_report(path))
+    if report_defects:
+        print("top_defects:", file=sys.stderr)
+        for item in report_defects[:5]:
+            print(f"- {item}", file=sys.stderr)
+        return
+    output_lines = top_output_lines(stderr, stdout)
+    if output_lines:
+        print("top_output:", file=sys.stderr)
+        for item in output_lines:
+            print(f"- {item}", file=sys.stderr)
 
 
 def run_tracked_phase(phase: str, command: list[str], out_dir: Path, output: Path | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
@@ -323,6 +387,65 @@ def compact_readiness(readiness: dict) -> dict:
             "runtime_contract_approx_tokens": artifact_size.get("runtime_contract_approx_tokens"),
         },
     }
+
+
+def load_bootloader_renderer():
+    path = SKILLS_ROOT / "goal-preflight" / "scripts" / "render_goal_bootloader.py"
+    spec = importlib.util.spec_from_file_location("goal_preflight_render_goal_bootloader", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load bootloader renderer: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def update_result_readiness_fields(result: dict, readiness_data: dict, *, verbose: bool) -> None:
+    result["readiness_status"] = readiness_data.get("status")
+    result["launch_allowed"] = readiness_data.get("launch_allowed")
+    result["readiness"] = compact_readiness(readiness_data)
+    result["next_commands"] = readiness_data.get("next_commands", [])
+    if verbose:
+        result["readiness_full"] = readiness_data
+
+
+def artifact_chars_by_path(readiness_data: dict) -> dict[str, int]:
+    report = readiness_data.get("artifact_size_report") if isinstance(readiness_data.get("artifact_size_report"), dict) else {}
+    entries = report.get("machine_artifacts") if isinstance(report.get("machine_artifacts"), list) else []
+    result: dict[str, int] = {}
+    for item in entries:
+        if isinstance(item, dict) and isinstance(item.get("path"), str) and isinstance(item.get("chars"), int):
+            result[item["path"]] = item["chars"]
+    return result
+
+
+def readiness_size_report_matches_files(readiness_data: dict, bundle_dir: Path) -> bool:
+    reported = artifact_chars_by_path(readiness_data)
+    checked = False
+    for rel_path in ["preflight.pipeline.json", "readiness.json"]:
+        path = bundle_dir / rel_path
+        if not path.exists():
+            continue
+        checked = True
+        if reported.get(rel_path) != len(path.read_text(encoding="utf-8")):
+            return False
+    return checked
+
+
+def refresh_final_readiness_sizes(out_dir: Path, repo_root: Path, output_path: Path, result: dict, *, verbose: bool) -> dict:
+    readiness_path = out_dir / "readiness.json"
+    if not readiness_path.exists():
+        return {"status": "missing"}
+    renderer = load_bootloader_renderer()
+    readiness_data: dict = read_json(readiness_path)
+    for _ in range(6):
+        readiness_text = renderer.render_readiness_json(out_dir, repo_root=repo_root)
+        readiness_path.write_text(readiness_text, encoding="utf-8")
+        readiness_data = json.loads(readiness_text)
+        update_result_readiness_fields(result, readiness_data, verbose=verbose)
+        write_json(output_path, result)
+        if readiness_size_report_matches_files(readiness_data, out_dir):
+            return readiness_data
+    return readiness_data
 
 
 def update_preflight_report(out_dir: Path, readiness: dict, lint_path: Path, repair_path: Path, result_kind: str) -> None:
@@ -537,8 +660,23 @@ def main() -> int:
     brief_lint_result, record = run_tracked_phase("brief_lint", brief_lint_command, out_dir, brief_lint)
     commands.append(record)
     if brief_lint_result.returncode != 0:
-        result = {"status": "failed", "phase": "brief_lint", "bundle_dir": out_dir.as_posix(), "commands": commands}
-        write_json(Path(args.output) if args.output else out_dir / "preflight.pipeline.json", result)
+        output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
+        result = {
+            "status": "failed",
+            "phase": "brief_lint",
+            "bundle_dir": out_dir.as_posix(),
+            "brief_lint_path": brief_lint.as_posix(),
+            "top_defects": top_defects_from_report(brief_lint),
+            "commands": commands,
+        }
+        write_json(output_path, result)
+        emit_failure_summary(
+            phase="brief_lint",
+            pipeline_path=output_path,
+            reports={"brief_lint_path": brief_lint},
+            stdout=brief_lint_result.stdout,
+            stderr=brief_lint_result.stderr,
+        )
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         return 1
@@ -611,6 +749,7 @@ def main() -> int:
     create_result, record = run_tracked_phase("create_bundle", create_command, out_dir, out_dir / "create-bundle-result.json")
     commands.append(record)
     if create_result.returncode != 0:
+        output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
         result = {
             "status": "failed",
             "phase": "create_bundle",
@@ -618,11 +757,19 @@ def main() -> int:
             "config_selection": compact_config_selection(config_selection),
             "stdout": create_result.stdout,
             "stderr": create_result.stderr,
+            "top_output": top_output_lines(create_result.stderr, create_result.stdout),
             "commands": commands,
         }
         if args.verbose:
             result["config_selection_full"] = config_selection
-        write_json(Path(args.output) if args.output else out_dir / "preflight.pipeline.json", result)
+        write_json(output_path, result)
+        emit_failure_summary(
+            phase="create_bundle",
+            pipeline_path=output_path,
+            reports={"create_result_path": out_dir / "create-bundle-result.json"},
+            stdout=create_result.stdout,
+            stderr=create_result.stderr,
+        )
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         return 1
@@ -715,6 +862,9 @@ def main() -> int:
         result["readiness_full"] = readiness_data
     output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
     write_json(output_path, result)
+    if output_path == out_dir / "preflight.pipeline.json":
+        readiness_data = refresh_final_readiness_sizes(out_dir, repo_root, output_path, result, verbose=args.verbose)
+        update_preflight_report(out_dir, readiness_data, bundle_lint, repair_gate, result_kind)
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:

@@ -114,10 +114,15 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
     verified_routes = _verified_routes_summary(manifest)
     recommendations_suppressed = verified_routes.get("route_model_availability_verified") is not True
     worker_policy = manifest.get("worker_model_policy", {})
-    routes["worker"] = worker_policy.get("default_ladder", [])
     routes["worker_recommendations_suppressed"] = recommendations_suppressed
     if recommendations_suppressed:
+        routes["worker"] = []
+        routes["unverified_config_aliases"] = {
+            "worker": worker_policy.get("default_ladder", []),
+        }
         routes["worker_recommendation_reason"] = "route availability was not verified; prompts defer concrete worker alias selection until a fresh model catalog or accepted-route smoke check"
+    else:
+        routes["worker"] = worker_policy.get("default_ladder", [])
     amender_policy = manifest.get("amender_model_policy", {})
     routes["amender"] = amender_policy.get("default_ladder", [])
     lite_policy = manifest.get("lite_model_policy", {})

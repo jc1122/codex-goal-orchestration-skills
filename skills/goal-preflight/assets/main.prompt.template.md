@@ -33,11 +33,11 @@ Base ref: {base_ref}
 - Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots and close finished branch orchestrator agents. Set absolute bundle paths and run:
 
 ```bash
-B="/absolute/path/to/bundle"
+B={bundle_root_shell}
 MANIFEST="$B/job.manifest.json"
 AUDIT="$B/audit/prompt-audit.json"
 
-python3 "${{GOAL_SKILLS_ROOT}}"/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest "$MANIFEST" --repo-root /absolute/path/to/repo --audit "$AUDIT" --list-ready --limit 4
+python3 "${{GOAL_SKILLS_ROOT}}"/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest "$MANIFEST" --repo-root {repo_root_shell} --audit "$AUDIT" --list-ready --limit 4
 ```
 
 Launch the next eligible branch from that output only.
@@ -46,8 +46,8 @@ Launch the next eligible branch from that output only.
 - If no branch completes after `orchestration_watchdog.main_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active branches with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
 - Outside that watchdog exception, wait for branch agents and do not poll active branch worktrees, worker packets, reviewer packets, process tables, or status files.
 - Branch sessions must launch workers as a rolling saturated pool up to each branch cap. Research-worker, reviewer, Lite, and amendment policy lives in `job.manifest.json` and packet validators.
-- Before merge readiness, require `git diff --check {base_ref}...HEAD`; accept each branch after `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
-- Before final pass, run `summarize_telemetry.py --bundle-dir /absolute/path/to/bundle` and require current `telemetry.summary.json` usage telemetry under the legacy `cost_summary` field name, `main.status.json` `cost_summary_path`, plus `validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json`.
+- Before merge readiness, require `git diff --check {base_ref}...HEAD`; accept each branch after `validate_branch_status.py --manifest {manifest_path_shell} --status {branch_status_glob_shell}`.
+- Before final pass, run `summarize_telemetry.py --bundle-dir {bundle_root_shell}` and require current `telemetry.summary.json` usage telemetry under the legacy `cost_summary` field name, `main.status.json` `cost_summary_path`, plus `validate_main_status.py --manifest {manifest_path_shell} --status {main_status_path_shell}`.
 - Optional Lite advisors are context routers only, never audit/review/mergeability/DoD evidence. Preserve unsupported, unresolved, negative, and probe-only labels.
 - Telemetry policy mode is `{telemetry_policy_mode}`. In debug mode, telemetry is passive only: collect extra runtime telemetry context but do not change model-route selection, selection reasons, polling windows, or watchdog behavior.
 
@@ -85,9 +85,9 @@ Launch the next eligible branch from that output only.
 - Packet telemetry exists for prompt audit, workers, research-workers, reviewers, any Lite packets, and any plan-amender packets; each declared attempt records `timeout_seconds`; `telemetry.summary.json` was regenerated.
 - `telemetry.summary.json` includes deterministic token/character/time usage fields under the legacy `cost_summary` field name for declared/called attempts, aliases, premium aliases avoided, mini/spark usage, prompt/output bytes, fallbacks, and failed same-class attempts; `main.status.json` points to it.
 - `{main_scheduler_path}` exists, matches the current manifest hash, and proves branch slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
-- Every branch status passed manifest-bound `validate_branch_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/branches/Bxx.status.json`.
+- Every branch status passed manifest-bound `validate_branch_status.py --manifest {manifest_path_shell} --status {branch_status_glob_shell}`.
 - Every terminal branch summary has an `amendment_decisions` launch or skip record; every launched amender has passing packet validation.
 - Every mergeable review recorded base-range whitespace evidence and no verification gaps.
-- Final `main.status.json` passed manifest-bound `validate_main_status.py --manifest /absolute/path/to/job.manifest.json --status /absolute/path/to/bundle/main.status.json`.
+- Final `main.status.json` passed manifest-bound `validate_main_status.py --manifest {manifest_path_shell} --status {main_status_path_shell}`.
 - `lite_advice` records are present, even when empty; every relevant main Lite packet directory is recorded, validated, and treated only as advisory context routing.
 {final_dod}
