@@ -2649,6 +2649,12 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
         raise SystemExit(f"readiness should find canonical preflight.brief.lint.json: {readiness_json.get('lint_status')!r}")
     if readiness_json.get("repair_gate", {}).get("status") != "pass":
         raise SystemExit(f"readiness should find canonical repair-gate.json: {readiness_json.get('repair_gate')!r}")
+    prompt_size = readiness_json.get("prompt_size_report", {})
+    prompt_paths = [item.get("path") for item in prompt_size.get("files", []) if isinstance(item, dict)]
+    if "runtime-rules.md" not in prompt_paths:
+        raise SystemExit(f"readiness prompt-size report should include runtime-rules.md: {prompt_size!r}")
+    if prompt_size.get("duplicated_section_counts", {}).get("shared_runtime_rules_extracted") is not True:
+        raise SystemExit(f"readiness should report extracted shared runtime rules: {prompt_size!r}")
     assert_all_contains(json.dumps(readiness_json["lint_status"], sort_keys=True), ["bundle_lint", "brief_lint"], "readiness lint keys")
     assert_all_contains(
         (bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8"),
@@ -2812,6 +2818,7 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         "goal-config-selection.json",
         "preflight.pipeline.json",
         "goal-bootloader.md",
+        "runtime-rules.md",
     ]:
         if not (pipeline_bundle / artifact).exists():
             raise SystemExit(f"prepare_goal_bundle.py did not persist canonical artifact {artifact}")
@@ -2824,6 +2831,76 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ["## Source Attachments", "Fixture README", "sha256="],
         "source attachments prompt section",
     )
+    runtime_rules = (pipeline_bundle / "runtime-rules.md").read_text(encoding="utf-8")
+    assert_all_contains(runtime_rules, ["Shared Branch Runtime Rules", "Worker Parallelism", "Reviewer Requirement", "Lite Advisors"], "runtime rules appendix")
+    if pipeline_manifest.get("runtime_rules_path") != "runtime-rules.md" or not pipeline_manifest.get("runtime_rules_sha256"):
+        raise SystemExit(f"manifest should pin runtime-rules.md by path and sha: {pipeline_manifest!r}")
+
+    large_source = branch_default_repo / "large-source.txt"
+    large_source.write_text("exact operation list fixture\n" + ("0123456789abcdef\n" * 700), encoding="utf-8")
+    run(["git", "-C", branch_default_repo.as_posix(), "add", "large-source.txt"])
+    promoted_brief = {
+        "job_id": "promoted-large-source-fixture",
+        "goal": "Use the exact source list in the repeated large context file without repeating it under every worker.",
+        "source_summary": "The exact source list is stored in large-source.txt and referenced by two workers.",
+        "required_evidence": ["The manifest declares large-source.txt once as a source attachment."],
+        "final_dod": ["Work items refer to the promoted source attachment by label."],
+        "branches": [
+            {
+                "id": "B01",
+                "objective": "Exercise repeated large context promotion for exact source data.",
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Read the exact source list and perform the first fixture check.",
+                        "owned_paths": ["README.md"],
+                        "context_files": ["large-source.txt"],
+                        "verification": ["true"],
+                        "dod": ["The first worker uses the promoted large source attachment."],
+                    },
+                    {
+                        "id": "W02",
+                        "objective": "Read the exact source list and perform the second fixture check.",
+                        "owned_paths": ["fixture-output.txt"],
+                        "context_files": ["large-source.txt"],
+                        "verification": ["true"],
+                        "dod": ["The second worker uses the promoted large source attachment."],
+                    },
+                ],
+            }
+        ],
+    }
+    promoted_brief_path = tmp_path / "promoted-large-source-brief.json"
+    promoted_bundle = tmp_path / "promoted-large-source-bundle"
+    write_json(promoted_brief_path, promoted_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+            "--brief",
+            promoted_brief_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            promoted_bundle.as_posix(),
+            "--no-goal-config",
+            "--json",
+        ]
+    )
+    promoted_manifest = read_json(promoted_bundle / "job.manifest.json")
+    promotions = promoted_manifest.get("source_attachment_promotions", [])
+    if not promotions or promotions[0].get("path") != "large-source.txt":
+        raise SystemExit(f"large repeated context file should be promoted: {promotions!r}")
+    promoted_attachments = promoted_manifest.get("source_attachments", [])
+    promoted_label = next((item.get("label") for item in promoted_attachments if item.get("path") == "large-source.txt"), None)
+    if not promoted_label:
+        raise SystemExit(f"promoted source attachment missing label: {promoted_attachments!r}")
+    for item in promoted_manifest["branches"][0]["work_items"]:
+        if "large-source.txt" in item.get("context_files", []):
+            raise SystemExit(f"promoted large source should not remain in work item context_files: {item!r}")
+        if promoted_label not in item.get("source_attachment_refs", []):
+            raise SystemExit(f"work item should reference promoted source attachment label: {item!r}")
+    assert_contains((promoted_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8"), "Source attachment refs:", "promoted source branch prompt")
 
     debug_mode_brief = {**branch_default_brief, "job_id": "debug-mode-shorthand-fixture", "telemetry_mode": "debug"}
     debug_mode_brief_path = tmp_path / "debug-mode-brief.json"

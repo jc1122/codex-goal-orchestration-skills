@@ -219,6 +219,8 @@ MANIFEST_REQUIRED_KEYS = (
     "required_evidence",
     "final_dod",
     "main_prompt",
+    "runtime_rules_path",
+    "runtime_rules_sha256",
     "base_ref",
     "artifact_policy",
     "cleanup_policy",
@@ -310,40 +312,56 @@ BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER = (
     "Scope",
     "Depends on branches",
     "Work Items",
-    "Reviewer Requirement",
-    "Bootstrap Requirement",
-    "Worker Parallelism",
-    "runtime_phase_manifest.py --markdown",
-    "do not read skill Python source",
+    "Runtime rules appendix",
+    "Runtime rules sha256",
+    "Branch Runtime Parameters",
     "Max active worker packets",
+    "Effective worker launch cap",
     "Declared worker packets",
     "Configured package max worker packets per branch",
     "Never exceed",
     "active worker packets",
-    "rolling saturated pool",
-    "render_worker_schedule.py",
     "Branch scheduler serial/under-capacity reasons",
     "Worker scheduler serial/under-capacity reasons",
 )
 BRANCH_PROMPT_PHRASES_AFTER_SCHEDULER = (
     "worker_parallelism.scheduler_path",
     "Worker parallelization rationale",
-    "Worker Model Routing",
+    "Pre-review gate path",
+    "Default worker ladder",
+    "Allowed worker route aliases",
     "Route-class ladders",
+    "Bootstrap Command",
     "Additional Validators",
-    "Selected worker ladders",
     "Worker packet id",
     "Route class reason code",
     "Recommended ladder",
+    "Source attachment refs",
     "telemetry.json",
-    "Lite Advisors",
-    "orchestration_watchdog.branch_no_completion_wait_limit",
     "validate_branch_status.py --manifest",
     "Stop Conditions",
     "git diff --check",
+    "semantic_input_hashes",
+)
+RUNTIME_RULES_REQUIRED_PHRASES = (
+    "Shared Branch Runtime Rules",
+    "Worker Parallelism",
+    "runtime_phase_manifest.py --markdown",
+    "do not read skill Python source",
+    "script_only_repair_gate.py --scope branch",
+    "rolling saturated pool",
+    "render_worker_schedule.py",
+    "scheduler_tick.py --blocked/--close",
+    "Worker Model Routing",
+    "Selected worker ladders",
+    "Lite Advisors",
+    "Reviewer Requirement",
     "pre_review_gate.json",
     "semantic_input_hashes",
+    "Bootstrap Requirement",
+    "orchestration_watchdog.branch_no_completion_wait_limit",
     "do not poll active",
+    "Validation DoD",
 )
 
 
@@ -1024,6 +1042,31 @@ def lint(bundle_dir: Path) -> dict:
             "critical",
             "exact source/instance/list is referenced but no inline payload or source_attachments entry exists",
         )
+    source_attachment_labels: set[str] = set()
+    source_attachment_paths: set[str] = set()
+    attachments = manifest.get("source_attachments")
+    if attachments is not None:
+        if not isinstance(attachments, list):
+            defect("job.manifest.json", "critical", "source_attachments must be an array when present")
+        else:
+            for index, attachment in enumerate(attachments):
+                if not isinstance(attachment, dict):
+                    defect("job.manifest.json", "critical", f"source_attachments[{index}] must be an object")
+                    continue
+                label = attachment.get("label")
+                path = attachment.get("path")
+                if not isinstance(label, str) or not label.strip():
+                    defect("job.manifest.json", "critical", f"source_attachments[{index}].label must be non-empty")
+                elif label in source_attachment_labels:
+                    defect("job.manifest.json", "critical", f"source_attachments label is duplicated: {label}")
+                else:
+                    source_attachment_labels.add(label)
+                if not isinstance(path, str) or relative_path_defect(path, f"source_attachments[{index}].path"):
+                    defect("job.manifest.json", "critical", f"source_attachments[{index}].path must be repo-relative")
+                else:
+                    source_attachment_paths.add(path)
+                if attachment.get("promoted_from_context_files") is True and attachment.get("bytes", 0) < 8192:
+                    defect("job.manifest.json", "major", f"source_attachments[{index}] was promoted from context_files but is below the large-source threshold")
     if RUNTIME_CAP_RE.search(manifest_text) and not concrete_runtime_cap(manifest.get("runtime_cap")):
         defect(
             "job.manifest.json",
@@ -1175,6 +1218,7 @@ def lint(bundle_dir: Path) -> dict:
     reserved_bundle_paths = {
         "job.manifest.json",
         "main.prompt.md",
+        "runtime-rules.md",
         "goal-bootloader.md",
         "PREFLIGHT_REPORT.md",
         "preflight.brief.lint.json",
@@ -1258,6 +1302,35 @@ def lint(bundle_dir: Path) -> dict:
         )
         if not has_dod(main_text):
             defect(str(main_path), "critical", "main prompt lacks a falsifiable Definition of Done")
+
+    runtime_rules_value = manifest.get("runtime_rules_path")
+    runtime_rules_error = relative_path_defect(runtime_rules_value, "runtime_rules_path")
+    if runtime_rules_error:
+        defect("job.manifest.json", "critical", runtime_rules_error)
+        runtime_rules_path = None
+    elif runtime_rules_value != "runtime-rules.md":
+        defect("job.manifest.json", "critical", "runtime_rules_path must be 'runtime-rules.md'")
+        runtime_rules_path = resolve(bundle_dir, runtime_rules_value) if isinstance(runtime_rules_value, str) else None
+    else:
+        runtime_rules_path = resolve(bundle_dir, runtime_rules_value)
+    if runtime_rules_path is None or not runtime_rules_path.exists():
+        defect("runtime-rules.md", "critical", "runtime rules appendix is missing")
+    else:
+        runtime_rules_text = runtime_rules_path.read_text(encoding="utf-8")
+        lint_generated_prompt_text(defect, "runtime-rules.md", runtime_rules_text)
+        require_text_phrases(
+            defect,
+            "runtime-rules.md",
+            runtime_rules_text,
+            RUNTIME_RULES_REQUIRED_PHRASES,
+            severity="critical",
+            message_prefix="runtime rules missing required phrase",
+        )
+        runtime_rules_hash = manifest.get("runtime_rules_sha256")
+        if not isinstance(runtime_rules_hash, str) or not runtime_rules_hash:
+            defect("job.manifest.json", "critical", "runtime_rules_sha256 must be present")
+        elif sha256_file(runtime_rules_path) != runtime_rules_hash:
+            defect("job.manifest.json", "critical", "runtime_rules_sha256 does not match runtime-rules.md")
 
     bootloader_path = bundle_dir / "goal-bootloader.md"
     if not bootloader_path.exists():
@@ -1401,7 +1474,7 @@ def lint(bundle_dir: Path) -> dict:
                     route_reason = item.get("route_class_reason")
                     if not isinstance(route_reason, str) or not route_reason.strip():
                         defect("job.manifest.json", "critical", f"{item_path}.route_class_reason must explain research-worker routing")
-                for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
+                for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("source_attachment_refs", 0), ("depends_on", 0)]:
                     values = item.get(key, [])
                     if key in {"owned_paths", "verification", "dod"} and key not in item:
                         defect("job.manifest.json", "critical", f"{item_path}.{key} is required")
@@ -1424,6 +1497,8 @@ def lint(bundle_dir: Path) -> dict:
                                         "major",
                                         f"{item_path}.context_files[{value_index}] exists in manifest but is not tracked by git: {value}",
                                     )
+                        elif key == "source_attachment_refs" and value not in source_attachment_labels:
+                            defect("job.manifest.json", "critical", f"{item_path}.source_attachment_refs[{value_index}] references unknown source attachment label: {value}")
             known_work_item_ids = {item.get("id") for item in work_items if isinstance(item, dict)}
             work_item_order = {
                 item.get("id"): index
@@ -1597,7 +1672,13 @@ def lint(bundle_dir: Path) -> dict:
         bid = branch["id"]
         work_items = branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []
         has_context = any(
-            isinstance(item, dict) and isinstance(item.get("context_files"), list) and bool(item.get("context_files"))
+            isinstance(item, dict)
+            and (
+                isinstance(item.get("context_files"), list)
+                and bool(item.get("context_files"))
+                or isinstance(item.get("source_attachment_refs"), list)
+                and bool(item.get("source_attachment_refs"))
+            )
             for item in work_items
         )
         if branch_deps.get(bid) and not has_context:

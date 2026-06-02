@@ -147,12 +147,20 @@ def manifest_to_brief(manifest: dict) -> dict:
         "serial_reasons": parallelization.get("serial_reasons", []),
         "parallelization_rationale": parallelization.get("parallelization_rationale", ""),
         "preflight_lite_advice": manifest.get("preflight_lite_advice", []),
+        "source_attachments": copy.deepcopy(manifest.get("source_attachments", [])),
+        "source_attachment_promotions": copy.deepcopy(manifest.get("source_attachment_promotions", [])),
+        "runtime_cap": copy.deepcopy(manifest.get("runtime_cap")),
+        "runtime_rules_path": manifest.get("runtime_rules_path"),
+        "runtime_rules_sha256": manifest.get("runtime_rules_sha256"),
         "branches": [branch_brief_from_manifest(branch) for branch in manifest.get("branches", []) if isinstance(branch, dict)],
     }
 
 
 def normalize_candidate_manifest(manifest: dict) -> tuple[dict, dict]:
     brief = PREFLIGHT.normalize_brief(manifest_to_brief(manifest))
+    for key in ["source_attachments", "source_attachment_promotions", "runtime_cap", "runtime_rules_path", "runtime_rules_sha256"]:
+        if key in manifest:
+            brief[key] = copy.deepcopy(manifest[key])
     normalized = PREFLIGHT.manifest_from_normalized_brief(brief)
     for key in ["amendment_history", "obsolete_branches"]:
         if key in manifest:

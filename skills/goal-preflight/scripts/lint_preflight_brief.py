@@ -57,6 +57,8 @@ EXACT_SOURCE_RE = re.compile(
 )
 INLINE_SOURCE_TUPLE_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
 RUNTIME_CAP_RE = re.compile(r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE)
+PROMOTED_CONTEXT_ATTACHMENT_MIN_BYTES = 8192
+PROMOTED_CONTEXT_ATTACHMENT_MIN_USES = 2
 
 
 def read_json(path: Path) -> dict:
@@ -106,6 +108,38 @@ def has_inline_source_payload(text: str) -> bool:
         return True
     lowered = text.lower()
     return "ft10 = [" in lowered or ("operation list" in lowered and text.count("[") >= 4 and text.count("]") >= 4)
+
+
+def promotable_context_sources(brief: dict, repo_root: Path | None) -> list[str]:
+    if repo_root is None:
+        return []
+    counts: dict[str, int] = {}
+    branches = brief.get("branches")
+    if not isinstance(branches, list):
+        return []
+    for branch in branches:
+        if not isinstance(branch, dict):
+            continue
+        work_items = branch.get("work_items")
+        if not isinstance(work_items, list):
+            continue
+        for item in work_items:
+            if not isinstance(item, dict):
+                continue
+            context_files = item.get("context_files")
+            if not isinstance(context_files, list):
+                continue
+            for value in context_files:
+                if isinstance(value, str) and value.strip():
+                    counts[value.strip()] = counts.get(value.strip(), 0) + 1
+    promotable = []
+    for rel_path, count in counts.items():
+        if count < PROMOTED_CONTEXT_ATTACHMENT_MIN_USES:
+            continue
+        target = repo_root / rel_path
+        if target.is_file() and target.stat().st_size >= PROMOTED_CONTEXT_ATTACHMENT_MIN_BYTES:
+            promotable.append(rel_path)
+    return promotable
 
 
 def repo_is_git(repo_root: Path | None) -> bool:
@@ -186,11 +220,13 @@ def lint_goal_surface(defects: list[dict], brief: dict) -> None:
                 defect(defects, f"$.{field}[{index}]", "major", "item is too vague to verify deterministically")
 
 
-def lint_source_fidelity(defects: list[dict], brief: dict) -> None:
+def lint_source_fidelity(defects: list[dict], brief: dict, *, repo_root: Path | None) -> None:
     text = collected_text(brief)
     if not EXACT_SOURCE_RE.search(text):
         return
     if has_source_attachment(brief.get("source_attachments")) or has_inline_source_payload(text):
+        return
+    if promotable_context_sources(brief, repo_root):
         return
     defect(
         defects,
@@ -298,7 +334,7 @@ def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
     lint_placeholders(defects, brief)
     lint_policy(defects, normalized if normalized is not None else brief)
     lint_goal_surface(defects, brief)
-    lint_source_fidelity(defects, brief)
+    lint_source_fidelity(defects, brief, repo_root=repo_root)
     lint_runtime_cap(defects, brief)
     branches = brief.get("branches")
     if not isinstance(branches, list):

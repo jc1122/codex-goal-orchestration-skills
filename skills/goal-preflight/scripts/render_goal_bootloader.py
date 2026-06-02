@@ -235,6 +235,8 @@ def _prompt_char_budget(manifest: dict) -> int | None:
 
 def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
     entries = [_prompt_entry(bundle_dir, str(manifest.get("main_prompt") or "main.prompt.md"))]
+    if isinstance(manifest.get("runtime_rules_path"), str):
+        entries.append(_prompt_entry(bundle_dir, str(manifest["runtime_rules_path"])))
     for branch in manifest.get("branches", []):
         if isinstance(branch, dict) and isinstance(branch.get("prompt"), str):
             entries.append(_prompt_entry(bundle_dir, branch["prompt"]))
@@ -247,10 +249,11 @@ def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
     max_single_prompt_chars = max((int(item["chars"]) for item in entries), default=0)
     per_file_min_margin = None if budget is None else min((budget - int(item["chars"]) for item in entries), default=budget)
     branch_prompt_entries = [item for item in entries if str(item.get("path", "")).startswith("branches/")]
+    runtime_rules_present = isinstance(manifest.get("runtime_rules_path"), str) and (bundle_dir / str(manifest["runtime_rules_path"])).exists()
     repeated_sections = {
         "branch_prompt_count": len(branch_prompt_entries),
-        "shared_runtime_boilerplate_sections": len(branch_prompt_entries)
-        * 5,
+        "shared_runtime_rules_extracted": runtime_rules_present,
+        "shared_runtime_boilerplate_sections": 0 if runtime_rules_present else len(branch_prompt_entries) * 5,
         "counted_sections": [
             "Worker Parallelism",
             "Worker Model Routing",

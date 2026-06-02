@@ -75,6 +75,9 @@ TELEMETRY_POLICY_DEFAULT = CONTRACT.TELEMETRY_POLICY_DEFAULT
 TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
 TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
 TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
+RUNTIME_RULES_PATH = "runtime-rules.md"
+PROMOTED_CONTEXT_ATTACHMENT_MIN_BYTES = 8192
+PROMOTED_CONTEXT_ATTACHMENT_MIN_USES = 2
 
 DOC_PATH_RE = re.compile(
     r"(^|/)(readme|changelog|license|notice|contributing|docs?|documentation)(\.|/|$)|"
@@ -273,8 +276,9 @@ def brief_schema_summary() -> dict:
             "route_class": f"one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)} for worker items; inferred deterministically when omitted; omit for research-worker",
             "route_class_reason": "optional explicit reason; bundle creation always writes a non-empty reason to job.manifest.json and branch prompts",
             "context_files": [
-                "repo-relative read-first files that must already exist under repo root; use owned_paths for new writable outputs and source_attachments for large existing source files"
+                "repo-relative read-first files that must already exist under repo root; use owned_paths for new writable outputs; repeated large files are promoted to source_attachments and referenced through source_attachment_refs"
             ],
+            "source_attachment_refs": "labels from source_attachments; generated automatically when repeated large context_files are promoted",
             "depends_on": "prior work item ids only; omit or [] for parallel workers",
         },
         "commands": {
@@ -399,6 +403,103 @@ def normalize_source_attachments(value: object, *, repo_root: Path | None = None
                 attachment["bytes"] = target.stat().st_size
         attachments.append(attachment)
     return attachments
+
+
+def attachment_label_for_path(path: str, used_labels: set[str]) -> str:
+    base = slug(Path(path).stem or Path(path).name or "source")
+    label = f"source-{base}"
+    suffix = 2
+    while label in used_labels:
+        label = f"source-{base}-{suffix}"
+        suffix += 1
+    used_labels.add(label)
+    return label
+
+
+def source_attachment_by_path(attachments: list[dict]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for item in attachments:
+        if not isinstance(item, dict):
+            continue
+        path = item.get("path")
+        label = item.get("label")
+        if isinstance(path, str) and isinstance(label, str) and path and label:
+            result[path] = label
+    return result
+
+
+def promote_repeated_context_attachments(brief: dict, *, repo_root: Path | None) -> dict:
+    attachments = list(brief.get("source_attachments", [])) if isinstance(brief.get("source_attachments"), list) else []
+    used_labels = {str(item.get("label")) for item in attachments if isinstance(item, dict) and item.get("label")}
+    attachment_paths = source_attachment_by_path(attachments)
+    context_counts: dict[str, int] = {}
+    for branch in brief.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            for path in item.get("context_files", []):
+                if isinstance(path, str) and path:
+                    context_counts[path] = context_counts.get(path, 0) + 1
+
+    promoted: dict[str, str] = {}
+    promotions: list[dict] = []
+    if repo_root is not None:
+        for path, count in sorted(context_counts.items()):
+            if count < PROMOTED_CONTEXT_ATTACHMENT_MIN_USES:
+                continue
+            target = repo_root / path
+            if not target.is_file():
+                continue
+            size = target.stat().st_size
+            if size < PROMOTED_CONTEXT_ATTACHMENT_MIN_BYTES:
+                continue
+            label = attachment_paths.get(path) or attachment_label_for_path(path, used_labels)
+            promoted[path] = label
+            promotions.append({"path": path, "label": label, "bytes": size, "work_item_refs": count})
+            if path not in attachment_paths:
+                attachments.append(
+                    {
+                        "path": path,
+                        "label": label,
+                        "kind": "context-source",
+                        "sha256": sha256_file(target),
+                        "bytes": size,
+                        "promoted_from_context_files": True,
+                    }
+                )
+                attachment_paths[path] = label
+
+    if not promoted:
+        brief["source_attachments"] = attachments
+        return brief
+
+    for branch in brief.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            kept_context: list[str] = []
+            refs = [ref for ref in item.get("source_attachment_refs", []) if isinstance(ref, str) and ref.strip()] if isinstance(item.get("source_attachment_refs"), list) else []
+            seen_refs = set(refs)
+            for path in item.get("context_files", []):
+                if not isinstance(path, str) or not path:
+                    continue
+                label = promoted.get(path)
+                if label is None:
+                    kept_context.append(path)
+                    continue
+                if label not in seen_refs:
+                    refs.append(label)
+                    seen_refs.add(label)
+            item["context_files"] = kept_context
+            item["source_attachment_refs"] = refs
+
+    brief["source_attachments"] = attachments
+    brief["source_attachment_promotions"] = promotions
+    return brief
 
 
 def normalize_runtime_cap(value: object) -> object | None:
@@ -859,6 +960,8 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
                     bullets(item.get("owned_paths", [])),
                     "Context files:",
                     bullets(item.get("context_files", [])),
+                    "Source attachment refs:",
+                    bullets(item.get("source_attachment_refs", [])),
                     "Depends on:",
                     bullets(item.get("depends_on", [])),
                     "Verification commands:",
@@ -896,6 +999,7 @@ def normalize_work_items(items: object, branch_id_value: str, *, branch_context:
             "objective": objective,
             "owned_paths": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} owned_paths") for value in require_string_list(item.get("owned_paths"), f"branch {branch_id_value} work item {item_id} owned_paths", min_items=1)],
             "context_files": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} context_files") for value in require_string_list(item.get("context_files", []), f"branch {branch_id_value} work item {item_id} context_files")],
+            "source_attachment_refs": require_string_list(item.get("source_attachment_refs", []), f"branch {branch_id_value} work item {item_id} source_attachment_refs"),
             "depends_on": require_string_list(item.get("depends_on", []), f"branch {branch_id_value} work item {item_id} depends_on"),
             "verification": require_string_list(item.get("verification"), f"branch {branch_id_value} work item {item_id} verification", min_items=1),
             "dod": require_string_list(item.get("dod"), f"branch {branch_id_value} work item {item_id} dod", min_items=1),
@@ -1496,6 +1600,16 @@ def render_runtime_cap(value: object) -> str:
     return f"- {value}"
 
 
+def render_runtime_rules_text(brief: dict) -> str:
+    template = (Path(__file__).resolve().parents[1] / "assets" / "runtime-rules.template.md").read_text(encoding="utf-8")
+    return template.format(
+        job_id=brief["job_id"],
+        base_ref=brief["base_ref"],
+        telemetry_policy_mode=brief["telemetry_policy"]["mode"],
+        main_scheduler_path=CONTRACT.MAIN_SCHEDULER_PATH,
+    )
+
+
 def compact_goal_config_summary(config: dict, *, manifest_telemetry_policy: dict | None = None) -> dict:
     validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
@@ -1628,6 +1742,8 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "required_evidence": brief.get("required_evidence", []),
         "final_dod": brief.get("final_dod", []),
         "main_prompt": "main.prompt.md",
+        "runtime_rules_path": brief.get("runtime_rules_path", RUNTIME_RULES_PATH),
+        "runtime_rules_sha256": brief.get("runtime_rules_sha256"),
         "base_ref": brief["base_ref"],
         "artifact_policy": brief["artifact_policy"],
         "cleanup_policy": brief["cleanup_policy"],
@@ -1643,7 +1759,8 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
 	        "telemetry_policy": brief["telemetry_policy"],
-	        "source_attachments": brief.get("source_attachments", []),
+        "source_attachments": brief.get("source_attachments", []),
+        **({"source_attachment_promotions": brief["source_attachment_promotions"]} if isinstance(brief.get("source_attachment_promotions"), list) and brief["source_attachment_promotions"] else {}),
 	        **({"runtime_cap": brief["runtime_cap"]} if brief.get("runtime_cap") is not None else {}),
 	        "repo_status": brief.get("repo_status", {}),
         "preflight_compatibility": brief.get("preflight_compatibility", {"status": "not_configured", "defects": []}),
@@ -1773,9 +1890,11 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         base_ref=brief["base_ref"],
         branch_name=branch["branch_name"],
         worktree_path=branch["worktree_path"],
-	        wave=branch["wave"],
-	        depends_on=bullets(branch.get("depends_on", [])),
-	        dependency_context=branch.get("dependency_context_reason") or "none",
+        wave=branch["wave"],
+        depends_on=bullets(branch.get("depends_on", [])),
+        dependency_context=branch.get("dependency_context_reason") or "none",
+        runtime_rules_path=brief.get("runtime_rules_path", RUNTIME_RULES_PATH),
+        runtime_rules_sha256=brief.get("runtime_rules_sha256", ""),
         max_active_worker_packets=branch["max_active_worker_packets"],
         effective_worker_cap=effective_worker_cap,
         worker_packet_count=worker_packet_count,
@@ -1812,6 +1931,12 @@ def write_bundle_prompts(
         if branch_ids is not None and branch["id"] not in branch_ids:
             continue
         write(bundle_dir / branch["prompt"], render_branch_prompt_text(brief, branch))
+
+
+def write_runtime_rules(brief: dict, bundle_dir: Path) -> str:
+    path = bundle_dir / RUNTIME_RULES_PATH
+    write(path, render_runtime_rules_text(brief))
+    return sha256_file(path)
 
 
 def lint_bundle(bundle_dir: Path, *, write_output: bool = True) -> dict:
@@ -1851,6 +1976,7 @@ def create_bundle(
         validate_base_ref=True,
         repo_root=repo_root,
     )
+    brief = promote_repeated_context_attachments(brief, repo_root=repo_root)
     brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"])
     brief["preflight_compatibility"] = compatibility
     brief["preflight_input_precedence"] = preflight_input_precedence(original_brief, brief, goal_config)
@@ -1868,6 +1994,9 @@ def create_bundle(
         shutil.copyfile(goal_config_check_source, bundle_dir / "goal-config.check.json")
     elif goal_config_check is not None:
         write(bundle_dir / "goal-config.check.json", json.dumps(goal_config_check, indent=2, sort_keys=True) + "\n")
+
+    brief["runtime_rules_path"] = RUNTIME_RULES_PATH
+    brief["runtime_rules_sha256"] = write_runtime_rules(brief, bundle_dir)
 
     manifest = manifest_from_normalized_brief(brief, bundle_dir)
     if runtime_goal_config is not None:
@@ -1906,6 +2035,7 @@ def create_bundle(
             f"Bundle: {bundle_dir.resolve()}",
             f"Branches: {len(brief['branches'])}",
             f"Waves: {len(brief['waves'])}",
+            f"Runtime rules appendix: {RUNTIME_RULES_PATH} sha256={brief.get('runtime_rules_sha256')}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Runtime readiness gate: {repo_runtime_gate_summary(brief['repo_status'])}",
             f"Config precedence: {brief['preflight_input_precedence']['note']}",
