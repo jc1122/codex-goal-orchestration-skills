@@ -8,7 +8,8 @@ Wave: {wave}
 Depends on branches:
 {depends_on}
 Max active worker packets: {max_active_worker_packets}
-Max worker packets for this branch: 4
+Declared worker packets: {worker_packet_count}
+Configured package max worker packets per branch: {max_worker_packets_per_branch}
 
 ## Objective
 
@@ -32,7 +33,7 @@ Use $goal-branch-orchestrator. Treat `job.manifest.json` as the policy source an
 
 Before worker dispatch or reviewer dispatch, run `script_only_repair_gate.py --scope branch`. Complete any `script_actions_needed` commands first; launch workers or reviewers only after the gate returns `pass_no_actions` or reviewer reuse has been accepted with telemetry.
 
-Cap: {max_active_worker_packets} active, 4 total; never exceed either. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
+Cap: {max_active_worker_packets} active; declared workers: {worker_packet_count}; configured package max per branch: {max_worker_packets_per_branch}. Never exceed the active cap or declared worker set. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
 
 Worker scheduler ledger: {worker_scheduler_path}. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Record ready/launch/finish/close/refill/defer/under_capacity/blocked evidence with scheduler scripts.
 
@@ -48,7 +49,7 @@ Default worker ladder: {default_worker_ladder}
 
 Allowed worker route aliases: {allowed_worker_routes}
 
-Worker route classes and route class reason are declared per work item in `job.manifest.json`. Use the declared class unless a more specific route is justified: mechanical/docs -> Codex mini; small-edit/normal-code -> Codex Spark then Codex mini; complex-code -> full ladder.
+Worker route classes and route class reason are declared per work item in `job.manifest.json`. Use the declared class unless a more specific route is justified. Prefer the lowest sufficient ordered subsequence of the configured default ladder for mechanical, docs, small-edit, and normal-code work; use the full configured ladder for complex-code work when the branch risk justifies it.
 
 Selected worker ladders must be an ordered non-empty subsequence of the default ladder with a `selection_reason`; do not invent aliases or reorder providers.
 
@@ -58,7 +59,7 @@ Telemetry policy mode is `{telemetry_policy_mode}`. In debug mode, telemetry col
 
 Optional Lite Advisors are context routers only. Use them after bootstrap or completed packets, never while worker/research-worker/reviewer launchers are active, and never as pass/review/mergeability/DoD evidence.
 
-## Tests And Validators
+## Additional Validators
 
 {tests}
 
@@ -71,8 +72,8 @@ Before reviewer launch, create schema v2 `{pre_review_gate_path}` / `pre_review_
 Before worker dispatch, run:
 
 ```bash
-python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/check_goal_skill_availability.py --skills-root $GOAL_SKILLS_ROOT --require goal-branch-orchestrator --require-codex-cli && \
-python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex > /absolute/path/to/bundle/branches/{branch_id}.model-catalog.json
+python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_goal_skill_availability.py --skills-root "$GOAL_SKILLS_ROOT" --require goal-branch-orchestrator --require-codex-cli && \
+python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex > /absolute/path/to/bundle/branches/{branch_id}.model-catalog.json
 ```
 
 Return blocked if either command fails.

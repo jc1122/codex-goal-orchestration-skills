@@ -51,6 +51,44 @@ def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
 
 
+def compact_remediation(remediation: object) -> dict:
+    if not isinstance(remediation, dict):
+        return {}
+    actions = []
+    for item in remediation.get("actions", []):
+        if not isinstance(item, dict):
+            continue
+        actions.append(
+            {
+                "field": item.get("field"),
+                "action": item.get("action"),
+                "from": item.get("from"),
+                "to": item.get("to"),
+            }
+        )
+    result = {
+        "status": remediation.get("status"),
+        "action_count": len(actions),
+        "actions": actions,
+    }
+    for key in ["output_path", "reason"]:
+        if remediation.get(key) is not None:
+            result[key] = remediation.get(key)
+    return result
+
+
+def route_availability_verified(candidate: dict | None) -> bool:
+    if not isinstance(candidate, dict) or not candidate.get("selected_check_path"):
+        return False
+    path = Path(str(candidate["selected_check_path"]))
+    if not path.exists():
+        return False
+    check = read_json(path)
+    summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
+    accepted = summary.get("accepted_route_count")
+    return isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
+
+
 def candidate_configs(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str]) -> list[Path]:
     if explicit:
         return [resolve_absolute_path(value, "--goal-config", must_exist=True) for value in explicit]
@@ -94,7 +132,9 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
         "original_check_path": original_report.as_posix(),
         "original_status": original.get("status"),
         "original_failures": original.get("failures", []),
-        "remediation": original.get("remediation", {}),
+        "remediation": compact_remediation(original.get("remediation", {})),
+        "eligible": False,
+        "remediated_passed": False,
         "selected": False,
         "selected_config_path": None,
         "selected_check_path": None,
@@ -104,6 +144,7 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
         candidate.update(
             {
                 "selected": True,
+                "eligible": True,
                 "selected_config_path": config.as_posix(),
                 "selected_check_path": original_report.as_posix(),
                 "selection_reason": "original config passed preflight compatibility",
@@ -136,6 +177,8 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
             candidate.update(
                 {
                     "selected": True,
+                    "eligible": True,
+                    "remediated_passed": True,
                     "selected_config_path": remediated_config.as_posix(),
                     "selected_check_path": remediated_report.as_posix(),
                     "selection_reason": "remediated config passed preflight compatibility",
@@ -152,13 +195,16 @@ def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[st
         return selection
     check_dir = out_dir / "config-checks"
     candidates = [check_config_candidate(path, check_dir) for path in candidate_configs(brief, repo_root, out_dir, explicit)]
-    selected = next((item for item in candidates if item.get("selected")), None)
+    selected_index = next((index for index, item in enumerate(candidates) if item.get("eligible")), None)
+    for index, item in enumerate(candidates):
+        item["selected"] = selected_index == index
+    selected = candidates[selected_index] if selected_index is not None else None
     selection = {
         "status": "pass" if selected else "not_selected",
         "selected": selected,
         "candidates": candidates,
         "selection_path": selection_path.as_posix(),
-        "route_model_availability_verified": False,
+        "route_model_availability_verified": route_availability_verified(selected),
         "reason": "no compatible config candidates found" if not selected else selected.get("selection_reason"),
     }
     write_json(selection_path, selection)
@@ -293,11 +339,22 @@ def main() -> int:
     readiness_data = read_json(readiness) if readiness.exists() else {"status": "missing"}
 
     status = "pass"
-    if lint_result.returncode != 0 or repair_result.returncode != 0 or readiness_data.get("status") != "pass":
+    result_kind = "pass"
+    blocked_reason = None
+    if lint_result.returncode != 0 or repair_result.returncode != 0:
         status = "blocked"
+        result_kind = "blocked_artifact_gate"
+    elif readiness_data.get("status") != "pass":
+        status = "blocked"
+        result_kind = "blocked_readiness_usable_bundle"
+        runtime_gate = readiness_data.get("runtime_gate") if isinstance(readiness_data.get("runtime_gate"), dict) else {}
+        blocked_reason = runtime_gate.get("reason") or "readiness status is not pass"
     result = {
         "schema_version": 1,
         "status": status,
+        "result_kind": result_kind,
+        "usable_bundle": status == "pass" or result_kind == "blocked_readiness_usable_bundle",
+        "blocked_reason": blocked_reason,
         "bundle_dir": out_dir.as_posix(),
         "bootloader_path": (out_dir / "goal-bootloader.md").as_posix(),
         "config_selection": config_selection,

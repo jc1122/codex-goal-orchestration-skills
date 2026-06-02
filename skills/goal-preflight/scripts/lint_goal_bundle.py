@@ -147,6 +147,11 @@ STATUS_TARGET_PREFIXES = (
 REQUIRED_BUNDLE_DIRS = ("branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments")
 MANIFEST_REQUIRED_KEYS = (
     "job_id",
+    "title",
+    "goal",
+    "source_summary",
+    "required_evidence",
+    "final_dod",
     "main_prompt",
     "base_ref",
     "artifact_policy",
@@ -163,6 +168,7 @@ MANIFEST_REQUIRED_KEYS = (
     "review_model_policy",
     "orchestration_watchdog",
     "preflight_lite_advice",
+    "preflight_input_precedence",
 )
 MAIN_PROMPT_REQUIRED_PHRASES = (
     "manifest paths",
@@ -218,6 +224,8 @@ BOOTLOADER_REQUIRED_PHRASES = (
 )
 BRANCH_REQUIRED_KEYS = (
     "id",
+    "objective",
+    "scope",
     "wave",
     "prompt",
     "branch_name",
@@ -242,7 +250,8 @@ BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER = (
     "runtime_phase_manifest.py --markdown",
     "do not read skill Python source",
     "Max active worker packets",
-    "Max worker packets for this branch",
+    "Declared worker packets",
+    "Configured package max worker packets per branch",
     "Never exceed",
     "active worker packets",
     "rolling saturated pool",
@@ -252,6 +261,7 @@ BRANCH_PROMPT_PHRASES_AFTER_SCHEDULER = (
     "worker_parallelism.scheduler_path",
     "Worker parallelization rationale",
     "Worker Model Routing",
+    "Additional Validators",
     "Selected worker ladders",
     "Worker packet id",
     "Route class reason",
@@ -345,6 +355,20 @@ def require_text_phrases(
         needle = phrase if case_sensitive else phrase.lower()
         if needle not in haystack:
             defect(path, severity, f"{message_prefix}: {phrase}")
+
+
+def lint_generated_prompt_text(defect, path: str, text: str, *, is_branch_prompt: bool = False) -> None:
+    if "$GOAL_SKILLS_ROOT/" in text or "${GOAL_SKILLS_ROOT}/" in text:
+        defect(path, "major", 'GOAL_SKILLS_ROOT script paths must be quoted as "$GOAL_SKILLS_ROOT"/...')
+    if not is_branch_prompt:
+        return
+    if "## Tests And Validators" in text:
+        defect(path, "major", "branch prompt must use Additional Validators instead of Tests And Validators")
+    if "small-edit/normal-code -> Codex Spark then Codex mini" in text:
+        defect(path, "major", "branch prompt contains stale hard-coded worker route aliases")
+    dod_tail = text.split("## Definition of Done", 1)[1] if "## Definition of Done" in text else ""
+    if "\n- none" in dod_tail:
+        defect(path, "major", "branch prompt Definition of Done must not include stray '- none'")
 
 
 def branch_prompt_required_phrases(branch_id: object) -> tuple[str, ...]:
@@ -779,6 +803,15 @@ def lint(bundle_dir: Path) -> dict:
     for key in ["artifact_policy", "cleanup_policy"]:
         if not isinstance(manifest.get(key), str) or not manifest.get(key, "").strip():
             defect("job.manifest.json", "critical", f"{key} must be non-empty")
+    for key in ["title", "goal", "source_summary"]:
+        if not isinstance(manifest.get(key), str) or not manifest.get(key, "").strip():
+            defect("job.manifest.json", "critical", f"{key} must be a non-empty string")
+    for key in ["required_evidence", "final_dod"]:
+        values = manifest.get(key)
+        if not isinstance(values, list) or not values or any(not isinstance(item, str) or not item.strip() for item in values):
+            defect("job.manifest.json", "critical", f"{key} must be a non-empty array of strings")
+    if not isinstance(manifest.get("preflight_input_precedence"), dict):
+        defect("job.manifest.json", "critical", "preflight_input_precedence must be an object")
 
     max_active = manifest.get("max_active_branch_agents")
     if not is_strict_int(max_active) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
@@ -987,6 +1020,7 @@ def lint(bundle_dir: Path) -> dict:
         defect(str(main_path), "critical", "main prompt is missing")
     elif main_path is not None:
         main_text = main_path.read_text(encoding="utf-8")
+        lint_generated_prompt_text(defect, str(main_path), main_text)
         lint_validator_command_snippets(
             defect,
             str(main_path),
@@ -1012,6 +1046,7 @@ def lint(bundle_dir: Path) -> dict:
         defect("goal-bootloader.md", "critical", "bootloader is missing")
     else:
         bootloader = bootloader_path.read_text(encoding="utf-8")
+        lint_generated_prompt_text(defect, "goal-bootloader.md", bootloader)
         if len(bootloader) > 4000:
             defect("goal-bootloader.md", "critical", "bootloader exceeds 4000 characters")
         require_text_phrases(
@@ -1023,6 +1058,36 @@ def lint(bundle_dir: Path) -> dict:
             message_prefix="bootloader missing phrase",
             case_sensitive=True,
         )
+        repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
+        if repo_status.get("repo_is_git") is False and "BLOCKED READINESS" not in bootloader:
+            defect("goal-bootloader.md", "critical", "non-git runtime blocker requires a hard blocked-readiness bootloader warning")
+        report_path = bundle_dir / "PREFLIGHT_REPORT.md"
+        if report_path.exists():
+            report_text = report_path.read_text(encoding="utf-8")
+            if repo_status.get("repo_is_git") is False and "Runtime readiness gate: blocked" not in report_text:
+                defect("PREFLIGHT_REPORT.md", "major", "preflight report must surface the non-git runtime readiness blocker")
+            if "harness check status is pass" in report_text:
+                defect("PREFLIGHT_REPORT.md", "major", "preflight report must not label config compatibility as harness/route availability pass")
+
+    selection_path = bundle_dir / "goal-config-selection.json"
+    if selection_path.exists():
+        try:
+            selection = load_json(selection_path)
+        except Exception as exc:  # noqa: BLE001
+            defect("goal-config-selection.json", "critical", f"goal-config-selection.json is not valid JSON: {exc}")
+            selection = {}
+        candidates = selection.get("candidates") if isinstance(selection, dict) else []
+        if isinstance(candidates, list) and candidates:
+            selected_candidates = [item for item in candidates if isinstance(item, dict) and item.get("selected") is True]
+            if selection.get("status") == "pass" and len(selected_candidates) != 1:
+                defect("goal-config-selection.json", "critical", "exactly one candidate may have selected=true")
+            for index, item in enumerate(candidates):
+                if not isinstance(item, dict):
+                    continue
+                if item.get("selected") is True and item.get("eligible") is not True:
+                    defect("goal-config-selection.json", "critical", f"candidates[{index}] selected=true requires eligible=true")
+                if "remediation" in item and isinstance(item.get("remediation"), dict) and "remediated_config" in item["remediation"]:
+                    defect("goal-config-selection.json", "major", f"candidates[{index}] remediation must be compact; full remediated config payload is not allowed")
 
     has_research_work_item = False
     worker_route_class_count = 0
@@ -1031,6 +1096,9 @@ def lint(bundle_dir: Path) -> dict:
         for key in BRANCH_REQUIRED_KEYS:
             if key not in branch:
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')} missing key: {key}")
+        for key in ["objective", "scope"]:
+            if not isinstance(branch.get(key), str) or not branch.get(key, "").strip():
+                defect("job.manifest.json", "critical", f"branch {branch.get('id')} {key} must be a non-empty string")
         depends_on = branch.get("depends_on", [])
         if not isinstance(depends_on, list):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} depends_on must be a list")
@@ -1241,6 +1309,7 @@ def lint(bundle_dir: Path) -> dict:
             defect(str(prompt_path), "critical", f"branch prompt missing for {branch.get('id')}")
             continue
         text = prompt_path.read_text(encoding="utf-8")
+        lint_generated_prompt_text(defect, str(prompt_path), text, is_branch_prompt=True)
         expected_status_path = branch.get("status_path") if isinstance(branch.get("status_path"), str) else "branches/Bxx.status.json"
         lint_validator_command_snippets(
             defect,

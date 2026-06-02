@@ -28,7 +28,7 @@ B="/absolute/path/to/bundle"
 MANIFEST="$B/job.manifest.json"
 AUDIT="$B/audit/prompt-audit.json"
 
-python3 ${{GOAL_SKILLS_ROOT}}/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest "$MANIFEST" --repo-root /absolute/path/to/repo --audit "$AUDIT" --list-ready --limit 4
+python3 "${{GOAL_SKILLS_ROOT}}"/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest "$MANIFEST" --repo-root /absolute/path/to/repo --audit "$AUDIT" --list-ready --limit 4
 ```
 
 Launch the next eligible branch from that output only.

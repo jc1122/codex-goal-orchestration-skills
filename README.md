@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.63
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.64
 ```
 
 Install to a custom absolute skills root:

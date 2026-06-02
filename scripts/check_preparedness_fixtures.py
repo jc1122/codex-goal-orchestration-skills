@@ -593,7 +593,17 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
         ],
         expect=1,
     )
-    assert_all_contains(invalid.stdout, ["contains placeholder text", "concrete top-level goal", "context file does not exist", "must include at least one exact verification command"], "invalid brief lint fixture")
+    assert_all_contains(
+        invalid.stdout,
+        [
+            "contains placeholder text",
+            "concrete top-level goal",
+            "context file must already exist",
+            "future writable outputs in owned_paths",
+            "must include at least one exact verification command",
+        ],
+        "invalid brief lint fixture",
+    )
     owned_only_missing_brief = {
         "job_id": "brief-lint-owned-missing",
         "base_ref": "main",
@@ -675,6 +685,10 @@ def create_amendment_bundle(tmp_path: Path, name: str) -> Path:
     brief = {
         "job_id": name,
         "base_ref": "main",
+        "goal": "Exercise deterministic amendment validation against future unstarted branches.",
+        "source_summary": "The amendment fixture uses generated branch prompts and README-backed work items.",
+        "required_evidence": ["Amendment validation keeps active and terminal branch evidence immutable."],
+        "final_dod": ["Generated amendment fixture bundle passes preflight lint before amendment operations."],
         "max_active_branch_agents": 1,
         "serial_reasons": ["Amendment fixture intentionally runs one branch at a time."],
         "branches": [
@@ -2474,9 +2488,19 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     assert_all_contains(json.dumps(readiness_json["lint_status"], sort_keys=True), ["bundle_lint", "brief_lint"], "readiness lint keys")
     assert_all_contains(
         (bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8"),
-        ["Waves are dependency-aware scheduling/order groups", "depends_on", "branch"],
+        ["Waves are dependency-aware scheduling/order groups", "Runtime readiness gate: pass", "depends_on", "branch"],
         "preflight report wave semantics",
     )
+    branch_prompt = (bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
+    assert_all_contains(
+        branch_prompt,
+        ["## Additional Validators", "Declared worker packets:", "Configured package max worker packets per branch:"],
+        "branch prompt compact validator/cap wording",
+    )
+    assert_not_contains(branch_prompt, "## Tests And Validators", "branch prompt stale validators heading")
+    assert_not_contains(branch_prompt, "small-edit/normal-code -> Codex Spark then Codex mini", "branch prompt stale route aliases")
+    dod_tail = branch_prompt.split("## Definition of Done", 1)[1]
+    assert_not_contains(dod_tail, "\n- none", "branch prompt DoD stray none")
     brief_schema = json.loads(
         run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
     )
@@ -2489,6 +2513,9 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
         raise SystemExit("brief schema should expose lean debug telemetry shorthands")
     if "source_attachments" not in top_level_optional:
         raise SystemExit("brief schema should expose structured source attachments")
+    context_guidance = str(brief_schema.get("work_item_optional", {}).get("context_files", ""))
+    if "must already exist" not in context_guidance or "owned_paths" not in context_guidance:
+        raise SystemExit(f"brief schema should distinguish context_files from future owned outputs: {context_guidance!r}")
     lint_schema = json.loads(
         run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
     )
@@ -2755,12 +2782,42 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if "remediated" not in str(config_selection.get("reason", "")):
         raise SystemExit(f"config selection should explain remediated config use: {config_selection!r}")
     selected = config_selection.get("selected") if isinstance(config_selection.get("selected"), dict) else {}
+    candidates = config_selection.get("candidates", [])
+    selected_candidates = [item for item in candidates if isinstance(item, dict) and item.get("selected") is True]
+    if len(selected_candidates) != 1:
+        raise SystemExit(f"config selection candidates should mark exactly one selected entry: {config_selection!r}")
+    if selected.get("eligible") is not True or selected.get("remediated_passed") is not True:
+        raise SystemExit(f"selected remediated config should be eligible/remediated_passed: {selected!r}")
     selected_config_path = Path(selected.get("selected_config_path", ""))
     selected_config = read_json(selected_config_path)
     if selected_config.get("aggressiveness", {}).get("max_waves") != 5:
         raise SystemExit(f"selected remediated config should clamp max_waves: {selected_config!r}")
     if (config_pipeline_bundle / "goal-config-selection.json").exists() is not True:
         raise SystemExit("prepare_goal_bundle.py should persist goal-config-selection.json")
+    config_pipeline_manifest = read_json(config_pipeline_bundle / "job.manifest.json")
+    if config_pipeline_manifest.get("title") in (None, ""):
+        raise SystemExit(f"manifest should preserve a non-null title: {config_pipeline_manifest.get('title')!r}")
+    if not config_pipeline_manifest.get("required_evidence") or not config_pipeline_manifest.get("final_dod"):
+        raise SystemExit("manifest should preserve required_evidence and final_dod as structured fields")
+    branch_manifest = config_pipeline_manifest.get("branches", [{}])[0]
+    if not branch_manifest.get("objective") or not branch_manifest.get("scope"):
+        raise SystemExit(f"branch manifest should preserve objective and scope: {branch_manifest!r}")
+    precedence = config_pipeline_manifest.get("preflight_input_precedence", {})
+    if precedence.get("max_active_branch_agents", {}).get("source") != "goal_config.aggressiveness.max_active_branch_agents":
+        raise SystemExit(f"manifest should report config cap precedence: {precedence!r}")
+    provenance = config_pipeline_manifest.get("goal_config_provenance", {}).get("config", {})
+    if provenance.get("source_path_type") != "bundle_relative" or "remediated" not in str(provenance.get("source_path")):
+        raise SystemExit(f"manifest should preserve remediated config source provenance separately: {provenance!r}")
+    goal_config_summary = config_pipeline_manifest.get("goal_config_summary", {})
+    if goal_config_summary.get("manifest_telemetry_policy", {}).get("raw_text") is not False:
+        raise SystemExit(f"goal_config_summary should expose authoritative manifest telemetry policy: {goal_config_summary!r}")
+    report_text = (config_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
+    assert_all_contains(
+        report_text,
+        ["preflight config check status=pass", "Goal config route availability:", "Config precedence:"],
+        "config preflight report status labels",
+    )
+    assert_not_contains(report_text, "harness check status is pass", "config preflight report stale harness pass label")
 
     git_repo_base_ref = {**branch_default_brief, "job_id": "branch-default-invalid-git-ref"}
     git_repo_base_ref["branches"][0]["work_items"][0]["owned_paths"] = ["README.md"]
@@ -2855,6 +2912,17 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     runtime_gate = non_git_pipeline_result.get("readiness", {}).get("runtime_gate", {})
     if non_git_pipeline_result.get("status") != "blocked" or runtime_gate.get("status") != "blocked":
         raise SystemExit(f"non-git pipeline should block runtime readiness explicitly: {non_git_pipeline_result!r}")
+    if non_git_pipeline_result.get("result_kind") != "blocked_readiness_usable_bundle" or non_git_pipeline_result.get("usable_bundle") is not True:
+        raise SystemExit(f"non-git pipeline should report a usable but readiness-blocked bundle: {non_git_pipeline_result!r}")
+    next_commands = non_git_pipeline_result.get("next_commands", [])
+    if not any("Correct runtime gate" in command for command in next_commands):
+        raise SystemExit(f"non-git readiness next commands should be corrective, not a launch handoff: {next_commands!r}")
+    if any(command.endswith("/goal") for command in next_commands):
+        raise SystemExit(f"non-git readiness next commands must not include /goal: {next_commands!r}")
+    non_git_bootloader = (non_git_pipeline_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
+    assert_all_contains(non_git_bootloader, ["BLOCKED READINESS", "do not launch /goal yet"], "non-git blocked bootloader warning")
+    non_git_report = (non_git_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
+    assert_contains(non_git_report, "Runtime readiness gate: blocked", "non-git preflight report blocker")
 
 
 def run_context_pack_fixtures(tmp_path: Path) -> None:

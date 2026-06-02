@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:b5ef7360ca5c6d109567cbfbdf04a637b32e34783c7bf26e277cd21715231915"
+    "source_fingerprint": "sha256:a7921e0ac47e64ab860464c084b59bfcc043e130284493695713eb521b19d429"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,14 +16,27 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 3425,
-      "approx_tokens": 36522,
+      "lines": 3493,
+      "approx_tokens": 37871,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "2499:run_base_ref_default_fixture:359l",
-        "860:run_negative_amendment_fixtures:289l",
-        "1317:run_scheduler_fixtures:221l",
-        "1999:run_runtime_packet_fixtures:206l"
+        "2526:run_base_ref_default_fixture:400l",
+        "874:run_negative_amendment_fixtures:289l",
+        "1331:run_scheduler_fixtures:221l",
+        "2013:run_runtime_packet_fixtures:206l"
+      ]
+    },
+    {
+      "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
+      "owner": "goal-preflight",
+      "lines": 1786,
+      "approx_tokens": 21812,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "923:normalize_brief:168l",
+        "1616:create_bundle:90l",
+        "126:example_brief:88l",
+        "1439:manifest_from_normalized_brief:86l"
       ]
     },
     {
@@ -50,19 +63,6 @@
         "921:run_harness_smoke:131l",
         "1327:discover_available_routes:124l",
         "770:check_opencode_model:121l"
-      ]
-    },
-    {
-      "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
-      "owner": "goal-preflight",
-      "lines": 1626,
-      "approx_tokens": 19551,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "899:normalize_brief:168l",
-        "126:example_brief:88l",
-        "587:infer_route_class:80l",
-        "1300:manifest_from_normalized_brief:78l"
       ]
     },
     {

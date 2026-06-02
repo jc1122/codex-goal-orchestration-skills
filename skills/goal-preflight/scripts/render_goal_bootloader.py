@@ -183,19 +183,27 @@ def _readiness_next_commands(
     *,
     lint_bundle_status: str,
     repair_gate_status: str,
-    runtime_gate_status: str,
+    runtime_gate: dict[str, object],
 ) -> list[str]:
     commands: list[str] = []
     if lint_bundle_status != "pass":
         commands.append(
-            f"python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir {bundle_dir}"
+            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir {bundle_dir}'
         )
     if repair_gate_status != "pass":
         commands.append(
-            f"python3 $GOAL_SKILLS_ROOT/_goal_shared/scripts/script_only_repair_gate.py --manifest {manifest_path} --bundle-dir {bundle_dir} --repo-root {repo_root or '<repo-root>'} --scope preflight --json --output {bundle_dir / 'repair-gate.json'}"
+            f'python3 "$GOAL_SKILLS_ROOT"/_goal_shared/scripts/script_only_repair_gate.py --manifest {manifest_path} --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --scope preflight --json --output {bundle_dir / "repair-gate.json"}'
         )
-    commands.append(f"python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir}")
-    if lint_bundle_status == "pass" and repair_gate_status == "pass" and runtime_gate_status == "pass":
+    if runtime_gate.get("status") != "pass":
+        commands.append(
+            "Correct runtime gate: use an existing git work tree for --repo-root, run git init before preflight/runtime, or wait for an explicit supported no-git runtime mode; do not launch /goal from this bundle while readiness is blocked."
+        )
+        commands.append(
+            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --readiness --json'
+        )
+        return commands
+    commands.append(f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir}')
+    if lint_bundle_status == "pass" and repair_gate_status == "pass" and runtime_gate.get("status") == "pass":
         commands.append("/goal")
     return commands
 
@@ -233,7 +241,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         resolved_repo_root,
         lint_bundle_status=str(lint_bundle["status"]),
         repair_gate_status=str(repair_gate["status"]),
-        runtime_gate_status=str(runtime_gate["status"]),
+        runtime_gate=runtime_gate,
     )
 
     lines = [
@@ -308,7 +316,7 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
             resolved_repo_root,
             lint_bundle_status=str(lint_bundle["status"]),
             repair_gate_status=str(repair_gate["status"]),
-            runtime_gate_status=str(runtime_gate["status"]),
+            runtime_gate=runtime_gate,
         ),
         "repository_root": str(resolved_repo_root) if resolved_repo_root else None,
     }
@@ -356,7 +364,18 @@ def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     manifest = bundle_dir / "job.manifest.json"
     main_prompt = bundle_dir / "main.prompt.md"
     model_catalog = bundle_dir / "model-catalog.json"
-    return f"""Use $goal-main-orchestrator with the generated bundle context below.
+    blocked_warning = ""
+    if manifest.exists():
+        runtime_gate = _repo_runtime_gate(_load_manifest(bundle_dir))
+        if runtime_gate.get("status") != "pass":
+            blocked_warning = f"""# BLOCKED READINESS: do not launch /goal yet
+
+Bundle is usable for inspection and lint repair, but runtime branch/worktree orchestration is blocked.
+Reason: {runtime_gate.get("reason")}
+Fix: use or initialize a git work tree, or use an explicit supported no-git runtime mode. Recheck with `render_goal_bootloader.py --readiness --json`.
+
+"""
+    return f"""{blocked_warning}Use $goal-main-orchestrator with the generated bundle context below.
 
 Prepared bundle:
 - Bundle root: {bundle_dir}
@@ -376,33 +395,23 @@ else
   exit 1
 fi
 
-python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest.py --markdown
-python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_goal_skill_availability.py --skills-root $GOAL_SKILLS_ROOT --require goal-main-orchestrator --require goal-branch-orchestrator --require goal-plan-amender
-python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/check_model_catalog.py --json --require-codex > {model_catalog}
-python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/run_prompt_audit_phase.py --manifest {manifest} --repo-root {repo_root} --audit-dir {bundle_dir}/audit --deterministic --require-pass
+python3 "$GOAL_SKILLS_ROOT"/goal-main-orchestrator/scripts/runtime_phase_manifest.py --markdown
+python3 "$GOAL_SKILLS_ROOT"/goal-main-orchestrator/scripts/check_goal_skill_availability.py --skills-root "$GOAL_SKILLS_ROOT" --require goal-main-orchestrator --require goal-branch-orchestrator --require goal-plan-amender
+python3 "$GOAL_SKILLS_ROOT"/goal-main-orchestrator/scripts/check_model_catalog.py --json --require-codex > {model_catalog}
+python3 "$GOAL_SKILLS_ROOT"/goal-main-orchestrator/scripts/run_prompt_audit_phase.py --manifest {manifest} --repo-root {repo_root} --audit-dir {bundle_dir}/audit --deterministic --require-pass
 ```
 
-Treat script output, JSON artifacts, and validator defects as the working surface; do not read skill Python source unless debugging a failed script.
-Use absolute paths only for goal scripts; regenerate this bootloader if bundle or repo paths change.
+Use script output, JSON artifacts, and validator defects as the working surface; do not read skill Python source unless debugging a failed script. Use absolute paths only.
 
-Mandatory skill availability bootstrap:
-1. `runtime_phase_manifest.py --markdown`
-2. `check_goal_skill_availability.py --require goal-main-orchestrator --require goal-branch-orchestrator --require goal-plan-amender`
-3. `check_model_catalog.py --json --require-codex`
+Mandatory skill availability bootstrap is the command block above.
 
 Do not start branches unless prompt-audit says `status=pass`, `can_start=true`, and it pins the manifest and repository above.
 
-Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Keep branch slots saturated, record scheduler-v2 evidence under `schedulers/`, and avoid polling active branch, worker, reviewer, process, or status artifacts.
+Respect max_active_branch_agents from job.manifest.json; never exceed {MAX_ACTIVE_BRANCH_AGENTS}. Keep branch orchestrator slots saturated, record scheduler-v2 evidence under `schedulers/`, and avoid polling active branch, worker, reviewer, process, or status artifacts.
 
-Parallelism is the default. Keep branch orchestrator slots saturated and use a rolling saturated pool. Defer only unresolved `depends_on` entries. Waves are dependency-aware scheduling/order groups, not barriers. Branches may each declare 1 to 4 worker packets in-band.
+Parallelism is the default. Use a rolling saturated pool. Defer only unresolved `depends_on` entries. Waves are dependency-aware scheduling/order groups, not barriers. Branches may each declare 1 to 4 worker packets in-band.
 
-Finish only when the Definition of Done in `main.prompt.md` is satisfied and all evidence is present:
-- Branch `status` and `review` files required by DoD are complete.
-- Packet telemetry and `telemetry.summary.json` are present and coherent.
-- Command evidence (stdout/stderr + exit code) exists for `run_prompt_audit_phase.py --deterministic --require-pass` and final `validate_main_status.py`.
-- Final `python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py` succeeds.
-- Git state is clean/explicit in status-review artifacts.
-Otherwise return blocked/partial.
+Finish only when the Definition of Done in `main.prompt.md` is satisfied, packet telemetry and `telemetry.summary.json` are coherent, branch status/review evidence is complete, final `python3 "$GOAL_SKILLS_ROOT"/goal-main-orchestrator/scripts/validate_main_status.py` succeeds, and git state is explicit. Otherwise return blocked/partial.
 """
 
 

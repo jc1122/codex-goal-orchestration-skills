@@ -268,7 +268,9 @@ def brief_schema_summary() -> dict:
             "worker_type": "worker or research-worker; default worker",
             "route_class": f"one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)} for worker items; inferred deterministically when omitted; omit for research-worker",
             "route_class_reason": "optional explicit reason; bundle creation always writes a non-empty reason to job.manifest.json and branch prompts",
-            "context_files": ["repo-relative read-first files"],
+            "context_files": [
+                "repo-relative read-first files that must already exist under repo root; use owned_paths for new writable outputs and source_attachments for large existing source files"
+            ],
             "depends_on": "prior work item ids only; omit or [] for parallel workers",
         },
         "commands": {
@@ -689,6 +691,28 @@ def bullets(values: object, fallback: str = "- none") -> str:
     if not values:
         return fallback
     return "\n".join(f"- {value}" for value in values)
+
+
+def branch_scope_text(branch: dict) -> str:
+    return branch.get("scope") or (
+        f"Bounded to the owned paths, work items, verification commands, and stop conditions listed for {branch['id']}."
+    )
+
+
+def branch_additional_validators(branch: dict) -> str:
+    tests = [item.strip() for item in branch.get("tests", []) if isinstance(item, str) and item.strip()] if isinstance(branch.get("tests"), list) else []
+    if tests:
+        return bullets(tests)
+    validators: list[str] = []
+    seen: set[str] = set()
+    for item in branch.get("work_items", []):
+        if not isinstance(item, dict):
+            continue
+        for command in item.get("verification", []):
+            if isinstance(command, str) and command.strip() and command not in seen:
+                validators.append(command.strip())
+                seen.add(command)
+    return bullets(validators, fallback="- No branch-level validators beyond work-item verification commands.")
 
 
 def format_work_items(branch_id_value: str, items: list[dict]) -> str:
@@ -1216,6 +1240,23 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def provenance_path(path: Path, bundle_dir: Path) -> dict:
+    resolved = path.resolve()
+    try:
+        relative = resolved.relative_to(bundle_dir.resolve())
+        source_path = relative.as_posix()
+        source_path_type = "bundle_relative"
+    except ValueError:
+        source_path = resolved.as_posix()
+        source_path_type = "absolute"
+    return {
+        "source_path": source_path,
+        "source_path_type": source_path_type,
+        "source_basename": path.name,
+        "source_sha256": sha256_file(path) if path.exists() else None,
+    }
+
+
 def ensure_bundle_dirs(bundle_dir: Path) -> None:
     bundle_dir.mkdir(parents=True, exist_ok=True)
     for dirname in ["branches", "workers", "research", "reviewers", "audit", "lite", "schedulers", "amendments"]:
@@ -1239,6 +1280,48 @@ def render_branch_dependencies(branches: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def repo_runtime_gate_summary(repo_status: dict) -> str:
+    if repo_status.get("repo_is_git") is False:
+        return "blocked - repository root is not a git work tree; runtime branch/worktree orchestration requires entering or initializing a git work tree, or an explicit supported no-git runtime mode"
+    if repo_status.get("base_ref_status") == "missing":
+        return f"blocked - base_ref does not exist: {repo_status.get('base_ref')}"
+    return "pass - git runtime gate is satisfied"
+
+
+def bundle_git_ignore_warning(repo_root: Path, bundle_dir: Path) -> str:
+    if not _is_git_repo(repo_root):
+        return ""
+    try:
+        relative = bundle_dir.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return ""
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "check-ignore", "-q", relative.as_posix()],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if result.returncode == 0:
+        return ""
+    return f"Bundle git ignore warning: {relative.as_posix()} is inside the git work tree and is not ignored; generated bundle files may dirty the repository."
+
+
+def goal_config_report_lines(goal_config: dict | None, goal_config_check: dict | None, manifest: dict) -> list[str]:
+    if not goal_config:
+        return []
+    check_summary = compact_goal_config_check_summary(goal_config_check or {})
+    accepted = check_summary.get("accepted_route_count")
+    route_label = "not verified" if accepted in (None, 0) else f"{accepted} accepted route(s)"
+    provenance = manifest.get("goal_config_provenance", {})
+    config_provenance = provenance.get("config", {}) if isinstance(provenance, dict) else {}
+    source = config_provenance.get("source_path") if isinstance(config_provenance, dict) else None
+    return [
+        f"Goal config: {goal_config.get('profile', 'custom')} copied to goal.config.json from {source or 'supplied config'}; preflight config check status={check_summary.get('status')}.",
+        f"Goal config route availability: {route_label}; this is distinct from config-schema/preflight compatibility status.",
+    ]
+
+
 def render_source_attachments(attachments: list[dict]) -> str:
     if not attachments:
         return "- none"
@@ -1253,9 +1336,10 @@ def render_source_attachments(attachments: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def compact_goal_config_summary(config: dict) -> dict:
+def compact_goal_config_summary(config: dict, *, manifest_telemetry_policy: dict | None = None) -> dict:
     validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
+    manifest_policy = manifest_telemetry_policy if isinstance(manifest_telemetry_policy, dict) else {}
     models = config.get("models") if isinstance(config.get("models"), dict) else {}
     compact_models = {}
     for role, model in models.items():
@@ -1275,6 +1359,15 @@ def compact_goal_config_summary(config: dict) -> dict:
         "validation_mode": validation.get("mode"),
         "telemetry_mode": telemetry.get("mode"),
         "telemetry_raw_text": telemetry.get("raw_text"),
+        "source_config_telemetry": {
+            "mode": telemetry.get("mode"),
+            "raw_text": telemetry.get("raw_text"),
+        },
+        "manifest_telemetry_policy": {
+            "mode": manifest_policy.get("mode"),
+            "raw_text": manifest_policy.get("raw_text"),
+        },
+        "telemetry_interpretation": "source config telemetry is provenance only; job.manifest.json telemetry_policy is authoritative at runtime",
         "model_ladders": config.get("model_ladders", {}),
         "models": compact_models,
         "compatibility": config.get("compatibility", {}),
@@ -1297,12 +1390,63 @@ def compact_goal_config_check_summary(check: dict) -> dict:
     }
 
 
+def preflight_input_precedence(original_brief: dict, normalized_brief: dict, config: dict | None) -> dict:
+    aggressiveness = config.get("aggressiveness") if isinstance(config, dict) and isinstance(config.get("aggressiveness"), dict) else {}
+    config_preflight_intent = config.get("preflight_intent") if isinstance(config, dict) and isinstance(config.get("preflight_intent"), dict) else {}
+    original_branches = original_brief.get("branches") if isinstance(original_brief.get("branches"), list) else []
+    original_branch_by_id = {
+        str(branch.get("id") or branch_id(index)): branch
+        for index, branch in enumerate(original_branches, start=1)
+        if isinstance(branch, dict)
+    }
+    branch_caps = {}
+    for branch in normalized_brief.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        bid = str(branch.get("id"))
+        original = original_branch_by_id.get(bid, {})
+        branch_caps[bid] = {
+            "brief_value": original.get("max_active_worker_packets") if isinstance(original, dict) else None,
+            "applied_value": branch.get("max_active_worker_packets"),
+            "source": "goal_config.aggressiveness.max_active_worker_packets"
+            if isinstance(aggressiveness.get("max_active_worker_packets"), int)
+            and not isinstance(aggressiveness.get("max_active_worker_packets"), bool)
+            else "brief_or_default",
+        }
+    return {
+        "goal_config_applied": config is not None,
+        "max_active_branch_agents": {
+            "brief_value": original_brief.get("max_active_branch_agents"),
+            "applied_value": normalized_brief.get("max_active_branch_agents"),
+            "source": "goal_config.aggressiveness.max_active_branch_agents"
+            if isinstance(aggressiveness.get("max_active_branch_agents"), int)
+            and not isinstance(aggressiveness.get("max_active_branch_agents"), bool)
+            else "brief_or_default",
+        },
+        "max_active_worker_packets_by_branch": branch_caps,
+        "telemetry_policy": {
+            "brief_value": original_brief.get("telemetry_policy") or original_brief.get("telemetry_mode") or original_brief.get("debug_telemetry"),
+            "config_preflight_intent": config_preflight_intent.get("telemetry_mode"),
+            "applied_mode": normalized_brief.get("telemetry_policy", {}).get("mode"),
+            "source": "brief"
+            if any(key in original_brief for key in ("telemetry_policy", "telemetry_mode", "debug_telemetry"))
+            else ("goal_config.preflight_intent.telemetry_mode" if config_preflight_intent.get("telemetry_mode") else "default"),
+        },
+        "note": "goal_config aggressiveness caps override brief caps when supplied; explicit brief telemetry fields override goal_config preflight_intent.",
+    }
+
+
 def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) -> dict:
     goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
     goal_config_check = brief.get("goal_config_check") if isinstance(brief.get("goal_config_check"), dict) else None
     model_policies = goal_config.get("model_policies", {}) if goal_config else {}
     return {
         "job_id": brief["job_id"],
+        "title": brief.get("title") or brief["job_id"],
+        "goal": brief.get("goal", ""),
+        "source_summary": brief.get("source_summary", ""),
+        "required_evidence": brief.get("required_evidence", []),
+        "final_dod": brief.get("final_dod", []),
         "main_prompt": "main.prompt.md",
         "base_ref": brief["base_ref"],
         "artifact_policy": brief["artifact_policy"],
@@ -1322,10 +1466,11 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "source_attachments": brief.get("source_attachments", []),
         "repo_status": brief.get("repo_status", {}),
         "preflight_compatibility": brief.get("preflight_compatibility", {"status": "not_configured", "defects": []}),
+        "preflight_input_precedence": brief.get("preflight_input_precedence", {}),
         **(
             {
                 "goal_config_path": "goal.config.json",
-                "goal_config_summary": compact_goal_config_summary(goal_config),
+                "goal_config_summary": compact_goal_config_summary(goal_config, manifest_telemetry_policy=brief["telemetry_policy"]),
                 "goal_config_check_path": "goal-config.check.json",
                 "goal_config_check_summary": compact_goal_config_check_summary(goal_config_check or {}),
                 **(
@@ -1343,6 +1488,8 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "branches": [
             {
                 "id": branch["id"],
+                "objective": branch.get("objective", ""),
+                "scope": branch_scope_text(branch),
                 "wave": branch["wave"],
                 "prompt": branch["prompt"],
                 "branch_name": branch["branch_name"],
@@ -1402,9 +1549,7 @@ def render_main_prompt_text(brief: dict) -> str:
 
 def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     branch_template = (Path(__file__).resolve().parents[1] / "assets" / "branch.prompt.template.md").read_text(encoding="utf-8")
-    scope = branch.get("scope") or (
-        f"Bounded to the owned paths, work items, verification commands, and stop conditions listed for {branch['id']}."
-    )
+    scope = branch_scope_text(branch)
     goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
     worker_policy = (
         goal_config.get("model_policies", {}).get("worker_model_policy", WORKER_MODEL_POLICY)
@@ -1422,6 +1567,8 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         wave=branch["wave"],
         depends_on=bullets(branch.get("depends_on", [])),
         max_active_worker_packets=branch["max_active_worker_packets"],
+        worker_packet_count=len(branch.get("work_items", [])) if isinstance(branch.get("work_items"), list) else 0,
+        max_worker_packets_per_branch=MAX_WORKER_PACKETS_PER_BRANCH,
         worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
         pre_review_gate_path=branch["pre_review_gate_path"],
         worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
@@ -1431,10 +1578,10 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         scope=scope,
         owned_paths=bullets(branch.get("owned_paths", [])),
         work_items=format_work_items(branch["id"], branch.get("work_items", [])),
-        tests=bullets(branch.get("tests", [])),
-        stop_conditions=bullets(branch.get("stop_conditions", [])),
+        tests=branch_additional_validators(branch),
+        stop_conditions=bullets(branch.get("stop_conditions", []), fallback="- No branch-specific stop conditions beyond runtime blockers and validator failures."),
         telemetry_policy_mode=brief["telemetry_policy"]["mode"],
-        dod=bullets(branch.get("dod", [])),
+        dod=bullets(branch.get("dod", []), fallback=""),
     )
 
 
@@ -1478,6 +1625,7 @@ def create_bundle(
 ) -> Path:
     if goal_config is not None and goal_config_check is None:
         raise SystemExit("--goal-config requires --goal-config-check with status=pass")
+    original_brief = dict(brief)
     compatibility = preflight_compatibility_summary(goal_config, goal_config_check)
     if compatibility.get("status") == "failed":
         defects = "; ".join(str(item) for item in compatibility.get("defects", []))
@@ -1491,6 +1639,7 @@ def create_bundle(
     )
     brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"])
     brief["preflight_compatibility"] = compatibility
+    brief["preflight_input_precedence"] = preflight_input_precedence(original_brief, brief, goal_config)
     if goal_config is not None:
         brief["goal_config"] = goal_config
         brief["goal_config_check"] = goal_config_check or {}
@@ -1508,12 +1657,24 @@ def create_bundle(
         write(bundle_dir / "goal-config.check.json", json.dumps(goal_config_check, indent=2, sort_keys=True) + "\n")
 
     manifest = manifest_from_normalized_brief(brief, bundle_dir)
+    if goal_config is not None:
+        provenance = {}
+        if goal_config_source is not None:
+            provenance["config"] = {**provenance_path(goal_config_source, bundle_dir), "copied_path": "goal.config.json"}
+        else:
+            provenance["config"] = {"source_path": "inline", "source_path_type": "inline", "copied_path": "goal.config.json"}
+        if goal_config_check_source is not None:
+            provenance["check"] = {**provenance_path(goal_config_check_source, bundle_dir), "copied_path": "goal-config.check.json"}
+        else:
+            provenance["check"] = {"source_path": "inline", "source_path_type": "inline", "copied_path": "goal-config.check.json"}
+        manifest["goal_config_provenance"] = provenance
     write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
     write_bundle_prompts(brief, bundle_dir)
 
     bootloader = render_bootloader(bundle_dir.resolve(), repo_root.resolve())
     write(bundle_dir / "goal-bootloader.md", bootloader)
+    git_ignore_warning = bundle_git_ignore_warning(repo_root, bundle_dir)
     report = "\n".join(
         [
             f"# Preflight Report: {brief['job_id']}",
@@ -1522,15 +1683,14 @@ def create_bundle(
             f"Branches: {len(brief['branches'])}",
             f"Waves: {len(brief['waves'])}",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
+            f"Runtime readiness gate: {repo_runtime_gate_summary(brief['repo_status'])}",
+            f"Config precedence: {brief['preflight_input_precedence']['note']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
             f"Scheduling: rolling; runtime branch scheduler ledger path is {CONTRACT.MAIN_SCHEDULER_PATH}; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
             "Waves are dependency-aware scheduling/order groups; dependencies are explicit via depends_on and runtime readiness still gates launch eligibility.",
             f"Worker model policy: {CONTRACT.format_worker_ladder(manifest['worker_model_policy']['default_ladder'])}; branches may choose an ordered subsequence with a recorded reason.",
-            *(
-                [f"Goal config: {goal_config.get('profile', 'custom')} from goal.config.json; harness check status is pass."]
-                if goal_config
-                else []
-            ),
+            *goal_config_report_lines(goal_config, goal_config_check, manifest),
+            *([git_ignore_warning] if git_ignore_warning else []),
             "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
             f"Artifact policy: {brief['artifact_policy']}",
             f"Cleanup policy: {brief['cleanup_policy']}",

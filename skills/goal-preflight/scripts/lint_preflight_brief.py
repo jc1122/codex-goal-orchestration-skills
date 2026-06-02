@@ -136,7 +136,12 @@ def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: P
                     continue
                 if key == "context_files":
                     if repo_root is not None and not (repo_root / value).exists():
-                        defect(defects, path, "major", f"context file does not exist under repo root: {value}")
+                        defect(
+                            defects,
+                            path,
+                            "major",
+                            f"context file must already exist under repo root: {value}; put future writable outputs in owned_paths or describe large existing sources in source_attachments",
+                        )
                     continue
 
 

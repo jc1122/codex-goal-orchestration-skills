@@ -134,9 +134,15 @@ def manifest_to_brief(manifest: dict) -> dict:
         parallelization = {}
     return {
         "job_id": manifest.get("job_id"),
+        "title": manifest.get("title") or manifest.get("job_id"),
         "base_ref": manifest.get("base_ref", "main"),
+        "goal": manifest.get("goal", ""),
+        "source_summary": manifest.get("source_summary", ""),
+        "required_evidence": copy.deepcopy(manifest.get("required_evidence", [])),
+        "final_dod": copy.deepcopy(manifest.get("final_dod", [])),
         "artifact_policy": manifest.get("artifact_policy", ""),
         "cleanup_policy": manifest.get("cleanup_policy", ""),
+        "telemetry_policy": copy.deepcopy(manifest.get("telemetry_policy", CONTRACT.TELEMETRY_POLICY_DEFAULT)),
         "max_active_branch_agents": manifest.get("max_active_branch_agents", CONTRACT.MAX_ACTIVE_BRANCH_AGENTS),
         "serial_reasons": parallelization.get("serial_reasons", []),
         "parallelization_rationale": parallelization.get("parallelization_rationale", ""),
