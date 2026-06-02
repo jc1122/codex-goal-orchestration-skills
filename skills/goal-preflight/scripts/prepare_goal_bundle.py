@@ -62,6 +62,52 @@ def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
 
 
+def _is_git_repo(repo_root: Path) -> bool:
+    result = run(["git", "-C", repo_root.as_posix(), "rev-parse", "--is-inside-work-tree"])
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _git_ref_exists(repo_root: Path, ref: str | None) -> bool:
+    if not isinstance(ref, str) or not ref.strip():
+        return True
+    result = run(["git", "-C", repo_root.as_posix(), "rev-parse", "--verify", "--quiet", ref])
+    return result.returncode == 0
+
+
+def runtime_gate_precheck(repo_root: Path, brief: dict) -> dict:
+    if not _is_git_repo(repo_root):
+        return {
+            "status": "blocked",
+            "reason": "repository root is not a git work tree; runtime branch/worktree orchestration requires git",
+            "repo_root": repo_root.as_posix(),
+            "repo_is_git": False,
+        }
+    base_ref = brief.get("base_ref")
+    if isinstance(base_ref, str) and base_ref.strip() and not _git_ref_exists(repo_root, base_ref.strip()):
+        return {
+            "status": "blocked",
+            "reason": f"base_ref does not exist: {base_ref.strip()}",
+            "repo_root": repo_root.as_posix(),
+            "repo_is_git": True,
+            "base_ref": base_ref.strip(),
+            "base_ref_status": "missing",
+        }
+    return {
+        "status": "pass",
+        "reason": "git work tree and base_ref gate passed",
+        "repo_root": repo_root.as_posix(),
+        "repo_is_git": True,
+        "base_ref": base_ref if isinstance(base_ref, str) else None,
+    }
+
+
+def blocked_gate_next_commands(brief: Path, repo_root: Path, out_dir: Path) -> list[str]:
+    return [
+        "Correct runtime gate first: use an existing git work tree for --repo-root, initialize this directory as a git work tree, or wait for an explicit supported no-git runtime mode.",
+        f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/prepare_goal_bundle.py --brief {brief} --repo-root {repo_root} --out-dir {out_dir} --build-blocked-bundle --allow-blocked-readiness',
+    ]
+
+
 def compact_remediation(remediation: object) -> dict:
     if not isinstance(remediation, dict):
         return {}
@@ -145,6 +191,7 @@ def compact_config_selection(selection: dict) -> dict:
 
 def compact_readiness(readiness: dict) -> dict:
     prompt_size = readiness.get("prompt_size_report") if isinstance(readiness.get("prompt_size_report"), dict) else {}
+    artifact_size = readiness.get("artifact_size_report") if isinstance(readiness.get("artifact_size_report"), dict) else {}
     return {
         "status": readiness.get("status"),
         "launch_allowed": readiness.get("launch_allowed"),
@@ -153,13 +200,21 @@ def compact_readiness(readiness: dict) -> dict:
         "repair_gate": readiness.get("repair_gate", {}),
         "lint_status": readiness.get("lint_status", {}),
         "verified_routes": readiness.get("verified_routes", {}),
-	        "prompt_size_summary": {
-	            "total_chars": prompt_size.get("total_prompt_chars", prompt_size.get("total_chars")),
-	            "approx_total_tokens": prompt_size.get("approx_total_tokens"),
-	            "max_single_prompt_chars": prompt_size.get("max_single_prompt_chars"),
-	            "max_prompt_chars_per_file": prompt_size.get("max_prompt_chars_per_file"),
-	            "per_file_min_prompt_char_margin": prompt_size.get("per_file_min_prompt_char_margin"),
-	        },
+        "prompt_size_summary": {
+            "total_chars": prompt_size.get("total_prompt_chars", prompt_size.get("total_chars")),
+            "approx_total_tokens": prompt_size.get("approx_total_tokens"),
+            "max_single_prompt_chars": prompt_size.get("max_single_prompt_chars"),
+            "max_prompt_chars_per_file": prompt_size.get("max_prompt_chars_per_file"),
+            "per_file_min_prompt_char_margin": prompt_size.get("per_file_min_prompt_char_margin"),
+        },
+        "artifact_size_summary": {
+            "bundle_surface_chars": artifact_size.get("bundle_surface_chars"),
+            "bundle_surface_approx_tokens": artifact_size.get("bundle_surface_approx_tokens"),
+            "machine_artifact_chars": artifact_size.get("machine_artifact_chars"),
+            "machine_artifact_approx_tokens": artifact_size.get("machine_artifact_approx_tokens"),
+            "runtime_contract_chars": artifact_size.get("runtime_contract_chars"),
+            "runtime_contract_approx_tokens": artifact_size.get("runtime_contract_approx_tokens"),
+        },
     }
 
 
@@ -168,7 +223,11 @@ def update_preflight_report(out_dir: Path, readiness: dict, lint_path: Path, rep
     if not report_path.exists():
         return
     text = report_path.read_text(encoding="utf-8").rstrip()
-    lint_status = read_json(lint_path).get("status") if lint_path.exists() else "missing"
+    marker = "\nFinal pipeline state:\n"
+    if marker in text:
+        text = text.split(marker, 1)[0].rstrip()
+    lint_payload = read_json(lint_path) if lint_path.exists() else {}
+    lint_status = lint_payload.get("schema_lint_status") or lint_payload.get("status") or "missing"
     repair_status = read_json(repair_path).get("status") if repair_path.exists() else "missing"
     readiness_status = readiness.get("status")
     launch_allowed = readiness.get("launch_allowed")
@@ -184,7 +243,7 @@ def update_preflight_report(out_dir: Path, readiness: dict, lint_path: Path, rep
     ]
     if blockers:
         final_lines.append(f"- Launch blockers: {'; '.join(str(item) for item in blockers)}")
-    report_path.write_text(text + "\n" + "\n".join(final_lines) + "\n", encoding="utf-8")
+    report_path.write_text(text + "\n".join(final_lines) + "\n", encoding="utf-8")
 
 
 def candidate_configs(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str]) -> list[Path]:
@@ -319,6 +378,11 @@ def main() -> int:
     parser.add_argument("--goal-config", action="append", default=[], help="Candidate config path. Repeat to control selection order.")
     parser.add_argument("--no-goal-config", action="store_true", help="Do not auto-detect or embed a goal config.")
     parser.add_argument("--allow-blocked-readiness", action="store_true", help="Return zero even when readiness is blocked.")
+    parser.add_argument(
+        "--build-blocked-bundle",
+        action="store_true",
+        help="Continue past an early runtime gate blocker and build an inspection-only bundle.",
+    )
     parser.add_argument("--json", action="store_true", help="Print pipeline JSON to stdout.")
     parser.add_argument("--verbose", action="store_true", help="Embed full config-selection and readiness payloads in the pipeline result.")
     parser.add_argument("--output", help="Write pipeline result JSON. Defaults to <bundle>/preflight.pipeline.json.")
@@ -352,6 +416,31 @@ def main() -> int:
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
         return 1
+
+    brief_data = read_json(brief)
+    runtime_gate = runtime_gate_precheck(repo_root, brief_data)
+    commands.append({"phase": "runtime_gate", "returncode": 0 if runtime_gate["status"] == "pass" else 2})
+    if runtime_gate["status"] != "pass" and not args.build_blocked_bundle:
+        result = {
+            "schema_version": 1,
+            "status": "blocked",
+            "result_kind": "blocked_runtime_gate_preflight",
+            "usable_bundle": False,
+            "blocked_reason": runtime_gate.get("reason"),
+            "bundle_dir": out_dir.as_posix(),
+            "brief_lint_path": brief_lint.as_posix(),
+            "runtime_gate": runtime_gate,
+            "launch_allowed": False,
+            "next_commands": blocked_gate_next_commands(brief, repo_root, out_dir),
+            "commands": commands,
+        }
+        output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
+        write_json(output_path, result)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(output_path)
+        return 0 if args.allow_blocked_readiness else 1
 
     config_selection = select_config(brief, repo_root, out_dir, args.goal_config, args.no_goal_config)
     selected = selected_candidate_from_selection(config_selection)
@@ -416,6 +505,8 @@ def main() -> int:
             repo_root.as_posix(),
             "--scope",
             "preflight",
+            "--bundle-lint-report",
+            bundle_lint.as_posix(),
             "--json",
             "--output",
             repair_gate.as_posix(),

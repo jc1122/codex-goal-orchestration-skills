@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import importlib.util
 import json
@@ -775,7 +776,29 @@ def normalize_worker_model_policy(policy: dict) -> dict:
     return normalized
 
 
-def route_class_ladder_guidance(worker_policy: dict) -> str:
+def route_availability_verified_from_check(goal_config_check: dict | None) -> bool | None:
+    if not isinstance(goal_config_check, dict):
+        return None
+    summary = goal_config_check.get("summary") if isinstance(goal_config_check.get("summary"), dict) else {}
+    accepted = summary.get("accepted_route_count")
+    return isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
+
+
+def route_recommendations_enabled(goal_config_check: dict | None) -> bool:
+    verified = route_availability_verified_from_check(goal_config_check)
+    return verified is not False
+
+
+def route_deferred_text(goal_config_check: dict | None) -> str:
+    verified = route_availability_verified_from_check(goal_config_check)
+    if verified is False:
+        return "route availability not verified by the supplied goal-config check; capture a fresh model catalog or smoke-check accepted routes before selecting runtime aliases"
+    return ""
+
+
+def route_class_ladder_guidance(worker_policy: dict, *, recommendations_enabled: bool = True, deferred_text: str = "") -> str:
+    if not recommendations_enabled:
+        return f"- deferred: {deferred_text or 'route availability must be verified before recommending worker aliases'}"
     route_classes = worker_policy.get("route_classes") if isinstance(worker_policy.get("route_classes"), dict) else {}
     lines = []
     for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
@@ -797,11 +820,11 @@ def work_item_route_ladder(item: dict, worker_policy: dict) -> list[str] | None:
     return None
 
 
-def add_route_ladder_recommendations(items: list[dict], worker_policy: dict) -> list[dict]:
+def add_route_ladder_recommendations(items: list[dict], worker_policy: dict, *, recommendations_enabled: bool = True) -> list[dict]:
     updated = []
     for item in items:
         normalized = dict(item)
-        ladder = work_item_route_ladder(normalized, worker_policy)
+        ladder = work_item_route_ladder(normalized, worker_policy) if recommendations_enabled else None
         if ladder:
             normalized["route_class_recommended_ladder"] = ladder
             normalized["route_class_ladder_source"] = worker_policy.get("route_class_ladder_source", "worker_model_policy.route_classes")
@@ -1177,7 +1200,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
         "job_id": job_id,
         "base_ref": base_ref,
         "artifact_policy": nonempty_text(brief.get("artifact_policy"))
-        or "Preserve the full orchestration bundle under plans/orchestration/<job-id>; commit generated preflight prompts only when the user explicitly asks, and commit runtime status/review/audit artifacts only when the main prompt or user explicitly requires them.",
+        or "Preserve the full orchestration bundle under the selected bundle directory; commit generated preflight prompts only when the user explicitly asks, and commit runtime status/review/audit artifacts only when the main prompt or user explicitly requires them.",
         "cleanup_policy": nonempty_text(brief.get("cleanup_policy"))
         or "On pass, report mergeability and leave branch/worktree removal to explicit user authorization. On partial, blocked, or failed runs, preserve branch worktrees, branches, packets, and logs for inspection unless the user explicitly authorizes cleanup.",
         "max_active_branch_agents": max_active,
@@ -1232,6 +1255,16 @@ def validate_goal_config(config: dict) -> None:
     for key in ("worker_model_policy", "review_model_policy", "amender_model_policy", "lite_model_policy"):
         if not isinstance(policies.get(key), dict):
             raise SystemExit(f"goal_config.model_policies.{key} must be an object")
+
+
+def sanitized_runtime_goal_config(config: dict) -> dict:
+    sanitized = copy.deepcopy(config)
+    telemetry = sanitized.get("telemetry")
+    if not isinstance(telemetry, dict):
+        telemetry = {}
+    telemetry["raw_text"] = False
+    sanitized["telemetry"] = telemetry
+    return sanitized
 
 
 def preflight_compatibility_summary(config: dict | None, check: dict | None) -> dict:
@@ -1586,6 +1619,7 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
     goal_config_check = brief.get("goal_config_check") if isinstance(brief.get("goal_config_check"), dict) else None
     model_policies = goal_config.get("model_policies", {}) if goal_config else {}
     worker_model_policy = normalize_worker_model_policy(model_policies.get("worker_model_policy", WORKER_MODEL_POLICY))
+    worker_route_recommendations_enabled = route_recommendations_enabled(goal_config_check)
     return {
         "job_id": brief["job_id"],
         "title": brief.get("title") or brief["job_id"],
@@ -1646,7 +1680,11 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
                 "pre_review_gate_path": branch["pre_review_gate_path"],
                 "depends_on": branch["depends_on"],
                 "owned_paths": branch["owned_paths"],
-                "work_items": add_route_ladder_recommendations(branch["work_items"], worker_model_policy),
+                "work_items": add_route_ladder_recommendations(
+                    branch["work_items"],
+                    worker_model_policy,
+                    recommendations_enabled=worker_route_recommendations_enabled,
+                ),
                 "max_active_worker_packets": branch["max_active_worker_packets"],
 	                "worker_parallelism": branch["worker_parallelism"],
 	                **(
@@ -1683,10 +1721,11 @@ def render_main_prompt_text(brief: dict) -> str:
         job_id=brief["job_id"],
         base_ref=brief["base_ref"],
         goal=brief.get("goal", "Goal not supplied."),
-	        source_summary=brief.get("source_summary", "Source summary not supplied."),
-	        source_attachments=render_source_attachments(brief.get("source_attachments", [])),
-	        runtime_cap=render_runtime_cap(brief.get("runtime_cap")),
-	        branch_waves=render_branch_waves(brief["waves"]),
+        source_summary=brief.get("source_summary", "Source summary not supplied."),
+        source_attachments=render_source_attachments(brief.get("source_attachments", [])),
+        runtime_cap=render_runtime_cap(brief.get("runtime_cap")),
+        runtime_readiness_gate=repo_runtime_gate_summary(brief.get("repo_status", {})),
+        branch_waves=render_branch_waves(brief["waves"]),
         branch_dependencies=render_branch_dependencies(brief["branches"]),
         max_active_branch_agents=brief["max_active_branch_agents"],
         main_scheduler_path=CONTRACT.MAIN_SCHEDULER_PATH,
@@ -1712,7 +1751,22 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     worker_policy = normalize_worker_model_policy(worker_policy)
     default_worker_ladder = worker_policy.get("default_ladder", list(DEFAULT_WORKER_LADDER))
     allowed_worker_routes = worker_policy.get("allowed_routes", list(DEFAULT_WORKER_LADDER))
-    work_items = add_route_ladder_recommendations(branch.get("work_items", []), worker_policy)
+    goal_config_check = brief.get("goal_config_check") if isinstance(brief.get("goal_config_check"), dict) else None
+    route_enabled = route_recommendations_enabled(goal_config_check)
+    route_deferred = route_deferred_text(goal_config_check)
+    default_worker_ladder_text = (
+        CONTRACT.format_worker_ladder(default_worker_ladder)
+        if route_enabled
+        else f"deferred - {route_deferred}"
+    )
+    allowed_worker_routes_text = (
+        ", ".join(allowed_worker_routes)
+        if route_enabled
+        else f"deferred - {route_deferred}"
+    )
+    work_items = add_route_ladder_recommendations(branch.get("work_items", []), worker_policy, recommendations_enabled=route_enabled)
+    worker_packet_count = len(branch.get("work_items", [])) if isinstance(branch.get("work_items"), list) else 0
+    effective_worker_cap = min(int(branch["max_active_worker_packets"]), worker_packet_count) if worker_packet_count else 0
     return branch_template.format(
         branch_id=branch["id"],
         title=branch.get("title", branch.get("objective", branch["id"])),
@@ -1722,17 +1776,18 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
 	        wave=branch["wave"],
 	        depends_on=bullets(branch.get("depends_on", [])),
 	        dependency_context=branch.get("dependency_context_reason") or "none",
-	        max_active_worker_packets=branch["max_active_worker_packets"],
-        worker_packet_count=len(branch.get("work_items", [])) if isinstance(branch.get("work_items"), list) else 0,
+        max_active_worker_packets=branch["max_active_worker_packets"],
+        effective_worker_cap=effective_worker_cap,
+        worker_packet_count=worker_packet_count,
         max_worker_packets_per_branch=MAX_WORKER_PACKETS_PER_BRANCH,
         worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
         pre_review_gate_path=branch["pre_review_gate_path"],
         worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
         branch_serial_reasons=bullets(brief["parallelization"].get("serial_reasons", []), fallback="- No branch-level serial or under-capacity reasons recorded."),
         worker_serial_reasons=bullets(branch["worker_parallelism"].get("serial_reasons", []), fallback="- No worker-level serial or under-capacity reasons recorded."),
-        default_worker_ladder=CONTRACT.format_worker_ladder(default_worker_ladder),
-        allowed_worker_routes=", ".join(allowed_worker_routes),
-        route_class_ladders=route_class_ladder_guidance(worker_policy),
+        default_worker_ladder=default_worker_ladder_text,
+        allowed_worker_routes=allowed_worker_routes_text,
+        route_class_ladders=route_class_ladder_guidance(worker_policy, recommendations_enabled=route_enabled, deferred_text=route_deferred),
         objective=branch.get("objective", "Objective not supplied."),
         scope=scope,
         owned_paths=bullets(branch.get("owned_paths", [])),
@@ -1799,29 +1854,39 @@ def create_bundle(
     brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"])
     brief["preflight_compatibility"] = compatibility
     brief["preflight_input_precedence"] = preflight_input_precedence(original_brief, brief, goal_config)
-    if goal_config is not None:
-        brief["goal_config"] = goal_config
+    runtime_goal_config = sanitized_runtime_goal_config(goal_config) if goal_config is not None else None
+    if runtime_goal_config is not None:
+        brief["goal_config"] = runtime_goal_config
         brief["goal_config_check"] = goal_config_check or {}
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)
 
-    if goal_config_source is not None:
-        shutil.copyfile(goal_config_source, bundle_dir / "goal.config.json")
-    elif goal_config is not None:
-        write(bundle_dir / "goal.config.json", json.dumps(goal_config, indent=2, sort_keys=True) + "\n")
+    if runtime_goal_config is not None:
+        write(bundle_dir / "goal.config.json", json.dumps(runtime_goal_config, indent=2, sort_keys=True) + "\n")
     if goal_config_check_source is not None:
         shutil.copyfile(goal_config_check_source, bundle_dir / "goal-config.check.json")
     elif goal_config_check is not None:
         write(bundle_dir / "goal-config.check.json", json.dumps(goal_config_check, indent=2, sort_keys=True) + "\n")
 
     manifest = manifest_from_normalized_brief(brief, bundle_dir)
-    if goal_config is not None:
+    if runtime_goal_config is not None:
         provenance = {}
         if goal_config_source is not None:
-            provenance["config"] = {**provenance_path(goal_config_source, bundle_dir), "copied_path": "goal.config.json"}
+            provenance["config"] = {
+                **provenance_path(goal_config_source, bundle_dir),
+                "copied_path": "goal.config.json",
+                "sanitized_runtime_copy": True,
+                "sanitized_fields": ["telemetry.raw_text"],
+            }
         else:
-            provenance["config"] = {"source_path": "inline", "source_path_type": "inline", "copied_path": "goal.config.json"}
+            provenance["config"] = {
+                "source_path": "inline",
+                "source_path_type": "inline",
+                "copied_path": "goal.config.json",
+                "sanitized_runtime_copy": True,
+                "sanitized_fields": ["telemetry.raw_text"],
+            }
         if goal_config_check_source is not None:
             provenance["check"] = {**provenance_path(goal_config_check_source, bundle_dir), "copied_path": "goal-config.check.json"}
         else:

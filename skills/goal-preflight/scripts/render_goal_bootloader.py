@@ -64,8 +64,13 @@ def _collect_bundle_dag(manifest: dict) -> list[dict[str, list[str] | str | int]
 
 def _route_policy_summary(manifest: dict) -> dict[str, object]:
     routes: dict[str, object] = {}
+    verified_routes = _verified_routes_summary(manifest)
+    recommendations_suppressed = verified_routes.get("route_model_availability_verified") is False and verified_routes.get("status") != "missing"
     worker_policy = manifest.get("worker_model_policy", {})
     routes["worker"] = worker_policy.get("default_ladder", [])
+    routes["worker_recommendations_suppressed"] = recommendations_suppressed
+    if recommendations_suppressed:
+        routes["worker_recommendation_reason"] = "route availability was not verified; prompts defer concrete worker alias selection until a fresh model catalog or accepted-route smoke check"
     amender_policy = manifest.get("amender_model_policy", {})
     routes["amender"] = amender_policy.get("default_ladder", [])
     lite_policy = manifest.get("lite_model_policy", {})
@@ -100,9 +105,13 @@ def _lint_status(bundle_dir: Path, label: str) -> dict[str, object]:
     payload = _read_json(path, f"{label} lint report")
     if not isinstance(payload, dict):
         return {"label": label, "status": "invalid", "path": str(path)}
+    schema_status = payload.get("schema_lint_status") or payload.get("status", "unknown")
     return {
         "label": label,
-        "status": payload.get("status", "unknown"),
+        "status": schema_status,
+        "reported_status": payload.get("status", "unknown"),
+        "status_kind": payload.get("status_kind"),
+        "defect_count": payload.get("defect_count", len(payload.get("defects", payload.get("errors", [])) or [])),
         "defects": payload.get("defects", payload.get("errors", [])),
         "path": str(path),
     }
@@ -113,11 +122,18 @@ def _repair_gate_status(bundle_dir: Path) -> dict[str, object]:
     if not path.exists():
         return {"status": "missing", "path": str(path)}
     payload = _read_json(path, "repair gate report")
+    status = payload.get("status")
+    if status not in {"pass", "blocked", "failed"}:
+        status = "pass" if payload.get("decision") == "pass_no_actions" else "blocked"
     return {
-        "status": "pass" if payload.get("decision") == "pass_no_actions" else "blocked",
+        "status": status,
         "decision": payload.get("decision"),
         "path": str(path),
         "model_launch_allowed": payload.get("model_launch_allowed"),
+        "script_repair_model_launch_allowed": payload.get("script_repair_model_launch_allowed"),
+        "runtime_launch_allowed": payload.get("runtime_launch_allowed"),
+        "launch_allowed": payload.get("launch_allowed"),
+        "action_count": payload.get("action_count", len(payload.get("actions", []) or [])),
     }
 
 
@@ -166,7 +182,7 @@ def _config_compatibility(manifest: dict) -> str:
 
 def _verified_routes_summary(manifest: dict) -> dict[str, object]:
     check_report = manifest.get("goal_config_check_summary", {})
-    if not isinstance(check_report, dict):
+    if not isinstance(check_report, dict) or not check_report:
         return {"status": "missing", "route_model_availability_verified": False}
     summary = dict(check_report)
     accepted = summary.get("accepted_route_count")
@@ -253,6 +269,62 @@ def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
         "per_file_min_prompt_char_margin": per_file_min_margin,
         "prompt_char_margin_basis": "minimum per-file margin against max_prompt_chars_per_file; total prompt chars are reported separately",
         "duplicated_section_counts": repeated_sections,
+    }
+
+
+def _artifact_entry(bundle_dir: Path, relative_path: str) -> dict[str, object]:
+    path = bundle_dir / relative_path
+    if not path.exists():
+        return {
+            "path": relative_path,
+            "exists": False,
+            "chars": 0,
+            "approx_tokens": 0,
+            "line_count": 0,
+        }
+    text = _read_text(path)
+    chars = len(text)
+    return {
+        "path": relative_path,
+        "exists": True,
+        "chars": chars,
+        "approx_tokens": (chars + 3) // 4,
+        "line_count": text.count("\n") + (0 if text.endswith("\n") else 1),
+    }
+
+
+def _artifact_size_report(bundle_dir: Path, manifest: dict, prompt_report: dict[str, object]) -> dict[str, object]:
+    prompt_paths = [str(item.get("path")) for item in prompt_report.get("files", []) if isinstance(item, dict) and item.get("path")]
+    machine_paths = [
+        "job.manifest.json",
+        "goal.config.json",
+        "goal-config.check.json",
+        "goal-config-selection.json",
+        "preflight.pipeline.json",
+        "preflight.brief.lint.json",
+        "preflight.lint.json",
+        "repair-gate.json",
+        "readiness.json",
+        "create-bundle-result.json",
+    ]
+    machine_entries = [_artifact_entry(bundle_dir, path) for path in machine_paths]
+    prompt_entries = [_artifact_entry(bundle_dir, path) for path in prompt_paths]
+    machine_chars = sum(int(item["chars"]) for item in machine_entries)
+    prompt_chars = sum(int(item["chars"]) for item in prompt_entries)
+    runtime_contract_paths = set(prompt_paths + ["job.manifest.json"])
+    runtime_contract_chars = sum(int(_artifact_entry(bundle_dir, path)["chars"]) for path in runtime_contract_paths)
+    return {
+        "prompt_files": prompt_entries,
+        "machine_artifacts": machine_entries,
+        "prompt_file_chars": prompt_chars,
+        "prompt_file_approx_tokens": (prompt_chars + 3) // 4,
+        "machine_artifact_chars": machine_chars,
+        "machine_artifact_approx_tokens": (machine_chars + 3) // 4,
+        "runtime_contract_chars": runtime_contract_chars,
+        "runtime_contract_approx_tokens": (runtime_contract_chars + 3) // 4,
+        "bundle_surface_chars": prompt_chars + machine_chars,
+        "bundle_surface_approx_tokens": (prompt_chars + machine_chars + 3) // 4,
+        "note": "prompt_size_report covers prompt files only; artifact_size_report includes selected machine artifacts and the manifest runtime contract",
     }
 
 
@@ -358,6 +430,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     caps = _caps_summary(manifest)
     verified_routes = _verified_routes_summary(manifest)
     prompt_size = _prompt_size_report(bundle_dir, manifest)
+    artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
     manifest_path = bundle_dir / "job.manifest.json"
     next_command = _readiness_next_commands(
         bundle_dir,
@@ -382,6 +455,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         f"route_policy={json.dumps(route_policy, sort_keys=True)}",
         f"verified_routes={json.dumps(verified_routes, sort_keys=True)}",
         f"prompt_size_report={json.dumps(prompt_size, sort_keys=True)}",
+        f"artifact_size_report={json.dumps(artifact_size, sort_keys=True)}",
         f"runtime_gate={json.dumps(runtime_gate, sort_keys=True)}",
         f"repair_gate={json.dumps(repair_gate, sort_keys=True)}",
         "branch_dag:",
@@ -427,6 +501,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     launch_allowed = status == "pass" and not launch_blockers
 
     manifest_path = bundle_dir / "job.manifest.json"
+    prompt_size = _prompt_size_report(bundle_dir, manifest)
+    artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
     payload = {
         "status": status,
         "launch_allowed": launch_allowed,
@@ -439,7 +515,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         "caps": _caps_summary(manifest),
         "route_policy": _route_policy_summary(manifest),
         "verified_routes": _verified_routes_summary(manifest),
-        "prompt_size_report": _prompt_size_report(bundle_dir, manifest),
+        "prompt_size_report": prompt_size,
+        "artifact_size_report": artifact_size,
         "branch_dag": _collect_bundle_dag(manifest),
         "lint_status": {
             "brief_lint": lint_brief,

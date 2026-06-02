@@ -19,9 +19,14 @@ Base ref: {base_ref}
 
 {runtime_cap}
 
+## Runtime Readiness Gate
+
+{runtime_readiness_gate}
+
 ## Runtime Rules
 
 - Use $goal-main-orchestrator. Treat `job.manifest.json` as the contract and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
+- If the runtime readiness gate is blocked, do not launch `/goal` from this prompt; use `goal-bootloader.md` and `readiness.json` corrective commands first.
 - Treat manifest paths as bundle-root relative and worktree paths as repo-root relative. Reject absolute paths, backslashes, and `..` traversal.
 - Run availability bootstrap and fresh model-catalog capture before prompt audit. Do not create branches until `prompt-audit.json` pins this manifest and repository root with `status=pass`.
 - Run `script_only_repair_gate.py --scope main` before prompt audit or branch launch. Complete any `script_actions_needed` commands first; launch a model only after the gate returns `pass_no_actions`.

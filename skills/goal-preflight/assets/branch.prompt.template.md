@@ -9,6 +9,7 @@ Depends on branches:
 {depends_on}
 Dependency context: {dependency_context}
 Max active worker packets: {max_active_worker_packets}
+Effective worker launch cap: {effective_worker_cap}
 Declared worker packets: {worker_packet_count}
 Configured package max worker packets per branch: {max_worker_packets_per_branch}
 
@@ -34,7 +35,7 @@ Use $goal-branch-orchestrator. Treat `job.manifest.json` as the policy source an
 
 Before worker dispatch or reviewer dispatch, run `script_only_repair_gate.py --scope branch`. Complete any `script_actions_needed` commands first; launch workers or reviewers only after the gate returns `pass_no_actions` or reviewer reuse has been accepted with telemetry.
 
-Cap: {max_active_worker_packets} active; declared workers: {worker_packet_count}; configured package max per branch: {max_worker_packets_per_branch}. Never exceed the active cap or declared worker set. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
+Configured cap: {max_active_worker_packets} active; effective launch cap for this branch: {effective_worker_cap}; declared workers: {worker_packet_count}; configured package max per branch: {max_worker_packets_per_branch}. Never exceed the active cap or declared worker set. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
 
 Branch scheduler serial/under-capacity reasons:
 {branch_serial_reasons}

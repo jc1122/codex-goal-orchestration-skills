@@ -122,8 +122,31 @@ def check_manifest_fields(actions: list[dict], checks: list[dict], manifest: dic
         )
 
 
-def check_bundle_lint(actions: list[dict], checks: list[dict], bundle_dir: Path) -> None:
+def check_bundle_lint(actions: list[dict], checks: list[dict], bundle_dir: Path, lint_report_path: Path | None = None) -> None:
     script = skills_root() / "goal-preflight" / "scripts" / "lint_goal_bundle.py"
+    if lint_report_path is not None and lint_report_path.exists():
+        report = load_json(lint_report_path)
+        schema_status = report.get("schema_lint_status") or report.get("status") if isinstance(report, dict) else None
+        defect_count = report.get("defect_count", len(report.get("defects", []) or [])) if isinstance(report, dict) else None
+        checks.append(
+            {
+                "name": "bundle_lint",
+                "status": "pass" if schema_status == "pass" else "failed",
+                "source": "existing_report",
+                "report": lint_report_path.as_posix(),
+                "schema_lint_status": schema_status,
+                "reported_status": report.get("status") if isinstance(report, dict) else None,
+                "defect_count": defect_count,
+            }
+        )
+        if schema_status != "pass":
+            action(
+                actions,
+                kind="bundle_lint_repair",
+                reason="persisted bundle lint report has schema/artifact defects that should be repaired before model launch",
+                command=f"python3 {script} --bundle-dir {bundle_dir}",
+            )
+        return
     if not script.exists():
         checks.append({"name": "bundle_lint", "status": "skipped", "reason": f"missing {script}"})
         return
@@ -186,6 +209,32 @@ def check_telemetry_summary(actions: list[dict], checks: list[dict], bundle_dir:
         action(actions, kind="missing_telemetry_summary", reason=reason, command=f"python3 {script} --bundle-dir {bundle_dir}")
 
 
+def runtime_launch_gate(manifest: dict, repo_root: Path | None) -> dict:
+    repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
+    if repo_status.get("repo_is_git") is False or repo_status.get("status") == "not_in_repo":
+        return {
+            "status": "blocked",
+            "reason": "repository root is not a git work tree; runtime branch/worktree orchestration is blocked",
+            "repo_status": repo_status,
+        }
+    if repo_status.get("base_ref_status") == "missing":
+        return {
+            "status": "blocked",
+            "reason": f"base_ref does not exist: {repo_status.get('base_ref')}",
+            "repo_status": repo_status,
+        }
+    if repo_root is not None:
+        result = run(["git", "-C", repo_root.as_posix(), "rev-parse", "--is-inside-work-tree"])
+        if result.returncode != 0 or result.stdout.strip() != "true":
+            return {
+                "status": "blocked",
+                "reason": "--repo-root is not a git work tree; runtime branch/worktree orchestration is blocked",
+                "repo_root": repo_root.as_posix(),
+                "repo_status": repo_status,
+            }
+    return {"status": "pass", "reason": "git runtime gate passed or was not required", "repo_status": repo_status}
+
+
 def status_blockers(status_data: object) -> list[str]:
     if not isinstance(status_data, dict):
         return []
@@ -236,12 +285,17 @@ def gate(args: argparse.Namespace) -> dict:
     actions: list[dict] = []
     check_context_index(actions, checks, repo_root)
     check_manifest_fields(actions, checks, manifest)
-    check_bundle_lint(actions, checks, bundle_dir)
+    lint_report_path = resolve_absolute_path(args.bundle_lint_report, "--bundle-lint-report", must_exist=True) if args.bundle_lint_report else None
+    check_bundle_lint(actions, checks, bundle_dir, lint_report_path)
     check_scheduler(actions, checks, manifest, bundle_dir, args.scope, args.branch_id)
     check_telemetry_summary(actions, checks, bundle_dir)
     check_amendments_and_blockers(actions, checks, bundle_dir, status_path, args.branch_id)
     decision = "script_actions_needed" if actions else "pass_no_actions"
     status = "pass" if decision == "pass_no_actions" else "blocked"
+    runtime_gate = runtime_launch_gate(manifest, repo_root)
+    script_repair_model_launch_allowed = decision == "pass_no_actions"
+    runtime_launch_allowed = runtime_gate["status"] == "pass"
+    launch_allowed = script_repair_model_launch_allowed and runtime_launch_allowed
     return {
         "schema_version": 1,
         "status": status,
@@ -250,7 +304,14 @@ def gate(args: argparse.Namespace) -> dict:
         "manifest": manifest_path.as_posix(),
         "bundle_dir": bundle_dir.as_posix(),
         "decision": decision,
-        "model_launch_allowed": decision == "pass_no_actions",
+        "script_repair_model_launch_allowed": script_repair_model_launch_allowed,
+        "runtime_launch_allowed": runtime_launch_allowed,
+        "launch_allowed": launch_allowed,
+        "model_launch_allowed": launch_allowed,
+        "launch_blocked_reason": None if launch_allowed else runtime_gate.get("reason") if not runtime_launch_allowed else "script repair actions are required",
+        "action_count": len(actions),
+        "check_count": len(checks),
+        "runtime_gate": runtime_gate,
         "checks": checks,
         "actions": actions,
     }
@@ -264,6 +325,7 @@ def main() -> int:
     parser.add_argument("--scope", choices=["preflight", "main", "branch", "amender"], default="main")
     parser.add_argument("--branch-id")
     parser.add_argument("--status")
+    parser.add_argument("--bundle-lint-report")
     parser.add_argument("--output")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

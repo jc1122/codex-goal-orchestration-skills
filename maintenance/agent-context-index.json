@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:bf7b0780f61c0463d7e724addbc99aa2941001918e800ea673870b4cf9bcd52f"
+    "source_fingerprint": "sha256:49b9bcd1438b5f92fa6fce082c066a4e419d116d49b9944743749a56d900a2cb"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,11 +16,11 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 3685,
-      "approx_tokens": 40214,
+      "lines": 3714,
+      "approx_tokens": 40628,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "2703:run_base_ref_default_fixture:415l",
+        "2703:run_base_ref_default_fixture:444l",
         "1029:run_negative_amendment_fixtures:289l",
         "561:run_preflight_brief_lint_fixtures:240l",
         "328:run_topology_fixtures:231l"
@@ -29,27 +29,27 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 1945,
-      "approx_tokens": 23774,
+      "lines": 2010,
+      "approx_tokens": 24549,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1024:normalize_brief:180l",
-        "1584:manifest_from_normalized_brief:93l",
-        "1775:create_bundle:90l",
-        "127:example_brief:88l"
+        "1047:normalize_brief:180l",
+        "1830:create_bundle:100l",
+        "1617:manifest_from_normalized_brief:98l",
+        "128:example_brief:88l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 1732,
-      "approx_tokens": 22290,
+      "lines": 1763,
+      "approx_tokens": 22684,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "939:lint:716l",
-        "641:validate_preflight_lite_records:152l",
-        "855:validate_goal_config_manifest:82l",
-        "795:validate_telemetry_policy:58l"
+        "958:lint:724l",
+        "657:validate_preflight_lite_records:152l",
+        "871:validate_goal_config_manifest:85l",
+        "811:validate_telemetry_policy:58l"
       ]
     },
     {
@@ -506,7 +506,8 @@
         "skills/goal-preflight/SKILL.md",
         "skills/goal-preflight/scripts/create_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_goal_bundle.py",
-        "skills/goal-preflight/scripts/prepare_goal_bundle.py"
+        "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+        "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
     },
     {

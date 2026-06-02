@@ -3097,23 +3097,52 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             ]
         ).stdout
     )
-    runtime_gate = non_git_pipeline_result.get("readiness", {}).get("runtime_gate", {})
+    runtime_gate = non_git_pipeline_result.get("runtime_gate", {})
     if non_git_pipeline_result.get("status") != "blocked" or runtime_gate.get("status") != "blocked":
-        raise SystemExit(f"non-git pipeline should block runtime readiness explicitly: {non_git_pipeline_result!r}")
-    if non_git_pipeline_result.get("launch_allowed") is not False or non_git_pipeline_result.get("readiness", {}).get("launch_allowed") is not False:
+        raise SystemExit(f"non-git pipeline should stop at the early runtime gate by default: {non_git_pipeline_result!r}")
+    if non_git_pipeline_result.get("launch_allowed") is not False:
         raise SystemExit(f"non-git pipeline should expose aggregate launch_allowed=false: {non_git_pipeline_result!r}")
-    if non_git_pipeline_result.get("result_kind") != "blocked_readiness_usable_bundle" or non_git_pipeline_result.get("usable_bundle") is not True:
-        raise SystemExit(f"non-git pipeline should report a usable but readiness-blocked bundle: {non_git_pipeline_result!r}")
+    if non_git_pipeline_result.get("result_kind") != "blocked_runtime_gate_preflight" or non_git_pipeline_result.get("usable_bundle") is not False:
+        raise SystemExit(f"non-git pipeline should avoid building a usable runtime bundle by default: {non_git_pipeline_result!r}")
     next_commands = non_git_pipeline_result.get("next_commands", [])
     if not any("Correct runtime gate" in command for command in next_commands):
         raise SystemExit(f"non-git readiness next commands should be corrective, not a launch handoff: {next_commands!r}")
     if any(command.endswith("/goal") for command in next_commands):
         raise SystemExit(f"non-git readiness next commands must not include /goal: {next_commands!r}")
-    non_git_bootloader = (non_git_pipeline_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
+    if (non_git_pipeline_bundle / "goal-bootloader.md").exists():
+        raise SystemExit("default non-git prepare_goal_bundle.py should not generate launch prompts or bootloader without --build-blocked-bundle")
+
+    non_git_blocked_bundle = tmp_path / "branch-default-non-git-pipeline-inspect-bundle"
+    non_git_blocked_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                non_git_brief_path.as_posix(),
+                "--repo-root",
+                non_git_repo.as_posix(),
+                "--out-dir",
+                non_git_blocked_bundle.as_posix(),
+                "--no-goal-config",
+                "--build-blocked-bundle",
+                "--allow-blocked-readiness",
+                "--json",
+            ]
+        ).stdout
+    )
+    inspect_gate = non_git_blocked_result.get("readiness", {}).get("runtime_gate", {})
+    if non_git_blocked_result.get("status") != "blocked" or inspect_gate.get("status") != "blocked":
+        raise SystemExit(f"explicit blocked bundle should still block runtime readiness: {non_git_blocked_result!r}")
+    if non_git_blocked_result.get("launch_allowed") is not False or non_git_blocked_result.get("readiness", {}).get("launch_allowed") is not False:
+        raise SystemExit(f"explicit blocked bundle should expose aggregate launch_allowed=false: {non_git_blocked_result!r}")
+    if non_git_blocked_result.get("result_kind") != "blocked_readiness_usable_bundle" or non_git_blocked_result.get("usable_bundle") is not True:
+        raise SystemExit(f"explicit blocked bundle should report a usable but readiness-blocked inspection bundle: {non_git_blocked_result!r}")
+    non_git_bootloader = (non_git_blocked_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
     assert_all_contains(non_git_bootloader, ["BLOCKED READINESS", "do not launch /goal yet"], "non-git blocked bootloader warning")
     assert_not_contains(non_git_bootloader, "Use $goal-main-orchestrator", "blocked bootloader launch handoff")
     assert_not_contains(non_git_bootloader, "run_prompt_audit_phase.py", "blocked bootloader prompt-audit command")
-    non_git_report = (non_git_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
+    non_git_report = (non_git_blocked_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
     assert_contains(non_git_report, "Runtime readiness gate: blocked", "non-git preflight report blocker")
 
 

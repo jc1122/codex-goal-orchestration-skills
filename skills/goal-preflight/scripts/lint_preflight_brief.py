@@ -8,6 +8,7 @@ import copy
 import importlib.util
 import json
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -107,6 +108,30 @@ def has_inline_source_payload(text: str) -> bool:
     return "ft10 = [" in lowered or ("operation list" in lowered and text.count("[") >= 4 and text.count("]") >= 4)
 
 
+def repo_is_git(repo_root: Path | None) -> bool:
+    if repo_root is None:
+        return False
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "rev-parse", "--is-inside-work-tree"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def git_tracks_path(repo_root: Path, rel_path: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "ls-files", "--error-unmatch", "--", rel_path],
+        text=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
 def concrete_runtime_cap(value: object) -> bool:
     if isinstance(value, str):
         return bool(value.strip()) and bool(re.search(r"\d", value))
@@ -189,7 +214,7 @@ def lint_runtime_cap(defects: list[dict], brief: dict) -> None:
     )
 
 
-def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: Path | None) -> None:
+def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: Path | None, *, git_repo: bool) -> None:
     for item_index, item in enumerate(branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []):
         if not isinstance(item, dict):
             continue
@@ -216,6 +241,13 @@ def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: P
                             path,
                             "major",
                             f"context file must already exist under repo root: {value}; put future writable outputs in owned_paths or describe large existing sources in source_attachments",
+                        )
+                    elif repo_root is not None and git_repo and not git_tracks_path(repo_root, value):
+                        defect(
+                            defects,
+                            path,
+                            "major",
+                            f"context file exists but is not tracked by git: {value}; add it to the repo or copy it into source_attachments for reproducible runtime context",
                         )
                     continue
 
@@ -255,6 +287,7 @@ def lint_verification_and_dod(defects: list[dict], branch: dict, branch_path: st
 
 def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
     defects: list[dict] = []
+    git_repo = repo_is_git(repo_root)
     normalized: dict | None = None
     try:
         normalized = CREATE_GOAL_BUNDLE.normalize_brief(copy.deepcopy(brief))
@@ -279,7 +312,7 @@ def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
         objective = branch.get("objective")
         if not isinstance(objective, str) or len(objective.split()) < 5:
             defect(defects, f"{branch_path}.objective", "major", "branch objective is too vague")
-        lint_paths(defects, branch, branch_path, repo_root)
+        lint_paths(defects, branch, branch_path, repo_root, git_repo=git_repo)
         lint_verification_and_dod(defects, branch, branch_path)
     return defects
 

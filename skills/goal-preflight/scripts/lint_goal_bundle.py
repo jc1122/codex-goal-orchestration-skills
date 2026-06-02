@@ -159,6 +159,22 @@ def _manifest_git_repo_status(manifest: dict, fallback: dict) -> dict:
     return result
 
 
+def git_tracks_manifest_path(repo_status: dict, rel_path: str) -> bool | None:
+    if repo_status.get("repo_is_git") is not True:
+        return None
+    root = repo_status.get("repo_root")
+    if not isinstance(root, str) or not root:
+        return None
+    result = subprocess.run(
+        ["git", "-C", root, "ls-files", "--error-unmatch", "--", rel_path],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -886,6 +902,9 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
     for forbidden in ("usd", "dollar", "pricing", "price"):
         if forbidden in serialized:
             defect("job.manifest.json", "critical", f"goal_config contains unsupported billing field or unit: {forbidden}")
+    telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
+    if telemetry.get("raw_text") is not False:
+        defect("goal.config.json", "critical", "bundled goal.config.json telemetry.raw_text must be false; runtime config copies must be sanitized")
     if config.get("schema_version") != 1:
         defect("job.manifest.json", "critical", "goal_config.schema_version must be 1")
     models = config.get("models")
@@ -1397,6 +1416,14 @@ def lint(bundle_dir: Path) -> dict:
                             message = relative_path_defect(value, f"{item_path}.{key}[{value_index}]")
                             if message:
                                 defect("job.manifest.json", "critical", message)
+                            elif key == "context_files":
+                                tracked = git_tracks_manifest_path(git_status, value)
+                                if tracked is False:
+                                    defect(
+                                        "job.manifest.json",
+                                        "major",
+                                        f"{item_path}.context_files[{value_index}] exists in manifest but is not tracked by git: {value}",
+                                    )
             known_work_item_ids = {item.get("id") for item in work_items if isinstance(item, dict)}
             work_item_order = {
                 item.get("id"): index
@@ -1664,7 +1691,7 @@ def result(
     compatibility_status: str,
     git_repo_status: dict,
 ) -> dict:
-    status = "pass" if not any(item["severity"] in {"critical", "major"} for item in defects) else "failed"
+    schema_status = "pass" if not any(item["severity"] in {"critical", "major"} for item in defects) else "failed"
     runtime_launch_blocked_reason = None
     runtime_launch_status = "pass"
     if git_repo_status.get("repo_is_git") is False or git_repo_status.get("status") == "not_in_repo":
@@ -1673,18 +1700,21 @@ def result(
     elif git_repo_status.get("base_ref_status") == "missing":
         runtime_launch_status = "blocked"
         runtime_launch_blocked_reason = f"base_ref does not exist: {git_repo_status.get('base_ref')}"
+    reported_status = schema_status
+    if schema_status == "pass" and runtime_launch_status != "pass":
+        reported_status = "launch_blocked"
     return {
-        "status": status,
-        "status_kind": "schema_lint",
-        "status_meaning": "status reports schema/artifact lint only; runtime launch readiness is reported separately in launch_status",
-        "schema_lint_status": status,
+        "status": reported_status,
+        "status_kind": "schema_and_launch_readiness",
+        "status_meaning": "status is launch-oriented; schema/artifact lint is reported separately in schema_lint_status",
+        "schema_lint_status": schema_status,
         "launch_status": {
             "status": runtime_launch_status,
-            "allowed": status == "pass" and runtime_launch_status == "pass",
+            "allowed": schema_status == "pass" and runtime_launch_status == "pass",
             "blocked_reason": runtime_launch_blocked_reason,
         },
         "runtime_launch_status": runtime_launch_status,
-        "runtime_launch_allowed": status == "pass" and runtime_launch_status == "pass",
+        "runtime_launch_allowed": schema_status == "pass" and runtime_launch_status == "pass",
         "runtime_launch_blocked_reason": runtime_launch_blocked_reason,
         "bundle_path": bundle_dir.as_posix(),
         "manifest_path": manifest_path.as_posix(),
@@ -1692,6 +1722,7 @@ def result(
         "config_check_status": config_check_status,
         "git_repo_status": git_repo_status,
         "compatibility_status": compatibility_status,
+        "defect_count": len(defects),
         "defects": defects,
     }
 
@@ -1710,7 +1741,7 @@ def main() -> int:
         if args.output:
             raise SystemExit("--no-write cannot be combined with --output")
         print(json.dumps(data, indent=2, sort_keys=True))
-        return 0 if data["status"] == "pass" else 1
+        return 0 if data["schema_lint_status"] == "pass" else 1
     canonical_path = bundle_dir / "preflight.lint.json"
     output_path = (
         resolve_absolute_path(args.output, "--output", must_exist=False)
@@ -1725,7 +1756,7 @@ def main() -> int:
         print(json.dumps(data, indent=2, sort_keys=True))
     else:
         print(output_path)
-    return 0 if data["status"] == "pass" else 1
+    return 0 if data["schema_lint_status"] == "pass" else 1
 
 
 if __name__ == "__main__":
