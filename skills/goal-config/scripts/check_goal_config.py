@@ -1509,11 +1509,28 @@ def token_telemetry_summary(harness_reports: list[dict[str, Any]]) -> dict[str, 
 
 
 def attach_summary(result: dict[str, Any]) -> None:
+    accepted_route_count = len(result.get("accepted_routes") or [])
+    checked_role_count = len(result.get("checked_roles") or [])
+    harness_count = len(result.get("harnesses") or [])
+    route_model_availability_verified = accepted_route_count > 0
+    route_verification_status = (
+        "routes_verified"
+        if route_model_availability_verified
+        else "schema_pass_routes_not_checked"
+        if result.get("status") == "pass"
+        else "failed"
+    )
+    result["route_model_availability_verified"] = route_model_availability_verified
+    result["route_verification_status"] = route_verification_status
     result["summary"] = {
-        "accepted_route_count": len(result.get("accepted_routes") or []),
+        "accepted_route_count": accepted_route_count,
         "rejected_route_count": len(result.get("rejected_routes") or []),
         "skipped_route_count": len(result.get("skipped_routes") or []),
         "unvisited_route_count": len(result.get("unvisited_routes") or []),
+        "checked_role_count": checked_role_count,
+        "harness_count": harness_count,
+        "route_model_availability_verified": route_model_availability_verified,
+        "route_verification_status": route_verification_status,
         "failure_count": len(result.get("failures") or []),
         "rejection_counts": rejection_counts(result.get("rejected_routes") or []),
         "token_telemetry": token_telemetry_summary(result.get("harnesses") or []),
@@ -1557,6 +1574,7 @@ def print_report_summary(result: dict[str, Any], *, output: Path | None) -> None
                 f"skipped={summary['skipped_route_count']}",
                 f"unvisited={summary['unvisited_route_count']}",
                 f"failures={summary['failure_count']}",
+                f"route_verification={summary['route_verification_status']}",
                 f"output={output_path}",
             ]
         )

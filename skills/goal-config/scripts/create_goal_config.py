@@ -634,12 +634,24 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             raise SystemExit(f"model_ladders.{name} must contain at least one role")
         require_roles(config, name, ladder)
 
+    def cheaper_worker_ladder(values: list[str]) -> list[str]:
+        premium_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
+        cheap = [
+            alias
+            for alias in values
+            if not any(marker in str(alias).lower() for marker in premium_markers)
+        ]
+        if cheap:
+            return cheap[-2:]
+        return values[-1:]
+
     worker_allowed = unique(worker)
+    cheaper_ladder = cheaper_worker_ladder(worker)
     worker_route_classes = {
         "mechanical": [worker[-1]],
         "docs": [worker[-1]],
-        "small-edit": worker,
-        "normal-code": worker,
+        "small-edit": cheaper_ladder,
+        "normal-code": cheaper_ladder,
         "complex-code": worker,
         "custom": worker,
     }

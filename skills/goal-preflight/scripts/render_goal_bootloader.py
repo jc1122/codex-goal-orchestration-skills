@@ -164,6 +164,89 @@ def _config_compatibility(manifest: dict) -> str:
     return f"goal config check {check_report.get('status', 'missing')}"
 
 
+def _verified_routes_summary(manifest: dict) -> dict[str, object]:
+    check_report = manifest.get("goal_config_check_summary", {})
+    if not isinstance(check_report, dict):
+        return {"status": "missing", "route_model_availability_verified": False}
+    summary = dict(check_report)
+    accepted = summary.get("accepted_route_count")
+    route_verified = isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
+    summary["route_model_availability_verified"] = route_verified
+    if route_verified:
+        summary["route_verification_status"] = summary.get("route_verification_status") or "routes_verified"
+        return summary
+    if summary.get("status") == "pass":
+        summary["schema_status"] = "pass"
+        summary["status"] = "schema_pass_routes_not_checked"
+    summary["route_verification_status"] = summary.get("route_verification_status") or summary.get("status", "missing")
+    return summary
+
+
+def _prompt_entry(bundle_dir: Path, relative_path: str) -> dict[str, object]:
+    path = bundle_dir / relative_path
+    if not path.exists():
+        return {
+            "path": relative_path,
+            "exists": False,
+            "chars": 0,
+            "approx_tokens": 0,
+            "line_count": 0,
+        }
+    text = _read_text(path)
+    chars = len(text)
+    return {
+        "path": relative_path,
+        "exists": True,
+        "chars": chars,
+        "approx_tokens": (chars + 3) // 4,
+        "line_count": text.count("\n") + (0 if text.endswith("\n") else 1),
+    }
+
+
+def _prompt_char_budget(manifest: dict) -> int | None:
+    for container in [
+        manifest.get("goal_config_summary"),
+        manifest.get("preflight_compatibility"),
+    ]:
+        if not isinstance(container, dict):
+            continue
+        effort = container.get("effort") if isinstance(container.get("effort"), dict) else {}
+        value = effort.get("max_prompt_chars")
+        if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+            return value
+    return None
+
+
+def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
+    entries = [_prompt_entry(bundle_dir, str(manifest.get("main_prompt") or "main.prompt.md"))]
+    for branch in manifest.get("branches", []):
+        if isinstance(branch, dict) and isinstance(branch.get("prompt"), str):
+            entries.append(_prompt_entry(bundle_dir, branch["prompt"]))
+    total_chars = sum(int(item["chars"]) for item in entries)
+    budget = _prompt_char_budget(manifest)
+    branch_prompt_entries = [item for item in entries if str(item.get("path", "")).startswith("branches/")]
+    repeated_sections = {
+        "branch_prompt_count": len(branch_prompt_entries),
+        "shared_runtime_boilerplate_sections": len(branch_prompt_entries)
+        * 5,
+        "counted_sections": [
+            "Worker Parallelism",
+            "Worker Model Routing",
+            "Lite Advisors",
+            "Reviewer Requirement",
+            "Bootstrap Requirement",
+        ],
+    }
+    return {
+        "files": entries,
+        "total_chars": total_chars,
+        "approx_total_tokens": (total_chars + 3) // 4,
+        "max_prompt_chars": budget,
+        "prompt_char_margin": None if budget is None else budget - total_chars,
+        "duplicated_section_counts": repeated_sections,
+    }
+
+
 def _repo_runtime_gate(manifest: dict) -> dict[str, object]:
     repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
     if repo_status.get("repo_is_git") is False:
@@ -174,6 +257,28 @@ def _repo_runtime_gate(manifest: dict) -> dict[str, object]:
     if repo_status.get("base_ref_status") == "missing":
         return {"status": "blocked", "reason": f"base_ref does not exist: {repo_status.get('base_ref')}"}
     return {"status": "pass", "reason": "git worktree/base_ref gate passed or was not required"}
+
+
+def _launch_blockers(
+    *,
+    goal_config_status: str,
+    lint_brief: dict[str, object],
+    lint_bundle: dict[str, object],
+    repair_gate: dict[str, object],
+    runtime_gate: dict[str, object],
+) -> list[str]:
+    blockers: list[str] = []
+    if goal_config_status != "no goal config supplied" and not goal_config_status.endswith("pass"):
+        blockers.append(goal_config_status)
+    if lint_brief["status"] not in {"pass", "missing"}:
+        blockers.append(f"brief lint {lint_brief['status']}")
+    if lint_bundle["status"] != "pass":
+        blockers.append(f"bundle lint {lint_bundle['status']}")
+    if repair_gate["status"] != "pass":
+        blockers.append(f"repair gate {repair_gate['status']}")
+    if runtime_gate["status"] != "pass":
+        blockers.append(f"runtime gate blocked: {runtime_gate.get('reason')}")
+    return blockers
 
 
 def _readiness_next_commands(
@@ -199,7 +304,7 @@ def _readiness_next_commands(
             "Correct runtime gate: use an existing git work tree for --repo-root, run git init before preflight/runtime, or wait for an explicit supported no-git runtime mode; do not launch /goal from this bundle while readiness is blocked."
         )
         commands.append(
-            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --readiness --json'
+            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --readiness --json'
         )
         return commands
     commands.append(f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir}')
@@ -230,10 +335,20 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         status = "blocked"
     if runtime_gate["status"] != "pass":
         status = "blocked"
+    launch_blockers = _launch_blockers(
+        goal_config_status=goal_config_status,
+        lint_brief=lint_brief,
+        lint_bundle=lint_bundle,
+        repair_gate=repair_gate,
+        runtime_gate=runtime_gate,
+    )
+    launch_allowed = status == "pass" and not launch_blockers
 
     branch_dag = _collect_bundle_dag(manifest)
     route_policy = _route_policy_summary(manifest)
     caps = _caps_summary(manifest)
+    verified_routes = _verified_routes_summary(manifest)
+    prompt_size = _prompt_size_report(bundle_dir, manifest)
     manifest_path = bundle_dir / "job.manifest.json"
     next_command = _readiness_next_commands(
         bundle_dir,
@@ -247,6 +362,8 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     lines = [
         "Compact readiness summary:",
         f"status={status}",
+        f"launch_allowed={str(launch_allowed).lower()}",
+        f"launch_blockers={json.dumps(launch_blockers, sort_keys=True)}",
         f"bundle={bundle_dir}",
         f"bootloader={bootloader_path}",
         f"bootloader_exists={bootloader_path.exists()}",
@@ -254,6 +371,8 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         f"telemetry_mode={telemetry_mode}",
         f"caps: max_active_branch_agents={caps['max_active_branch_agents']}, max_waves={caps['max_waves']}, max_branches_per_wave={caps['max_branches_per_wave']}, waves={caps['waves']}",
         f"route_policy={json.dumps(route_policy, sort_keys=True)}",
+        f"verified_routes={json.dumps(verified_routes, sort_keys=True)}",
+        f"prompt_size_report={json.dumps(prompt_size, sort_keys=True)}",
         f"runtime_gate={json.dumps(runtime_gate, sort_keys=True)}",
         f"repair_gate={json.dumps(repair_gate, sort_keys=True)}",
         "branch_dag:",
@@ -289,10 +408,20 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         status = "blocked"
     if runtime_gate["status"] != "pass":
         status = "blocked"
+    launch_blockers = _launch_blockers(
+        goal_config_status=goal_config_status,
+        lint_brief=lint_brief,
+        lint_bundle=lint_bundle,
+        repair_gate=repair_gate,
+        runtime_gate=runtime_gate,
+    )
+    launch_allowed = status == "pass" and not launch_blockers
 
     manifest_path = bundle_dir / "job.manifest.json"
     payload = {
         "status": status,
+        "launch_allowed": launch_allowed,
+        "launch_blockers": launch_blockers,
         "bundle_dir": str(bundle_dir),
         "bootloader_path": str(bootloader_path),
         "bootloader_exists": bootloader_path.exists(),
@@ -300,7 +429,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         "telemetry_mode": telemetry_mode,
         "caps": _caps_summary(manifest),
         "route_policy": _route_policy_summary(manifest),
-        "verified_routes": manifest.get("goal_config_check_summary", {}),
+        "verified_routes": _verified_routes_summary(manifest),
+        "prompt_size_report": _prompt_size_report(bundle_dir, manifest),
         "branch_dag": _collect_bundle_dag(manifest),
         "lint_status": {
             "brief_lint": lint_brief,
@@ -364,18 +494,34 @@ def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     manifest = bundle_dir / "job.manifest.json"
     main_prompt = bundle_dir / "main.prompt.md"
     model_catalog = bundle_dir / "model-catalog.json"
-    blocked_warning = ""
     if manifest.exists():
         runtime_gate = _repo_runtime_gate(_load_manifest(bundle_dir))
         if runtime_gate.get("status") != "pass":
-            blocked_warning = f"""# BLOCKED READINESS: do not launch /goal yet
+            return f"""# BLOCKED READINESS: do not launch /goal yet
 
 Bundle is usable for inspection and lint repair, but runtime branch/worktree orchestration is blocked.
+Bundle root: {bundle_dir}
+Repository root: {repo_root}
 Reason: {runtime_gate.get("reason")}
-Fix: use or initialize a git work tree, or use an explicit supported no-git runtime mode. Recheck with `render_goal_bootloader.py --readiness --json`.
 
+Fix the runtime gate:
+- Use an existing git work tree for the repository root, initialize this directory as a git work tree before preflight/runtime, or use an explicit supported no-git runtime mode once one exists.
+- Recheck readiness before launch:
+
+```bash
+if [ -d "${{CODEX_HOME:-$HOME/.codex}}/skills/goal-preflight" ]; then
+  GOAL_SKILLS_ROOT="${{CODEX_HOME:-$HOME/.codex}}/skills"
+elif [ -d "$HOME/.agents/skills/goal-preflight" ]; then
+  GOAL_SKILLS_ROOT="$HOME/.agents/skills"
+else
+  echo "missing installed skill root for goal-preflight" >&2
+  exit 1
+fi
+
+python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root} --readiness --json
+```
 """
-    return f"""{blocked_warning}Use $goal-main-orchestrator with the generated bundle context below.
+    return f"""Use $goal-main-orchestrator with the generated bundle context below.
 
 Prepared bundle:
 - Bundle root: {bundle_dir}

@@ -35,6 +35,12 @@ Before worker dispatch or reviewer dispatch, run `script_only_repair_gate.py --s
 
 Cap: {max_active_worker_packets} active; declared workers: {worker_packet_count}; configured package max per branch: {max_worker_packets_per_branch}. Never exceed the active cap or declared worker set. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
 
+Branch scheduler serial/under-capacity reasons:
+{branch_serial_reasons}
+
+Worker scheduler serial/under-capacity reasons:
+{worker_serial_reasons}
+
 Worker scheduler ledger: {worker_scheduler_path}. `worker_parallelism.scheduler_path` in branch status must be `{worker_scheduler_path}`. Record ready/launch/finish/close/refill/defer/under_capacity/blocked evidence with scheduler scripts.
 
 Worker parallelization rationale: {worker_parallelization_rationale}
@@ -49,7 +55,10 @@ Default worker ladder: {default_worker_ladder}
 
 Allowed worker route aliases: {allowed_worker_routes}
 
-Worker route classes and route class reason are declared per work item in `job.manifest.json`. Use the declared class unless a more specific route is justified. Prefer the lowest sufficient ordered subsequence of the configured default ladder for mechanical, docs, small-edit, and normal-code work; use the full configured ladder for complex-code work when the branch risk justifies it.
+Route-class ladders:
+{route_class_ladders}
+
+Worker route classes and compact route reason codes are declared per work item in `job.manifest.json`. Use the declared class unless a more specific route is justified. Prefer the recorded route-class ladder for mechanical, docs, small-edit, and normal-code work; use the full configured ladder for complex-code work when the branch risk justifies it.
 
 Selected worker ladders must be an ordered non-empty subsequence of the default ladder with a `selection_reason`; do not invent aliases or reorder providers.
 

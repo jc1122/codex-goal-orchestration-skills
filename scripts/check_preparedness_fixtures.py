@@ -2283,6 +2283,8 @@ def create_goal_fixture_bundle(tmp_path: Path) -> Path:
         raise SystemExit(f"lint report should expose git repo status metadata: {git_repo_status!r}")
     if lint_report.get("compatibility_status") != "not_applicable":
         raise SystemExit(f"lint report should expose compatibility status metadata: {lint_report.get('compatibility_status')!r}")
+    if lint_report.get("schema_lint_status") != "pass" or lint_report.get("runtime_launch_allowed") is not True:
+        raise SystemExit(f"lint report should distinguish schema lint from runtime launch readiness: {lint_report!r}")
     return bundle
 
 
@@ -2309,6 +2311,8 @@ def run_repair_gate_fixture(bundle: Path) -> None:
         raise SystemExit("script_only_repair_gate.py --output should persist canonical repair-gate.json")
     if decision.get("decision") != "pass_no_actions":
         raise SystemExit(f"repair gate should return pass_no_actions on clean fixtures: {decision.get('decision')!r}")
+    if decision.get("status") != "pass":
+        raise SystemExit(f"repair gate should expose top-level status=pass on clean fixtures: {decision!r}")
     if decision.get("model_launch_allowed") is not True:
         raise SystemExit(f"repair gate should allow model launch when no actions are needed: {decision!r}")
     context_index = next((item for item in decision.get("checks", []) if item.get("name") == "context_index"), None)
@@ -2462,12 +2466,15 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     if json.loads(readiness_with_output) != json.loads(readiness_output.read_text(encoding="utf-8")):
         raise SystemExit("render_goal_bootloader.py --output should write the same readiness JSON it prints")
     for key in [
-        "status",
-        "bundle_dir",
-        "bootloader_exists",
-        "route_policy",
-        "verified_routes",
-        "caps",
+            "status",
+            "launch_allowed",
+            "launch_blockers",
+            "bundle_dir",
+            "bootloader_exists",
+            "route_policy",
+            "verified_routes",
+            "prompt_size_report",
+            "caps",
         "branch_dag",
         "lint_status",
         "repair_gate",
@@ -2479,6 +2486,8 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
             raise SystemExit(f"readiness JSON missing {key}")
     if readiness_json.get("status") != "pass":
         raise SystemExit(f"canonical fixture readiness should pass: {readiness_json!r}")
+    if readiness_json.get("launch_allowed") is not True or readiness_json.get("launch_blockers") != []:
+        raise SystemExit(f"canonical fixture readiness should be launch-allowed: {readiness_json!r}")
     if "accepted_routes" in readiness_json:
         raise SystemExit("readiness JSON should not call unverified route policy accepted_routes")
     if readiness_json.get("lint_status", {}).get("brief_lint", {}).get("status") != "pass":
@@ -2494,7 +2503,15 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     branch_prompt = (bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
     assert_all_contains(
         branch_prompt,
-        ["## Additional Validators", "Declared worker packets:", "Configured package max worker packets per branch:"],
+        [
+            "## Additional Validators",
+            "Declared worker packets:",
+            "Configured package max worker packets per branch:",
+            "Branch scheduler serial/under-capacity reasons:",
+            "Worker scheduler serial/under-capacity reasons:",
+            "Route-class ladders:",
+            "Recommended ladder:",
+        ],
         "branch prompt compact validator/cap wording",
     )
     assert_not_contains(branch_prompt, "## Tests And Validators", "branch prompt stale validators heading")
@@ -2623,6 +2640,10 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     if pipeline_result.get("status") != "pass" or pipeline_result.get("readiness", {}).get("status") != "pass":
         raise SystemExit(f"prepare_goal_bundle.py should pass for a git-backed fixture: {pipeline_result!r}")
+    if pipeline_result.get("launch_allowed") is not True:
+        raise SystemExit(f"prepare_goal_bundle.py should expose launch_allowed=true for git-backed fixture: {pipeline_result!r}")
+    if "readiness_full" in pipeline_result or "config_selection_full" in pipeline_result:
+        raise SystemExit(f"prepare_goal_bundle.py should keep default pipeline output compact: {pipeline_result!r}")
     for artifact in [
         "preflight.brief.lint.json",
         "preflight.lint.json",
@@ -2781,13 +2802,20 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"prepare_goal_bundle.py should remediate and select compatible config: {config_pipeline_result!r}")
     if "remediated" not in str(config_selection.get("reason", "")):
         raise SystemExit(f"config selection should explain remediated config use: {config_selection!r}")
-    selected = config_selection.get("selected") if isinstance(config_selection.get("selected"), dict) else {}
-    candidates = config_selection.get("candidates", [])
+    persisted_selection = read_json(config_pipeline_bundle / "goal-config-selection.json")
+    if "selected" in persisted_selection:
+        raise SystemExit(f"goal-config-selection.json should not duplicate selected candidate: {persisted_selection!r}")
+    candidates = persisted_selection.get("candidates", [])
     selected_candidates = [item for item in candidates if isinstance(item, dict) and item.get("selected") is True]
     if len(selected_candidates) != 1:
-        raise SystemExit(f"config selection candidates should mark exactly one selected entry: {config_selection!r}")
+        raise SystemExit(f"config selection candidates should mark exactly one selected entry: {persisted_selection!r}")
+    selected = selected_candidates[0]
+    if persisted_selection.get("selected_index") != candidates.index(selected):
+        raise SystemExit(f"config selection should point selected_index at the selected candidate: {persisted_selection!r}")
     if selected.get("eligible") is not True or selected.get("remediated_passed") is not True:
         raise SystemExit(f"selected remediated config should be eligible/remediated_passed: {selected!r}")
+    if selected.get("remediation", {}).get("status") != "remediated":
+        raise SystemExit(f"config remediation should expose status=remediated: {selected!r}")
     selected_config_path = Path(selected.get("selected_config_path", ""))
     selected_config = read_json(selected_config_path)
     if selected_config.get("aggressiveness", {}).get("max_waves") != 5:
@@ -2912,6 +2940,8 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     runtime_gate = non_git_pipeline_result.get("readiness", {}).get("runtime_gate", {})
     if non_git_pipeline_result.get("status") != "blocked" or runtime_gate.get("status") != "blocked":
         raise SystemExit(f"non-git pipeline should block runtime readiness explicitly: {non_git_pipeline_result!r}")
+    if non_git_pipeline_result.get("launch_allowed") is not False or non_git_pipeline_result.get("readiness", {}).get("launch_allowed") is not False:
+        raise SystemExit(f"non-git pipeline should expose aggregate launch_allowed=false: {non_git_pipeline_result!r}")
     if non_git_pipeline_result.get("result_kind") != "blocked_readiness_usable_bundle" or non_git_pipeline_result.get("usable_bundle") is not True:
         raise SystemExit(f"non-git pipeline should report a usable but readiness-blocked bundle: {non_git_pipeline_result!r}")
     next_commands = non_git_pipeline_result.get("next_commands", [])
@@ -2921,6 +2951,8 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"non-git readiness next commands must not include /goal: {next_commands!r}")
     non_git_bootloader = (non_git_pipeline_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
     assert_all_contains(non_git_bootloader, ["BLOCKED READINESS", "do not launch /goal yet"], "non-git blocked bootloader warning")
+    assert_not_contains(non_git_bootloader, "Use $goal-main-orchestrator", "blocked bootloader launch handoff")
+    assert_not_contains(non_git_bootloader, "run_prompt_audit_phase.py", "blocked bootloader prompt-audit command")
     non_git_report = (non_git_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
     assert_contains(non_git_report, "Runtime readiness gate: blocked", "non-git preflight report blocker")
 

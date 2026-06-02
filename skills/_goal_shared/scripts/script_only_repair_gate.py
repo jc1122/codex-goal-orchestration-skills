@@ -241,8 +241,10 @@ def gate(args: argparse.Namespace) -> dict:
     check_telemetry_summary(actions, checks, bundle_dir)
     check_amendments_and_blockers(actions, checks, bundle_dir, status_path, args.branch_id)
     decision = "script_actions_needed" if actions else "pass_no_actions"
+    status = "pass" if decision == "pass_no_actions" else "blocked"
     return {
         "schema_version": 1,
+        "status": status,
         "skill": current_skill_name(),
         "scope": args.scope,
         "manifest": manifest_path.as_posix(),

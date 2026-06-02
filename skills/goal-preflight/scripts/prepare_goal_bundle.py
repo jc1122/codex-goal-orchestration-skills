@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -42,6 +43,16 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def sha256_file(path: Path | None) -> str | None:
+    if path is None or not path.exists():
+        return None
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def safe_name(path: Path) -> str:
     value = re.sub(r"[^A-Za-z0-9_.-]+", "-", path.name).strip("-")
     return value or "goal-config"
@@ -66,8 +77,11 @@ def compact_remediation(remediation: object) -> dict:
                 "to": item.get("to"),
             }
         )
+    status = remediation.get("status")
+    if not isinstance(status, str) or not status:
+        status = "remediated" if actions else "not_needed"
     result = {
-        "status": remediation.get("status"),
+        "status": status,
         "action_count": len(actions),
         "actions": actions,
     }
@@ -87,6 +101,89 @@ def route_availability_verified(candidate: dict | None) -> bool:
     summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
     accepted = summary.get("accepted_route_count")
     return isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
+
+
+def selected_candidate_from_selection(selection: dict) -> dict | None:
+    candidates = selection.get("candidates") if isinstance(selection.get("candidates"), list) else []
+    index = selection.get("selected_index")
+    if isinstance(index, int) and not isinstance(index, bool) and 0 <= index < len(candidates):
+        candidate = candidates[index]
+        return candidate if isinstance(candidate, dict) else None
+    return None
+
+
+def selected_config_summary(candidate: dict | None) -> dict:
+    if not isinstance(candidate, dict):
+        return {}
+    config_path = Path(str(candidate.get("selected_config_path"))) if candidate.get("selected_config_path") else None
+    check_path = Path(str(candidate.get("selected_check_path"))) if candidate.get("selected_check_path") else None
+    return {
+        "selected_config_path": config_path.as_posix() if config_path else None,
+        "selected_config_sha256": sha256_file(config_path),
+        "selected_check_path": check_path.as_posix() if check_path else None,
+        "selected_check_sha256": sha256_file(check_path),
+        "selection_reason": candidate.get("selection_reason"),
+        "selection_kind": "remediated_derivative" if candidate.get("remediated_passed") else "original",
+        "eligible": candidate.get("eligible"),
+        "remediated_passed": candidate.get("remediated_passed"),
+    }
+
+
+def compact_config_selection(selection: dict) -> dict:
+    candidate = selected_candidate_from_selection(selection)
+    result = {
+        "status": selection.get("status"),
+        "selection_path": selection.get("selection_path"),
+        "selected_index": selection.get("selected_index"),
+        "candidate_count": len(selection.get("candidates") or []),
+        "route_model_availability_verified": selection.get("route_model_availability_verified"),
+        "reason": selection.get("reason"),
+    }
+    result.update(selected_config_summary(candidate))
+    return result
+
+
+def compact_readiness(readiness: dict) -> dict:
+    prompt_size = readiness.get("prompt_size_report") if isinstance(readiness.get("prompt_size_report"), dict) else {}
+    return {
+        "status": readiness.get("status"),
+        "launch_allowed": readiness.get("launch_allowed"),
+        "launch_blockers": readiness.get("launch_blockers", []),
+        "runtime_gate": readiness.get("runtime_gate", {}),
+        "repair_gate": readiness.get("repair_gate", {}),
+        "lint_status": readiness.get("lint_status", {}),
+        "verified_routes": readiness.get("verified_routes", {}),
+        "prompt_size_summary": {
+            "total_chars": prompt_size.get("total_chars"),
+            "approx_total_tokens": prompt_size.get("approx_total_tokens"),
+            "max_prompt_chars": prompt_size.get("max_prompt_chars"),
+            "prompt_char_margin": prompt_size.get("prompt_char_margin"),
+        },
+    }
+
+
+def update_preflight_report(out_dir: Path, readiness: dict, lint_path: Path, repair_path: Path, result_kind: str) -> None:
+    report_path = out_dir / "PREFLIGHT_REPORT.md"
+    if not report_path.exists():
+        return
+    text = report_path.read_text(encoding="utf-8").rstrip()
+    lint_status = read_json(lint_path).get("status") if lint_path.exists() else "missing"
+    repair_status = read_json(repair_path).get("status") if repair_path.exists() else "missing"
+    readiness_status = readiness.get("status")
+    launch_allowed = readiness.get("launch_allowed")
+    blockers = readiness.get("launch_blockers") if isinstance(readiness.get("launch_blockers"), list) else []
+    final_lines = [
+        "",
+        "Final pipeline state:",
+        f"- Bundle lint: {lint_status}",
+        f"- Repair gate: {repair_status}",
+        f"- Readiness: {readiness_status}",
+        f"- Result kind: {result_kind}",
+        f"- Launch allowed: {str(bool(launch_allowed)).lower()}",
+    ]
+    if blockers:
+        final_lines.append(f"- Launch blockers: {'; '.join(str(item) for item in blockers)}")
+    report_path.write_text(text + "\n" + "\n".join(final_lines) + "\n", encoding="utf-8")
 
 
 def candidate_configs(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str]) -> list[Path]:
@@ -190,7 +287,7 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
 def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str], skip: bool) -> dict:
     selection_path = out_dir / "goal-config-selection.json"
     if skip:
-        selection = {"status": "skipped", "selected": None, "candidates": [], "reason": "--no-goal-config"}
+        selection = {"status": "skipped", "selected_index": None, "candidates": [], "reason": "--no-goal-config", "selection_path": selection_path.as_posix()}
         write_json(selection_path, selection)
         return selection
     check_dir = out_dir / "config-checks"
@@ -199,9 +296,11 @@ def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[st
     for index, item in enumerate(candidates):
         item["selected"] = selected_index == index
     selected = candidates[selected_index] if selected_index is not None else None
+    selected_summary = selected_config_summary(selected)
     selection = {
         "status": "pass" if selected else "not_selected",
-        "selected": selected,
+        "selected_index": selected_index,
+        **selected_summary,
         "candidates": candidates,
         "selection_path": selection_path.as_posix(),
         "route_model_availability_verified": route_availability_verified(selected),
@@ -220,6 +319,7 @@ def main() -> int:
     parser.add_argument("--no-goal-config", action="store_true", help="Do not auto-detect or embed a goal config.")
     parser.add_argument("--allow-blocked-readiness", action="store_true", help="Return zero even when readiness is blocked.")
     parser.add_argument("--json", action="store_true", help="Print pipeline JSON to stdout.")
+    parser.add_argument("--verbose", action="store_true", help="Embed full config-selection and readiness payloads in the pipeline result.")
     parser.add_argument("--output", help="Write pipeline result JSON. Defaults to <bundle>/preflight.pipeline.json.")
     args = parser.parse_args()
 
@@ -253,7 +353,7 @@ def main() -> int:
         return 1
 
     config_selection = select_config(brief, repo_root, out_dir, args.goal_config, args.no_goal_config)
-    selected = config_selection.get("selected") if isinstance(config_selection.get("selected"), dict) else None
+    selected = selected_candidate_from_selection(config_selection)
 
     create_command = [
         sys.executable,
@@ -277,10 +377,12 @@ def main() -> int:
             "status": "failed",
             "phase": "create_bundle",
             "bundle_dir": out_dir.as_posix(),
-            "config_selection": config_selection,
+            "config_selection": compact_config_selection(config_selection),
             "stdout": create_result.stdout,
             "commands": commands,
         }
+        if args.verbose:
+            result["config_selection_full"] = config_selection
         write_json(Path(args.output) if args.output else out_dir / "preflight.pipeline.json", result)
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -349,6 +451,7 @@ def main() -> int:
         result_kind = "blocked_readiness_usable_bundle"
         runtime_gate = readiness_data.get("runtime_gate") if isinstance(readiness_data.get("runtime_gate"), dict) else {}
         blocked_reason = runtime_gate.get("reason") or "readiness status is not pass"
+    update_preflight_report(out_dir, readiness_data, bundle_lint, repair_gate, result_kind)
     result = {
         "schema_version": 1,
         "status": status,
@@ -357,16 +460,21 @@ def main() -> int:
         "blocked_reason": blocked_reason,
         "bundle_dir": out_dir.as_posix(),
         "bootloader_path": (out_dir / "goal-bootloader.md").as_posix(),
-        "config_selection": config_selection,
+        "config_selection_path": (out_dir / "goal-config-selection.json").as_posix(),
+        "config_selection": compact_config_selection(config_selection),
         "brief_lint_path": brief_lint.as_posix(),
         "bundle_lint_path": bundle_lint.as_posix(),
         "repair_gate_path": repair_gate.as_posix(),
         "readiness_path": readiness.as_posix(),
         "readiness_status": readiness_data.get("status"),
-        "readiness": readiness_data,
+        "launch_allowed": readiness_data.get("launch_allowed"),
+        "readiness": compact_readiness(readiness_data),
         "next_commands": readiness_data.get("next_commands", []),
         "commands": commands,
     }
+    if args.verbose:
+        result["config_selection_full"] = config_selection
+        result["readiness_full"] = readiness_data
     output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
     write_json(output_path, result)
     if args.json:

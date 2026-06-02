@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:a7921e0ac47e64ab860464c084b59bfcc043e130284493695713eb521b19d429"
+    "source_fingerprint": "sha256:3ec50ccc42f90bc5b77e54b9ee6655418e4f676a61dc564d047a6229eb6fab20"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,11 +16,11 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 3493,
-      "approx_tokens": 37871,
+      "lines": 3525,
+      "approx_tokens": 38471,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "2526:run_base_ref_default_fixture:400l",
+        "2543:run_base_ref_default_fixture:415l",
         "874:run_negative_amendment_fixtures:289l",
         "1331:run_scheduler_fixtures:221l",
         "2013:run_runtime_packet_fixtures:206l"
@@ -29,25 +29,25 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 1786,
-      "approx_tokens": 21812,
+      "lines": 1884,
+      "approx_tokens": 22986,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "923:normalize_brief:168l",
-        "1616:create_bundle:90l",
-        "126:example_brief:88l",
-        "1439:manifest_from_normalized_brief:86l"
+        "996:normalize_brief:168l",
+        "1714:create_bundle:90l",
+        "127:example_brief:88l",
+        "1531:manifest_from_normalized_brief:87l"
       ]
     },
     {
       "path": "scripts/check_goal_config_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 1678,
-      "approx_tokens": 20360,
+      "lines": 1674,
+      "approx_tokens": 20261,
       "rule": "--help or JSON before implementation source",
       "top_functions": [
-        "339:main:1336l",
-        "237:run_integration_fixture:100l",
+        "335:main:1336l",
+        "237:run_integration_fixture:96l",
         "126:write_fake_opencode_discovery_scripts:43l",
         "199:build_integration_brief:36l"
       ]
@@ -55,27 +55,27 @@
     {
       "path": "skills/goal-config/scripts/check_goal_config.py",
       "owner": "goal-config",
-      "lines": 1984,
-      "approx_tokens": 19947,
+      "lines": 2002,
+      "approx_tokens": 20176,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1667:main:314l",
+        "1685:main:314l",
         "921:run_harness_smoke:131l",
         "1327:discover_available_routes:124l",
         "770:check_opencode_model:121l"
       ]
     },
     {
-      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 1827,
-      "approx_tokens": 19134,
+      "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
+      "owner": "goal-preflight",
+      "lines": 1506,
+      "approx_tokens": 19799,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1508:main:316l",
-        "720:compact_worker_context:118l",
-        "1420:compact_launch_config:86l",
-        "1134:research_worker_prompt:79l"
+        "792:lint:644l",
+        "494:validate_preflight_lite_records:152l",
+        "708:validate_goal_config_manifest:82l",
+        "648:validate_telemetry_policy:58l"
       ]
     }
   ],

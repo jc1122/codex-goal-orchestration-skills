@@ -62,6 +62,7 @@ DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
 WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
 MANIFEST_WORKER_ROUTE_CLASSES = CONTRACT.MANIFEST_WORKER_ROUTE_CLASSES
+RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
 AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 LITE_MODEL_POLICY = CONTRACT.LITE_MODEL_POLICY
@@ -597,13 +598,13 @@ def infer_route_class(
     if worker_type == "research-worker":
         return None, route_class_reason(
             item.get("route_class_reason"),
-            "Research-worker route selected: the work item gathers outside or local read-only information and does not launch a normal worker ladder.",
+            "research_worker_read_only_info",
             f"branch {branch_context['id']} work item {item_id} route_class_reason",
         )
     if explicit_route_class is not None:
         return explicit_route_class, route_class_reason(
             item.get("route_class_reason"),
-            f"Explicit route_class '{explicit_route_class}' supplied by the preflight brief; deterministic inference did not override it.",
+            "explicit_brief",
             f"branch {branch_context['id']} work item {item_id} route_class_reason",
         )
 
@@ -637,13 +638,9 @@ def infer_route_class(
     path_count = len(owned_paths)
 
     if owned_buckets and all(bucket == "docs" for bucket in owned_buckets) and not has_complex:
-        return "docs", (
-            "Inferred docs route class: every owned path is documentation-like and the objective, verification, and branch context do not contain high-risk implementation signals."
-        )
+        return "docs", "inferred_docs_only"
     if has_mechanical and not has_complex and path_count <= 3 and not has_dependencies:
-        return "mechanical", (
-            "Inferred mechanical route class: objective or verification names formatting, generated metadata, path, or lint repair with a small independent changed surface."
-        )
+        return "mechanical", "inferred_mechanical_small_surface"
     if (
         has_complex
         or path_count >= 4
@@ -651,21 +648,13 @@ def infer_route_class(
         or (has_dependencies and path_count >= 2)
         or branch_context.get("contention_risk") is True
     ):
-        return "complex-code", (
-            "Inferred complex-code route class: branch risk, dependencies, changed surface, or objective text includes scheduler, validator, security, migration, telemetry, concurrency, or cross-module signals."
-        )
+        return "complex-code", "inferred_complex_or_cross_module"
     if path_count <= 2 and not has_dependencies:
         if owned_buckets and all(bucket == "test" for bucket in owned_buckets):
-            return "small-edit", (
-                "Inferred small-edit route class: owned paths are test-only, bounded to at most two files, and have no explicit dependencies."
-            )
+            return "small-edit", "inferred_small_test_only"
         if path_count == 1 or len(changed_surface) <= 1:
-            return "small-edit", (
-                "Inferred small-edit route class: changed surface is bounded to at most two owned paths in one area with no explicit dependencies or high-risk signals."
-            )
-    return DEFAULT_WORKER_ROUTE_CLASS, (
-        "Default normal-code inference: work item was not docs-only, mechanical, small-edit, research, or complex by deterministic preflight signals."
-    )
+            return "small-edit", "inferred_small_edit"
+    return DEFAULT_WORKER_ROUTE_CLASS, "inferred_normal_code_default"
 
 
 def branch_id(index: int) -> str:
@@ -715,6 +704,83 @@ def branch_additional_validators(branch: dict) -> str:
     return bullets(validators, fallback="- No branch-level validators beyond work-item verification commands.")
 
 
+PREMIUM_ROUTE_MARKERS = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
+
+
+def cheaper_worker_ladder(default_ladder: list[str]) -> list[str]:
+    cheap = [
+        alias
+        for alias in default_ladder
+        if not any(marker in str(alias).lower() for marker in PREMIUM_ROUTE_MARKERS)
+    ]
+    if cheap:
+        return cheap[-2:]
+    return default_ladder[-1:]
+
+
+def deterministic_route_class_ladders(worker_policy: dict) -> dict[str, list[str]]:
+    default_ladder = worker_policy.get("default_ladder")
+    if not isinstance(default_ladder, list) or not default_ladder:
+        default_ladder = list(DEFAULT_WORKER_LADDER)
+    default_ladder = [str(alias) for alias in default_ladder if isinstance(alias, str) and alias]
+    if not default_ladder:
+        default_ladder = list(DEFAULT_WORKER_LADDER)
+    cheap_ladder = cheaper_worker_ladder(default_ladder)
+    cheapest = [cheap_ladder[-1]] if cheap_ladder else [default_ladder[-1]]
+    return {
+        "mechanical": cheapest,
+        "docs": cheapest,
+        "small-edit": cheap_ladder,
+        "normal-code": cheap_ladder,
+        "complex-code": default_ladder,
+        "custom": default_ladder,
+    }
+
+
+def normalize_worker_model_policy(policy: dict) -> dict:
+    if not isinstance(policy, dict):
+        policy = WORKER_MODEL_POLICY
+    normalized = dict(policy)
+    route_classes = deterministic_route_class_ladders(normalized)
+    normalized["route_classes"] = route_classes
+    normalized["route_class_ladder_source"] = "preflight_deterministic_cheap_subsequences"
+    return normalized
+
+
+def route_class_ladder_guidance(worker_policy: dict) -> str:
+    route_classes = worker_policy.get("route_classes") if isinstance(worker_policy.get("route_classes"), dict) else {}
+    lines = []
+    for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
+        ladder = route_classes.get(route_class)
+        if not isinstance(ladder, list) or not ladder:
+            continue
+        lines.append(f"- {route_class}: {CONTRACT.format_worker_ladder(ladder)}")
+    return "\n".join(lines) if lines else "- no route-class ladder guidance recorded"
+
+
+def work_item_route_ladder(item: dict, worker_policy: dict) -> list[str] | None:
+    if item.get("worker_type") == RESEARCH_WORKER_TYPE:
+        return None
+    route_class = item.get("route_class")
+    route_classes = worker_policy.get("route_classes") if isinstance(worker_policy.get("route_classes"), dict) else {}
+    ladder = route_classes.get(route_class)
+    if isinstance(ladder, list) and ladder and all(isinstance(alias, str) and alias for alias in ladder):
+        return list(ladder)
+    return None
+
+
+def add_route_ladder_recommendations(items: list[dict], worker_policy: dict) -> list[dict]:
+    updated = []
+    for item in items:
+        normalized = dict(item)
+        ladder = work_item_route_ladder(normalized, worker_policy)
+        if ladder:
+            normalized["route_class_recommended_ladder"] = ladder
+            normalized["route_class_ladder_source"] = worker_policy.get("route_class_ladder_source", "worker_model_policy.route_classes")
+        updated.append(normalized)
+    return updated
+
+
 def format_work_items(branch_id_value: str, items: list[dict]) -> str:
     if not items:
         return "- No work items supplied; preflight should ask for or synthesize worker-sized items."
@@ -722,6 +788,12 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
     for idx, item in enumerate(items, start=1):
         item_id = item.get("id") or f"W{idx:02d}"
         packet_id = item.get("packet_id") or f"{branch_id_value}-{item_id}"
+        recommended_ladder = item.get("route_class_recommended_ladder")
+        recommended_ladder_text = (
+            CONTRACT.format_worker_ladder(recommended_ladder)
+            if isinstance(recommended_ladder, list) and recommended_ladder
+            else "n/a"
+        )
         chunks.append(
             "\n".join(
                 [
@@ -729,7 +801,8 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
                     f"Worker packet id: {packet_id}",
                     f"Worker type: {item.get('worker_type', 'worker')}",
                     f"Route class: {item.get('route_class', 'n/a')}",
-                    f"Route class reason: {item.get('route_class_reason', 'n/a')}",
+                    f"Route class reason code: {item.get('route_class_reason', 'n/a')}",
+                    f"Recommended ladder: {recommended_ladder_text}",
                     f"Objective: {item.get('objective', 'Objective not supplied.')}",
                     "Owned paths:",
                     bullets(item.get("owned_paths", [])),
@@ -1313,12 +1386,13 @@ def goal_config_report_lines(goal_config: dict | None, goal_config_check: dict |
     check_summary = compact_goal_config_check_summary(goal_config_check or {})
     accepted = check_summary.get("accepted_route_count")
     route_label = "not verified" if accepted in (None, 0) else f"{accepted} accepted route(s)"
+    route_status = check_summary.get("route_verification_status")
     provenance = manifest.get("goal_config_provenance", {})
     config_provenance = provenance.get("config", {}) if isinstance(provenance, dict) else {}
     source = config_provenance.get("source_path") if isinstance(config_provenance, dict) else None
     return [
         f"Goal config: {goal_config.get('profile', 'custom')} copied to goal.config.json from {source or 'supplied config'}; preflight config check status={check_summary.get('status')}.",
-        f"Goal config route availability: {route_label}; this is distinct from config-schema/preflight compatibility status.",
+        f"Goal config route availability: {route_label}; route_verification_status={route_status}; this is distinct from config-schema/preflight compatibility status.",
     ]
 
 
@@ -1341,6 +1415,8 @@ def compact_goal_config_summary(config: dict, *, manifest_telemetry_policy: dict
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
     manifest_policy = manifest_telemetry_policy if isinstance(manifest_telemetry_policy, dict) else {}
     models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    discovery_summary = config.get("discovery_summary") if isinstance(config.get("discovery_summary"), dict) else {}
+    validation_summary = config.get("summary") if isinstance(config.get("summary"), dict) else {}
     compact_models = {}
     for role, model in models.items():
         if not isinstance(model, dict):
@@ -1370,21 +1446,37 @@ def compact_goal_config_summary(config: dict, *, manifest_telemetry_policy: dict
         "telemetry_interpretation": "source config telemetry is provenance only; job.manifest.json telemetry_policy is authoritative at runtime",
         "model_ladders": config.get("model_ladders", {}),
         "models": compact_models,
+        "effort": config.get("effort") if isinstance(config.get("effort"), dict) else {},
+        "source_route_provenance": {
+            "accepted_route_count": discovery_summary.get("accepted_route_count", validation_summary.get("accepted_route_count")),
+            "route_model_availability_verified": discovery_summary.get("accepted_route_count", validation_summary.get("accepted_route_count")) not in (None, 0),
+            "note": "copied source config metadata is provenance only; goal_config_check_summary is the current preflight check result",
+        },
         "compatibility": config.get("compatibility", {}),
     }
 
 
 def compact_goal_config_check_summary(check: dict) -> dict:
     summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
+    accepted = summary.get("accepted_route_count")
+    route_verified = isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
+    route_status = check.get("route_verification_status") or summary.get("route_verification_status")
+    if not route_status:
+        route_status = "routes_verified" if route_verified else "schema_pass_routes_not_checked" if check.get("status") == "pass" else check.get("status")
     return {
         "status": check.get("status"),
+        "schema_status": check.get("status"),
+        "route_verification_status": route_status,
+        "route_model_availability_verified": route_verified,
         "mode": check.get("mode"),
         "check_mode": check.get("check_mode"),
         "config_validation_mode": check.get("config_validation_mode"),
-        "accepted_route_count": summary.get("accepted_route_count"),
+        "accepted_route_count": accepted,
         "rejected_route_count": summary.get("rejected_route_count"),
         "skipped_route_count": summary.get("skipped_route_count"),
         "unvisited_route_count": summary.get("unvisited_route_count"),
+        "checked_role_count": summary.get("checked_role_count"),
+        "harness_count": summary.get("harness_count"),
         "failure_count": summary.get("failure_count"),
         "token_telemetry": summary.get("token_telemetry", {}),
     }
@@ -1440,6 +1532,7 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
     goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
     goal_config_check = brief.get("goal_config_check") if isinstance(brief.get("goal_config_check"), dict) else None
     model_policies = goal_config.get("model_policies", {}) if goal_config else {}
+    worker_model_policy = normalize_worker_model_policy(model_policies.get("worker_model_policy", WORKER_MODEL_POLICY))
     return {
         "job_id": brief["job_id"],
         "title": brief.get("title") or brief["job_id"],
@@ -1454,7 +1547,7 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "max_active_branch_agents": brief["max_active_branch_agents"],
         "parallelization": brief["parallelization"],
         "adaptation_policy": CONTRACT.ADAPTATION_POLICY,
-        "worker_model_policy": model_policies.get("worker_model_policy", WORKER_MODEL_POLICY),
+        "worker_model_policy": worker_model_policy,
         "amender_model_policy": model_policies.get("amender_model_policy", AMENDER_MODEL_POLICY),
         "lite_model_policy": model_policies.get("lite_model_policy", LITE_MODEL_POLICY),
         "lite_advisor_policy": LITE_ADVISOR_POLICY,
@@ -1499,7 +1592,7 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
                 "pre_review_gate_path": branch["pre_review_gate_path"],
                 "depends_on": branch["depends_on"],
                 "owned_paths": branch["owned_paths"],
-                "work_items": branch["work_items"],
+                "work_items": add_route_ladder_recommendations(branch["work_items"], worker_model_policy),
                 "max_active_worker_packets": branch["max_active_worker_packets"],
                 "worker_parallelism": branch["worker_parallelism"],
                 **(
@@ -1556,8 +1649,10 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         if goal_config
         else WORKER_MODEL_POLICY
     )
+    worker_policy = normalize_worker_model_policy(worker_policy)
     default_worker_ladder = worker_policy.get("default_ladder", list(DEFAULT_WORKER_LADDER))
     allowed_worker_routes = worker_policy.get("allowed_routes", list(DEFAULT_WORKER_LADDER))
+    work_items = add_route_ladder_recommendations(branch.get("work_items", []), worker_policy)
     return branch_template.format(
         branch_id=branch["id"],
         title=branch.get("title", branch.get("objective", branch["id"])),
@@ -1572,12 +1667,15 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),
         pre_review_gate_path=branch["pre_review_gate_path"],
         worker_parallelization_rationale=branch["worker_parallelism"]["parallelization_rationale"],
+        branch_serial_reasons=bullets(brief["parallelization"].get("serial_reasons", []), fallback="- No branch-level serial or under-capacity reasons recorded."),
+        worker_serial_reasons=bullets(branch["worker_parallelism"].get("serial_reasons", []), fallback="- No worker-level serial or under-capacity reasons recorded."),
         default_worker_ladder=CONTRACT.format_worker_ladder(default_worker_ladder),
         allowed_worker_routes=", ".join(allowed_worker_routes),
+        route_class_ladders=route_class_ladder_guidance(worker_policy),
         objective=branch.get("objective", "Objective not supplied."),
         scope=scope,
         owned_paths=bullets(branch.get("owned_paths", [])),
-        work_items=format_work_items(branch["id"], branch.get("work_items", [])),
+        work_items=format_work_items(branch["id"], work_items),
         tests=branch_additional_validators(branch),
         stop_conditions=bullets(branch.get("stop_conditions", []), fallback="- No branch-specific stop conditions beyond runtime blockers and validator failures."),
         telemetry_policy_mode=brief["telemetry_policy"]["mode"],
@@ -1697,7 +1795,7 @@ def create_bundle(
             "",
             "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
             "Lite: optional advisory packets may route context but never satisfy audit, review, mergeability, or DoD evidence; preflight Lite provenance lives in job.manifest.json preflight_lite_advice.",
-            "Run `lint_goal_bundle.py` before launching `/goal`.",
+            "Launch gate: run bundle lint and readiness; launch only when readiness reports `launch_allowed=true`.",
             "",
         ]
     )

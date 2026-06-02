@@ -58,6 +58,7 @@ MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.worker_ladder_list()
 MANIFEST_WORKER_ROUTE_CLASSES = CONTRACT.MANIFEST_WORKER_ROUTE_CLASSES
+WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
 AMENDER_MODEL_POLICY = CONTRACT.AMENDER_MODEL_POLICY
 LITE_MODEL_POLICY = CONTRACT.LITE_MODEL_POLICY
 LITE_ADVISOR_POLICY = CONTRACT.LITE_ADVISOR_POLICY
@@ -67,6 +68,40 @@ ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
 TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
 TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
 TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
+PREMIUM_ROUTE_MARKERS = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
+
+
+def cheaper_worker_ladder(default_ladder: list[str]) -> list[str]:
+    cheap = [
+        alias
+        for alias in default_ladder
+        if not any(marker in str(alias).lower() for marker in PREMIUM_ROUTE_MARKERS)
+    ]
+    if cheap:
+        return cheap[-2:]
+    return default_ladder[-1:]
+
+
+def normalized_worker_policy(policy: dict) -> dict:
+    if not isinstance(policy, dict):
+        policy = WORKER_MODEL_POLICY
+    result = dict(policy)
+    default_ladder = result.get("default_ladder")
+    if not isinstance(default_ladder, list) or not default_ladder:
+        default_ladder = DEFAULT_WORKER_LADDER
+    default_ladder = [str(alias) for alias in default_ladder if isinstance(alias, str) and alias]
+    cheap_ladder = cheaper_worker_ladder(default_ladder)
+    cheapest = [cheap_ladder[-1]] if cheap_ladder else [default_ladder[-1]]
+    result["route_classes"] = {
+        "mechanical": cheapest,
+        "docs": cheapest,
+        "small-edit": cheap_ladder,
+        "normal-code": cheap_ladder,
+        "complex-code": default_ladder,
+        "custom": default_ladder,
+    }
+    result["route_class_ladder_source"] = "preflight_deterministic_cheap_subsequences"
+    return result
 
 
 def _git_repo_status(bundle_dir: Path) -> dict:
@@ -256,15 +291,19 @@ BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER = (
     "active worker packets",
     "rolling saturated pool",
     "render_worker_schedule.py",
+    "Branch scheduler serial/under-capacity reasons",
+    "Worker scheduler serial/under-capacity reasons",
 )
 BRANCH_PROMPT_PHRASES_AFTER_SCHEDULER = (
     "worker_parallelism.scheduler_path",
     "Worker parallelization rationale",
     "Worker Model Routing",
+    "Route-class ladders",
     "Additional Validators",
     "Selected worker ladders",
     "Worker packet id",
-    "Route class reason",
+    "Route class reason code",
+    "Recommended ladder",
     "telemetry.json",
     "Lite Advisors",
     "orchestration_watchdog.branch_no_completion_wait_limit",
@@ -870,8 +909,8 @@ def lint(bundle_dir: Path) -> dict:
         worker_model_policy = {}
     if goal_config is not None:
         expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
-        if worker_model_policy != expected_policies.get("worker_model_policy"):
-            defect("job.manifest.json", "critical", "worker_model_policy must match goal_config.model_policies.worker_model_policy")
+        if worker_model_policy != normalized_worker_policy(expected_policies.get("worker_model_policy")):
+            defect("job.manifest.json", "critical", "worker_model_policy must match deterministic preflight-normalized goal_config.model_policies.worker_model_policy")
             compatibility_status = "failed"
     else:
         if worker_model_policy.get("default_ladder") != DEFAULT_WORKER_LADDER:
@@ -1049,18 +1088,23 @@ def lint(bundle_dir: Path) -> dict:
         lint_generated_prompt_text(defect, "goal-bootloader.md", bootloader)
         if len(bootloader) > 4000:
             defect("goal-bootloader.md", "critical", "bootloader exceeds 4000 characters")
-        require_text_phrases(
-            defect,
-            "goal-bootloader.md",
-            bootloader,
-            BOOTLOADER_REQUIRED_PHRASES,
-            severity="critical",
-            message_prefix="bootloader missing phrase",
-            case_sensitive=True,
-        )
         repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
-        if repo_status.get("repo_is_git") is False and "BLOCKED READINESS" not in bootloader:
-            defect("goal-bootloader.md", "critical", "non-git runtime blocker requires a hard blocked-readiness bootloader warning")
+        runtime_blocked = repo_status.get("repo_is_git") is False or repo_status.get("base_ref_status") == "missing"
+        if runtime_blocked:
+            if "BLOCKED READINESS" not in bootloader:
+                defect("goal-bootloader.md", "critical", "runtime blocker requires a hard blocked-readiness bootloader warning")
+            if "Use $goal-main-orchestrator" in bootloader or "run_prompt_audit_phase.py" in bootloader:
+                defect("goal-bootloader.md", "critical", "blocked-readiness bootloader must not render launch-looking main-orchestrator handoff commands")
+        else:
+            require_text_phrases(
+                defect,
+                "goal-bootloader.md",
+                bootloader,
+                BOOTLOADER_REQUIRED_PHRASES,
+                severity="critical",
+                message_prefix="bootloader missing phrase",
+                case_sensitive=True,
+            )
         report_path = bundle_dir / "PREFLIGHT_REPORT.md"
         if report_path.exists():
             report_text = report_path.read_text(encoding="utf-8")
@@ -1081,6 +1125,14 @@ def lint(bundle_dir: Path) -> dict:
             selected_candidates = [item for item in candidates if isinstance(item, dict) and item.get("selected") is True]
             if selection.get("status") == "pass" and len(selected_candidates) != 1:
                 defect("goal-config-selection.json", "critical", "exactly one candidate may have selected=true")
+            if "selected" in selection:
+                defect("goal-config-selection.json", "major", "top-level selected candidate must not be duplicated; use selected_index plus selected path/hash fields")
+            selected_index = selection.get("selected_index")
+            if selection.get("status") == "pass":
+                if not isinstance(selected_index, int) or isinstance(selected_index, bool) or not (0 <= selected_index < len(candidates)):
+                    defect("goal-config-selection.json", "critical", "selected_index must point to the selected candidate")
+                elif selected_candidates and candidates[selected_index] is not selected_candidates[0]:
+                    defect("goal-config-selection.json", "critical", "selected_index must match the candidate with selected=true")
             for index, item in enumerate(candidates):
                 if not isinstance(item, dict):
                     continue
@@ -1164,7 +1216,7 @@ def lint(bundle_dir: Path) -> dict:
                     route_reason = item.get("route_class_reason")
                     if not isinstance(route_reason, str) or not route_reason.strip():
                         defect("job.manifest.json", "critical", f"{item_path}.route_class_reason must be a non-empty string")
-                    elif route_class == "normal-code" and "default normal-code inference" in route_reason.lower():
+                    elif route_class == "normal-code" and route_reason.strip() == "inferred_normal_code_default":
                         default_normal_route_count += 1
                 if worker_type == RESEARCH_WORKER_TYPE:
                     route_reason = item.get("route_class_reason")
@@ -1394,8 +1446,20 @@ def result(
     git_repo_status: dict,
 ) -> dict:
     status = "pass" if not any(item["severity"] in {"critical", "major"} for item in defects) else "failed"
+    runtime_launch_blocked_reason = None
+    runtime_launch_status = "pass"
+    if git_repo_status.get("repo_is_git") is False or git_repo_status.get("status") == "not_in_repo":
+        runtime_launch_status = "blocked"
+        runtime_launch_blocked_reason = "repository root is not a git work tree; runtime branch/worktree orchestration is blocked"
+    elif git_repo_status.get("base_ref_status") == "missing":
+        runtime_launch_status = "blocked"
+        runtime_launch_blocked_reason = f"base_ref does not exist: {git_repo_status.get('base_ref')}"
     return {
         "status": status,
+        "schema_lint_status": status,
+        "runtime_launch_status": runtime_launch_status,
+        "runtime_launch_allowed": status == "pass" and runtime_launch_status == "pass",
+        "runtime_launch_blocked_reason": runtime_launch_blocked_reason,
         "bundle_path": bundle_dir.as_posix(),
         "manifest_path": manifest_path.as_posix(),
         "branch_count": branch_count,

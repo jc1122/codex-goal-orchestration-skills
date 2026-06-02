@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.64
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.65
 ```
 
 Install to a custom absolute skills root:
@@ -312,7 +312,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/prepare_goal_bundle.py" \
   --json
 ```
 
-The guided command auto-detects candidate `goal.preflight.config.json` or `goal.config.json`, runs preflight compatibility with mechanical remediation when possible, writes `goal-config-selection.json`, persists canonical lint/repair/readiness artifacts in the bundle, and exits blocked rather than handing off a non-git directory-mode bundle as branch/worktree-ready.
+The guided command auto-detects candidate `goal.preflight.config.json` or `goal.config.json`, runs preflight compatibility with mechanical remediation when possible, writes `goal-config-selection.json`, persists canonical lint/repair/readiness artifacts in the bundle, and exits blocked rather than handing off a non-git directory-mode bundle as branch/worktree-ready. `preflight.pipeline.json` is compact by default; add `--verbose` only when you need the full config-selection and readiness payloads embedded in the pipeline result.
 
 Manual preflight commands for debugging individual stages:
 

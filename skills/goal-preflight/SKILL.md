@@ -1,6 +1,6 @@
 ---
 name: goal-preflight
-version: 0.2.64
+version: 0.2.65
 description: "Prepare path-hardened /goal orchestration bundles from a report, roadmap, diagnosis, or rough goal brief. Use when the user needs prompt infrastructure for goal-main-orchestrator: optionally use CLI-only Lite advisors for source digestion or lint-repair advice, synthesize rolling-scheduled branch groups and worker-sized work items when missing, enforce reproducible manifest paths and telemetry requirements, write job.manifest.json/main.prompt.md/branch prompts/location-bound goal-bootloader.md, run deterministic lint, and present the exact bootloader text for manual /goal launch."
 ---
 
@@ -41,7 +41,7 @@ For a compact state snapshot (no jq), run:
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py" --bundle-dir /abs/bundle --readiness
 ```
 
-Use `--json` for machine-readable readiness checks. The guided pipeline writes `preflight.brief.lint.json`, `preflight.lint.json`, `repair-gate.json`, `readiness.json`, `goal-config-selection.json`, and `preflight.pipeline.json`.
+Use `--json` for machine-readable readiness checks. The guided pipeline writes `preflight.brief.lint.json`, `preflight.lint.json`, `repair-gate.json`, `readiness.json`, `goal-config-selection.json`, and compact `preflight.pipeline.json`; add `prepare_goal_bundle.py --verbose` only when full embedded selection/readiness payloads are needed.
 
 For compact prompt handoff, share only the `--readiness --json` payload and next-command guidance instead of full manifests.
 
@@ -53,10 +53,10 @@ For compact prompt handoff, share only the `--readiness --json` payload and next
 - If brief shape is unclear, run `create_goal_bundle.py --brief-schema-json` or `--example-brief`; do not inspect script source for schema.
 - Parallelism is default: prefer independent branches and worker-sized work items; record serial reasons when capacity is intentionally underfilled.
 - When preparing a new bundle, preserve intermediate artifacts and use the guided preflight pipeline. If a manual fallback is needed, run `brief lint`, `create_goal_bundle`, `lint_goal_bundle`, `script_only_repair_gate`, then `render_goal_bootloader` with `--readiness` before returning bootloader text.
-- Readiness must treat non-git repository roots as blocked for runtime branch/worktree orchestration unless a future explicit no-git runtime mode is implemented.
+- Readiness must treat non-git repository roots as blocked for runtime branch/worktree orchestration unless a future explicit no-git runtime mode is implemented; blocked bootloaders are corrective-only and must not render `$goal-main-orchestrator` launch handoff commands.
 - Ask the user only for gaps that would change branch boundaries, DoD, merge policy, or runtime safety.
 - Use Lite only as optional context routing for large/vague source material or lint repair.
-- Return the exact `goal-bootloader.md` text after lint passes.
+- Return the exact `goal-bootloader.md` text after lint passes and readiness launch is allowed; if readiness is blocked, return the blocked readiness fix/recheck command instead.
 - Do not read or search `skills/*/scripts/*.py` during normal preflight, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 
 ## Details On Demand
