@@ -323,6 +323,8 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
         if configured_failures:
             report["status"] = "failed"
             report["configured_route_failures"] = configured_failures
+        elif report["status"] == "skipped":
+            report["status"] = "pass"
     return report
 
 
