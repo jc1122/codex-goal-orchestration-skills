@@ -239,7 +239,8 @@ def brief_schema_summary() -> dict:
             "telemetry_policy": "manifest-owned opt-in telemetry policy object; supported modes are standard and debug, raw_text must be false, collect names debug metric groups",
             "telemetry_mode": "lean shorthand; set to debug to expand the full safe debug telemetry policy",
             "debug_telemetry": "boolean shorthand; true means telemetry_mode=debug, false means standard unless telemetry_policy says otherwise",
-            "source_attachments": "array of repo-relative file paths or {path,label,kind}; use for large benchmark/spec files instead of pasting them into goal",
+            "source_attachments": "array of repo-relative file paths or {path,label,kind}; use for large benchmark/spec files instead of pasting them into goal; required when the brief references an exact instance/list/source that is not fully inline",
+            "runtime_cap": "string or object declaring any concrete runtime/time cap mentioned in success criteria, including CLI flag when applicable",
             "goal_config": "optional copied model/provider/harness configuration supplied through --goal-config; manifest stores only compact summaries and hashes; do not hand-author in the brief",
             "goal_config_check": "optional passing goal-config check report supplied through --goal-config-check; required when --goal-config is used",
         },
@@ -255,6 +256,7 @@ def brief_schema_summary() -> dict:
             "max_active_worker_packets": f"integer 1-{MAX_WORKER_PACKETS_PER_BRANCH}; default {MAX_WORKER_PACKETS_PER_BRANCH}",
             "worker_serial_reasons": "optional; deterministic defaults are supplied for underfilled worker capacity",
             "scope": "branch-specific boundary text",
+            "dependency_context_reason": "required when a branch depends on prior branches but no work item context_files are declared; bundle creation supplies a deterministic default",
             "dod": "branch-level DoD; worker DoD is still required",
             "stop_conditions": "branch stop conditions",
         },
@@ -396,6 +398,32 @@ def normalize_source_attachments(value: object, *, repo_root: Path | None = None
                 attachment["bytes"] = target.stat().st_size
         attachments.append(attachment)
     return attachments
+
+
+def normalize_runtime_cap(value: object) -> object | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    if isinstance(value, dict):
+        if not value:
+            return None
+        normalized: dict[str, object] = {}
+        for key, item in value.items():
+            if not isinstance(key, str) or not key.strip():
+                raise SystemExit("runtime_cap keys must be non-empty strings")
+            if item is None:
+                continue
+            if isinstance(item, str):
+                item = item.strip()
+                if not item:
+                    continue
+            elif isinstance(item, bool) or not isinstance(item, (int, float, list, dict)):
+                raise SystemExit("runtime_cap values must be strings, numbers, arrays, or objects")
+            normalized[key.strip()] = item
+        return normalized or None
+    raise SystemExit("runtime_cap must be a string or object when supplied")
 
 
 def normalize_telemetry_policy(value: object) -> dict:
@@ -1122,6 +1150,17 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
     for branch in branches:
         branch["wave"] = wave_by_branch[branch["id"]]
     normalize_branch_dependencies(branches)
+    for branch in branches:
+        work_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
+        has_context = any(
+            isinstance(item, dict) and isinstance(item.get("context_files"), list) and bool(item.get("context_files"))
+            for item in work_items
+        )
+        if branch.get("depends_on") and not has_context:
+            branch["dependency_context_reason"] = (
+                nonempty_text(branch.get("dependency_context_reason"))
+                or "No direct context_files declared; runtime must inspect completed dependency branch status/review artifacts before launching this branch."
+            )
 
     initial_ready = len([branch for branch in branches if not branch.get("depends_on")])
     if initial_ready < min(max_active, len(branches)):
@@ -1158,9 +1197,10 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
         "branches": branches,
         "waves": waves,
         "preflight_lite_advice": preflight_lite_advice,
-        "telemetry_policy": telemetry_policy,
-        "source_attachments": normalize_source_attachments(brief.get("source_attachments"), repo_root=repo_root),
-    }
+	        "telemetry_policy": telemetry_policy,
+	        "source_attachments": normalize_source_attachments(brief.get("source_attachments"), repo_root=repo_root),
+	        "runtime_cap": normalize_runtime_cap(brief.get("runtime_cap")),
+	    }
 
 
 BILLING_FORBIDDEN_RE = re.compile(r"usd|dollar|pricing|price", re.IGNORECASE)
@@ -1410,6 +1450,19 @@ def render_source_attachments(attachments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def render_runtime_cap(value: object) -> str:
+    if value is None:
+        return "- none declared"
+    if isinstance(value, str):
+        return f"- {value}"
+    if isinstance(value, dict):
+        lines = []
+        for key in sorted(value):
+            lines.append(f"- {key}: {value[key]}")
+        return "\n".join(lines) if lines else "- none declared"
+    return f"- {value}"
+
+
 def compact_goal_config_summary(config: dict, *, manifest_telemetry_policy: dict | None = None) -> dict:
     validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
@@ -1555,9 +1608,10 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "review_model_policy": model_policies.get("review_model_policy", REVIEW_MODEL_POLICY),
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
-        "telemetry_policy": brief["telemetry_policy"],
-        "source_attachments": brief.get("source_attachments", []),
-        "repo_status": brief.get("repo_status", {}),
+	        "telemetry_policy": brief["telemetry_policy"],
+	        "source_attachments": brief.get("source_attachments", []),
+	        **({"runtime_cap": brief["runtime_cap"]} if brief.get("runtime_cap") is not None else {}),
+	        "repo_status": brief.get("repo_status", {}),
         "preflight_compatibility": brief.get("preflight_compatibility", {"status": "not_configured", "defects": []}),
         "preflight_input_precedence": brief.get("preflight_input_precedence", {}),
         **(
@@ -1594,9 +1648,14 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
                 "owned_paths": branch["owned_paths"],
                 "work_items": add_route_ladder_recommendations(branch["work_items"], worker_model_policy),
                 "max_active_worker_packets": branch["max_active_worker_packets"],
-                "worker_parallelism": branch["worker_parallelism"],
-                **(
-                    {"recovers_from": branch["recovers_from"]}
+	                "worker_parallelism": branch["worker_parallelism"],
+	                **(
+	                    {"dependency_context_reason": branch["dependency_context_reason"]}
+	                    if isinstance(branch.get("dependency_context_reason"), str) and branch["dependency_context_reason"].strip()
+	                    else {}
+	                ),
+	                **(
+	                    {"recovers_from": branch["recovers_from"]}
                     if isinstance(branch.get("recovers_from"), list)
                     else {}
                 ),
@@ -1624,9 +1683,10 @@ def render_main_prompt_text(brief: dict) -> str:
         job_id=brief["job_id"],
         base_ref=brief["base_ref"],
         goal=brief.get("goal", "Goal not supplied."),
-        source_summary=brief.get("source_summary", "Source summary not supplied."),
-        source_attachments=render_source_attachments(brief.get("source_attachments", [])),
-        branch_waves=render_branch_waves(brief["waves"]),
+	        source_summary=brief.get("source_summary", "Source summary not supplied."),
+	        source_attachments=render_source_attachments(brief.get("source_attachments", [])),
+	        runtime_cap=render_runtime_cap(brief.get("runtime_cap")),
+	        branch_waves=render_branch_waves(brief["waves"]),
         branch_dependencies=render_branch_dependencies(brief["branches"]),
         max_active_branch_agents=brief["max_active_branch_agents"],
         main_scheduler_path=CONTRACT.MAIN_SCHEDULER_PATH,
@@ -1659,9 +1719,10 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         base_ref=brief["base_ref"],
         branch_name=branch["branch_name"],
         worktree_path=branch["worktree_path"],
-        wave=branch["wave"],
-        depends_on=bullets(branch.get("depends_on", [])),
-        max_active_worker_packets=branch["max_active_worker_packets"],
+	        wave=branch["wave"],
+	        depends_on=bullets(branch.get("depends_on", [])),
+	        dependency_context=branch.get("dependency_context_reason") or "none",
+	        max_active_worker_packets=branch["max_active_worker_packets"],
         worker_packet_count=len(branch.get("work_items", [])) if isinstance(branch.get("work_items"), list) else 0,
         max_worker_packets_per_branch=MAX_WORKER_PACKETS_PER_BRANCH,
         worker_scheduler_path=CONTRACT.worker_scheduler_path(branch["id"]),

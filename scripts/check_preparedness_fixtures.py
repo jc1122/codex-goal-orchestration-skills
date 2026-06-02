@@ -454,6 +454,109 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     )
     assert_contains(result.stdout, "branch owned_paths overlap", "cross-branch overlap topology fixture")
 
+    verification_owner_brief = {
+        "job_id": "verification-owner-topology",
+        "base_ref": "main",
+        "branches": [
+            {
+                **branch_fixture("B01", "src/core.py"),
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Deliberately reference future-owned verification paths.",
+                        "owned_paths": ["src/core.py"],
+                        "context_files": ["README.md"],
+                        "verification": ["python -m src.cli", "pytest tests/test_cli.py"],
+                        "dod": ["verification ownership fixture is rejected by bundle lint"],
+                    }
+                ],
+            },
+            branch_fixture("B02", "src/cli.py"),
+            branch_fixture("B03", "tests/test_cli.py"),
+        ],
+    }
+    verification_owner_brief_path = tmp_path / "verification-owner-topology.json"
+    verification_owner_bundle = tmp_path / "verification-owner-topology"
+    write_json(verification_owner_brief_path, verification_owner_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            verification_owner_brief_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            verification_owner_bundle.as_posix(),
+        ]
+    )
+    owner_result = run(
+        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", verification_owner_bundle.as_posix(), "--no-write"],
+        expect=1,
+    )
+    assert_all_contains(
+        owner_result.stdout,
+        [
+            "references python module src.cli",
+            "owned by B02",
+            "references path tests/test_cli.py",
+            "owned by B03",
+        ],
+        "verification ownership topology fixture",
+    )
+
+    dependency_context_brief = {
+        "job_id": "dependency-context-topology",
+        "base_ref": "main",
+        "goal": "Validate dependency context metadata for dependent branches without direct context files.",
+        "source_summary": "The fixture uses README-backed topology branches and checks that dependency artifacts are named as the runtime context source.",
+        "required_evidence": ["The manifest contains dependency_context_reason for the dependent branch."],
+        "final_dod": ["The dependency-context fixture bundle passes preflight bundle lint."],
+        "max_active_branch_agents": 1,
+        "serial_reasons": ["Sequential dependency-context fixture."],
+        "branches": [
+            branch_fixture("B01", "src/base.py"),
+            {
+                **branch_fixture("B02", "src/followup.py", depends_on=["B01"]),
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Use dependency status artifacts instead of direct context files.",
+                        "owned_paths": ["src/followup.py"],
+                        "context_files": [],
+                        "verification": ["git diff --check main...HEAD"],
+                        "dod": ["dependency context reason is explicit in the manifest"],
+                    }
+                ],
+            },
+        ],
+    }
+    dependency_context_brief_path = tmp_path / "dependency-context-topology.json"
+    dependency_context_bundle = tmp_path / "dependency-context-topology"
+    write_json(dependency_context_brief_path, dependency_context_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            dependency_context_brief_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            dependency_context_bundle.as_posix(),
+        ]
+    )
+    dependency_manifest = read_json(dependency_context_bundle / "job.manifest.json")
+    dependency_branch = next(branch for branch in dependency_manifest["branches"] if branch["id"] == "B02")
+    if not dependency_branch.get("dependency_context_reason"):
+        raise SystemExit("dependent branch without context_files should get dependency_context_reason")
+    assert_contains(
+        (dependency_context_bundle / "branches" / "B02.prompt.md").read_text(encoding="utf-8"),
+        "Dependency context:",
+        "dependency context branch prompt",
+    )
+    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", dependency_context_bundle.as_posix(), "--no-write"])
+
 
 def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
     valid_brief = {
@@ -638,6 +741,58 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
             "skills/goal-preflight/scripts/lint_preflight_brief.py",
             "--brief",
             owned_only_missing_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--json",
+        ]
+    )
+
+    exact_source_missing_brief = {
+        **valid_brief,
+        "job_id": "brief-lint-exact-source-missing",
+        "goal": "Use the exact FT10 instance provided in this brief and solve it within the chosen runtime cap.",
+        "source_summary": "The exact operation list is intentionally absent so source-fidelity lint must reject this fixture.",
+        "runtime_cap": None,
+    }
+    exact_source_missing_path = tmp_path / "brief-lint-exact-source-missing.json"
+    write_json(exact_source_missing_path, exact_source_missing_brief)
+    exact_source_missing = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_preflight_brief.py",
+            "--brief",
+            exact_source_missing_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--json",
+        ],
+        expect=1,
+    )
+    assert_all_contains(
+        exact_source_missing.stdout,
+        [
+            "exact source/instance/list is referenced",
+            "no concrete runtime_cap",
+        ],
+        "exact source/runtime cap brief lint fixture",
+    )
+
+    exact_source_attached_brief = {
+        **valid_brief,
+        "job_id": "brief-lint-exact-source-attached",
+        "goal": "Use the exact fixture instance provided in this brief attachment and finish within the chosen runtime cap.",
+        "source_summary": "README.md is attached as the source-of-truth fixture payload for this lint check.",
+        "source_attachments": [{"path": "README.md", "label": "Exact fixture source", "kind": "benchmark-data"}],
+        "runtime_cap": {"seconds": 30, "cli_flag": "--time-limit-seconds 30"},
+    }
+    exact_source_attached_path = tmp_path / "brief-lint-exact-source-attached.json"
+    write_json(exact_source_attached_path, exact_source_attached_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_preflight_brief.py",
+            "--brief",
+            exact_source_attached_path.as_posix(),
             "--repo-root",
             ROOT.as_posix(),
             "--json",
@@ -2530,6 +2685,11 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
         raise SystemExit("brief schema should expose lean debug telemetry shorthands")
     if "source_attachments" not in top_level_optional:
         raise SystemExit("brief schema should expose structured source attachments")
+    if "runtime_cap" not in top_level_optional:
+        raise SystemExit("brief schema should expose runtime cap guidance")
+    branch_optional = brief_schema.get("branch_optional", {})
+    if "dependency_context_reason" not in branch_optional:
+        raise SystemExit("brief schema should expose dependency_context_reason guidance")
     context_guidance = str(brief_schema.get("work_item_optional", {}).get("context_files", ""))
     if "must already exist" not in context_guidance or "owned_paths" not in context_guidance:
         raise SystemExit(f"brief schema should distinguish context_files from future owned outputs: {context_guidance!r}")

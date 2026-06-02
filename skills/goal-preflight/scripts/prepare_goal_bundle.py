@@ -153,12 +153,13 @@ def compact_readiness(readiness: dict) -> dict:
         "repair_gate": readiness.get("repair_gate", {}),
         "lint_status": readiness.get("lint_status", {}),
         "verified_routes": readiness.get("verified_routes", {}),
-        "prompt_size_summary": {
-            "total_chars": prompt_size.get("total_chars"),
-            "approx_total_tokens": prompt_size.get("approx_total_tokens"),
-            "max_prompt_chars": prompt_size.get("max_prompt_chars"),
-            "prompt_char_margin": prompt_size.get("prompt_char_margin"),
-        },
+	        "prompt_size_summary": {
+	            "total_chars": prompt_size.get("total_prompt_chars", prompt_size.get("total_chars")),
+	            "approx_total_tokens": prompt_size.get("approx_total_tokens"),
+	            "max_single_prompt_chars": prompt_size.get("max_single_prompt_chars"),
+	            "max_prompt_chars_per_file": prompt_size.get("max_prompt_chars_per_file"),
+	            "per_file_min_prompt_char_margin": prompt_size.get("per_file_min_prompt_char_margin"),
+	        },
     }
 
 

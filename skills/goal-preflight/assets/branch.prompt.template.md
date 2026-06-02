@@ -7,6 +7,7 @@ Worktree path: {worktree_path}
 Wave: {wave}
 Depends on branches:
 {depends_on}
+Dependency context: {dependency_context}
 Max active worker packets: {max_active_worker_packets}
 Declared worker packets: {worker_packet_count}
 Configured package max worker packets per branch: {max_worker_packets_per_branch}

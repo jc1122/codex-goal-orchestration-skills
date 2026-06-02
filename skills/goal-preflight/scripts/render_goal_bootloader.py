@@ -224,6 +224,12 @@ def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
             entries.append(_prompt_entry(bundle_dir, branch["prompt"]))
     total_chars = sum(int(item["chars"]) for item in entries)
     budget = _prompt_char_budget(manifest)
+    if budget is not None:
+        for entry in entries:
+            entry["max_prompt_chars"] = budget
+            entry["prompt_char_margin"] = budget - int(entry["chars"])
+    max_single_prompt_chars = max((int(item["chars"]) for item in entries), default=0)
+    per_file_min_margin = None if budget is None else min((budget - int(item["chars"]) for item in entries), default=budget)
     branch_prompt_entries = [item for item in entries if str(item.get("path", "")).startswith("branches/")]
     repeated_sections = {
         "branch_prompt_count": len(branch_prompt_entries),
@@ -240,9 +246,12 @@ def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
     return {
         "files": entries,
         "total_chars": total_chars,
+        "total_prompt_chars": total_chars,
         "approx_total_tokens": (total_chars + 3) // 4,
-        "max_prompt_chars": budget,
-        "prompt_char_margin": None if budget is None else budget - total_chars,
+        "max_single_prompt_chars": max_single_prompt_chars,
+        "max_prompt_chars_per_file": budget,
+        "per_file_min_prompt_char_margin": per_file_min_margin,
+        "prompt_char_margin_basis": "minimum per-file margin against max_prompt_chars_per_file; total prompt chars are reported separately",
         "duplicated_section_counts": repeated_sections,
     }
 

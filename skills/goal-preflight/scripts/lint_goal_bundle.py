@@ -69,6 +69,21 @@ TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
 TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
 TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
 PREMIUM_ROUTE_MARKERS = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
+EXACT_SOURCE_RE = re.compile(
+    r"\b("
+    r"exact\s+(?:operation\s+)?(?:list|instance|source|payload|dataset|benchmark|data)|"
+    r"provided\s+in\s+this\s+brief|"
+    r"matching\s+the\s+exact|"
+    r"matches\s+the\s+exact|"
+    r"source[-\s]+of[-\s]+truth|"
+    r"exact\s+FT\d+"
+    r")\b",
+    re.IGNORECASE,
+)
+INLINE_SOURCE_TUPLE_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
+RUNTIME_CAP_RE = re.compile(r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE)
+PATH_TOKEN_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".csv", ".sh")
+PYTHON_BINS = {"python", "python3", "py"}
 
 
 def cheaper_worker_ladder(default_ladder: list[str]) -> list[str]:
@@ -452,6 +467,138 @@ def paths_overlap(left: str, right: str) -> bool:
     left_norm = left.rstrip("/")
     right_norm = right.rstrip("/")
     return left_norm == right_norm or left_norm.startswith(right_norm + "/") or right_norm.startswith(left_norm + "/")
+
+
+def collect_manifest_text(manifest: dict) -> str:
+    parts: list[str] = []
+
+    def walk(value: object) -> None:
+        if isinstance(value, str):
+            parts.append(value)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+        elif isinstance(value, dict):
+            for item in value.values():
+                walk(item)
+
+    for key in ("goal", "source_summary", "required_evidence", "final_dod", "runtime_cap"):
+        walk(manifest.get(key))
+    for branch in manifest.get("branches", []) if isinstance(manifest.get("branches"), list) else []:
+        if not isinstance(branch, dict):
+            continue
+        for key in ("objective", "scope", "dod"):
+            walk(branch.get(key))
+        for item in branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []:
+            if isinstance(item, dict):
+                for key in ("objective", "verification", "dod"):
+                    walk(item.get(key))
+    return "\n".join(parts)
+
+
+def has_inline_source_payload(text: str) -> bool:
+    if len(text) < 400:
+        return False
+    tuple_count = len(INLINE_SOURCE_TUPLE_RE.findall(text))
+    if tuple_count >= 10:
+        return True
+    lowered = text.lower()
+    return "ft10 = [" in lowered or ("operation list" in lowered and text.count("[") >= 4 and text.count("]") >= 4)
+
+
+def has_source_attachment(manifest: dict) -> bool:
+    attachments = manifest.get("source_attachments")
+    return isinstance(attachments, list) and any(isinstance(item, dict) for item in attachments)
+
+
+def concrete_runtime_cap(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip()) and bool(re.search(r"\d", value))
+    if isinstance(value, dict):
+        if not value:
+            return False
+        for item in value.values():
+            if isinstance(item, bool):
+                continue
+            if isinstance(item, (int, float)) and item > 0:
+                return True
+            if isinstance(item, str) and item.strip() and re.search(r"\d", item):
+                return True
+        return False
+    return False
+
+
+def dependency_closure(branch_id: str, branch_deps: dict[str, list[str]]) -> set[str]:
+    remaining = list(branch_deps.get(branch_id, []))
+    seen: set[str] = set()
+    while remaining:
+        current = remaining.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        remaining.extend(dep for dep in branch_deps.get(current, []) if dep not in seen)
+    return seen
+
+
+def owner_for_path(path: str, branch_owned_paths: dict[str, list[str]]) -> tuple[str, str] | None:
+    for branch_id, owned_paths in branch_owned_paths.items():
+        for owned in owned_paths:
+            if paths_overlap(path, owned):
+                return branch_id, owned
+    return None
+
+
+def command_tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return command.split()
+
+
+def strip_command_path_token(token: str) -> str:
+    value = token.strip().strip("\"'`").rstrip(".,;)")
+    if "::" in value:
+        value = value.split("::", 1)[0]
+    return value
+
+
+def looks_like_repo_path(token: str) -> bool:
+    if not token or token.startswith("-") or token.startswith("$") or token.startswith("/"):
+        return False
+    if "\\" in token or "://" in token:
+        return False
+    value = strip_command_path_token(token)
+    if not value or value in {".", ".."}:
+        return False
+    if "/" in value:
+        return not value.startswith("../") and "/../" not in value and not value.endswith("/..")
+    return value.endswith(PATH_TOKEN_EXTENSIONS)
+
+
+def python_module_candidates(module: str) -> list[str]:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", module):
+        return []
+    path = module.replace(".", "/")
+    return [
+        f"{path}.py",
+        f"{path}/__init__.py",
+        f"src/{path}.py",
+        f"src/{path}/__init__.py",
+    ]
+
+
+def command_references(command: str) -> list[dict[str, object]]:
+    tokens = command_tokens(command)
+    refs: list[dict[str, object]] = []
+    for index, token in enumerate(tokens):
+        if token in {"-m", "--module"} and index > 0 and index + 1 < len(tokens) and Path(tokens[index - 1]).name in PYTHON_BINS:
+            module = tokens[index + 1]
+            if module != "pytest":
+                refs.append({"kind": "python_module", "value": module, "candidates": python_module_candidates(module)})
+        candidate = strip_command_path_token(token)
+        if looks_like_repo_path(candidate):
+            refs.append({"kind": "path", "value": candidate, "candidates": [candidate]})
+    return refs
 
 
 def has_contention_reason(*values: object) -> bool:
@@ -851,6 +998,19 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"{key} must be a non-empty array of strings")
     if not isinstance(manifest.get("preflight_input_precedence"), dict):
         defect("job.manifest.json", "critical", "preflight_input_precedence must be an object")
+    manifest_text = collect_manifest_text(manifest)
+    if EXACT_SOURCE_RE.search(manifest_text) and not has_source_attachment(manifest) and not has_inline_source_payload(manifest_text):
+        defect(
+            "job.manifest.json",
+            "critical",
+            "exact source/instance/list is referenced but no inline payload or source_attachments entry exists",
+        )
+    if RUNTIME_CAP_RE.search(manifest_text) and not concrete_runtime_cap(manifest.get("runtime_cap")):
+        defect(
+            "job.manifest.json",
+            "critical",
+            "success criteria reference a runtime cap but job.manifest.json lacks a concrete runtime_cap value or CLI flag",
+        )
 
     max_active = manifest.get("max_active_branch_agents")
     if not is_strict_int(max_active) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
@@ -1404,6 +1564,65 @@ def lint(bundle_dir: Path) -> dict:
         branch_contention[bid] = branch.get("contention_reason")
         owned = [path for path in branch.get("owned_paths", []) if isinstance(path, str)] if isinstance(branch.get("owned_paths"), list) else []
         branch_owned_paths[bid] = owned
+    for branch in branches:
+        if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
+            continue
+        bid = branch["id"]
+        work_items = branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []
+        has_context = any(
+            isinstance(item, dict) and isinstance(item.get("context_files"), list) and bool(item.get("context_files"))
+            for item in work_items
+        )
+        if branch_deps.get(bid) and not has_context:
+            reason = branch.get("dependency_context_reason")
+            if not isinstance(reason, str) or not reason.strip():
+                defect(
+                    "job.manifest.json",
+                    "major",
+                    f"branch {bid} depends_on prior branches but declares no work item context_files and no dependency_context_reason",
+                )
+        for owned_path in branch_owned_paths.get(bid, []):
+            if owned_path == ".gitkeep" or owned_path.endswith("/.gitkeep"):
+                defect(
+                    "job.manifest.json",
+                    "major",
+                    f"branch {bid} owns placeholder file {owned_path}; own the containing directory or explicit artifact files instead",
+                )
+        allowed_branch_ids = {bid, *dependency_closure(bid, branch_deps)}
+        for item_index, item in enumerate(work_items):
+            if not isinstance(item, dict):
+                continue
+            verification = item.get("verification", [])
+            if not isinstance(verification, list):
+                continue
+            for command_index, command in enumerate(verification):
+                if not isinstance(command, str) or not command.strip():
+                    continue
+                for ref in command_references(command):
+                    owners: list[tuple[str, str, str]] = []
+                    for candidate in ref.get("candidates", []):
+                        if not isinstance(candidate, str):
+                            continue
+                        owner = owner_for_path(candidate, branch_owned_paths)
+                        if owner is not None:
+                            owners.append((owner[0], owner[1], candidate))
+                    if owners:
+                        owner_id, owned_path, matched_path = owners[0]
+                        if owner_id not in allowed_branch_ids:
+                            ref_label = f"python module {ref.get('value')}" if ref.get("kind") == "python_module" else f"path {ref.get('value')}"
+                            defect(
+                                "job.manifest.json",
+                                "critical",
+                                f"branch {bid} work_items[{item_index}].verification[{command_index}] references {ref_label} mapped to {matched_path} owned by {owner_id}, but {bid} does not depend on {owner_id}",
+                            )
+                        continue
+                    value = ref.get("value")
+                    if ref.get("kind") == "path" and isinstance(value, str) and re.search(r"(^|/)tests?/", value):
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"branch {bid} work_items[{item_index}].verification[{command_index}] references unowned test path {value}; tests must be owned by this branch or a completed dependency",
+                        )
     branch_ids_for_overlap = list(branch_owned_paths)
     for left_index, left_id in enumerate(branch_ids_for_overlap):
         for right_id in branch_ids_for_overlap[left_index + 1 :]:
@@ -1456,7 +1675,14 @@ def result(
         runtime_launch_blocked_reason = f"base_ref does not exist: {git_repo_status.get('base_ref')}"
     return {
         "status": status,
+        "status_kind": "schema_lint",
+        "status_meaning": "status reports schema/artifact lint only; runtime launch readiness is reported separately in launch_status",
         "schema_lint_status": status,
+        "launch_status": {
+            "status": runtime_launch_status,
+            "allowed": status == "pass" and runtime_launch_status == "pass",
+            "blocked_reason": runtime_launch_blocked_reason,
+        },
         "runtime_launch_status": runtime_launch_status,
         "runtime_launch_allowed": status == "pass" and runtime_launch_status == "pass",
         "runtime_launch_blocked_reason": runtime_launch_blocked_reason,

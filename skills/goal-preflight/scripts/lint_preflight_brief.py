@@ -43,6 +43,19 @@ PLACEHOLDER_RE = re.compile(r"(<(?!bundle\b)[^>\n]+>|\b(?:TODO|TBD|FIXME|XXX)\b|
 WEAK_DOD_RE = re.compile(r"^(done|complete|completed|implemented|works|working|tests pass|fix it|ship it|as needed)\.?$", re.IGNORECASE)
 COMMAND_START_RE = re.compile(r"^[A-Za-z0-9_./-]+(?:\s+|$)")
 NEGATIVE_STATE_RE = re.compile(r"\b(partial|blocked|failed|negative|unresolved|unsupported|probe-only|preserve)\b", re.IGNORECASE)
+EXACT_SOURCE_RE = re.compile(
+    r"\b("
+    r"exact\s+(?:operation\s+)?(?:list|instance|source|payload|dataset|benchmark|data)|"
+    r"provided\s+in\s+this\s+brief|"
+    r"matching\s+the\s+exact|"
+    r"matches\s+the\s+exact|"
+    r"source[-\s]+of[-\s]+truth|"
+    r"exact\s+FT\d+"
+    r")\b",
+    re.IGNORECASE,
+)
+INLINE_SOURCE_TUPLE_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
+RUNTIME_CAP_RE = re.compile(r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE)
 
 
 def read_json(path: Path) -> dict:
@@ -74,6 +87,40 @@ def string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def collected_text(value: object) -> str:
+    return "\n".join(text for _, text in walk_strings(value, "$"))
+
+
+def has_source_attachment(value: object) -> bool:
+    return isinstance(value, list) and any(isinstance(item, (str, dict)) for item in value)
+
+
+def has_inline_source_payload(text: str) -> bool:
+    if len(text) < 400:
+        return False
+    tuple_count = len(INLINE_SOURCE_TUPLE_RE.findall(text))
+    if tuple_count >= 10:
+        return True
+    lowered = text.lower()
+    return "ft10 = [" in lowered or ("operation list" in lowered and text.count("[") >= 4 and text.count("]") >= 4)
+
+
+def concrete_runtime_cap(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip()) and bool(re.search(r"\d", value))
+    if isinstance(value, dict):
+        if not value:
+            return False
+        return any(
+            isinstance(item, int | float) and not isinstance(item, bool) and item > 0
+            or isinstance(item, str)
+            and item.strip()
+            and bool(re.search(r"\d", item))
+            for item in value.values()
+        )
+    return False
 
 
 def lint_placeholders(defects: list[dict], brief: dict) -> None:
@@ -112,6 +159,34 @@ def lint_goal_surface(defects: list[dict], brief: dict) -> None:
         for index, value in enumerate(values):
             if len(value.split()) < 4 or WEAK_DOD_RE.fullmatch(value.strip()) or PLACEHOLDER_RE.search(value):
                 defect(defects, f"$.{field}[{index}]", "major", "item is too vague to verify deterministically")
+
+
+def lint_source_fidelity(defects: list[dict], brief: dict) -> None:
+    text = collected_text(brief)
+    if not EXACT_SOURCE_RE.search(text):
+        return
+    if has_source_attachment(brief.get("source_attachments")) or has_inline_source_payload(text):
+        return
+    defect(
+        defects,
+        "$.source_attachments",
+        "critical",
+        "exact source/instance/list is referenced but no inline payload or source_attachments entry exists; add a source attachment with SHA or include the exact payload in the brief",
+    )
+
+
+def lint_runtime_cap(defects: list[dict], brief: dict) -> None:
+    text = collected_text(brief)
+    if not RUNTIME_CAP_RE.search(text):
+        return
+    if concrete_runtime_cap(brief.get("runtime_cap")):
+        return
+    defect(
+        defects,
+        "$.runtime_cap",
+        "critical",
+        "success criteria reference a runtime cap but no concrete runtime_cap value or CLI flag is declared",
+    )
 
 
 def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: Path | None) -> None:
@@ -190,6 +265,8 @@ def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
     lint_placeholders(defects, brief)
     lint_policy(defects, normalized if normalized is not None else brief)
     lint_goal_surface(defects, brief)
+    lint_source_fidelity(defects, brief)
+    lint_runtime_cap(defects, brief)
     branches = brief.get("branches")
     if not isinstance(branches, list):
         defect(defects, "$.branches", "critical", "must be an array")
