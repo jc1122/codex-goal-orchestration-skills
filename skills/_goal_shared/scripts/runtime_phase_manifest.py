@@ -43,8 +43,8 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "route_discovery",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/seed.goal.config.json --discover-profile mixed-fast --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json",
-                "agent_does": "only when the user chooses discovery/use-all-available; inspect the summary first, then candidate_routes, accepted_routes, rejected_routes, and goal-config-state.json; create a final explicit goal.config.json from accepted routes with --from-discovery",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/seed.goal.config.json --discover-profile mixed-fast --discover-all-candidates --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json",
+                "agent_does": "only when the user chooses discovery/use-all-available; inspect the summary first, then candidate_routes, checked_roles, accepted_routes, rejected_routes, skipped_routes, unvisited_routes, and goal-config-state.json; create a final explicit goal.config.json from accepted routes with --from-discovery",
                 "pass": "at least one accepted route and every rejected route has reasons",
                 "on_fail": "do not pass unreviewed discovered routes to preflight",
             },
@@ -53,6 +53,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --effort-profile balanced --validation-mode smoke --role-model lite_agent:opencode:provider/model --role-model demanding_agent:opencode:provider/model --harness-spec /abs/custom-harness.json --from-discovery /abs/goal-config-discovery.json --mapping auto --output /abs/goal.config.json --state-output /abs/goal-config-state.json",
                 "artifacts": ["goal.config.json"],
                 "agent_does": "translate captured preferences into explicit flags; omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit; verify requested caps/timeouts/ladders are rendered and every role has harness_smokes",
+            },
+            {
+                "id": "preflight_compatibility",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --for-preflight --stdout summary --output /abs/goal-config-preflight.json --state-output /abs/goal-config-state.json",
+                "pass": "status=pass with config_validation_mode and check_mode recorded",
+                "on_fail": "repair cap, telemetry, validation-mode, or preflight schema defects before model availability checks",
             },
             {
                 "id": "model_check",
@@ -69,7 +75,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "preflight_integration",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --brief /abs/brief.json --repo-root /abs/repo --out-dir /abs/bundle --goal-config /abs/goal.config.json --goal-config-check /abs/goal-config-check.json",
-                "pass": "bundle manifest embeds goal_config/model_policies and lint_goal_bundle.py passes",
+                "pass": "bundle manifest references hashed goal_config artifacts, embeds derived model_policies, and lint_goal_bundle.py passes",
                 "agent_does": "use the smoke report as --goal-config-check when the user requested smoke-validated harnesses",
             },
         ],
@@ -94,26 +100,51 @@ PHASES: dict[str, dict[str, Any]] = {
                 "avoid": "do not inspect Python source or runtime contracts for brief shape; use --brief-schema-json, --example-brief, and lint defects",
             },
             {
+                "id": "guided_pipeline",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/prepare_goal_bundle.py --brief /abs/brief.json --repo-root /abs/repo --out-dir /abs/bundle --json",
+                "artifacts": [
+                    "preflight.brief.lint.json",
+                    "goal-config-selection.json",
+                    "job.manifest.json",
+                    "preflight.lint.json",
+                    "repair-gate.json",
+                    "readiness.json",
+                    "goal-bootloader.md",
+                    "preflight.pipeline.json",
+                ],
+                "agent_does": "prefer this one-shot path for normal preflight; it auto-detects candidate configs, remediates preflight caps/telemetry when possible, persists canonical artifacts, and blocks non-git runtime handoff",
+                "pass": "pipeline status=pass and readiness status=pass",
+                "on_fail": "inspect the pipeline JSON, canonical lint/check artifacts, and readiness runtime_gate before running individual stages",
+            },
+            {
                 "id": "brief_lint",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_preflight_brief.py --brief /abs/brief.json --repo-root /abs/repo",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_preflight_brief.py --brief /abs/brief.json --repo-root /abs/repo --json --output /abs/bundle/preflight.brief.lint.json",
                 "pass": "status=pass",
-                "on_fail": "repair only reported defects",
+                "on_fail": "manual fallback only; repair only reported defects",
             },
             {
                 "id": "bundle",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py --brief /abs/brief.json --repo-root /abs/repo --out-dir /abs/bundle",
                 "artifacts": ["job.manifest.json", "main.prompt.md", "branches/*.prompt.md", "goal-bootloader.md"],
+                "agent_does": "manual fallback only when guided_pipeline needs stage isolation",
             },
             {
                 "id": "bundle_lint",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir /abs/bundle",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir /abs/bundle --json --output /abs/bundle/preflight.lint.json",
                 "pass": "status=pass",
             },
             {
                 "id": "script_repair_gate",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope preflight --json",
-                "pass": "decision=needs_semantic_decision or direct script actions completed and gate rerun clean",
-                "agent_does": "run deterministic script suggestions before any optional Lite or semantic repair pass",
+                "run": "python3 $GOAL_SKILLS_ROOT/_goal_shared/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope preflight --json --output /abs/bundle/repair-gate.json",
+                "pass": "decision=pass_no_actions or direct script actions completed and gate rerun clean",
+                "agent_does": "run deterministic script suggestions before any optional Lite or semantic repair pass; rerun until decision=pass_no_actions",
+            },
+            {
+                "id": "readiness",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir /abs/bundle --readiness --json --output /abs/bundle/readiness.json",
+                "agent_does": "capture compact readiness snapshot: config compatibility, bundle lint, cap settings, route policy, telemetry mode, branch DAG, git status, repair gate, runtime gate, and next command",
+                "pass": "readiness status=pass",
+                "on_fail": "do not continue into /goal if readiness is blocked or lint/report defects remain",
             },
             {
                 "id": "handoff",
@@ -124,6 +155,7 @@ PHASES: dict[str, dict[str, Any]] = {
         "details": [
             "references/actionability-rubric.md only for vague source material",
             "references/bundle-contract.md only when bundle lint reports schema defects",
+            "share only compact readiness output and next command for handoff when user asks for compact prompt mode",
         ],
     },
     "goal-main-orchestrator": {
@@ -144,8 +176,8 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "script_repair_gate",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope main --json",
-                "pass": "decision=needs_semantic_decision before launching prompt audit or branch orchestrators",
-                "agent_does": "complete script_action_available commands first; launch a model only after the gate returns needs_semantic_decision",
+                "pass": "decision=pass_no_actions before launching prompt audit or branch orchestrators",
+                "agent_does": "complete script_actions_needed commands first; launch a model only after the gate returns pass_no_actions",
             },
             {
                 "id": "prompt_audit",
@@ -202,8 +234,8 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "script_repair_gate",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope branch --branch-id Bxx --json",
-                "pass": "decision=needs_semantic_decision before worker packet launch",
-                "agent_does": "complete script_action_available commands first; launch workers only after the gate allows semantic work",
+                "pass": "decision=pass_no_actions before worker packet launch",
+                "agent_does": "complete script_actions_needed commands first; launch workers only after the gate allows semantic work",
             },
             {
                 "id": "context_pack",
@@ -239,7 +271,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "pre_reviewer_script_gate",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope branch --branch-id Bxx --status /abs/bundle/branches/Bxx.status.json --json",
-                "pass": "decision=needs_semantic_decision or accepted reviewer reuse with telemetry",
+                "pass": "decision=pass_no_actions or accepted reviewer reuse with telemetry",
                 "agent_does": "prefer deterministic repair/reuse evidence over reviewer model launch",
             },
             {
@@ -268,7 +300,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "script_repair_gate",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --scope amender --status /abs/bundle/branches/Bxx.status.json --json",
-                "pass": "decision=needs_semantic_decision before semantic amender packet launch",
+                "pass": "decision=pass_no_actions before semantic amender packet launch",
                 "agent_does": "use amendment decision and blocker repair commands before launching an amender model",
             },
             {

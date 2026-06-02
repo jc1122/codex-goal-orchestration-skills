@@ -61,15 +61,26 @@ def action(actions: list[dict], *, kind: str, reason: str, command: str | None =
 
 def check_context_index(actions: list[dict], checks: list[dict], repo_root: Path | None) -> None:
     if repo_root is None:
-        checks.append({"name": "context_index", "status": "skipped", "reason": "--repo-root not supplied"})
+        checks.append(
+            {"name": "context_index", "status": "skipped", "severity": "info", "reason": "--repo-root not supplied"},
+        )
         return
     index = repo_root / "maintenance" / "agent-context-index.json"
     package = repo_root / "package.json"
     if not index.exists() or not package.exists():
-        checks.append({"name": "context_index", "status": "skipped", "reason": "repo has no maintenance context index"})
+        checks.append(
+            {"name": "context_index", "status": "skipped", "severity": "info", "reason": "repo has no maintenance context index"},
+        )
         return
     result = run(["npm", "run", "check:context", "--silent"], cwd=repo_root)
-    checks.append({"name": "context_index", "status": "pass" if result.returncode == 0 else "failed", "command": "npm run check:context --silent"})
+    checks.append(
+        {
+            "name": "context_index",
+            "status": "pass" if result.returncode == 0 else "failed",
+            "severity": "info" if result.returncode == 0 else "critical",
+            "command": "npm run check:context --silent",
+        }
+    )
     if result.returncode != 0:
         action(
             actions,
@@ -229,7 +240,7 @@ def gate(args: argparse.Namespace) -> dict:
     check_scheduler(actions, checks, manifest, bundle_dir, args.scope, args.branch_id)
     check_telemetry_summary(actions, checks, bundle_dir)
     check_amendments_and_blockers(actions, checks, bundle_dir, status_path, args.branch_id)
-    decision = "script_action_available" if actions else "needs_semantic_decision"
+    decision = "script_actions_needed" if actions else "pass_no_actions"
     return {
         "schema_version": 1,
         "skill": current_skill_name(),
@@ -237,7 +248,7 @@ def gate(args: argparse.Namespace) -> dict:
         "manifest": manifest_path.as_posix(),
         "bundle_dir": bundle_dir.as_posix(),
         "decision": decision,
-        "model_launch_allowed": decision == "needs_semantic_decision",
+        "model_launch_allowed": decision == "pass_no_actions",
         "checks": checks,
         "actions": actions,
     }
@@ -264,7 +275,7 @@ def main() -> int:
         print(json.dumps(data, indent=2, sort_keys=True))
     else:
         print(output_path)
-    return 0 if data["decision"] == "needs_semantic_decision" else 2
+    return 0 if data["decision"] == "pass_no_actions" else 2
 
 
 if __name__ == "__main__":

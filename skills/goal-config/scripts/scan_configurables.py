@@ -27,9 +27,9 @@ def build_inventory(contract: Any) -> dict[str, Any]:
         "schema_version": 1,
         "status": "pass",
         "usage_units": {
-            "tokens": ["input", "output", "reasoning", "cache_read", "cache_write"],
-            "characters": ["prompt", "response", "stdout", "stderr"],
-            "time": ["elapsed_ms", "timeout_seconds"],
+            "token_counts": ["input", "output", "reasoning", "cache_read", "cache_write"],
+            "text_counts": ["prompt_chars", "response_chars", "stdout_chars", "stderr_chars"],
+            "time_counts": ["elapsed_ms", "timeout_seconds"],
         },
         "categories": {
             "aggressiveness": {
@@ -159,7 +159,9 @@ def build_preference_questions() -> dict[str, Any]:
                 "Show every option for each missing section with its short description.",
                 "Ask all missing sections in one compact pass when the user asks to continue or wants the config completed.",
                 "Use goal-config-state.json after create/check/discovery so the next step is deterministic.",
+                "For preflight compatibility, always run check_goal_config.py --for-preflight before heavy model checks.",
                 "For custom options, collect the requested exact harness/provider/model or numeric values before creating goal.config.json.",
+                "Prefer smoke checks for normal validation; reserve debug mode for trace-analysis workflows.",
             ],
         },
         "do_not_create_until": [
@@ -203,14 +205,18 @@ def build_preference_questions() -> dict[str, Any]:
                     },
                     {
                         "id": "discover_available",
-                        "label": "Discover available",
-                        "description": "List candidate models from configured CLIs, smoke selected candidates, then report accepted_routes and rejected_routes. Slower but useful when the user says to use all available models.",
+                        "label": "Discover all candidates",
+                        "description": "Create or reuse a seed config, list configured candidate models from CLIs, smoke every candidate unless provider auth fails, then report accepted_routes, rejected_routes, skipped_routes, and unvisited_routes. Use this for discovery-path coverage checks.",
                         "needs": ["optional provider/model filter", "roles each accepted route may serve when auto mapping is not enough"],
                         "maps_to": [
-                            "check_goal_config.py --discover-profile mixed-fast --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json",
+                            "create_goal_config.py --preset current-default --output /abs/seed.goal.config.json --state-output /abs/goal-config-state.json",
+                            "check_goal_config.py --config /abs/seed.goal.config.json --discover-profile mixed-fast --discover-all-candidates --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json",
                             "create_goal_config.py --from-discovery /abs/goal-config-discovery.json --mapping auto --effort-profile PROFILE --validation-mode MODE --output /abs/goal.config.json --state-output /abs/goal-config-state.json",
+                            "check_goal_config.py --config /abs/goal.config.json --require-models --smoke --reuse-smoke-report /abs/goal-config-discovery.json --output /abs/goal-config-smoke.json --state-output /abs/goal-config-state.json",
                             "accepted_routes",
                             "rejected_routes",
+                            "skipped_routes",
+                            "unvisited_routes",
                         ],
                     },
                     {
@@ -275,7 +281,7 @@ def build_preference_questions() -> dict[str, Any]:
                     {
                         "id": "thorough",
                         "label": "Thorough",
-                        "description": "Use higher allowed parallelism within hard caps and longer timeouts for harder goals.",
+                        "description": "Use higher requested parallelism and longer timeouts for harder goals. If values exceed hard preflight caps, compatibility capping is recorded under compatibility.aggressiveness_adjustments.",
                         "maps_to": ["create_goal_config.py --effort-profile thorough"],
                         "values": {
                             "max_active_branch_agents": 6,
@@ -300,9 +306,9 @@ def build_preference_questions() -> dict[str, Any]:
                 "order": 3,
                 "title": "Validation and debug telemetry",
                 "ask_when_missing": ["model check", "smoke requirement", "debug telemetry intent"],
-                "explain_to_user": "This decides how hard the harness is tested before orchestration and whether preflight should request full debug telemetry for later efficiency analysis.",
+                "explain_to_user": "This decides how hard the harness is tested before orchestration and whether preflight should request debug telemetry for trace analysis. Smoke is the normal path.",
                 "question": "Choose the validation and telemetry mode.",
-                "recommended_default": "fail-closed model check plus smoke for new or changed harnesses",
+                "recommended_default": "smoke is the normal default validation; debug only for trace analysis",
                 "options": [
                     {
                         "id": "model_check_only",
@@ -316,7 +322,7 @@ def build_preference_questions() -> dict[str, Any]:
                     {
                         "id": "model_check_plus_smoke",
                         "label": "Model check plus smoke",
-                        "description": "Verify model availability and run assistant smoke tests for selected roles before preflight consumes the config.",
+                        "description": "Lean verification: verify model availability and run assistant smoke tests for selected roles before preflight consumes the config.",
                         "maps_to": [
                             "create_goal_config.py --validation-mode smoke",
                             "check_goal_config.py --require-models --smoke --stdout summary --output /abs/goal-config-smoke.json --state-output /abs/goal-config-state.json",
@@ -325,7 +331,7 @@ def build_preference_questions() -> dict[str, Any]:
                     {
                         "id": "full_debug_trace",
                         "label": "Smoke plus debug telemetry",
-                        "description": "Run model checks and smoke tests, then request debug telemetry in the preflight brief for full trace analysis.",
+                        "description": "Run model checks and smoke tests, then request debug telemetry in the preflight brief for trace analysis. This is heavier and should be chosen only when trace-level diagnosis is requested.",
                         "maps_to": [
                             "create_goal_config.py --validation-mode debug",
                             "check_goal_config.py --require-models --smoke --stdout summary --output /abs/goal-config-smoke.json --state-output /abs/goal-config-state.json",
@@ -335,7 +341,7 @@ def build_preference_questions() -> dict[str, Any]:
                     {
                         "id": "custom_validation",
                         "label": "Custom validation",
-                        "description": "Ask which roles need smoke tests and whether debug telemetry should be enabled.",
+                        "description": "Ask which roles need smoke tests and whether debug telemetry should be enabled for trace analysis.",
                         "needs": ["roles to smoke", "debug telemetry yes/no"],
                         "maps_to": ["check_goal_config.py --harness ROLE", "optional brief telemetry_mode=debug"],
                     },

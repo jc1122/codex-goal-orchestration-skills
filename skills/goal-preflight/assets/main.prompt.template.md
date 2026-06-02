@@ -11,12 +11,16 @@ Base ref: {base_ref}
 
 {source_summary}
 
+## Source Attachments
+
+{source_attachments}
+
 ## Runtime Rules
 
 - Use $goal-main-orchestrator. Treat `job.manifest.json` as the contract and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 - Treat manifest paths as bundle-root relative and worktree paths as repo-root relative. Reject absolute paths, backslashes, and `..` traversal.
 - Run availability bootstrap and fresh model-catalog capture before prompt audit. Do not create branches until `prompt-audit.json` pins this manifest and repository root with `status=pass`.
-- Run `script_only_repair_gate.py --scope main` before prompt audit or branch launch. Complete any `script_action_available` commands first; launch a model only after the gate returns `needs_semantic_decision`.
+- Run `script_only_repair_gate.py --scope main` before prompt audit or branch launch. Complete any `script_actions_needed` commands first; launch a model only after the gate returns `pass_no_actions`.
 - Parallelism is the default. Respect max_active_branch_agents={max_active_branch_agents}; never exceed 4. Saturate branch orchestrator slots and close finished branch orchestrator agents. Set absolute bundle paths and run:
 
 ```bash

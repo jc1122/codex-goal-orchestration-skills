@@ -161,9 +161,15 @@ def worker_policy_from_manifest(manifest: dict | None) -> dict:
     return CONTRACT.WORKER_MODEL_POLICY
 
 
-def goal_config_from_manifest(manifest: dict | None) -> dict | None:
+def goal_config_from_manifest(manifest: dict | None, manifest_path: Path | None = None) -> dict | None:
     if isinstance(manifest, dict) and isinstance(manifest.get("goal_config"), dict):
         return manifest["goal_config"]
+    if isinstance(manifest, dict) and manifest_path is not None:
+        config_path = manifest.get("goal_config_path")
+        if isinstance(config_path, str) and config_path.strip():
+            candidate = (manifest_path.parent / config_path).resolve()
+            if candidate.is_file():
+                return load_json(candidate)
     return None
 
 
@@ -1550,6 +1556,7 @@ def main() -> int:
         raise SystemExit(f"branch is not a safe git branch name: {branch!r}")
     manifest_branch_id = branch
     manifest: dict | None = None
+    manifest_path: Path | None = None
     telemetry_debug = False
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
     owned_files = normalize_owned_paths(args.owned_file)
@@ -1673,7 +1680,8 @@ def main() -> int:
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
         if not selection_reason:
-            if goal_config_from_manifest(manifest):
+            goal_config = goal_config_from_manifest(manifest, manifest_path)
+            if goal_config:
                 selection_reason = (
                     f"{route_class} route class selected from goal_config worker_model_policy: "
                     + ", ".join(selected_ladder)
@@ -1683,7 +1691,12 @@ def main() -> int:
         if model_catalog and model_catalog.get("filtered_aliases"):
             aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
             selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
-        validate_route_class_selection(route_class, selected_ladder, selection_reason, worker_policy if goal_config_from_manifest(manifest) else None)
+        validate_route_class_selection(
+            route_class,
+            selected_ladder,
+            selection_reason,
+            worker_policy if goal_config_from_manifest(manifest, manifest_path) else None,
+        )
 
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
     packet_dir = out_dir / packet_id
@@ -1784,7 +1797,7 @@ def main() -> int:
         review_semantic_hashes=review_semantic_hashes,
         review_reuse_policy=review_reuse_policy,
         telemetry_debug=telemetry_debug,
-        goal_config=goal_config_from_manifest(manifest),
+        goal_config=goal_config_from_manifest(manifest, manifest_path),
     )
     if launch_config is not None:
         write_json(packet_dir / "launch-config.json", launch_config)

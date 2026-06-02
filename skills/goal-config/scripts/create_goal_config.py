@@ -55,6 +55,58 @@ def load_contract() -> Any:
     return module
 
 
+def normalize_aggressiveness_with_preflight_caps(
+    config: dict[str, Any],
+    requested: dict[str, int],
+    *,
+    source: str,
+    contract: Any,
+) -> None:
+    caps = {
+        "max_active_branch_agents": (1, int(contract.MAX_ACTIVE_BRANCH_AGENTS)),
+        "max_active_worker_packets": (1, int(contract.MAX_WORKER_PACKETS_PER_BRANCH)),
+        "max_waves": (1, int(contract.MAX_WAVES)),
+    }
+
+    adjusted: dict[str, int] = {}
+    adjustments: list[str] = []
+    for key, (minimum, maximum) in caps.items():
+        value = int(requested[key])
+        normalized = max(minimum, min(value, maximum))
+        adjusted[key] = normalized
+        if normalized != value:
+            adjustments.append(f"{key} {value} -> {normalized}")
+        config["aggressiveness"][key] = normalized
+
+    config["aggressiveness"]["total_branch_cap"] = adjusted["max_active_branch_agents"] * adjusted["max_waves"]
+
+    if not adjustments:
+        return
+
+    compatibility = config.setdefault("compatibility", {})
+    history = compatibility.setdefault("aggressiveness_adjustments", [])
+    if not isinstance(history, list):
+        history = []
+        compatibility["aggressiveness_adjustments"] = history
+    history.append(
+        {
+            "source": source,
+            "requested": {
+                "max_active_branch_agents": requested["max_active_branch_agents"],
+                "max_active_worker_packets": requested["max_active_worker_packets"],
+                "max_waves": requested["max_waves"],
+            },
+            "applied": {
+                "max_active_branch_agents": adjusted["max_active_branch_agents"],
+                "max_active_worker_packets": adjusted["max_active_worker_packets"],
+                "max_waves": adjusted["max_waves"],
+            },
+            "adjustments": adjustments,
+            "total_branch_cap": config["aggressiveness"]["total_branch_cap"],
+        }
+    )
+
+
 def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str, str]:
     parts = spec.split(":")
     if len(parts) < 3:
@@ -177,9 +229,9 @@ def default_harnesses() -> dict[str, Any]:
         },
         "antigravity": {
             "kind": "generic-cli",
-            "command": "antigravity",
-            "smoke_args": ["{prompt}"],
-            "run_args": ["{prompt_file}"],
+            "command": "agy",
+            "smoke_args": ["--print", "{prompt}"],
+            "run_args": ["--print", "{prompt}"],
             "run_readback": "stdout",
         },
     }
@@ -207,31 +259,38 @@ def parse_ladder(value: str | None) -> list[str] | None:
     return ladder
 
 
-def load_harness_spec(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+def load_harness_spec(value: str) -> dict[str, Any]:
+    source = value.strip()
+    if source.startswith("{"):
+        data = json.loads(source)
+        source_name = "inline --harness-spec"
+    else:
+        path = Path(value)
+        data = json.loads(path.read_text(encoding="utf-8"))
+        source_name = path.as_posix()
     if not isinstance(data, dict):
-        raise SystemExit(f"harness spec must be a JSON object: {path}")
+        raise SystemExit(f"harness spec must be a JSON object: {source_name}")
     if "name" in data:
         name = data.get("name")
         if not isinstance(name, str) or not name:
-            raise SystemExit(f"harness spec name must be non-empty: {path}")
+            raise SystemExit(f"harness spec name must be non-empty: {source_name}")
         spec = {key: value for key, value in data.items() if key != "name"}
         return {name: spec}
     return data
 
 
-def apply_harness_specs(config: dict[str, Any], paths: list[Path]) -> None:
+def apply_harness_specs(config: dict[str, Any], specs: list[str]) -> None:
     harnesses = config.setdefault("harnesses", default_harnesses())
-    for path in paths:
-        for name, spec in load_harness_spec(path).items():
+    for value in specs:
+        for name, spec in load_harness_spec(value).items():
             if not isinstance(name, str) or not name:
-                raise SystemExit(f"harness spec has invalid name in {path}")
+                raise SystemExit(f"harness spec has invalid name in {value}")
             if not isinstance(spec, dict):
-                raise SystemExit(f"harness spec for {name!r} must be an object: {path}")
+                raise SystemExit(f"harness spec for {name!r} must be an object: {value}")
             harnesses[name] = spec
 
 
-def apply_effort_profile(config: dict[str, Any], profile: str | None) -> None:
+def apply_effort_profile(config: dict[str, Any], profile: str | None, contract: Any) -> None:
     if profile is None:
         return
     values = EFFORT_PROFILES.get(profile)
@@ -239,11 +298,21 @@ def apply_effort_profile(config: dict[str, Any], profile: str | None) -> None:
         raise SystemExit(f"unknown effort profile: {profile}")
     aggressiveness = config.setdefault("aggressiveness", {})
     effort = config.setdefault("effort", {})
+    requested = {
+        "max_active_branch_agents": int(values["max_active_branch_agents"]),
+        "max_active_worker_packets": int(values["max_active_worker_packets"]),
+        "max_waves": int(values["max_waves"]),
+    }
     for key in ("max_active_branch_agents", "max_active_worker_packets", "max_waves"):
-        aggressiveness[key] = values[key]
+        aggressiveness[key] = requested[key]
+    normalize_aggressiveness_with_preflight_caps(
+        config,
+        requested,
+        source=f"effort-profile:{profile}",
+        contract=contract,
+    )
     for key in ("lite_timeout_seconds", "demanding_timeout_seconds"):
         effort[key] = values[key]
-    aggressiveness["total_branch_cap"] = values["max_active_branch_agents"] * values["max_waves"]
     config["effort_profile"] = profile
 
 
@@ -272,9 +341,11 @@ def positive_int(value: int, field: str) -> int:
     return value
 
 
-def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace) -> None:
+def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace, contract: Any) -> None:
     aggressiveness = config.setdefault("aggressiveness", {})
     effort = config.setdefault("effort", {})
+    requested: dict[str, int] = {}
+    has_cap_override = False
     for arg_name, key in {
         "max_active_branch_agents": "max_active_branch_agents",
         "max_active_worker_packets": "max_active_worker_packets",
@@ -283,6 +354,10 @@ def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace) ->
         value = getattr(args, arg_name)
         if value is not None:
             aggressiveness[key] = positive_int(value, f"--{arg_name.replace('_', '-')}")
+            has_cap_override = True
+        current = aggressiveness.get(key)
+        if isinstance(current, int) and not isinstance(current, bool):
+            requested[key] = int(current)
 
     for arg_name, key in {
         "lite_timeout_seconds": "lite_timeout_seconds",
@@ -291,6 +366,14 @@ def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace) ->
         value = getattr(args, arg_name)
         if value is not None:
             effort[key] = positive_int(value, f"--{arg_name.replace('_', '-')}")
+
+    if has_cap_override and len(requested) == 3:
+        normalize_aggressiveness_with_preflight_caps(
+            config,
+            requested,
+            source="numeric overrides",
+            contract=contract,
+        )
 
     if "max_active_branch_agents" in aggressiveness and "max_waves" in aggressiveness:
         aggressiveness["total_branch_cap"] = int(aggressiveness["max_active_branch_agents"]) * int(
@@ -612,8 +695,8 @@ def finalize_config(config: dict[str, Any], contract: Any, args: argparse.Namesp
     apply_harness_specs(config, args.harness_spec)
     apply_discovery_mapping(config, args.from_discovery, args.mapping)
     apply_role_overrides(config["models"], args.role_model, args.provider)
-    apply_effort_profile(config, args.effort_profile)
-    apply_numeric_overrides(config, args)
+    apply_effort_profile(config, args.effort_profile, contract)
+    apply_numeric_overrides(config, args, contract)
     apply_validation_mode(config, args.validation_mode)
     ladders = config.setdefault("model_ladders", {})
     for name, value in {
@@ -706,19 +789,7 @@ def base_config(contract: Any) -> dict[str, Any]:
         "telemetry": {
             "mode": "standard",
             "group_by": ["role", "harness", "provider", "model"],
-            "collect": [
-                "prompt_chars",
-                "response_chars",
-                "stdout_chars",
-                "stderr_chars",
-                "input_tokens",
-                "output_tokens",
-                "reasoning_tokens",
-                "cache_read_tokens",
-                "cache_write_tokens",
-                "elapsed_ms",
-                "returncode",
-            ],
+            "collect": list(contract.TELEMETRY_COLLECT_ITEMS),
             "raw_text": False,
         },
     }
@@ -785,7 +856,8 @@ def write_state(config: dict[str, Any], output: Path | None, state_output: Path 
         )
         if smoke:
             next_command += " --smoke"
-        next_command += " --output /abs/goal-config-check.json"
+        check_report = "/abs/goal-config-smoke.json" if smoke else "/abs/goal-config-check.json"
+        next_command += f" --output {check_report}"
     state = {
         "schema_version": 1,
         "phase": "config_created",
@@ -838,9 +910,8 @@ def main() -> int:
     parser.add_argument(
         "--harness-spec",
         action="append",
-        type=Path,
         default=[],
-        help="JSON harness spec object or {name, ...spec}. Repeat to add/override CLI harnesses.",
+        help="Path to a JSON harness spec, or an inline JSON object. Repeat to add/override CLI harnesses.",
     )
     parser.add_argument(
         "--role-model",

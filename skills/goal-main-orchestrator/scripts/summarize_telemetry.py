@@ -792,7 +792,6 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
         "drift_count": 0,
     }
     drift_packet_ids: list[str] = []
-    packets = []
     defects = []
     packet_attempts: list[dict[str, Any]] = []
 
@@ -829,7 +828,6 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
 
         text_metrics = data.get("text_metrics") if isinstance(data.get("text_metrics"), dict) else {}
         model_usage = data.get("model_usage") if isinstance(data.get("model_usage"), dict) else {}
-        time_metrics = data.get("time_metrics") if isinstance(data.get("time_metrics"), dict) else {}
         success_metrics = data.get("success_metrics") if isinstance(data.get("success_metrics"), dict) else {}
         determinism_payload = data.get("determinism") if isinstance(data.get("determinism"), dict) else {}
         attempts = model_usage.get("attempts") if isinstance(model_usage.get("attempts"), list) else []

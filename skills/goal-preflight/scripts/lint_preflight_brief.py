@@ -134,8 +134,10 @@ def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: P
                 if not is_repo_relative_path(value):
                     defect(defects, path, "critical", "must be repo-relative without traversal or backslashes")
                     continue
-                if repo_root is not None and key == "context_files" and not (repo_root / value).exists():
-                    defect(defects, path, "major", f"context file does not exist under repo root: {value}")
+                if key == "context_files":
+                    if repo_root is not None and not (repo_root / value).exists():
+                        defect(defects, path, "major", f"context file does not exist under repo root: {value}")
+                    continue
 
 
 def lint_verification_and_dod(defects: list[dict], branch: dict, branch_path: str) -> None:

@@ -30,7 +30,7 @@ Max worker packets for this branch: 4
 
 Use $goal-branch-orchestrator. Treat `job.manifest.json` as the policy source and run `runtime_phase_manifest.py --markdown`; do not read skill Python source unless debugging a failed script.
 
-Before worker dispatch or reviewer dispatch, run `script_only_repair_gate.py --scope branch`. Complete any `script_action_available` commands first; launch workers or reviewers only after the gate returns `needs_semantic_decision` or reviewer reuse has been accepted with telemetry.
+Before worker dispatch or reviewer dispatch, run `script_only_repair_gate.py --scope branch`. Complete any `script_actions_needed` commands first; launch workers or reviewers only after the gate returns `pass_no_actions` or reviewer reuse has been accepted with telemetry.
 
 Cap: {max_active_worker_packets} active, 4 total; never exceed either. Launch ready workers as a rolling saturated pool with `render_worker_schedule.py --list-ready` before first launch and after each completion.
 

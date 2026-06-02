@@ -4,13 +4,13 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 import os
 import shlex
 import shutil
 import subprocess
 import tempfile
 import time
-import importlib.util
 from pathlib import Path
 
 from fixture_support import (
@@ -414,6 +414,16 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     serial_reasons = serial_manifest.get("parallelization", {}).get("serial_reasons", [])
     if not serial_reasons or not any("dependency" in item for item in serial_reasons):
         raise SystemExit(f"serial-chain topology fixture did not synthesize dependency serial_reasons: {serial_reasons!r}")
+    serial_waves = serial_manifest.get("waves", [])
+    serial_wave_by_branch = {
+        branch_id: {"wave": wave.get("id"), "dependency_level": wave.get("dependency_level")}
+        for wave in serial_waves
+        for branch_id in wave.get("branches", [])
+    }
+    if serial_wave_by_branch.get("B01", {}).get("wave") == serial_wave_by_branch.get("B02", {}).get("wave"):
+        raise SystemExit(f"dependency-aware waves should not put dependent branches in the same wave: {serial_waves!r}")
+    if serial_wave_by_branch.get("B03", {}).get("dependency_level") != 3:
+        raise SystemExit(f"dependency-aware waves should preserve topological dependency levels: {serial_waves!r}")
 
     overlap_brief = {
         "job_id": "topology-cross-overlap",
@@ -584,6 +594,45 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
         expect=1,
     )
     assert_all_contains(invalid.stdout, ["contains placeholder text", "concrete top-level goal", "context file does not exist", "must include at least one exact verification command"], "invalid brief lint fixture")
+    owned_only_missing_brief = {
+        "job_id": "brief-lint-owned-missing",
+        "base_ref": "main",
+        "goal": "Validate brief lint behavior for writable-owned path targets.",
+        "source_summary": "This fixture confirms expected new file paths do not have to pre-exist in the repo.",
+        "required_evidence": ["The linter accepts missing owned paths when they are declared as writable targets."],
+        "final_dod": ["The owned path is not required to pre-exist and is treated as a writable target."],
+        "branches": [
+            {
+                "id": "B01",
+                "objective": "Validate owned paths are treated as writable targets and do not precondition file existence.",
+                "max_active_worker_packets": 1,
+                "worker_serial_reasons": ["Single lint fixture work item."],
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Read the repository and propose a new file.",
+                        "owned_paths": ["owned_target_fixture_does_not_exist.md"],
+                        "context_files": ["README.md"],
+                        "verification": ["python3 -m py_compile skills/goal-preflight/scripts/lint_preflight_brief.py"],
+                        "dod": ["Missing owned path is allowed because the worker owns it."],
+                    }
+                ],
+            }
+        ],
+    }
+    owned_only_missing_path = tmp_path / "brief-lint-owned-missing.json"
+    write_json(owned_only_missing_path, owned_only_missing_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_preflight_brief.py",
+            "--brief",
+            owned_only_missing_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--json",
+        ]
+    )
 
 
 def amendment_branch(branch_id: str, owned_path: str, *, depends_on: list[str] | None = None, branch_name: str | None = None) -> dict:
@@ -2169,8 +2218,92 @@ def create_goal_fixture_bundle(tmp_path: Path) -> Path:
             bundle.as_posix(),
         ]
     )
-    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+    brief_lint = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_preflight_brief.py",
+                "--brief",
+                BRIEF.as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--json",
+                "--output",
+                (bundle / "preflight.brief.lint.json").as_posix(),
+            ]
+        ).stdout
+    )
+    if brief_lint.get("status") != "pass":
+        raise SystemExit(f"canonical brief lint fixture should pass: {brief_lint!r}")
+    external_lint_path = tmp_path / "bundle-lint-outside.json"
+    lint_report = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_goal_bundle.py",
+                "--bundle-dir",
+                bundle.as_posix(),
+                "--json",
+                "--output",
+                external_lint_path.as_posix(),
+            ]
+        ).stdout
+    )
+    canonical_lint_path = bundle / "preflight.lint.json"
+    if read_json(external_lint_path) != lint_report or read_json(canonical_lint_path) != lint_report:
+        raise SystemExit("lint_goal_bundle.py --output should also persist canonical bundle/preflight.lint.json")
+    if lint_report.get("bundle_path") != bundle.resolve().as_posix():
+        raise SystemExit(f"lint report should include bundle_path: {lint_report.get('bundle_path')!r}")
+    if lint_report.get("manifest_path") != (bundle / "job.manifest.json").resolve().as_posix():
+        raise SystemExit(f"lint report should include manifest_path: {lint_report.get('manifest_path')!r}")
+    if not isinstance(lint_report.get("branch_count"), int) or lint_report.get("branch_count", 0) < 1:
+        raise SystemExit(f"lint report should include a positive branch_count: {lint_report.get('branch_count')!r}")
+    if lint_report.get("config_check_status") != "not_configured":
+        raise SystemExit(f"lint report should expose config_check_status: {lint_report.get('config_check_status')!r}")
+    git_repo_status = lint_report.get("git_repo_status")
+    if (
+        not isinstance(git_repo_status, dict)
+        or not isinstance(git_repo_status.get("repo_is_git"), bool)
+        or git_repo_status.get("base_ref_status") not in {"exists", "not_checked", "missing", "not_requested"}
+    ):
+        raise SystemExit(f"lint report should expose git repo status metadata: {git_repo_status!r}")
+    if lint_report.get("compatibility_status") != "not_applicable":
+        raise SystemExit(f"lint report should expose compatibility status metadata: {lint_report.get('compatibility_status')!r}")
     return bundle
+
+
+def run_repair_gate_fixture(bundle: Path) -> None:
+    repair_gate_path = bundle / "repair-gate.json"
+    decision = json.loads(
+        run(
+            [
+                "python3",
+                "skills/_goal_shared/scripts/script_only_repair_gate.py",
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--bundle-dir",
+                bundle.as_posix(),
+                "--scope",
+                "preflight",
+                "--json",
+                "--output",
+                repair_gate_path.as_posix(),
+            ]
+        ).stdout
+    )
+    if read_json(repair_gate_path) != decision:
+        raise SystemExit("script_only_repair_gate.py --output should persist canonical repair-gate.json")
+    if decision.get("decision") != "pass_no_actions":
+        raise SystemExit(f"repair gate should return pass_no_actions on clean fixtures: {decision.get('decision')!r}")
+    if decision.get("model_launch_allowed") is not True:
+        raise SystemExit(f"repair gate should allow model launch when no actions are needed: {decision!r}")
+    context_index = next((item for item in decision.get("checks", []) if item.get("name") == "context_index"), None)
+    if context_index is None:
+        raise SystemExit(f"repair gate should emit context_index check entry: {decision!r}")
+    if context_index.get("status") != "skipped":
+        raise SystemExit(f"context_index should be skipped without --repo-root: {context_index!r}")
+    if context_index.get("severity") != "info":
+        raise SystemExit(f"context_index skip must be severity info: {context_index!r}")
 
 
 def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
@@ -2242,7 +2375,7 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
         raise SystemExit(f"deterministic prompt audit should fail stale validator snippets: {stale_audit!r}")
 
 
-def run_phase_manifest_and_schema_fixtures() -> None:
+def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     preflight_phase_manifest = run(
         ["python3", "skills/goal-preflight/scripts/runtime_phase_manifest.py", "--markdown"]
     ).stdout
@@ -2261,6 +2394,89 @@ def run_phase_manifest_and_schema_fixtures() -> None:
     assert_all_contains(preflight_phase_manifest, ["telemetry_mode=debug", "debug mode"], "preflight phase manifest")
     assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit"], "main phase manifest")
     assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
+    readiness = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/render_goal_bootloader.py",
+            "--bundle-dir",
+            bundle.as_posix(),
+            "--readiness",
+        ]
+    ).stdout
+    assert_all_contains(
+        readiness,
+        [
+            "status=",
+            "config_compatibility=",
+            "route_policy=",
+            "caps:",
+            "telemetry_mode=",
+            "branch_dag:",
+            "bootloader=",
+            "git_status=",
+            "runtime_gate=",
+            "repair_gate=",
+            "next_command=",
+        ],
+        "preflight readiness summary",
+    )
+    readiness_json = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/render_goal_bootloader.py",
+                "--bundle-dir",
+                bundle.as_posix(),
+                "--readiness",
+                "--json",
+            ]
+        ).stdout
+    )
+    readiness_output = bundle.parent / f"{bundle.name}-readiness.json"
+    readiness_with_output = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/render_goal_bootloader.py",
+            "--bundle-dir",
+            bundle.as_posix(),
+            "--readiness",
+            "--json",
+            "--output",
+            readiness_output.as_posix(),
+        ]
+    ).stdout
+    if json.loads(readiness_with_output) != json.loads(readiness_output.read_text(encoding="utf-8")):
+        raise SystemExit("render_goal_bootloader.py --output should write the same readiness JSON it prints")
+    for key in [
+        "status",
+        "bundle_dir",
+        "bootloader_exists",
+        "route_policy",
+        "verified_routes",
+        "caps",
+        "branch_dag",
+        "lint_status",
+        "repair_gate",
+        "runtime_gate",
+        "repo_status",
+        "next_commands",
+    ]:
+        if key not in readiness_json:
+            raise SystemExit(f"readiness JSON missing {key}")
+    if readiness_json.get("status") != "pass":
+        raise SystemExit(f"canonical fixture readiness should pass: {readiness_json!r}")
+    if "accepted_routes" in readiness_json:
+        raise SystemExit("readiness JSON should not call unverified route policy accepted_routes")
+    if readiness_json.get("lint_status", {}).get("brief_lint", {}).get("status") != "pass":
+        raise SystemExit(f"readiness should find canonical preflight.brief.lint.json: {readiness_json.get('lint_status')!r}")
+    if readiness_json.get("repair_gate", {}).get("status") != "pass":
+        raise SystemExit(f"readiness should find canonical repair-gate.json: {readiness_json.get('repair_gate')!r}")
+    assert_all_contains(json.dumps(readiness_json["lint_status"], sort_keys=True), ["bundle_lint", "brief_lint"], "readiness lint keys")
+    assert_all_contains(
+        (bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8"),
+        ["Waves are dependency-aware scheduling/order groups", "depends_on", "branch"],
+        "preflight report wave semantics",
+    )
     brief_schema = json.loads(
         run(["python3", "skills/goal-preflight/scripts/create_goal_bundle.py", "--brief-schema-json"]).stdout
     )
@@ -2271,6 +2487,8 @@ def run_phase_manifest_and_schema_fixtures() -> None:
     top_level_optional = brief_schema.get("top_level_optional", {})
     if "telemetry_mode" not in top_level_optional or "debug_telemetry" not in top_level_optional:
         raise SystemExit("brief schema should expose lean debug telemetry shorthands")
+    if "source_attachments" not in top_level_optional:
+        raise SystemExit("brief schema should expose structured source attachments")
     lint_schema = json.loads(
         run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
     )
@@ -2283,6 +2501,22 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     branch_default_repo.mkdir()
     run(["git", "-C", branch_default_repo.as_posix(), "init", "-q", "--initial-branch", "trunk"])
     (branch_default_repo / "README.md").write_text("branch default fixture\n", encoding="utf-8")
+    run(["git", "-C", branch_default_repo.as_posix(), "add", "README.md"])
+    run(
+        [
+            "git",
+            "-c",
+            "user.email=ci@example.com",
+            "-c",
+            "user.name=CI",
+            "-C",
+            branch_default_repo.as_posix(),
+            "commit",
+            "-q",
+            "-m",
+            "Add branch default fixture README",
+        ]
+    )
     branch_default_brief = {
         "job_id": "branch-default-fixture",
         "branches": [
@@ -2319,6 +2553,69 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     branch_default_manifest = read_json(branch_default_bundle / "job.manifest.json")
     if branch_default_manifest.get("base_ref") != "trunk":
         raise SystemExit(f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}")
+
+    pipeline_brief = json.loads(json.dumps(branch_default_brief))
+    pipeline_brief.update(
+        {
+            "job_id": "preflight-pipeline-fixture",
+            "goal": "Run the canonical one-shot preflight pipeline fixture.",
+            "source_summary": "The pipeline fixture uses a tiny git repository with README.md as concrete context.",
+            "required_evidence": ["Canonical brief lint, bundle lint, repair gate, readiness, and bootloader artifacts exist."],
+            "final_dod": ["The one-shot preflight pipeline returns status pass."],
+            "source_attachments": [
+                {"path": "README.md", "label": "Fixture README", "kind": "benchmark-data"},
+            ],
+        }
+    )
+    pipeline_work_item = pipeline_brief["branches"][0]["work_items"][0]
+    pipeline_brief["branches"][0]["objective"] = (
+        "Verify that guided preflight defaults base_ref to the current git branch "
+        "and persists canonical pipeline artifacts."
+    )
+    pipeline_work_item["objective"] = "Inspect README.md and validate the guided preflight pipeline artifact contract."
+    pipeline_work_item["context_files"] = ["README.md"]
+    pipeline_work_item["verification"] = ["git diff --check trunk...HEAD"]
+    pipeline_brief_path = tmp_path / "preflight-pipeline-brief.json"
+    pipeline_bundle = tmp_path / "preflight-pipeline-bundle"
+    write_json(pipeline_brief_path, pipeline_brief)
+    pipeline_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                pipeline_bundle.as_posix(),
+                "--no-goal-config",
+                "--json",
+            ]
+        ).stdout
+    )
+    if pipeline_result.get("status") != "pass" or pipeline_result.get("readiness", {}).get("status") != "pass":
+        raise SystemExit(f"prepare_goal_bundle.py should pass for a git-backed fixture: {pipeline_result!r}")
+    for artifact in [
+        "preflight.brief.lint.json",
+        "preflight.lint.json",
+        "repair-gate.json",
+        "readiness.json",
+        "goal-config-selection.json",
+        "preflight.pipeline.json",
+        "goal-bootloader.md",
+    ]:
+        if not (pipeline_bundle / artifact).exists():
+            raise SystemExit(f"prepare_goal_bundle.py did not persist canonical artifact {artifact}")
+    pipeline_manifest = read_json(pipeline_bundle / "job.manifest.json")
+    source_attachments = pipeline_manifest.get("source_attachments", [])
+    if not source_attachments or source_attachments[0].get("path") != "README.md" or not source_attachments[0].get("sha256"):
+        raise SystemExit(f"source_attachments should be normalized and hashed in manifest: {source_attachments!r}")
+    assert_all_contains(
+        (pipeline_bundle / "main.prompt.md").read_text(encoding="utf-8"),
+        ["## Source Attachments", "Fixture README", "sha256="],
+        "source attachments prompt section",
+    )
 
     debug_mode_brief = {**branch_default_brief, "job_id": "debug-mode-shorthand-fixture", "telemetry_mode": "debug"}
     debug_mode_brief_path = tmp_path / "debug-mode-brief.json"
@@ -2368,6 +2665,196 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     debug_bool_policy = read_json(debug_bool_bundle / "job.manifest.json").get("telemetry_policy", {})
     if debug_bool_policy.get("mode") != "debug" or debug_bool_policy.get("collect") != expected_collect:
         raise SystemExit(f"debug_telemetry=true did not expand to full safe debug policy: {debug_bool_policy!r}")
+
+    config_debug_path = tmp_path / "goal-config-debug-intent.json"
+    config_debug_check_path = tmp_path / "goal-config-debug-intent-check.json"
+    config_debug_bundle = tmp_path / "goal-config-debug-intent-bundle"
+    config_debug_brief_path = tmp_path / "goal-config-debug-intent-brief.json"
+    write_json(config_debug_brief_path, {**branch_default_brief, "job_id": "goal-config-debug-intent-fixture"})
+    run(
+        [
+            "python3",
+            "skills/goal-config/scripts/create_goal_config.py",
+            "--preset",
+            "current-default",
+            "--effort-profile",
+            "thorough",
+            "--validation-mode",
+            "debug",
+            "--output",
+            config_debug_path.as_posix(),
+        ]
+    )
+    run(
+        [
+            "python3",
+            "skills/goal-config/scripts/check_goal_config.py",
+            "--config",
+            config_debug_path.as_posix(),
+            "--for-preflight",
+            "--smoke",
+            "--stdout",
+            "none",
+            "--output",
+            config_debug_check_path.as_posix(),
+        ]
+    )
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            config_debug_brief_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            config_debug_bundle.as_posix(),
+            "--goal-config",
+            config_debug_path.as_posix(),
+            "--goal-config-check",
+            config_debug_check_path.as_posix(),
+        ]
+    )
+    config_debug_manifest = read_json(config_debug_bundle / "job.manifest.json")
+    config_debug_policy = config_debug_manifest.get("telemetry_policy", {})
+    if config_debug_policy.get("mode") != "debug" or config_debug_policy.get("raw_text") is not False:
+        raise SystemExit(f"goal_config preflight_intent telemetry_mode=debug should produce safe debug policy: {config_debug_policy!r}")
+    config_debug_compat = config_debug_manifest.get("preflight_compatibility", {}).get("telemetry", {})
+    if config_debug_compat.get("policy_transformation") != "raw_text_true_is_sanitized_to_manifest_raw_text_false":
+        raise SystemExit(f"goal_config raw_text policy transformation should be recorded: {config_debug_compat!r}")
+
+    bad_pipeline_config_path = tmp_path / "goal-config-pipeline-remediation.json"
+    bad_pipeline_config = read_json(config_debug_path)
+    bad_pipeline_config["aggressiveness"]["max_active_branch_agents"] = 6
+    bad_pipeline_config["aggressiveness"]["max_active_worker_packets"] = 6
+    bad_pipeline_config["aggressiveness"]["max_waves"] = 8
+    bad_pipeline_config["aggressiveness"]["total_branch_cap"] = 48
+    bad_pipeline_config["telemetry"]["collect"] = ["route_decisions", "unsupported_raw_payload"]
+    write_json(bad_pipeline_config_path, bad_pipeline_config)
+    config_pipeline_bundle = tmp_path / "preflight-pipeline-config-remediation-bundle"
+    config_pipeline_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                config_pipeline_bundle.as_posix(),
+                "--goal-config",
+                bad_pipeline_config_path.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    config_selection = config_pipeline_result.get("config_selection", {})
+    if config_pipeline_result.get("status") != "pass" or config_selection.get("status") != "pass":
+        raise SystemExit(f"prepare_goal_bundle.py should remediate and select compatible config: {config_pipeline_result!r}")
+    if "remediated" not in str(config_selection.get("reason", "")):
+        raise SystemExit(f"config selection should explain remediated config use: {config_selection!r}")
+    selected = config_selection.get("selected") if isinstance(config_selection.get("selected"), dict) else {}
+    selected_config_path = Path(selected.get("selected_config_path", ""))
+    selected_config = read_json(selected_config_path)
+    if selected_config.get("aggressiveness", {}).get("max_waves") != 5:
+        raise SystemExit(f"selected remediated config should clamp max_waves: {selected_config!r}")
+    if (config_pipeline_bundle / "goal-config-selection.json").exists() is not True:
+        raise SystemExit("prepare_goal_bundle.py should persist goal-config-selection.json")
+
+    git_repo_base_ref = {**branch_default_brief, "job_id": "branch-default-invalid-git-ref"}
+    git_repo_base_ref["branches"][0]["work_items"][0]["owned_paths"] = ["README.md"]
+    git_repo_base_ref["base_ref"] = "nonexistent-base-ref"
+    git_repo_base_ref_path = tmp_path / "branch-default-git-invalid-base-ref.json"
+    write_json(git_repo_base_ref_path, git_repo_base_ref)
+    git_ref_invalid = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            git_repo_base_ref_path.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--out-dir",
+            (tmp_path / "branch-default-git-invalid-ref").as_posix(),
+        ],
+        expect=1,
+    )
+    assert_contains(git_ref_invalid.stdout, "base_ref does not exist", "git repo base_ref existence check fixture")
+
+    non_git_repo = tmp_path / "non-git-repo"
+    non_git_repo.mkdir()
+    (non_git_repo / "README.md").write_text("non-git fixture\n", encoding="utf-8")
+    non_git_brief = {
+        "job_id": "branch-default-non-git-ref-fixture",
+        "base_ref": "nonexistent-base-ref",
+        "goal": "Validate non-git runtime readiness handling.",
+        "source_summary": "This fixture is intentionally outside a git work tree.",
+        "required_evidence": ["Readiness reports non-git runtime branch orchestration as blocked."],
+        "final_dod": ["Non-git readiness is explicit before runtime launch."],
+        "branches": [
+            {
+                "id": "B01",
+                "objective": "Validate base_ref is accepted in non-git repo when unknown branch is supplied.",
+                "max_active_worker_packets": 1,
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Exercise a deterministic non-git base_ref path.",
+                        "owned_paths": ["README.md"],
+                        "context_files": ["README.md"],
+                        "verification": ["python3 -c 'from pathlib import Path; assert Path(\"README.md\").exists()'"],
+                        "dod": ["Bundle creation should not validate base_ref in non-git repo."],
+                    }
+                ],
+            }
+        ],
+    }
+    non_git_bundle = tmp_path / "branch-default-non-git-ref-bundle"
+    non_git_brief_path = tmp_path / "branch-default-non-git-ref.json"
+    non_git_create_result_path = tmp_path / "branch-default-non-git-ref-create-result.json"
+    write_json(non_git_brief_path, non_git_brief)
+    non_git_create_result = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            non_git_brief_path.as_posix(),
+            "--repo-root",
+            non_git_repo.as_posix(),
+            "--out-dir",
+            non_git_bundle.as_posix(),
+            "--json",
+            "--output",
+            non_git_create_result_path.as_posix(),
+        ]
+    ).stdout
+    if json.loads(non_git_create_result) != read_json(non_git_create_result_path):
+        raise SystemExit("create_goal_bundle.py --json --output should write and print matching command result JSON")
+    non_git_manifest = read_json(non_git_bundle / "job.manifest.json")
+    if non_git_manifest.get("base_ref") != "nonexistent-base-ref":
+        raise SystemExit(f"non-git repo should not validate base_ref and should preserve provided branch: {non_git_manifest.get('base_ref')!r}")
+    non_git_pipeline_bundle = tmp_path / "branch-default-non-git-pipeline-bundle"
+    non_git_pipeline_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                non_git_brief_path.as_posix(),
+                "--repo-root",
+                non_git_repo.as_posix(),
+                "--out-dir",
+                non_git_pipeline_bundle.as_posix(),
+                "--no-goal-config",
+                "--allow-blocked-readiness",
+                "--json",
+            ]
+        ).stdout
+    )
+    runtime_gate = non_git_pipeline_result.get("readiness", {}).get("runtime_gate", {})
+    if non_git_pipeline_result.get("status") != "blocked" or runtime_gate.get("status") != "blocked":
+        raise SystemExit(f"non-git pipeline should block runtime readiness explicitly: {non_git_pipeline_result!r}")
 
 
 def run_context_pack_fixtures(tmp_path: Path) -> None:
@@ -2907,8 +3394,9 @@ def main() -> int:
         tmp_path = Path(tmp)
         test_launcher_state_classifier()
         bundle = create_goal_fixture_bundle(tmp_path)
+        run_repair_gate_fixture(bundle)
         run_validator_command_fixtures(tmp_path, bundle)
-        run_phase_manifest_and_schema_fixtures()
+        run_phase_manifest_and_schema_fixtures(bundle)
         run_base_ref_default_fixture(tmp_path)
         run_context_pack_fixtures(tmp_path)
         run_telemetry_summary_fixture(tmp_path)

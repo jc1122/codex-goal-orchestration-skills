@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:78a5675b6dbaf7eadc358c6b508fc7191e5af5661908be0e879040234f1e7ff1"
+    "source_fingerprint": "sha256:b73c05a0a0120f0ef9277c7bfc2b99b8eda1519fd218fadd50e682dfd964f203"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,66 +16,66 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 2937,
-      "approx_tokens": 30891,
+      "lines": 3425,
+      "approx_tokens": 36522,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "811:run_negative_amendment_fixtures:289l",
-        "1268:run_scheduler_fixtures:221l",
-        "1950:run_runtime_packet_fixtures:206l",
-        "1734:run_launch_ready_helper_fixtures:193l"
+        "2499:run_base_ref_default_fixture:359l",
+        "860:run_negative_amendment_fixtures:289l",
+        "1317:run_scheduler_fixtures:221l",
+        "1999:run_runtime_packet_fixtures:206l"
+      ]
+    },
+    {
+      "path": "scripts/check_goal_config_fixtures.py",
+      "owner": "repo-scripts",
+      "lines": 1666,
+      "approx_tokens": 20226,
+      "rule": "--help or JSON before implementation source",
+      "top_functions": [
+        "339:main:1324l",
+        "237:run_integration_fixture:100l",
+        "126:write_fake_opencode_discovery_scripts:43l",
+        "199:build_integration_brief:36l"
+      ]
+    },
+    {
+      "path": "skills/goal-config/scripts/check_goal_config.py",
+      "owner": "goal-config",
+      "lines": 1984,
+      "approx_tokens": 19947,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "1667:main:314l",
+        "921:run_harness_smoke:131l",
+        "1327:discover_available_routes:124l",
+        "770:check_opencode_model:121l"
+      ]
+    },
+    {
+      "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
+      "owner": "goal-preflight",
+      "lines": 1626,
+      "approx_tokens": 19551,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "899:normalize_brief:168l",
+        "126:example_brief:88l",
+        "587:infer_route_class:80l",
+        "1300:manifest_from_normalized_brief:78l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 1814,
-      "approx_tokens": 18996,
+      "lines": 1827,
+      "approx_tokens": 19134,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1502:main:309l",
-        "714:compact_worker_context:118l",
-        "1414:compact_launch_config:86l",
-        "1128:research_worker_prompt:79l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 1570,
-      "approx_tokens": 18551,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "1277:validate_review_artifact_for_branch:135l",
-        "1414:validate_branch_status:119l",
-        "458:validate_worker_artifacts:116l",
-        "1003:validate_manifest_branch_contract:75l"
-      ]
-    },
-    {
-      "path": "scripts/check_golden_smoke.py",
-      "owner": "repo-scripts",
-      "lines": 1755,
-      "approx_tokens": 17421,
-      "rule": "readable smoke; consolidate repeats",
-      "top_functions": [
-        "1416:main:336l",
-        "1053:run_amendment_smoke:239l",
-        "1294:run_blocker_repair_smoke:106l",
-        "418:write_lite_advice:79l"
-      ]
-    },
-    {
-      "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
-      "owner": "goal-preflight",
-      "lines": 1214,
-      "approx_tokens": 16157,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "634:lint:548l",
-        "363:validate_preflight_lite_records:152l",
-        "517:validate_telemetry_policy:58l",
-        "577:validate_goal_config_manifest:55l"
+        "1508:main:316l",
+        "720:compact_worker_context:118l",
+        "1420:compact_launch_config:86l",
+        "1134:research_worker_prompt:79l"
       ]
     }
   ],
@@ -258,6 +258,7 @@
         "skills/goal-preflight/scripts/create_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_preflight_brief.py",
+        "skills/goal-preflight/scripts/prepare_goal_bundle.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ],
       "open_core_scripts_only_for": "implementation or debugging of that script surface",
@@ -352,6 +353,7 @@
       "paths": [
         "skills/goal-config/references/lite-advisor-contract.md",
         "skills/goal-config/scripts/append_scheduler_event.py",
+        "skills/goal-config/scripts/check_goal_config.py",
         "skills/goal-config/scripts/check_goal_skill_availability.py",
         "skills/goal-config/scripts/check_model_catalog.py",
         "skills/goal-config/scripts/context_pack.py",

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import re
@@ -237,7 +238,8 @@ def brief_schema_summary() -> dict:
             "telemetry_policy": "manifest-owned opt-in telemetry policy object; supported modes are standard and debug, raw_text must be false, collect names debug metric groups",
             "telemetry_mode": "lean shorthand; set to debug to expand the full safe debug telemetry policy",
             "debug_telemetry": "boolean shorthand; true means telemetry_mode=debug, false means standard unless telemetry_policy says otherwise",
-            "goal_config": "optional manifest-owned model/provider/harness configuration supplied through --goal-config; do not hand-author in the brief",
+            "source_attachments": "array of repo-relative file paths or {path,label,kind}; use for large benchmark/spec files instead of pasting them into goal",
+            "goal_config": "optional copied model/provider/harness configuration supplied through --goal-config; manifest stores only compact summaries and hashes; do not hand-author in the brief",
             "goal_config_check": "optional passing goal-config check report supplied through --goal-config-check; required when --goal-config is used",
         },
         "branch_required": {
@@ -299,6 +301,55 @@ def current_git_branch(repo_root: Path) -> str:
     return value if value else "main"
 
 
+def _is_git_repo(repo_root: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "rev-parse", "--is-inside-work-tree"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def _git_ref_exists(repo_root: Path, ref: str) -> bool:
+    for candidate in [f"refs/heads/{ref}", f"refs/remotes/{ref}"]:
+        result = subprocess.run(
+            ["git", "-C", repo_root.as_posix(), "show-ref", "--verify", "--quiet", candidate],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+        if result.returncode == 0:
+            return True
+    return False
+
+
+def git_repo_status(repo_root: Path, *, base_ref: str | None = None) -> dict:
+    if not _is_git_repo(repo_root):
+        return {
+            "repo_root": repo_root.resolve().as_posix(),
+            "repo_is_git": False,
+            "base_ref": base_ref,
+            "base_ref_status": "not_checked",
+            "reason": "repo root is not a git work tree",
+        }
+    status = {
+        "repo_root": repo_root.resolve().as_posix(),
+        "repo_is_git": True,
+        "current_branch": current_git_branch(repo_root),
+        "base_ref": base_ref,
+        "base_ref_status": "not_requested",
+    }
+    if base_ref:
+        exists = _git_ref_exists(repo_root, base_ref)
+        status["base_ref_status"] = "exists" if exists else "missing"
+        if not exists:
+            status["reason"] = f"base_ref does not exist in repository refs: {base_ref!r}"
+    return status
+
+
 def require_worker_limit(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise SystemExit("max_active_worker_packets must be an integer from 1 to 4")
@@ -310,6 +361,38 @@ def require_worker_limit(value: object) -> int:
 
 def nonempty_text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
+
+
+def normalize_source_attachments(value: object, *, repo_root: Path | None = None) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise SystemExit("source_attachments must be a list")
+    attachments: list[dict] = []
+    for index, item in enumerate(value):
+        if isinstance(item, str):
+            raw_path = item
+            label = Path(item).name
+            kind = "context"
+        elif isinstance(item, dict):
+            raw_path = item.get("path")
+            label = nonempty_text(item.get("label")) or (Path(str(raw_path)).name if raw_path else f"attachment-{index + 1}")
+            kind = nonempty_text(item.get("kind")) or "context"
+        else:
+            raise SystemExit(f"source_attachments[{index}] must be a path string or object")
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise SystemExit(f"source_attachments[{index}].path must be non-empty")
+        rel_path = require_relative_path(raw_path, f"source_attachments[{index}].path")
+        attachment = {"path": rel_path, "label": label, "kind": kind}
+        if repo_root is not None:
+            target = repo_root / rel_path
+            if not target.exists():
+                raise SystemExit(f"source attachment does not exist: {rel_path}")
+            if target.is_file():
+                attachment["sha256"] = sha256_file(target)
+                attachment["bytes"] = target.stat().st_size
+        attachments.append(attachment)
+    return attachments
 
 
 def normalize_telemetry_policy(value: object) -> dict:
@@ -753,6 +836,31 @@ def chunk_waves(branches: list[dict], wave_size: int) -> list[dict]:
     return waves
 
 
+def dependency_waves(branches: list[dict], wave_size: int) -> list[dict]:
+    levels: dict[str, int] = {}
+    grouped: dict[int, list[dict]] = {}
+    for branch in branches:
+        deps = branch.get("depends_on") if isinstance(branch.get("depends_on"), list) else []
+        dep_levels = [levels.get(dep, 1) for dep in deps if isinstance(dep, str)]
+        level = 1 + (max(dep_levels) if dep_levels else 0)
+        levels[branch["id"]] = level
+        grouped.setdefault(level, []).append(branch)
+
+    waves: list[dict] = []
+    for level in sorted(grouped):
+        level_branches = grouped[level]
+        for offset in range(0, len(level_branches), wave_size):
+            wave_branches = level_branches[offset : offset + wave_size]
+            waves.append(
+                {
+                    "id": wave_id(len(waves) + 1),
+                    "branches": [branch["id"] for branch in wave_branches],
+                    "dependency_level": level,
+                }
+            )
+    return waves
+
+
 def ensure_unique_branch_values(branches: list[dict]) -> None:
     for field in ["id", "branch_name", "worktree_path"]:
         seen: dict[str, str] = {}
@@ -768,7 +876,12 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
         "main.prompt.md",
         "goal-bootloader.md",
         "PREFLIGHT_REPORT.md",
+        "preflight.brief.lint.json",
         "preflight.lint.json",
+        "repair-gate.json",
+        "readiness.json",
+        "goal-config-selection.json",
+        "preflight.pipeline.json",
     }
     seen_paths: dict[str, str] = {}
     for branch in branches:
@@ -783,7 +896,7 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
             seen_paths[value] = label
 
 
-def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
+def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_base_ref: bool = True, repo_root: Path | None = None) -> dict:
     if "job_id" not in brief:
         raise SystemExit("brief must include job_id")
     if not brief.get("branches"):
@@ -791,6 +904,8 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
 
     job_id = slug(brief["job_id"])
     base_ref = require_branch_name(str(brief.get("base_ref") or default_base_ref), "base_ref")
+    if validate_base_ref and repo_root is not None and _is_git_repo(repo_root) and not _git_ref_exists(repo_root, base_ref):
+        raise SystemExit(f"base_ref does not exist in repository refs: {base_ref!r}")
     max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
     serial_reason = nonempty_text(brief.get("serial_reason"))
     serial_reasons = normalize_reason_list(brief.get("serial_reasons"), serial_reason)
@@ -880,7 +995,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
         raise SystemExit("preflight_lite_advice must be an array when supplied")
     telemetry_policy = normalize_brief_telemetry_policy(brief)
 
-    waves = brief.get("waves") or chunk_waves(branches, max_active)
+    waves = brief.get("waves") or dependency_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
         raise SystemExit(f"waves must not exceed {MAX_WAVES}")
     branch_ids = {branch["id"] for branch in branches}
@@ -947,6 +1062,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main") -> dict:
         "waves": waves,
         "preflight_lite_advice": preflight_lite_advice,
         "telemetry_policy": telemetry_policy,
+        "source_attachments": normalize_source_attachments(brief.get("source_attachments"), repo_root=repo_root),
     }
 
 
@@ -979,6 +1095,58 @@ def validate_goal_config(config: dict) -> None:
     for key in ("worker_model_policy", "review_model_policy", "amender_model_policy", "lite_model_policy"):
         if not isinstance(policies.get(key), dict):
             raise SystemExit(f"goal_config.model_policies.{key} must be an object")
+
+
+def preflight_compatibility_summary(config: dict | None, check: dict | None) -> dict:
+    if config is None:
+        return {"status": "not_configured", "defects": []}
+    defects: list[str] = []
+    aggressiveness = config.get("aggressiveness") if isinstance(config.get("aggressiveness"), dict) else {}
+    branch_cap = aggressiveness.get("max_active_branch_agents")
+    worker_cap = aggressiveness.get("max_active_worker_packets")
+    if not isinstance(branch_cap, int) or isinstance(branch_cap, bool) or branch_cap < 1 or branch_cap > MAX_ACTIVE_BRANCH_AGENTS:
+        defects.append(f"aggressiveness.max_active_branch_agents must be an integer from 1 to {MAX_ACTIVE_BRANCH_AGENTS}; got {branch_cap!r}")
+    if not isinstance(worker_cap, int) or isinstance(worker_cap, bool) or worker_cap < 1 or worker_cap > MAX_WORKER_PACKETS_PER_BRANCH:
+        defects.append(f"aggressiveness.max_active_worker_packets must be an integer from 1 to {MAX_WORKER_PACKETS_PER_BRANCH}; got {worker_cap!r}")
+
+    validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
+    config_validation_mode = validation.get("mode")
+    check_mode = check.get("mode") if isinstance(check, dict) else None
+    check_status = check.get("status") if isinstance(check, dict) else None
+    if check is None:
+        defects.append("goal_config_check is required when goal_config is supplied")
+    elif check_status != "pass":
+        defects.append(f"goal_config_check.status must be pass; got {check_status!r}")
+    if config_validation_mode in {"smoke", "debug"} and check_mode not in {"smoke", "discover"}:
+        defects.append(f"config validation mode {config_validation_mode!r} requires a smoke/discovery check report; got check mode {check_mode!r}")
+
+    telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
+    token_summary = {}
+    if isinstance(check, dict):
+        summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
+        token_summary = summary.get("token_telemetry") if isinstance(summary.get("token_telemetry"), dict) else {}
+    raw_text = telemetry.get("raw_text")
+    return {
+        "status": "pass" if not defects else "failed",
+        "defects": defects,
+        "caps": {
+            "max_active_branch_agents": branch_cap,
+            "max_active_worker_packets": worker_cap,
+            "preflight_max_active_branch_agents": MAX_ACTIVE_BRANCH_AGENTS,
+            "preflight_max_active_worker_packets": MAX_WORKER_PACKETS_PER_BRANCH,
+        },
+        "config_validation_mode": config_validation_mode,
+        "check_mode": check_mode,
+        "check_status": check_status,
+        "telemetry": {
+            "config_mode": telemetry.get("mode"),
+            "config_raw_text": raw_text,
+            "manifest_raw_text": False,
+            "policy_transformation": "raw_text_true_is_sanitized_to_manifest_raw_text_false" if raw_text is True else "none",
+            "token_telemetry": token_summary,
+        },
+        "effort": config.get("effort") if isinstance(config.get("effort"), dict) else {},
+    }
 
 
 def load_goal_config(path: Path | None) -> dict | None:
@@ -1022,6 +1190,15 @@ def apply_goal_config_to_brief(brief: dict, config: dict | None) -> dict:
                 branch["max_active_worker_packets"] = max_workers
             branches.append(branch)
         updated["branches"] = branches
+    preflight_intent = config.get("preflight_intent") if isinstance(config.get("preflight_intent"), dict) else {}
+    telemetry_mode = preflight_intent.get("telemetry_mode")
+    if (
+        isinstance(telemetry_mode, str)
+        and "telemetry_mode" not in updated
+        and "debug_telemetry" not in updated
+        and "telemetry_policy" not in updated
+    ):
+        updated["telemetry_mode"] = telemetry_mode
     updated["goal_config"] = config
     return updated
 
@@ -1029,6 +1206,14 @@ def apply_goal_config_to_brief(brief: dict, config: dict | None) -> dict:
 def write(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def ensure_bundle_dirs(bundle_dir: Path) -> None:
@@ -1040,7 +1225,9 @@ def ensure_bundle_dirs(bundle_dir: Path) -> None:
 def render_branch_waves(waves: list[dict]) -> str:
     lines = []
     for wave in waves:
-        lines.append(f"- {wave['id']}: {', '.join(wave['branches'])}")
+        level = wave.get("dependency_level")
+        level_label = f" dependency_level={level}" if isinstance(level, int) else ""
+        lines.append(f"- {wave['id']}{level_label}: {', '.join(wave['branches'])}")
     return "\n".join(lines)
 
 
@@ -1052,8 +1239,67 @@ def render_branch_dependencies(branches: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def manifest_from_normalized_brief(brief: dict) -> dict:
+def render_source_attachments(attachments: list[dict]) -> str:
+    if not attachments:
+        return "- none"
+    lines = []
+    for item in attachments:
+        detail = f"{item.get('path')} ({item.get('kind', 'context')})"
+        if item.get("sha256"):
+            detail += f" sha256={item['sha256']}"
+        if item.get("bytes") is not None:
+            detail += f" bytes={item['bytes']}"
+        lines.append(f"- {item.get('label', item.get('path'))}: {detail}")
+    return "\n".join(lines)
+
+
+def compact_goal_config_summary(config: dict) -> dict:
+    validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
+    telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
+    models = config.get("models") if isinstance(config.get("models"), dict) else {}
+    compact_models = {}
+    for role, model in models.items():
+        if not isinstance(model, dict):
+            continue
+        compact_models[role] = {
+            "alias": model.get("alias"),
+            "harness": model.get("harness"),
+            "provider": model.get("provider"),
+            "model": model.get("model"),
+        }
+    return {
+        "profile": config.get("profile"),
+        "effort_profile": config.get("effort_profile"),
+        "base_effort_profile": config.get("base_effort_profile"),
+        "aggressiveness": config.get("aggressiveness", {}),
+        "validation_mode": validation.get("mode"),
+        "telemetry_mode": telemetry.get("mode"),
+        "telemetry_raw_text": telemetry.get("raw_text"),
+        "model_ladders": config.get("model_ladders", {}),
+        "models": compact_models,
+        "compatibility": config.get("compatibility", {}),
+    }
+
+
+def compact_goal_config_check_summary(check: dict) -> dict:
+    summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
+    return {
+        "status": check.get("status"),
+        "mode": check.get("mode"),
+        "check_mode": check.get("check_mode"),
+        "config_validation_mode": check.get("config_validation_mode"),
+        "accepted_route_count": summary.get("accepted_route_count"),
+        "rejected_route_count": summary.get("rejected_route_count"),
+        "skipped_route_count": summary.get("skipped_route_count"),
+        "unvisited_route_count": summary.get("unvisited_route_count"),
+        "failure_count": summary.get("failure_count"),
+        "token_telemetry": summary.get("token_telemetry", {}),
+    }
+
+
+def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) -> dict:
     goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
+    goal_config_check = brief.get("goal_config_check") if isinstance(brief.get("goal_config_check"), dict) else None
     model_policies = goal_config.get("model_policies", {}) if goal_config else {}
     return {
         "job_id": brief["job_id"],
@@ -1073,12 +1319,23 @@ def manifest_from_normalized_brief(brief: dict) -> dict:
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
         "telemetry_policy": brief["telemetry_policy"],
+        "source_attachments": brief.get("source_attachments", []),
+        "repo_status": brief.get("repo_status", {}),
+        "preflight_compatibility": brief.get("preflight_compatibility", {"status": "not_configured", "defects": []}),
         **(
             {
                 "goal_config_path": "goal.config.json",
+                "goal_config_summary": compact_goal_config_summary(goal_config),
                 "goal_config_check_path": "goal-config.check.json",
-                "goal_config": goal_config,
-                "goal_config_check": brief.get("goal_config_check", {}),
+                "goal_config_check_summary": compact_goal_config_check_summary(goal_config_check or {}),
+                **(
+                    {
+                        "goal_config_sha256": sha256_file(bundle_dir / "goal.config.json"),
+                        "goal_config_check_sha256": sha256_file(bundle_dir / "goal-config.check.json"),
+                    }
+                    if bundle_dir is not None
+                    else {}
+                ),
             }
             if goal_config
             else {}
@@ -1128,6 +1385,7 @@ def render_main_prompt_text(brief: dict) -> str:
         base_ref=brief["base_ref"],
         goal=brief.get("goal", "Goal not supplied."),
         source_summary=brief.get("source_summary", "Source summary not supplied."),
+        source_attachments=render_source_attachments(brief.get("source_attachments", [])),
         branch_waves=render_branch_waves(brief["waves"]),
         branch_dependencies=render_branch_dependencies(brief["branches"]),
         max_active_branch_agents=brief["max_active_branch_agents"],
@@ -1220,8 +1478,19 @@ def create_bundle(
 ) -> Path:
     if goal_config is not None and goal_config_check is None:
         raise SystemExit("--goal-config requires --goal-config-check with status=pass")
+    compatibility = preflight_compatibility_summary(goal_config, goal_config_check)
+    if compatibility.get("status") == "failed":
+        defects = "; ".join(str(item) for item in compatibility.get("defects", []))
+        raise SystemExit(f"goal_config is not preflight-compatible: {defects}")
     brief = apply_goal_config_to_brief(brief, goal_config)
-    brief = normalize_brief(brief, default_base_ref=current_git_branch(repo_root))
+    brief = normalize_brief(
+        brief,
+        default_base_ref=current_git_branch(repo_root),
+        validate_base_ref=True,
+        repo_root=repo_root,
+    )
+    brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"])
+    brief["preflight_compatibility"] = compatibility
     if goal_config is not None:
         brief["goal_config"] = goal_config
         brief["goal_config_check"] = goal_config_check or {}
@@ -1229,8 +1498,6 @@ def create_bundle(
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)
 
-    manifest = manifest_from_normalized_brief(brief)
-    write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
     if goal_config_source is not None:
         shutil.copyfile(goal_config_source, bundle_dir / "goal.config.json")
     elif goal_config is not None:
@@ -1239,6 +1506,9 @@ def create_bundle(
         shutil.copyfile(goal_config_check_source, bundle_dir / "goal-config.check.json")
     elif goal_config_check is not None:
         write(bundle_dir / "goal-config.check.json", json.dumps(goal_config_check, indent=2, sort_keys=True) + "\n")
+
+    manifest = manifest_from_normalized_brief(brief, bundle_dir)
+    write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
 
     write_bundle_prompts(brief, bundle_dir)
 
@@ -1254,6 +1524,7 @@ def create_bundle(
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
             f"Scheduling: rolling; runtime branch scheduler ledger path is {CONTRACT.MAIN_SCHEDULER_PATH}; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
+            "Waves are dependency-aware scheduling/order groups; dependencies are explicit via depends_on and runtime readiness still gates launch eligibility.",
             f"Worker model policy: {CONTRACT.format_worker_ladder(manifest['worker_model_policy']['default_ladder'])}; branches may choose an ordered subsequence with a recorded reason.",
             *(
                 [f"Goal config: {goal_config.get('profile', 'custom')} from goal.config.json; harness check status is pass."]
@@ -1285,6 +1556,8 @@ def main() -> int:
     parser.add_argument("--brief")
     parser.add_argument("--repo-root")
     parser.add_argument("--out-dir")
+    parser.add_argument("--json", action="store_true", help="Print a machine-readable command result JSON.")
+    parser.add_argument("--output", type=Path, help="Write the command result JSON to this path.")
     parser.add_argument("--goal-config", help="Absolute path to checked goal.config.json to embed and consume in the bundle.")
     parser.add_argument("--goal-config-check", help="Absolute path to a passing check_goal_config.py report for --goal-config.")
     parser.add_argument(
@@ -1329,7 +1602,23 @@ def main() -> int:
         goal_config_source=goal_config_path,
         goal_config_check_source=goal_config_check_path,
     )
-    print(bundle_dir)
+    result = {
+        "status": "pass",
+        "bundle_dir": bundle_dir.resolve().as_posix(),
+        "manifest_path": (bundle_dir / "job.manifest.json").resolve().as_posix(),
+        "main_prompt_path": (bundle_dir / "main.prompt.md").resolve().as_posix(),
+        "bootloader_path": (bundle_dir / "goal-bootloader.md").resolve().as_posix(),
+        "repo_root": repo_root.resolve().as_posix(),
+        "goal_config_path": goal_config_path.resolve().as_posix() if goal_config_path is not None else None,
+        "goal_config_check_path": goal_config_check_path.resolve().as_posix() if goal_config_check_path is not None else None,
+    }
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if args.json:
+        print(json.dumps(result, indent=2, sort_keys=True))
+    else:
+        print(bundle_dir)
     return 0
 
 

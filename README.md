@@ -21,7 +21,7 @@ npx github:jc1122/codex-goal-orchestration-skills
 Install a pinned release:
 
 ```bash
-npx github:jc1122/codex-goal-orchestration-skills#v0.2.61
+npx github:jc1122/codex-goal-orchestration-skills#v0.2.62
 ```
 
 Install to a custom absolute skills root:
@@ -54,6 +54,8 @@ if [ ! -d "$GOAL_SKILLS_ROOT/goal-preflight" ] && [ -d "$HOME/.agents/skills/goa
   GOAL_SKILLS_ROOT="$HOME/.agents/skills"
 fi
 ```
+
+Runtime goal-config instructions live at `"$GOAL_SKILLS_ROOT/goal-config/SKILL.md"`. `.agents/skills/.system` is for system-level wrappers/metadata, not user-facing config docs.
 
 ## Agent Start
 
@@ -88,13 +90,14 @@ The bundle is the data plane. Runtime agents exchange manifest-owned files rathe
 ## End-To-End Flow
 
 1. Optionally run `goal-config` to write and verify a model/provider/harness profile before preflight or runtime work.
-2. `goal-preflight` writes a structured brief, consumes the checked `goal.config.json` when supplied, lints it, creates the bundle, lints the bundle, and returns the exact `goal-bootloader.md` text.
-3. The user launches `/goal` with the bootloader. The bootloader points to absolute bundle and repository roots, so it must be regenerated if either path moves.
-4. `goal-main-orchestrator` runs bootstrap, live model catalog, script-only repair gate, deterministic or model prompt audit, branch scheduling, and main scheduler ledger updates.
-5. Main launches eligible branch orchestrator sessions as a rolling saturated pool up to `max_active_branch_agents` and waits for terminal artifacts rather than polling active branch internals.
-6. `goal-branch-orchestrator` creates worker or research-worker packets, runs launchers, integrates diffs or research findings, updates worker scheduler evidence, creates a pre-review gate, launches or reuses reviewer evidence, and validates branch status.
-7. After each validated terminal branch result, main records an amendment launch-or-skip decision. `goal-plan-amender` may add or adjust only future unstarted work through validated amendments.
-8. Main closes by running scheduler finalization, `summarize_telemetry.py`, `assemble_main_status.py`, and `validate_main_status.py`.
+2. `goal-preflight` writes a structured brief, then normally runs `prepare_goal_bundle.py` to auto-select a preflight-compatible config, lint the brief, create the bundle, lint the bundle, run the repair gate, write readiness, and return the exact `goal-bootloader.md` text.
+3. Use `render_goal_bootloader.py --readiness` (or `--readiness --json`) to confirm config compatibility, lint status, caps/route policy/telemetry mode, branch DAG, git runtime gate, repair gate, and next command.
+4. The user launches `/goal` with the bootloader. The bootloader points to absolute bundle and repository roots, so it must be regenerated if either path moves.
+5. `goal-main-orchestrator` runs bootstrap, live model catalog, script-only repair gate, deterministic or model prompt audit, branch scheduling, and main scheduler ledger updates.
+6. Main launches eligible branch orchestrator sessions as a rolling saturated pool up to `max_active_branch_agents` and waits for terminal artifacts rather than polling active branch internals.
+7. `goal-branch-orchestrator` creates worker or research-worker packets, runs launchers, integrates diffs or research findings, updates worker scheduler evidence, creates a pre-review gate, launches or reuses reviewer evidence, and validates branch status.
+8. After each validated terminal branch result, main records an amendment launch-or-skip decision. `goal-plan-amender` may add or adjust only future unstarted work through validated amendments.
+9. Main closes by running scheduler finalization, `summarize_telemetry.py`, `assemble_main_status.py`, and `validate_main_status.py`.
 
 Status semantics:
 
@@ -125,6 +128,8 @@ Use the generated `interaction.ask_order` so the user is not overwhelmed:
 2. Ask the effort/aggressiveness profile second.
 3. Ask the validation/smoke/debug telemetry mode third.
 
+For normal runs, prefer smoke mode; request debug only when a user asks for traceability or stall analysis.
+
 Ask only missing sections in that order. If the user says to continue or wants completion, ask/apply all remaining missing sections in one compact pass. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
 
 Create the opencode DeepSeek v4 profile requested for Lite and demanding agents:
@@ -152,7 +157,7 @@ Validation modes are exact create inputs:
 
 - `--validation-mode model-check`: require model availability checks.
 - `--validation-mode smoke`: require model checks and harness smoke.
-- `--validation-mode debug`: require smoke and serialize `telemetry.mode=debug` plus debug preflight intent.
+- `--validation-mode debug`: require smoke and serialize `telemetry.mode=debug` plus debug preflight intent. This is heavier and intended for trace analysis.
 
 To use user-supplied models, keep roles explicit:
 
@@ -169,15 +174,15 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
 For `codex` and `gemini`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4` or `gemini-3-flash-preview`.
 Bare provider-implied forms also work for those harnesses, for example `--role-model lite_agent:gemini:gemini-3-flash-preview`.
 
-To plug in another CLI harness, provide a JSON harness spec and map roles to it. Built-in harness kinds are `opencode`, `codex`, `gemini`, and `generic-cli`; `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
+To plug in another CLI harness, provide a JSON harness spec path or inline JSON and map roles to it. Built-in harness kinds are `opencode`, `codex`, `gemini`, and `generic-cli`; `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
 
 ```json
 {
   "name": "antigravity",
   "kind": "generic-cli",
-  "command": "antigravity",
-  "smoke_args": ["--model", "{model}", "--prompt", "{prompt}"],
-  "run_args": ["--model", "{model}", "--prompt-file", "{prompt_file}"],
+  "command": "agy",
+  "smoke_args": ["--print", "{prompt}"],
+  "run_args": ["--print", "{prompt}"],
   "run_readback": "stdout"
 }
 ```
@@ -217,7 +222,14 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
 
 When `--output` is supplied, checker stdout defaults to `summary`: status, accepted routes, rejection counts, and output path. Use `--stdout full` to print the full JSON report, or `--stdout none` for quiet file-only output.
 
-The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. It does not read provider credentials or report provider prices. Passing smoke evidence is reused for duplicate `(harness, provider, model)` routes in the same run; `--reuse-smoke-report /abs/previous.json` can reuse a prior passing discovery/check report.
+The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. Each smoke entry includes `token_telemetry.available`; when it is false, compare character counts and elapsed time instead of pretending token totals are complete. CLI response excerpts are focused on the expected assistant smoke text when possible to keep boilerplate out of the scan path. The checker does not read provider credentials or report provider prices. Passing smoke evidence is reused for duplicate `(harness, provider, model)` routes in the same run; `--reuse-smoke-report /abs/previous.json` can reuse a prior passing discovery/check report.
+
+For large reports, prefer scoped reads:
+
+```bash
+jq '.accepted_routes | length' /abs/goal-config-smoke.json
+jq '.unvisited_routes' /abs/goal-config-smoke.json
+```
 
 Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. To isolate a failing route without rerunning the full matrix, pass repeated or comma-separated `--harness` values, for example `--harness lite_agent,demanding_agent`.
 
@@ -229,6 +241,7 @@ Discovery mode checks provider-listed candidates without manually writing every 
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --config /abs/goal.config.json \
   --discover-profile mixed-fast \
+  --discover-all-candidates \
   --discover-model-filter 'deepseek|gpt-5.4|gemini' \
   --smoke \
   --stdout summary \
@@ -236,9 +249,24 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --state-output /abs/goal-config-state.json
 ```
 
-`mixed-fast` tries a fixed ranking across configured opencode, Codex, Gemini, and generic antigravity harnesses, stops after enough accepted routes, and stops a provider after the first auth failure. Provider-specific opencode listing remains available with repeated `--discover-provider PROVIDER`.
+`mixed-fast` tries a fixed ranking across configured opencode, Codex, Gemini, and generic antigravity harnesses. By default it may stop early after enough accepted routes; `--discover-all-candidates` disables that early accept stop and adds explicit `skipped_routes` and `unvisited_routes` evidence. Provider-specific opencode listing remains available with repeated `--discover-provider PROVIDER`.
+This route-discovery flow is for discovery-path validation (discover all candidates and smoke traversal), not the default performance validation loop.
 
-The discovery report includes `candidate_routes`, `accepted_routes`, and `rejected_routes`. Use the accepted route list to create the final explicit `goal.config.json`; do not pass unreviewed discovered routes directly into preflight:
+The discovery report includes `candidate_routes`, `accepted_routes`, and `rejected_routes`. Use the accepted route list to create the final explicit `goal.config.json`; do not pass unreviewed discovered routes directly into preflight.
+
+If final accepted routes are unchanged between discovery and final config creation, reuse discovery smoke evidence to avoid duplicate smoke calls:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
+  --config /abs/goal.config.json \
+  --require-models \
+  --smoke \
+  --reuse-smoke-report /abs/goal-config-discovery.json \
+  --output /abs/goal-config-smoke.json \
+  --state-output /abs/goal-config-state.json
+```
+
+Use this final accepted list to create the explicit goal config:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
@@ -274,7 +302,19 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" --brief
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/create_goal_bundle.py" --example-brief
 ```
 
-Core preflight commands:
+Guided preflight command for the normal path:
+
+```bash
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/prepare_goal_bundle.py" \
+  --brief /abs/brief.json \
+  --repo-root /abs/repo \
+  --out-dir /abs/bundle \
+  --json
+```
+
+The guided command auto-detects candidate `goal.preflight.config.json` or `goal.config.json`, runs preflight compatibility with mechanical remediation when possible, writes `goal-config-selection.json`, persists canonical lint/repair/readiness artifacts in the bundle, and exits blocked rather than handing off a non-git directory-mode bundle as branch/worktree-ready.
+
+Manual preflight commands for debugging individual stages:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_preflight_brief.py" \
@@ -291,6 +331,12 @@ python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/lint_goal_bundle.py" \
 
 python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py" \
   --bundle-dir /abs/bundle
+
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py" \
+  --bundle-dir /abs/bundle --readiness
+
+python3 "$GOAL_SKILLS_ROOT/goal-preflight/scripts/render_goal_bootloader.py" \
+  --bundle-dir /abs/bundle --readiness --json
 ```
 
 ## Bundle Layout
@@ -301,7 +347,13 @@ plans/orchestration/<job-id>/
   main.prompt.md
   goal-bootloader.md
   PREFLIGHT_REPORT.md
+  preflight.brief.lint.json
   preflight.lint.json
+  repair-gate.json
+  readiness.json
+  goal-config-selection.json
+  preflight.pipeline.json
+  config-checks/                     # selected/remediated config checks when a config is supplied
   telemetry.summary.json              # runtime-created before final pass
   telemetry.debug.summary.json        # debug mode only
   run.trace.jsonl                     # debug mode structured full run trace

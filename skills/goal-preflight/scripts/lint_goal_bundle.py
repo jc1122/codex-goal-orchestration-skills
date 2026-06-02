@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shlex
 import re
+import subprocess
 from pathlib import Path
 
 
@@ -65,6 +67,72 @@ ORCHESTRATION_WATCHDOG = CONTRACT.ORCHESTRATION_WATCHDOG
 TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
 TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
 TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
+
+
+def _git_repo_status(bundle_dir: Path) -> dict:
+    result = subprocess.run(
+        ["git", "-C", bundle_dir.as_posix(), "rev-parse", "--is-inside-work-tree"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    if result.returncode != 0 or result.stdout.strip() != "true":
+        return {"status": "not_in_repo"}
+    branch_result = subprocess.run(
+        ["git", "-C", bundle_dir.as_posix(), "branch", "--show-current"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    branch = branch_result.stdout.strip()
+    if not branch:
+        return {"status": "git_repo_detached", "branch": None}
+    return {"status": "pass", "branch": branch}
+
+
+def _manifest_git_repo_status(manifest: dict, fallback: dict) -> dict:
+    status = manifest.get("repo_status")
+    if not isinstance(status, dict):
+        return fallback
+    result = dict(status)
+    if "status" not in result:
+        if result.get("repo_is_git") is False:
+            result["status"] = "not_in_repo"
+        elif result.get("base_ref_status") == "missing":
+            result["status"] = "base_ref_missing"
+        elif result.get("repo_is_git") is True:
+            result["status"] = "pass"
+        else:
+            result["status"] = "unknown"
+    return result
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def load_bundle_json(defect, bundle_dir: Path, relative_path: str, label: str) -> dict | None:
+    path = bundle_dir / relative_path
+    if not path.is_file():
+        defect("job.manifest.json", "critical", f"{label} artifact is missing: {relative_path}")
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        defect(relative_path, "critical", f"{label} must be valid JSON: {exc}")
+        return None
+    if not isinstance(data, dict):
+        defect(relative_path, "critical", f"{label} must be a JSON object")
+        return None
+    return data
+
+
 VALIDATOR_COMMAND_STATUS_HINTS = {
     "validate_branch_status.py": "--status /absolute/path/to/bundle/branches/Bxx.status.json",
     "validate_main_status.py": "--status /absolute/path/to/bundle/main.status.json",
@@ -144,7 +212,7 @@ BOOTLOADER_REQUIRED_PHRASES = (
     "never exceed 4",
     "branch orchestrator slots saturated",
     "depends_on",
-    "Waves are scheduling/order groups",
+    "Waves are dependency-aware scheduling/order groups",
     "1 to 4 worker packets",
     "rolling saturated pool",
 )
@@ -574,13 +642,36 @@ def validate_telemetry_policy(defect, manifest: dict) -> None:
         defect("job.manifest.json", "critical", f"telemetry_policy contains unsupported keys: {', '.join(unknown)}")
 
 
-def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> dict | None:
-    config = manifest.get("goal_config")
+def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> tuple[dict | None, str]:
+    config_path = manifest.get("goal_config_path")
+    check_path = manifest.get("goal_config_check_path")
+    if config_path is None and check_path is None and "goal_config_summary" not in manifest:
+        return None, "not_configured"
+    status = "pass"
+    if "goal_config" in manifest:
+        defect("job.manifest.json", "critical", "goal_config must not embed full config; use goal_config_path plus summary/hash")
+        status = "failed"
+    if "goal_config_check" in manifest:
+        defect("job.manifest.json", "critical", "goal_config_check must not embed full check report; use goal_config_check_path plus summary/hash")
+        status = "failed"
+
+    if config_path != "goal.config.json":
+        defect("job.manifest.json", "critical", "goal_config_path must be 'goal.config.json' when goal_config is present")
+        return None, "failed"
+    config = load_bundle_json(defect, bundle_dir, "goal.config.json", "goal_config")
     if config is None:
-        return None
-    if not isinstance(config, dict):
-        defect("job.manifest.json", "critical", "goal_config must be an object when present")
-        return None
+        return None, "failed"
+    config_hash = manifest.get("goal_config_sha256")
+    if not isinstance(config_hash, str) or not config_hash:
+        defect("job.manifest.json", "critical", "goal_config_sha256 must be present when goal_config_path is present")
+        status = "failed"
+    elif sha256_file(bundle_dir / "goal.config.json") != config_hash:
+        defect("job.manifest.json", "critical", "goal_config_sha256 does not match goal.config.json")
+        status = "failed"
+    if not isinstance(manifest.get("goal_config_summary"), dict):
+        defect("job.manifest.json", "critical", "goal_config_summary must be an object when goal_config_path is present")
+        status = "failed"
+
     serialized = json.dumps(config, sort_keys=True).lower()
     for forbidden in ("usd", "dollar", "pricing", "price"):
         if forbidden in serialized:
@@ -613,25 +704,30 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> d
         if not isinstance(policies.get(key), dict):
             defect("job.manifest.json", "critical", f"goal_config.model_policies.{key} must be an object")
 
-    config_path = manifest.get("goal_config_path")
-    if config_path != "goal.config.json":
-        defect("job.manifest.json", "critical", "goal_config_path must be 'goal.config.json' when goal_config is present")
-    elif not (bundle_dir / "goal.config.json").is_file():
-        defect("job.manifest.json", "critical", "goal_config_path artifact is missing: goal.config.json")
-    check = manifest.get("goal_config_check")
-    if not isinstance(check, dict):
-        defect("job.manifest.json", "critical", "goal_config_check must be an object when goal_config is present")
-    elif check.get("status") != "pass":
+    if not isinstance(check_path, str) or check_path != "goal-config.check.json":
+        defect("job.manifest.json", "critical", "goal_config_check_path must be 'goal-config.check.json' when goal_config_path is present")
+        return config, "failed"
+    check = load_bundle_json(defect, bundle_dir, "goal-config.check.json", "goal_config_check")
+    if check is None:
+        return config, "failed"
+    check_hash = manifest.get("goal_config_check_sha256")
+    if not isinstance(check_hash, str) or not check_hash:
+        defect("job.manifest.json", "critical", "goal_config_check_sha256 must be present when goal_config_check_path is present")
+        status = "failed"
+    elif sha256_file(bundle_dir / "goal-config.check.json") != check_hash:
+        defect("job.manifest.json", "critical", "goal_config_check_sha256 does not match goal-config.check.json")
+        status = "failed"
+    if not isinstance(manifest.get("goal_config_check_summary"), dict):
+        defect("job.manifest.json", "critical", "goal_config_check_summary must be an object when goal_config_check_path is present")
+        status = "failed"
+    if check.get("status") != "pass":
         defect("job.manifest.json", "critical", "goal_config_check.status must be pass")
-    check_path = manifest.get("goal_config_check_path")
-    if check_path != "goal-config.check.json":
-        defect("job.manifest.json", "critical", "goal_config_check_path must be 'goal-config.check.json' when goal_config is present")
-    elif not (bundle_dir / "goal-config.check.json").is_file():
-        defect("job.manifest.json", "critical", "goal_config_check_path artifact is missing: goal-config.check.json")
-    return config
+        status = "failed"
+    return config, status
 
 
 def lint(bundle_dir: Path) -> dict:
+    git_status = _git_repo_status(bundle_dir)
     defects: list[dict] = []
 
     def defect(file: str, severity: str, message: str) -> None:
@@ -640,13 +736,30 @@ def lint(bundle_dir: Path) -> dict:
     manifest_path = bundle_dir / "job.manifest.json"
     if not manifest_path.exists():
         defect("job.manifest.json", "critical", "manifest is missing")
-        return result(defects)
+        return result(
+            defects,
+            bundle_dir=bundle_dir,
+            manifest_path=manifest_path,
+            branch_count=0,
+            config_check_status="not_available",
+            compatibility_status="not_applicable",
+            git_repo_status=git_status,
+        )
 
     try:
         manifest = load_json(manifest_path)
     except Exception as exc:  # noqa: BLE001
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
-        return result(defects)
+        return result(
+            defects,
+            bundle_dir=bundle_dir,
+            manifest_path=manifest_path,
+            branch_count=0,
+            config_check_status="not_available",
+            compatibility_status="not_applicable",
+            git_repo_status=git_status,
+        )
+    git_status = _manifest_git_repo_status(manifest, git_status)
 
     for dirname in REQUIRED_BUNDLE_DIRS:
         if not (bundle_dir / dirname).is_dir():
@@ -657,7 +770,10 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"missing key: {key}")
     validate_preflight_lite_records(defect, bundle_dir, manifest)
     validate_telemetry_policy(defect, manifest)
-    goal_config = validate_goal_config_manifest(defect, bundle_dir, manifest)
+    goal_config, config_check_status = validate_goal_config_manifest(defect, bundle_dir, manifest)
+    compatibility_status = "not_applicable"
+    if config_check_status not in {"not_configured"}:
+        compatibility_status = "pass" if config_check_status == "pass" else "failed"
     if not safe_branch_name(manifest.get("base_ref")):
         defect("job.manifest.json", "critical", f"base_ref is not safe: {manifest.get('base_ref')!r}")
     for key in ["artifact_policy", "cleanup_policy"]:
@@ -723,6 +839,7 @@ def lint(bundle_dir: Path) -> dict:
         expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
         if worker_model_policy != expected_policies.get("worker_model_policy"):
             defect("job.manifest.json", "critical", "worker_model_policy must match goal_config.model_policies.worker_model_policy")
+            compatibility_status = "failed"
     else:
         if worker_model_policy.get("default_ladder") != DEFAULT_WORKER_LADDER:
             defect("job.manifest.json", "critical", f"worker_model_policy.default_ladder must be {DEFAULT_WORKER_LADDER!r}")
@@ -740,6 +857,7 @@ def lint(bundle_dir: Path) -> dict:
         expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
         if review_model_policy != expected_policies.get("review_model_policy"):
             defect("job.manifest.json", "critical", "review_model_policy must match goal_config.model_policies.review_model_policy")
+            compatibility_status = "failed"
     elif review_model_policy != REVIEW_MODEL_POLICY:
         defect("job.manifest.json", "critical", "review_model_policy must match the shared deterministic review router policy")
 
@@ -748,6 +866,7 @@ def lint(bundle_dir: Path) -> dict:
         expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
         if amender_model_policy != expected_policies.get("amender_model_policy"):
             defect("job.manifest.json", "critical", "amender_model_policy must match goal_config.model_policies.amender_model_policy")
+            compatibility_status = "failed"
     elif amender_model_policy != AMENDER_MODEL_POLICY:
         defect("job.manifest.json", "critical", "amender_model_policy must match the shared deterministic plan-amender router policy")
 
@@ -756,6 +875,7 @@ def lint(bundle_dir: Path) -> dict:
         expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
         if lite_model_policy != expected_policies.get("lite_model_policy"):
             defect("job.manifest.json", "critical", "lite_model_policy must match goal_config.model_policies.lite_model_policy")
+            compatibility_status = "failed"
     elif lite_model_policy != LITE_MODEL_POLICY:
         defect("job.manifest.json", "critical", "lite_model_policy must match the shared deterministic Lite model policy")
 
@@ -806,7 +926,12 @@ def lint(bundle_dir: Path) -> dict:
         "main.prompt.md",
         "goal-bootloader.md",
         "PREFLIGHT_REPORT.md",
+        "preflight.brief.lint.json",
         "preflight.lint.json",
+        "repair-gate.json",
+        "readiness.json",
+        "goal-config-selection.json",
+        "preflight.pipeline.json",
     }
     branch_bundle_paths: dict[str, str] = {}
     for branch in branches:
@@ -1178,12 +1303,38 @@ def lint(bundle_dir: Path) -> dict:
                 overlap_text = ", ".join(f"{left_path} vs {right_path}" for left_path, right_path in overlaps)
                 defect("job.manifest.json", "critical", f"branch owned_paths overlap without dependency or contention_reason: {left_id} and {right_id}: {overlap_text}")
 
-    return result(defects)
+    return result(
+        defects,
+        bundle_dir=bundle_dir,
+        manifest_path=manifest_path,
+        branch_count=len(manifest.get("branches", [])) if isinstance(manifest, dict) else 0,
+        config_check_status=config_check_status,
+        compatibility_status=compatibility_status,
+        git_repo_status=git_status,
+    )
 
 
-def result(defects: list[dict]) -> dict:
+def result(
+    defects: list[dict],
+    *,
+    bundle_dir: Path,
+    manifest_path: Path,
+    branch_count: int,
+    config_check_status: str,
+    compatibility_status: str,
+    git_repo_status: dict,
+) -> dict:
     status = "pass" if not any(item["severity"] in {"critical", "major"} for item in defects) else "failed"
-    return {"status": status, "defects": defects}
+    return {
+        "status": status,
+        "bundle_path": bundle_dir.as_posix(),
+        "manifest_path": manifest_path.as_posix(),
+        "branch_count": branch_count,
+        "config_check_status": config_check_status,
+        "git_repo_status": git_repo_status,
+        "compatibility_status": compatibility_status,
+        "defects": defects,
+    }
 
 
 def main() -> int:
@@ -1191,6 +1342,7 @@ def main() -> int:
     parser.add_argument("--bundle-dir", required=True)
     parser.add_argument("--output")
     parser.add_argument("--no-write", action="store_true", help="Print lint JSON to stdout without mutating preflight.lint.json.")
+    parser.add_argument("--json", action="store_true", help="Print lint JSON to stdout instead of the output path.")
     args = parser.parse_args()
 
     bundle_dir = resolve_absolute_path(args.bundle_dir, "--bundle-dir", must_exist=True)
@@ -1200,13 +1352,20 @@ def main() -> int:
             raise SystemExit("--no-write cannot be combined with --output")
         print(json.dumps(data, indent=2, sort_keys=True))
         return 0 if data["status"] == "pass" else 1
+    canonical_path = bundle_dir / "preflight.lint.json"
     output_path = (
         resolve_absolute_path(args.output, "--output", must_exist=False)
         if args.output
-        else bundle_dir / "preflight.lint.json"
+        else canonical_path
     )
-    output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    print(output_path)
+    rendered = json.dumps(data, indent=2, sort_keys=True) + "\n"
+    output_path.write_text(rendered, encoding="utf-8")
+    if output_path.resolve() != canonical_path.resolve():
+        canonical_path.write_text(rendered, encoding="utf-8")
+    if args.json or args.no_write:
+        print(json.dumps(data, indent=2, sort_keys=True))
+    else:
+        print(output_path)
     return 0 if data["status"] == "pass" else 1
 
 
