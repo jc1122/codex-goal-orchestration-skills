@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-version: 0.2.72
+version: 0.2.73
 description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, optionally use CLI-only Lite advisors for packet planning/context packing/completed-worker summaries/blocked triage, create path-safe worker/research-worker/reviewer packets with telemetry, choose allowed per-worker routes from the Gemini Pro -> Gemini Flash -> Codex Spark -> Codex mini ladder for normal workers, keep worker launcher slots saturated with ready workers, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
@@ -30,9 +30,10 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/runtime_phase_manife
 - Use generated packets, route JSON, scheduler JSON, status/review JSON, telemetry JSON, diffs, tests, and validator defects as the working surface.
 - Verify prompt audit passed and run the model catalog phase before choosing worker routes.
 - Launch independent worker packets as a rolling saturated pool up to `max_active_worker_packets`.
+- Create reviewer packets only when pre-review validation succeeds and the branch status has no unresolved blocker evidence.
+- Reviewer promotion is validator-owned: use `validate_branch_status.py`/`create_pre_review_gate.py` to ensure the branch review artifact is promoted to the canonical branch review path and launcher config route policy is consistent.
 - Use separate child worktrees for write-capable workers when owned paths do not conflict.
 - Do not poll active worker/research/reviewer packet logs. Inspect artifacts only after launchers exit or return terminal status.
-- Create reviewer packets only after deterministic pre-review gate passes.
 - Use `context_pack.py`/packet context excerpts instead of broad reads.
 - Do not read or search `skills/*/scripts/*.py` during normal orchestration, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 

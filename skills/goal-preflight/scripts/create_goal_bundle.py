@@ -801,6 +801,73 @@ def load_json(path: Path) -> dict:
         return json.load(handle)
 
 
+def usable_python_command() -> str:
+    if shutil.which("python3"):
+        return "python3"
+    if shutil.which("python"):
+        return "python"
+    return "python3"
+
+
+def normalize_verification_command(command: str) -> str:
+    if re.match(r"^\s*python(?=\s|$)", command) is None:
+        return command
+    python_command = usable_python_command()
+    if python_command == "python":
+        return command
+    return re.sub(
+        r"^(\s*)python(?=\s|$)",
+        lambda match: f"{match.group(1)}{python_command}",
+        command,
+        count=1,
+    )
+
+
+def normalize_verification_commands(commands: list[str]) -> list[str]:
+    return [normalize_verification_command(command) for command in commands]
+
+
+def package_skeletons_for_path(path: str) -> list[str]:
+    parts = Path(path).parts
+    if len(parts) < 2 or not path.endswith(".py"):
+        return []
+    if parts[-1] == "__init__.py" or parts[0] in {"tests", "test", "docs", "scripts"}:
+        return []
+    skeletons: list[str] = []
+    for index in range(1, len(parts)):
+        package_parts = parts[:index]
+        if package_parts[-1] in {"src", "lib"}:
+            continue
+        if not all(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", part) for part in package_parts if part not in {"src", "lib"}):
+            continue
+        skeleton = "/".join([*package_parts, "__init__.py"])
+        if skeleton not in skeletons:
+            skeletons.append(skeleton)
+    return skeletons
+
+
+def assign_package_skeleton_owned_paths(work_items: list[dict]) -> None:
+    globally_owned = {
+        value
+        for item in work_items
+        for value in item.get("owned_paths", [])
+        if isinstance(value, str)
+    }
+    for item in work_items:
+        owned_paths = item.get("owned_paths")
+        if not isinstance(owned_paths, list):
+            continue
+        additions: list[str] = []
+        for path in list(owned_paths):
+            if not isinstance(path, str):
+                continue
+            for skeleton in package_skeletons_for_path(path):
+                if skeleton not in globally_owned and skeleton not in additions:
+                    additions.append(skeleton)
+                    globally_owned.add(skeleton)
+        owned_paths.extend(additions)
+
+
 def bullets(values: object, fallback: str = "- none") -> str:
     if isinstance(values, str):
         values = [values.strip()] if values.strip() else []
@@ -1004,7 +1071,9 @@ def normalize_work_items(items: object, branch_id_value: str, *, branch_context:
             "context_files": [require_relative_path(value, f"branch {branch_id_value} work item {item_id} context_files") for value in require_string_list(item.get("context_files", []), f"branch {branch_id_value} work item {item_id} context_files")],
             "source_attachment_refs": require_string_list(item.get("source_attachment_refs", []), f"branch {branch_id_value} work item {item_id} source_attachment_refs"),
             "depends_on": require_string_list(item.get("depends_on", []), f"branch {branch_id_value} work item {item_id} depends_on"),
-            "verification": require_string_list(item.get("verification"), f"branch {branch_id_value} work item {item_id} verification", min_items=1),
+            "verification": normalize_verification_commands(
+                require_string_list(item.get("verification"), f"branch {branch_id_value} work item {item_id} verification", min_items=1)
+            ),
             "dod": require_string_list(item.get("dod"), f"branch {branch_id_value} work item {item_id} dod", min_items=1),
         }
         worker_type = normalize_worker_type(item.get("worker_type"), f"branch {branch_id_value} work item {item_id} worker_type")
@@ -1027,6 +1096,7 @@ def normalize_work_items(items: object, branch_id_value: str, *, branch_context:
                 raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends on unknown work item: {dep}")
             if order[dep] >= index:
                 raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends_on must reference only prior work item ids: {dep}")
+    assign_package_skeleton_owned_paths(normalized)
     return normalized
 
 

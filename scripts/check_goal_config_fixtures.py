@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -20,10 +21,14 @@ LINT_BUNDLE = ROOT / "skills" / "goal-preflight" / "scripts" / "lint_goal_bundle
 CREATE_PACKET = ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "create_runtime_packet.py"
 
 
-def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[str]:
+def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    command_env = os.environ.copy()
+    if env:
+        command_env.update(env)
     result = subprocess.run(
         command,
         cwd=ROOT,
+        env=command_env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -40,6 +45,31 @@ def run(command: list[str], *, expect: int = 0) -> subprocess.CompletedProcess[s
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
+
+
+def write_fake_codex_catalog(bin_dir: Path, models: list[str]) -> None:
+    catalog = {
+        "models": [
+            {
+                "slug": model,
+                "display_name": model,
+                "supported_in_api": True,
+                "visibility": "fixture",
+            }
+            for model in models
+        ]
+    }
+    catalog_json = json.dumps(catalog, sort_keys=True).replace("'", "'\"'\"'")
+    script = bin_dir / "codex"
+    script.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" != \"debug\" ] || [ \"$2\" != \"models\" ]; then\n"
+        "  exit 2\n"
+        "fi\n"
+        f"printf '%s\\n' '{catalog_json}'\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
 
 
 def build_generic_cli_config(base_path: Path, source_path: Path) -> None:
@@ -284,6 +314,165 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     require(
         manifest["review_model_policy"]["routes"]["standard"] == ["demanding_agent"],
         "manifest reviewer policy should come from goal config",
+    )
+    route_catalog = json.loads(
+        run(
+            [
+                sys.executable,
+                (ROOT / "skills" / "goal-main-orchestrator" / "scripts" / "check_model_catalog.py").as_posix(),
+                "--json",
+                "--manifest",
+                manifest_path.as_posix(),
+            ]
+        ).stdout
+    )
+    require(route_catalog["status"] == "pass", "manifest route catalog should validate configured routes")
+    require(
+        route_catalog.get("checked_aliases") == ["demanding_agent", "lite_agent"],
+        "manifest route catalog should check every configured route alias",
+    )
+    require(
+        route_catalog.get("checked_harnesses") == ["opencode"],
+        "manifest route catalog should cover the configured opencode harness",
+    )
+    configured_rows = {row.get("alias"): row for row in route_catalog.get("configured_route_models", [])}
+    for alias in ["demanding_agent", "lite_agent"]:
+        row = configured_rows.get(alias, {})
+        require(row.get("harness_kind") == "opencode", f"{alias} route catalog harness mismatch")
+        require(row.get("model_check_status") == "pass", f"{alias} route catalog model check missing")
+        require(row.get("smoke_status") == "pass", f"{alias} route catalog smoke check missing")
+        require(row.get("packet_runner_viable") is True, f"{alias} route catalog should preserve smoke viability")
+
+    no_codex_bin = tmp_path / "no-codex-bin"
+    no_codex_bin.mkdir()
+    missing_codex_catalog = json.loads(
+        run(
+            [
+                sys.executable,
+                (ROOT / "skills" / "goal-main-orchestrator" / "scripts" / "check_model_catalog.py").as_posix(),
+                "--json",
+                "--require-codex",
+                "--manifest",
+                manifest_path.as_posix(),
+                "--source",
+                "live",
+            ],
+            env={"PATH": no_codex_bin.as_posix()},
+            expect=1,
+        ).stdout
+    )
+    require(
+        missing_codex_catalog["status"] == "failed",
+        "manifest route catalog must preserve --require-codex failure when Codex CLI is missing",
+    )
+    require(
+        missing_codex_catalog["source"] == "missing",
+        "missing Codex CLI should be reported as a missing catalog source",
+    )
+
+    codex_manifest_dir = tmp_path / "codex-route-manifest"
+    codex_manifest_dir.mkdir()
+    codex_config_path = codex_manifest_dir / "goal.config.json"
+    codex_check_path = codex_manifest_dir / "goal-config.check.json"
+    codex_manifest_path = codex_manifest_dir / "job.manifest.json"
+    codex_config_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "models": {
+                    "bad_codex": {
+                        "alias": "bad-codex",
+                        "role": "bad_codex",
+                        "harness": "codex",
+                        "provider": "openai",
+                        "model": "gpt-missing-fixture",
+                        "purpose": "fixture missing Codex catalog model",
+                    }
+                },
+                "harnesses": {
+                    "codex": {
+                        "kind": "codex",
+                        "command": "codex",
+                    }
+                },
+                "model_policies": {
+                    "worker_model_policy": {
+                        "default_ladder": ["bad_codex"],
+                        "routes": {"normal-code": ["bad_codex"]},
+                    }
+                },
+                "model_ladders": {"worker": ["bad_codex"]},
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    codex_check_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "pass",
+                "harnesses": [
+                    {
+                        "role": "bad_codex",
+                        "model_check": {"status": "pass"},
+                        "smoke": {"status": "pass"},
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    codex_manifest_path.write_text(
+        json.dumps(
+            {
+                "goal_config_path": "goal.config.json",
+                "goal_config_check_path": "goal-config.check.json",
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    fake_codex_bin = tmp_path / "fake-codex-bin"
+    fake_codex_bin.mkdir()
+    write_fake_codex_catalog(fake_codex_bin, ["gpt-5.4"])
+    absent_configured_codex = json.loads(
+        run(
+            [
+                sys.executable,
+                (ROOT / "skills" / "goal-main-orchestrator" / "scripts" / "check_model_catalog.py").as_posix(),
+                "--json",
+                "--require-codex",
+                "--manifest",
+                codex_manifest_path.as_posix(),
+                "--source",
+                "live",
+            ],
+            env={"PATH": fake_codex_bin.as_posix()},
+            expect=1,
+        ).stdout
+    )
+    require(
+        absent_configured_codex["status"] == "failed",
+        "manifest route catalog must fail when a configured Codex model is absent from the live catalog",
+    )
+    codex_rows = {row.get("alias"): row for row in absent_configured_codex.get("configured_route_models", [])}
+    missing_codex_row = codex_rows.get("bad_codex", {})
+    require(missing_codex_row.get("present") is False, "missing configured Codex model should report present=false")
+    require(missing_codex_row.get("status") == "failed", "missing configured Codex model should fail its row")
+    require(
+        any(
+            "bad_codex: configured Codex model absent from catalog" in failure
+            for failure in absent_configured_codex.get("configured_route_failures", [])
+        ),
+        "missing configured Codex model should be included in configured_route_failures",
     )
 
     run(
@@ -1664,7 +1853,7 @@ def main() -> int:
             any("billing" in failure.lower() for failure in billing_report["failures"]),
             "billing-bearing config should fail with billing rejection",
         )
-        run_integration_fixture(tmp_path, config_path, report_path)
+        run_integration_fixture(tmp_path, config_path, smoke_report_path)
 
     print("status=pass")
     return 0

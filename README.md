@@ -346,6 +346,8 @@ plans/orchestration/<job-id>/
   job.manifest.json
   main.prompt.md
   goal-bootloader.md
+  orchestration.state.json
+  resume.report.json
   PREFLIGHT_REPORT.md
   preflight.brief.lint.json
   preflight.lint.json
@@ -376,6 +378,14 @@ Important manifest policies:
 - `worker_model_policy`, `research_worker_policy`, `review_model_policy`, `amender_model_policy`, and `lite_model_policy` define allowed model routes.
 - `adaptation_policy` allows only future-work manifest amendments.
 - `telemetry_policy` controls standard or debug telemetry.
+
+## Resume and Debug Entrypoints
+
+- For any non-terminal run, `orchestration.state.json` is the primary state snapshot and `resume.report.json` is the canonical resume/readiness view.
+- These artifacts describe safe reuse, blocked/recoverable work, and the exact next command before relaunching work.
+- Main runtime should run reconciliation before relaunching work and again during finalization, then require validator status contracts before reporting final runtime status.
+- Packet-level compact debug surfaces are `packet.summary.json` files (route, attempts, outputs, changed files, and next action) plus `telemetry.json`.
+- Debug-first flow should read `telemetry.debug.summary.json`, `run.trace.jsonl`, `orchestration.state.json`, then `resume.report.json` before opening packet-level logs.
 
 ## Scheduling
 

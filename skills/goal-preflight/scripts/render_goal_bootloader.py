@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import json
 import importlib.util
+import json
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -526,6 +527,57 @@ def _readiness_next_commands(
     return commands
 
 
+def _cleanup_plan(manifest: dict, bundle_dir: Path, repo_root: Path | None, warnings: list[dict[str, object]]) -> dict[str, object]:
+    warning_paths = [
+        str(warning.get("path"))
+        for warning in warnings
+        if isinstance(warning, dict)
+        and warning.get("code") == "bundle_inside_git_worktree_not_ignored"
+        and isinstance(warning.get("path"), str)
+        and str(warning.get("path")).strip()
+    ]
+    bundle_rel = warning_paths[0] if warning_paths else None
+    runtime_dirs = ["audit", "workers", "research", "reviewers", "lite", "schedulers", "amendments", "branches"]
+    generated_artifacts = [
+        "job.manifest.json",
+        "main.prompt.md",
+        "goal-bootloader.md",
+        "runtime-rules.md",
+        "preflight.brief.lint.json",
+        "preflight.lint.json",
+        "repair-gate.json",
+        "readiness.json",
+        "preflight.pipeline.json",
+        "PREFLIGHT_REPORT.md",
+        "telemetry.summary.json",
+        "orchestration.state.json",
+        "resume.report.json",
+    ]
+    config_artifacts = [
+        name
+        for name in ["goal.config.json", "goal-config.check.json", "goal-config-selection.json"]
+        if (bundle_dir / name).exists() or name == "goal-config-selection.json"
+    ]
+    commands: list[str] = []
+    if bundle_rel:
+        commands.append(f"printf '%s\\n' {shlex.quote(bundle_rel + '/')} >> .git/info/exclude")
+    commands.append(f"rm -rf {shlex.quote(bundle_dir.as_posix())}")
+    preserve_config = [path for path in config_artifacts if (bundle_dir / path).exists()]
+    return {
+        "status": "needs_ignore_or_cleanup" if bundle_rel else "ok",
+        "bundle_inside_git_worktree_not_ignored": bool(bundle_rel),
+        "bundle_repo_relative_path": bundle_rel,
+        "repository_root": str(repo_root) if repo_root else None,
+        "generated_artifact_roots": runtime_dirs,
+        "generated_artifacts": generated_artifacts,
+        "config_artifacts": config_artifacts,
+        "preserve_config_artifacts": preserve_config,
+        "suggested_ignore_patterns": [bundle_rel + "/"] if bundle_rel else [],
+        "cleanup_commands": commands,
+        "note": "Generated bundle/runtime artifacts are disposable after the run report is captured; config artifacts are listed separately so users can preserve or reuse them.",
+    }
+
+
 def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     manifest = _load_manifest(bundle_dir)
     bootloader_text = _read_bootloader(bundle_dir)
@@ -568,6 +620,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         verified_routes=verified_routes,
         utilization=utilization,
     )
+    cleanup_plan = _cleanup_plan(manifest, bundle_dir, resolved_repo_root, warnings)
     prompt_size = _prompt_size_report(bundle_dir, manifest)
     artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
     manifest_path = bundle_dir / "job.manifest.json"
@@ -595,6 +648,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         f"route_policy={json.dumps(route_policy, sort_keys=True)}",
         f"verified_routes={json.dumps(verified_routes, sort_keys=True)}",
         f"warnings={json.dumps(warnings, sort_keys=True)}",
+        f"cleanup_plan={json.dumps(cleanup_plan, sort_keys=True)}",
         f"prompt_size_report={json.dumps(prompt_size, sort_keys=True)}",
         f"artifact_size_report={json.dumps(artifact_size, sort_keys=True)}",
         f"runtime_gate={json.dumps(runtime_gate, sort_keys=True)}",
@@ -646,6 +700,12 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
     verified_routes = _verified_routes_summary(manifest)
     utilization = _branch_utilization_summary(manifest)
+    warnings = _readiness_warnings(
+        manifest,
+        goal_config_status=goal_config_status,
+        verified_routes=verified_routes,
+        utilization=utilization,
+    )
     payload = {
         "status": status,
         "launch_allowed": launch_allowed,
@@ -659,12 +719,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         "route_policy": _route_policy_summary(manifest),
         "verified_routes": verified_routes,
         "branch_utilization": utilization,
-        "warnings": _readiness_warnings(
-            manifest,
-            goal_config_status=goal_config_status,
-            verified_routes=verified_routes,
-            utilization=utilization,
-        ),
+        "warnings": warnings,
+        "cleanup_plan": _cleanup_plan(manifest, bundle_dir, resolved_repo_root, warnings),
         "prompt_size_report": prompt_size,
         "artifact_size_report": artifact_size,
         "branch_dag": _collect_bundle_dag(manifest),

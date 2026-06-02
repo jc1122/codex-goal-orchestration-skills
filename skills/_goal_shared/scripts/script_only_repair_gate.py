@@ -190,7 +190,16 @@ def check_scheduler(actions: list[dict], checks: list[dict], manifest: dict, bun
         action(actions, kind="scheduler_gap", reason="scheduler ledger is missing or has no events", command=command)
 
 
-def check_telemetry_summary(actions: list[dict], checks: list[dict], bundle_dir: Path) -> None:
+def check_telemetry_summary(actions: list[dict], checks: list[dict], bundle_dir: Path, scope: str, branch_id: str | None) -> None:
+    if scope == "branch":
+        checks.append(
+            {
+                "name": "telemetry_summary",
+                "status": "pass",
+                "reason": f"branch scope {branch_id or '<unknown>'} skips bundle-wide telemetry.summary.json freshness; main runtime owns aggregate refresh",
+            }
+        )
+        return
     telemetry_files = sorted(path for path in bundle_dir.rglob("telemetry.json") if path.is_file())
     summary = bundle_dir / "telemetry.summary.json"
     status = "pass"
@@ -246,7 +255,23 @@ def status_blockers(status_data: object) -> list[str]:
     return blockers
 
 
-def check_amendments_and_blockers(actions: list[dict], checks: list[dict], bundle_dir: Path, status_path: Path | None, branch_id: str | None) -> None:
+def check_amendments_and_blockers(
+    actions: list[dict],
+    checks: list[dict],
+    bundle_dir: Path,
+    status_path: Path | None,
+    branch_id: str | None,
+    scope: str,
+) -> None:
+    if scope == "branch":
+        checks.append(
+            {
+                "name": "amendment_and_blocker_repair",
+                "status": "skipped",
+                "reason": "branch orchestrator does not launch goal-plan-amender or blocker-repair packets",
+            }
+        )
+        return
     if status_path is None or not status_path.exists():
         checks.append({"name": "amendment_and_blocker_repair", "status": "skipped", "reason": "--status not supplied"})
         return
@@ -288,8 +313,8 @@ def gate(args: argparse.Namespace) -> dict:
     lint_report_path = resolve_absolute_path(args.bundle_lint_report, "--bundle-lint-report", must_exist=True) if args.bundle_lint_report else None
     check_bundle_lint(actions, checks, bundle_dir, lint_report_path)
     check_scheduler(actions, checks, manifest, bundle_dir, args.scope, args.branch_id)
-    check_telemetry_summary(actions, checks, bundle_dir)
-    check_amendments_and_blockers(actions, checks, bundle_dir, status_path, args.branch_id)
+    check_telemetry_summary(actions, checks, bundle_dir, args.scope, args.branch_id)
+    check_amendments_and_blockers(actions, checks, bundle_dir, status_path, args.branch_id, args.scope)
     decision = "script_actions_needed" if actions else "pass_no_actions"
     status = "pass" if decision == "pass_no_actions" else "blocked"
     runtime_gate = runtime_launch_gate(manifest, repo_root)

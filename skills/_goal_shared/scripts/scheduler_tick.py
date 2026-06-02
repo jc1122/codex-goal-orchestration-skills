@@ -356,6 +356,7 @@ def append_event(ledger: dict, *, event: str, runtime_ref: str, timestamp_value:
     data = {
         "seq": seq,
         "timestamp": timestamp_value or deterministic_timestamp(seq),
+        "wall_clock_timestamp": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "runtime_ref": runtime_ref,
         "event": event,
     }

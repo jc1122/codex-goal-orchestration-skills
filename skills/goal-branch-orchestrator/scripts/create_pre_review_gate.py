@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -228,6 +229,38 @@ def git_lines(command: list[str], *, cwd: Path, defects: list[str], label: str) 
     return paths
 
 
+def is_runtime_cache_path(path: str) -> bool:
+    parts = [part for part in Path(path).parts if part]
+    if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in parts):
+        return True
+    return path == ".runtime-cache" or path.startswith(".runtime-cache/")
+
+
+def untracked_whitespace_defects(worktree: Path) -> list[str]:
+    result = run_command(["git", "ls-files", "--others", "--exclude-standard"], cwd=worktree)
+    if result.returncode != 0:
+        return [f"untracked file scan failed:\n{result.stdout.strip()}"]
+    defects: list[str] = []
+    for rel_path in result.stdout.splitlines():
+        rel_path = rel_path.strip()
+        if not rel_path or not is_repo_relative_path(rel_path, reject_porcelain=True) or is_runtime_cache_path(rel_path):
+            continue
+        target = (worktree / rel_path).resolve()
+        try:
+            target.relative_to(worktree.resolve())
+        except ValueError:
+            continue
+        if not target.is_file():
+            continue
+        data = target.read_bytes()
+        if b"\0" in data:
+            continue
+        for line_no, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), start=1):
+            if line.endswith((" ", "\t")):
+                defects.append(f"{rel_path}:{line_no}: trailing whitespace in untracked file")
+    return defects
+
+
 def file_state(worktree: Path, rel_path: str) -> str:
     target = (worktree / rel_path).resolve()
     try:
@@ -420,14 +453,83 @@ def reuse_policy(
     return policy, eligibility, defects
 
 
-def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict) -> tuple[dict, list[str]]:
+def manifest_test_commands(branch: dict) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    tests = branch.get("tests")
+    if isinstance(tests, list):
+        for command in tests:
+            if isinstance(command, str) and command.strip() and command.strip() not in seen:
+                commands.append(command.strip())
+                seen.add(command.strip())
+    return commands
+
+
+SEMANTIC_PROBE_KEYWORDS = (
+    "compatible",
+    "compatibility",
+    "contract",
+    "verifier",
+    "api",
+    "integration",
+    "round-trip",
+    "round trip",
+)
+
+
+def semantic_keyword_present(text: str, keyword: str) -> bool:
+    return re.search(rf"(?<![A-Za-z0-9_]){re.escape(keyword)}(?![A-Za-z0-9_])", text) is not None
+
+
+def branch_semantic_probe_requirements(branch: dict) -> list[str]:
+    text_parts: list[str] = []
+    for key in ("objective", "scope"):
+        value = branch.get(key)
+        if isinstance(value, str):
+            text_parts.append(value)
+    dod = branch.get("dod")
+    if isinstance(dod, str):
+        text_parts.append(dod)
+    elif isinstance(dod, list):
+        text_parts.extend(item for item in dod if isinstance(item, str))
+    combined = "\n".join(text_parts).lower()
+    requirements = [
+        keyword
+        for keyword in SEMANTIC_PROBE_KEYWORDS
+        if semantic_keyword_present(combined, keyword)
+    ]
+    return sorted(dict.fromkeys(requirements))
+
+
+def semantic_probe_check(branch: dict, tests: dict) -> tuple[dict, list[str]]:
+    requirements = branch_semantic_probe_requirements(branch)
+    commands = tests.get("commands") if isinstance(tests.get("commands"), list) else []
+    command_values = [item for item in commands if isinstance(item, str) and item.strip()]
+    status = "pass" if not requirements or command_values else "failed"
+    check = {
+        "status": status,
+        "requirements": requirements,
+        "commands": command_values,
+        "source": "branch objective/scope/DoD keyword scan",
+    }
+    defects = []
+    if requirements and not command_values:
+        defects.append(
+            "branch declares checkable compatibility/contract/API/verifier/integration behavior but pre-review has no command-backed semantic probe"
+        )
+    return check, defects
+
+
+def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict, branch: dict) -> tuple[dict, list[str]]:
     if args.skip_tests:
         if not str(args.test_skip_reason or "").strip():
             return {"status": "failed"}, ["--test-skip-reason is required with --skip-tests"]
         return {"status": "skipped", "skip_allowed": True, "reason": args.test_skip_reason.strip()}, []
     defects = []
     commands = []
-    for command in args.test_command:
+    manifest_commands = manifest_test_commands(branch)
+    explicit_commands = [command for command in args.test_command if isinstance(command, str) and command.strip()]
+    for command in [*explicit_commands, *manifest_commands]:
         result = run_shell_command(command, cwd=worktree)
         commands.append(command)
         if result.returncode != 0:
@@ -442,6 +544,8 @@ def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict) ->
     check = {"status": "pass" if not defects else "failed"}
     if commands:
         check["commands"] = commands
+    if manifest_commands:
+        check["manifest_commands"] = manifest_commands
     if evidence:
         check["evidence"] = evidence
     return check, defects
@@ -499,7 +603,13 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     base_ref = manifest.get("base_ref", "main")
     diff_command = f"git diff --check {base_ref}...HEAD"
     diff_result = run_shell_command(diff_command, cwd=worktree)
-    tests, test_defects = test_check(args, worktree, branch_status)
+    unstaged_diff_command = "git diff --check HEAD"
+    unstaged_diff_result = run_shell_command(unstaged_diff_command, cwd=worktree)
+    staged_diff_command = "git diff --cached --check HEAD"
+    staged_diff_result = run_shell_command(staged_diff_command, cwd=worktree)
+    untracked_check_command = "git ls-files --others --exclude-standard + internal untracked trailing-whitespace scan"
+    untracked_defects = untracked_whitespace_defects(worktree)
+    tests, test_defects = test_check(args, worktree, branch_status, branch)
     freshness_rel_path = BRANCH_VALIDATOR.worktree_freshness_path(branch_id)
     freshness_snapshot, freshness_defects = worktree_snapshot(worktree, str(base_ref), branch_id, branch_status)
     write_json(bundle_dir / freshness_rel_path, freshness_snapshot)
@@ -507,6 +617,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     write_json(bundle_dir / route_policy_rel_path, review_route_policy(branch, branch_id, manifest))
     worker_defects = worker_pass_defects(branch, branch_status, branch_id)
     ownership = ownership_check(branch, branch_status)
+    semantic_probes, semantic_probe_defects = semantic_probe_check(branch, tests)
     dod_items = [item for item in args.dod_item if item.strip()]
     if not dod_items:
         dod_value = branch_status.get("dod_checklist")
@@ -534,8 +645,8 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         },
         "tests": tests,
         "diff_check": {
-            "status": "pass" if diff_result.returncode == 0 else "failed",
-            "command": diff_command,
+            "status": "pass" if diff_result.returncode == 0 and unstaged_diff_result.returncode == 0 and staged_diff_result.returncode == 0 and not untracked_defects else "failed",
+            "commands": [diff_command, unstaged_diff_command, staged_diff_command, untracked_check_command],
         },
         "artifacts_fresh": {
             "status": "pass" if not hash_defects and not freshness_defects else "failed",
@@ -547,6 +658,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             "expected_packet_ids": expected_worker_packet_ids(branch, branch_id),
         },
         "ownership": ownership,
+        "semantic_probes": semantic_probes,
         "dod_evidence": {
             "status": "pass" if not dod_defects else "failed",
             "items": dod_items,
@@ -559,11 +671,17 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         defects.append("branch status validation failed:\n" + status_result.stdout.strip())
     if diff_result.returncode != 0:
         defects.append(f"diff check failed:\n{diff_result.stdout.strip()}")
+    if unstaged_diff_result.returncode != 0:
+        defects.append(f"unstaged diff check failed:\n{unstaged_diff_result.stdout.strip()}")
+    if staged_diff_result.returncode != 0:
+        defects.append(f"staged diff check failed:\n{staged_diff_result.stdout.strip()}")
+    defects.extend(untracked_defects)
     defects.extend(test_defects)
     defects.extend(hash_defects)
     defects.extend(freshness_defects)
     defects.extend(worker_defects)
     defects.extend(ownership.get("defects", []))
+    defects.extend(semantic_probe_defects)
     defects.extend(reuse_defects)
     defects.extend(dod_defects)
 
@@ -572,7 +690,15 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "branch_id": branch_id,
         "status": "pass" if not defects else "failed",
         "review_packet_id": review_packet_id,
-        "commands_run": [shlex.join(status_command), shlex.join(manifest_command), diff_command],
+        "commands_run": [
+            shlex.join(status_command),
+            shlex.join(manifest_command),
+            *tests.get("commands", []),
+            diff_command,
+            unstaged_diff_command,
+            staged_diff_command,
+            untracked_check_command,
+        ],
         "checks": checks,
         "semantic_input_hashes": semantic_hashes,
         "volatile_input_hashes": {},

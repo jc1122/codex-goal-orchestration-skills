@@ -61,6 +61,7 @@ REQUIRED_PACKAGE_FILES = {
     "skills/_goal_shared/scripts/orchestration_contract.py",
     "skills/_goal_shared/scripts/runtime_lite_runner.py",
     "skills/_goal_shared/scripts/runtime_phase_manifest.py",
+    "skills/_goal_shared/scripts/reconcile_goal_run.py",
     "skills/_goal_shared/scripts/scheduler_tick.py",
     "skills/_goal_shared/scripts/status_validation.py",
     "skills/goal-branch-orchestrator/SKILL.md",

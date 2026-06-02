@@ -274,6 +274,19 @@ def choose_status(audit: str, branches: list[dict], expected_branch_count: int, 
     return "blocked"
 
 
+def aggregate_review_status(branch_statuses: list[dict], expected_branch_count: int) -> str:
+    if not branch_statuses:
+        return "missing"
+    if len(branch_statuses) < expected_branch_count:
+        return "missing"
+    review_statuses = {str(item.get("review_status", "missing")) for item in branch_statuses}
+    if review_statuses == {"mergeable"}:
+        return "mergeable"
+    if "failed" in review_statuses or "blocked" in review_statuses:
+        return "blocked"
+    return "missing"
+
+
 def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summary_text: str | None) -> dict:
     manifest = load_json(manifest_path)
     branches = branch_entries(manifest)
@@ -300,9 +313,15 @@ def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summa
     )
     if not branch_statuses:
         dod.append("no branch status artifacts were available")
+    review_status = aggregate_review_status(branch_statuses, len(branches))
     data = {
         "job_id": manifest.get("job_id"),
         "status": status,
+        "schema_status": "assembled",
+        "runtime_status": status,
+        "dod_status": "pass" if status == "pass" and not blockers else "incomplete",
+        "review_status": review_status,
+        "resume_action": "reuse_terminal_status" if status == "pass" and not blockers else "resume_or_repair",
         "audit_status": audit,
         "branch_parallelism": branch_parallelism,
         "branch_statuses": branch_statuses,

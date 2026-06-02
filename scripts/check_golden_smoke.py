@@ -999,6 +999,9 @@ def make_refill_assembly_bundle(source_bundle: Path, target_bundle: Path) -> Non
         },
     )
     (target_bundle / "branches" / "B01.review.json").unlink()
+    reviewer_output = target_bundle / "reviewers" / REVIEW_PACKET / "review.json"
+    if reviewer_output.exists():
+        reviewer_output.unlink()
     run(
         [
             "python3",
@@ -1585,6 +1588,79 @@ def main() -> int:
                 "--json",
             ]
         )
+        reconcile_result = run(
+            [
+                "python3",
+                skill_script("goal-main-orchestrator", "reconcile_goal_run.py"),
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--write",
+                "--require-pass",
+                "--json",
+            ]
+        )
+        reconcile_report = json.loads(reconcile_result.stdout)
+        if reconcile_report.get("status") != "pass" or reconcile_report.get("final_state_validation", {}).get("status") != "pass":
+            raise SystemExit(f"reconcile_goal_run should pass on golden bundle: {reconcile_report!r}")
+        for rel_path in ["orchestration.state.json", "resume.report.json"]:
+            if not (bundle / rel_path).exists():
+                raise SystemExit(f"reconcile_goal_run --write did not create {rel_path}")
+
+        unpromoted_bundle = tmp_path / "reconcile-unpromoted-review"
+        shutil.copytree(bundle, unpromoted_bundle)
+        rewrite_copied_branch_paths(unpromoted_bundle)
+        (unpromoted_bundle / "main.status.json").unlink()
+        (unpromoted_bundle / "branches" / "B01.review.json").unlink()
+        unpromoted_result = run(
+            [
+                "python3",
+                skill_script("goal-main-orchestrator", "reconcile_goal_run.py"),
+                "--manifest",
+                (unpromoted_bundle / "job.manifest.json").as_posix(),
+                "--write",
+                "--json",
+            ]
+        )
+        unpromoted_report = json.loads(unpromoted_result.stdout)
+        codes = {
+            item.get("code")
+            for key in ["missing_artifacts", "stale_or_unreconciled"]
+            for item in unpromoted_report.get(key, [])
+            if isinstance(item, dict)
+        }
+        if "unpromoted_review" not in codes:
+            raise SystemExit(f"reconcile_goal_run did not report unpromoted review: {unpromoted_report!r}")
+        if not (unpromoted_bundle / "main.status.json").exists():
+            raise SystemExit("reconcile_goal_run --write should materialize conservative main.status.json")
+        if not (unpromoted_bundle / "resume.report.json").exists():
+            raise SystemExit("reconcile_goal_run --write did not write blocked resume.report.json")
+        if unpromoted_report.get("final_state_validation", {}).get("status") != "failed":
+            raise SystemExit(f"reconcile_goal_run should fail final validation for missing review: {unpromoted_report!r}")
+        if unpromoted_report.get("safe_to_reuse", {}).get("overall") is not False:
+            raise SystemExit(f"reconcile_goal_run must not mark failed final state reusable: {unpromoted_report!r}")
+
+        missing_branch_status_bundle = tmp_path / "reconcile-missing-branch-status"
+        shutil.copytree(bundle, missing_branch_status_bundle)
+        rewrite_copied_branch_paths(missing_branch_status_bundle)
+        (missing_branch_status_bundle / "main.status.json").unlink()
+        (missing_branch_status_bundle / "branches" / "B01.status.json").unlink()
+        missing_branch_status_result = run(
+            [
+                "python3",
+                skill_script("goal-main-orchestrator", "reconcile_goal_run.py"),
+                "--manifest",
+                (missing_branch_status_bundle / "job.manifest.json").as_posix(),
+                "--write",
+                "--json",
+            ]
+        )
+        missing_branch_status_report = json.loads(missing_branch_status_result.stdout)
+        if missing_branch_status_report.get("status") != "blocked":
+            raise SystemExit(f"missing branch status should reconcile to blocked: {missing_branch_status_report!r}")
+        if missing_branch_status_report.get("final_state_validation", {}).get("status") != "failed":
+            raise SystemExit(f"missing branch status should fail final validation: {missing_branch_status_report!r}")
+        if missing_branch_status_report.get("safe_to_reuse", {}).get("overall") is not False:
+            raise SystemExit(f"missing branch status must not be reported reusable: {missing_branch_status_report!r}")
 
         mismatch_bundle = tmp_path / "reviewer-hash-mismatch"
         shutil.copytree(bundle, mismatch_bundle)
@@ -1673,6 +1749,22 @@ def main() -> int:
         write_json(missing_worker_gate_bundle / "branches" / "B01.pre_review_gate.json", missing_worker_gate)
         missing_worker_gate_result = validate_branch(missing_worker_gate_bundle, expect=1)
         assert_contains(missing_worker_gate_result.stdout, "worker_evidence", "pre-review gate missing worker evidence fixture")
+
+        missing_launch_config_bundle = tmp_path / "missing-launch-config"
+        shutil.copytree(bundle, missing_launch_config_bundle)
+        rewrite_copied_branch_paths(missing_launch_config_bundle)
+        (missing_launch_config_bundle / "workers" / WORKER_PACKET / "launch-config.json").unlink()
+        missing_launch_config_result = validate_branch(missing_launch_config_bundle, expect=1)
+        assert_contains(missing_launch_config_result.stdout, "launch config", "missing launch-config fixture")
+
+        missing_debug_events_bundle = tmp_path / "missing-debug-events"
+        shutil.copytree(bundle, missing_debug_events_bundle)
+        rewrite_copied_branch_paths(missing_debug_events_bundle)
+        worker_config = read_json(missing_debug_events_bundle / "workers" / WORKER_PACKET / "launch-config.json")
+        worker_config["debug_events_name"] = "debug-events.jsonl"
+        write_json(missing_debug_events_bundle / "workers" / WORKER_PACKET / "launch-config.json", worker_config)
+        missing_debug_events_result = validate_branch(missing_debug_events_bundle, expect=1)
+        assert_contains(missing_debug_events_result.stdout, "debug events", "missing debug events fixture")
 
         reuse_bundle = tmp_path / "reviewer-reuse-valid"
         make_reuse_bundle(bundle, reuse_bundle, input_hashes)

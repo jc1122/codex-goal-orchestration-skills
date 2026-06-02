@@ -1,6 +1,6 @@
 ---
 name: goal-main-orchestrator
-version: 0.2.72
+version: 0.2.73
 description: Runtime-only main orchestrator for prepared /goal job bundles. Use when a /goal session has been launched from a goal-preflight bootloader and must consume existing job.manifest.json, main.prompt.md, and branch prompts; first run skill availability bootstrap and fail-closed prompt audit with telemetry, optionally use CLI-only Lite advisors after audit or completed branch artifacts for advisory summaries, then create path-validated branch worktrees, dispatch goal-branch-orchestrator sessions within the hard agent limit, summarize packet telemetry, and finish only when the main prompt's falsifiable Definition of Done is satisfied.
 ---
 
@@ -31,8 +31,11 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/runtime_phase_manifest
 - In debug telemetry mode, `summarize_telemetry.py` writes `telemetry.debug.summary.json` and root `run.trace.jsonl`; use those for efficiency, stall, fallback, and token-pressure analysis before raw event logs.
 - Run the model catalog phase before choosing or launching model routes.
 - Prompt audit must pass before branch worktree creation or branch dispatch.
+- For resumable or interrupted runs, run `reconcile_goal_run.py` first to materialize `orchestration.state.json`/`resume.report.json`, then launch only work that is safe to resume.
 - Keep branch orchestrator slots saturated up to `max_active_branch_agents`; waves are scheduling order, not dependency barriers.
 - Wait on active branch agents; do not poll branch worktrees, worker packets, reviewer packets, or logs while branch agents are active.
+- Branch/reviewer status promotion and launch-config integrity are validator-enforced; treat `assemble_branch_status.py`/`validate_branch_status.py` output as the source of truth before relaunching branch work.
+- After each dispatch loop and before final reporting, reconcile terminal evidence and run `validate_main_status.py` on a freshly assembled `main.status.json`.
 - Use `goal-plan-amender` only after validated terminal branch evidence and only for future unstarted work.
 - Do not read or search `skills/*/scripts/*.py` during normal runtime, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.
 

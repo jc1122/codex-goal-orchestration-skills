@@ -98,6 +98,7 @@ def main() -> int:
     event = {
         "seq": seq,
         "timestamp": args.timestamp or deterministic_timestamp(seq),
+        "wall_clock_timestamp": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "runtime_ref": args.runtime_ref,
         "event": args.event,
     }

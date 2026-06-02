@@ -186,6 +186,12 @@ PHASES: dict[str, dict[str, Any]] = {
                 "on_fail": "do not create branches; read audit/prompt-audit-phase.json before event logs",
             },
             {
+                "id": "resume_reconcile",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/reconcile_goal_run.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --write",
+                "agent_does": "inspect resume.report.json before launching or relaunching branches; reuse only validated terminal artifacts and follow listed next_commands for stale or missing evidence",
+                "pass": "orchestration.state.json and resume.report.json exist with explicit safe_to_reuse and next_commands",
+            },
+            {
                 "id": "branch_schedule",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --audit /abs/bundle/audit/prompt-audit.json --list-ready --limit 4",
                 "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap",
@@ -208,7 +214,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "finalize",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope main --runtime-ref goal-main-orchestrator --init --record-ready --close-from-artifacts --validate-final && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py --bundle-dir /abs/bundle && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/assemble_main_status.py --manifest /abs/bundle/job.manifest.json --out /abs/bundle/main.status.json --replace && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/main.status.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope main --runtime-ref goal-main-orchestrator --init --record-ready --close-from-artifacts --validate-final && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py --bundle-dir /abs/bundle && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/assemble_main_status.py --manifest /abs/bundle/job.manifest.json --out /abs/bundle/main.status.json --replace && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/main.status.json && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/reconcile_goal_run.py --manifest /abs/bundle/job.manifest.json --write",
                 "pass": "main.status.json validates and DoD evidence is complete",
             },
         ],
@@ -227,15 +233,20 @@ PHASES: dict[str, dict[str, Any]] = {
                 "pass": "skill availability and model-catalog.json status=pass/source live preferred",
             },
             {
-                "id": "ready_workers",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/render_worker_schedule.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --list-ready --limit 4",
-                "agent_does": "launch independent ready workers as a saturated pool up to max_active_worker_packets",
+                "id": "scheduler_init",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --init --record-ready",
+                "pass": "worker scheduler ledger exists and records initially ready work before branch script gate",
             },
             {
                 "id": "script_repair_gate",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope branch --branch-id Bxx --json",
                 "pass": "decision=pass_no_actions before worker packet launch",
                 "agent_does": "complete script_actions_needed commands first; launch workers only after the gate allows semantic work",
+            },
+            {
+                "id": "ready_workers",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/render_worker_schedule.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --list-ready --limit 4",
+                "agent_does": "after scheduler_init and script_repair_gate pass, launch independent ready workers as a saturated pool up to max_active_worker_packets",
             },
             {
                 "id": "context_pack",
@@ -249,7 +260,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "watchdog",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --init --record-ready",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --record-ready",
                 "agent_does": "after orchestration_watchdog.branch_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; close unreachable or stale active worker/reviewer packets with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
                 "pass": "active worker/reviewer work completes normally or has terminal scheduler evidence before replacement launch",
             },

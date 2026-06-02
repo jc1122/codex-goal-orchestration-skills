@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -24,6 +25,11 @@ WORKER_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 WORKER_STATUS_END = "END_WORKER_STATUS_JSON"
 TIMEOUT_RETURN_CODES = {124, 137}
 LAUNCHER_STATES = ("active", "timeout", "fail-clean", "fail-dirty", "pass", "blocked")
+CACHE_PATH_PARTS = (
+    "__pycache__",
+    ".pytest_cache",
+    ".ruff_cache",
+)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -110,6 +116,7 @@ def remove_if_exists(path: Path) -> None:
 def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, Any]]) -> None:
     remove_if_exists(packet_dir / output_name)
     remove_if_exists(packet_dir / "telemetry.json")
+    remove_if_exists(packet_dir / "packet.summary.json")
     remove_if_exists(packet_dir / "fallback.blocked.txt")
     remove_if_exists(packet_dir / "launcher-state.json")
     seen: set[str] = set()
@@ -285,6 +292,112 @@ def write_launcher_state(
     write_json(path, data)
 
 
+def read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        return read_json(path)
+    except SystemExit:
+        return {}
+
+
+def packet_next_action(output_status: object, terminal_state: object) -> str:
+    if output_status in {"pass", "mergeable"} and terminal_state == "pass":
+        return "validate_and_collect"
+    if output_status in {"blocked", "failed"} or terminal_state == "blocked":
+        return "close_blocked_or_create_repair"
+    if terminal_state in {"timeout", "fail-clean", "fail-dirty"}:
+        return "inspect_packet_failure"
+    return "inspect_packet_artifacts"
+
+
+def attempt_failure_class(event: dict[str, Any], attempt: dict[str, Any]) -> str:
+    state = event.get("state")
+    if state in {None, "active"}:
+        return "unknown"
+    if state == "pass":
+        return "none"
+    if state == "timeout":
+        return "timeout"
+    message = str(event.get("message", "")).lower()
+    if "outside owned paths" in message:
+        return "ownership"
+    if event.get("dirty") is True:
+        return "dirty_worktree"
+    returncode = event.get("returncode")
+    if returncode in {126, 127}:
+        return "harness_unavailable"
+    if event.get("output_nonempty") is True:
+        return "schema_or_output_readback"
+    provider = attempt.get("harness_kind") or attempt.get("provider")
+    if provider:
+        return f"{provider}_failure"
+    return "harness_failure"
+
+
+def write_packet_summary(packet_dir: Path, config: dict[str, Any]) -> None:
+    output_name = string_value(config, "output_name")
+    output_path = packet_dir / output_name
+    telemetry_path = packet_dir / "telemetry.json"
+    launcher_path = packet_dir / state_artifact_name(config)
+    output = read_optional_json(output_path)
+    telemetry = read_optional_json(telemetry_path)
+    launcher = read_optional_json(launcher_path)
+    launcher_events = launcher.get("events") if isinstance(launcher.get("events"), list) else []
+    telemetry_attempts = telemetry.get("attempts") if isinstance(telemetry.get("attempts"), list) else []
+    attempts: list[dict[str, Any]] = []
+    for index, attempt in enumerate(list_value(config, "attempts")):
+        attempt_events = [
+            event for event in launcher_events
+            if isinstance(event, dict) and event.get("attempt_index") == index
+        ]
+        last_event = attempt_events[-1] if attempt_events else {}
+        telemetry_attempt = telemetry_attempts[index] if index < len(telemetry_attempts) and isinstance(telemetry_attempts[index], dict) else {}
+        attempts.append(
+            {
+                "attempt_index": index,
+                "alias": attempt.get("alias"),
+                "provider": attempt.get("provider"),
+                "harness": attempt.get("harness"),
+                "harness_kind": attempt.get("harness_kind"),
+                "model": attempt.get("model"),
+                "timeout_seconds": attempt.get("timeout_seconds"),
+                "state": last_event.get("state"),
+                "returncode": last_event.get("returncode"),
+                "dirty": last_event.get("dirty"),
+                "output_nonempty": last_event.get("output_nonempty"),
+                "failure_class": attempt_failure_class(last_event, attempt),
+                "called": telemetry_attempt.get("called"),
+                "accepted": telemetry_attempt.get("accepted"),
+                "usage": telemetry_attempt.get("usage"),
+            }
+        )
+    output_status = output.get("status") or output.get("verdict")
+    summary = {
+        "schema_version": 1,
+        "packet_id": string_value(config, "packet_id"),
+        "role": string_value(config, "role"),
+        "route_class": config.get("route_class"),
+        "selected_ladder": config.get("selected_ladder", []),
+        "selection_reason": config.get("selection_reason", ""),
+        "worktree": string_value(config, "worktree"),
+        "output_path": output_name,
+        "output_exists": output_path.exists(),
+        "output_status": output_status,
+        "changed_files": output.get("changed_files") if isinstance(output.get("changed_files"), list) else [],
+        "blockers": output.get("blockers") if isinstance(output.get("blockers"), list) else [],
+        "telemetry_path": "telemetry.json",
+        "telemetry_exists": telemetry_path.exists(),
+        "launcher_state_path": state_artifact_name(config),
+        "launcher_state_exists": launcher_path.exists(),
+        "terminal_state": launcher.get("terminal_state"),
+        "attempts": attempts,
+        "next_action": packet_next_action(output_status, launcher.get("terminal_state")),
+    }
+    write_json(packet_dir / "packet.summary.json", summary)
+    append_debug_event(packet_dir, config, {"phase": "packet_summary", "event": "written"})
+
+
 def event_label(attempt: dict[str, Any], fallback: str) -> str:
     logs = attempt.get("event_logs")
     if isinstance(logs, list) and logs:
@@ -310,6 +423,18 @@ def run_with_timeout(
     if shutil.which("timeout") is None:
         stdout_path.write_text(TIMEOUT_NOT_FOUND.format(role=role), encoding="utf-8")
         return 127
+    cache_root = stdout_path.parent / ".runtime-cache"
+    tmp_root = cache_root / "tmp"
+    xdg_cache = cache_root / "xdg-cache"
+    tmp_root.mkdir(parents=True, exist_ok=True)
+    xdg_cache.mkdir(parents=True, exist_ok=True)
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["TMPDIR"] = tmp_root.as_posix()
+    env["XDG_CACHE_HOME"] = xdg_cache.as_posix()
+    pytest_addopts = env.get("PYTEST_ADDOPTS", "").strip()
+    cache_opt = "-p no:cacheprovider"
+    env["PYTEST_ADDOPTS"] = (pytest_addopts + " " + cache_opt).strip() if cache_opt not in pytest_addopts else pytest_addopts
     full_command = [
         "timeout",
         "--foreground",
@@ -323,6 +448,7 @@ def run_with_timeout(
             input=stdin_data,
             stdout=stdout,
             stderr=subprocess.STDOUT,
+            env=env,
             check=False,
         )
     return result.returncode
@@ -347,7 +473,7 @@ def validate_probe_output(path: Path, prompt: str, label: str) -> int:
     return 1
 
 
-def is_worktree_dirty(worktree: str) -> bool:
+def worktree_status_lines(worktree: str) -> list[str]:
     try:
         status = subprocess.run(
             ["git", "-C", worktree, "status", "--porcelain"],
@@ -357,8 +483,101 @@ def is_worktree_dirty(worktree: str) -> bool:
             text=True,
         )
     except Exception:  # noqa: BLE001
-        return False
-    return bool(status.stdout.strip())
+        return []
+    return [line for line in status.stdout.splitlines() if line.strip()]
+
+
+def porcelain_status_path(line: str) -> str:
+    path = line[3:] if len(line) > 3 and line[2] == " " else line.strip()
+    if " -> " in path:
+        path = path.split(" -> ", 1)[1]
+    return path.strip()
+
+
+def is_runtime_cache_path(path: str) -> bool:
+    parts = [part for part in Path(path).parts if part]
+    if any(part in CACHE_PATH_PARTS for part in parts):
+        return True
+    return path.startswith(".runtime-cache/") or path == ".runtime-cache"
+
+
+def actionable_worktree_status_lines(worktree: str) -> list[str]:
+    return [
+        line
+        for line in worktree_status_lines(worktree)
+        if not is_runtime_cache_path(porcelain_status_path(line))
+    ]
+
+
+def is_worktree_dirty(worktree: str, *, ignore_runtime_cache: bool = False) -> bool:
+    status_lines = actionable_worktree_status_lines(worktree) if ignore_runtime_cache else worktree_status_lines(worktree)
+    return bool(status_lines)
+
+
+def file_fingerprint(worktree: str, path: str) -> str:
+    target = Path(worktree) / path
+    try:
+        stat_result = target.lstat()
+    except FileNotFoundError:
+        return "missing"
+    except OSError as exc:
+        return f"error:{exc.__class__.__name__}"
+    if target.is_symlink():
+        try:
+            return f"symlink:{os.readlink(target)}"
+        except OSError as exc:
+            return f"symlink-error:{exc.__class__.__name__}"
+    if target.is_file():
+        digest = hashlib.sha256()
+        try:
+            with target.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            return f"file:{stat_result.st_size}:{digest.hexdigest()}"
+        except OSError as exc:
+            return f"file-error:{exc.__class__.__name__}"
+    if target.is_dir():
+        return "dir"
+    return f"other:{stat_result.st_mode}:{stat_result.st_size}"
+
+
+def changed_file_fingerprints(worktree: str) -> dict[str, str]:
+    return {
+        path: file_fingerprint(worktree, path)
+        for path in extract_changed_files(worktree)
+    }
+
+
+def packet_delta_changed_files(worktree: str, baseline: dict[str, str]) -> list[str]:
+    current = changed_file_fingerprints(worktree)
+    changed: list[str] = []
+    for path in sorted(set(current) | set(baseline)):
+        current_fingerprint = current[path] if path in current else file_fingerprint(worktree, path)
+        if current_fingerprint != baseline.get(path):
+            changed.append(path)
+    return changed
+
+
+def path_is_owned(path: str, owned_paths: list[str]) -> bool:
+    for owned in owned_paths:
+        if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
+            return True
+    return False
+
+
+def worker_ownership_violations(config: dict[str, Any], changed_files: list[str]) -> list[str]:
+    owned_files = [
+        item
+        for item in config.get("owned_files", [])
+        if isinstance(item, str) and item.strip()
+    ] if isinstance(config.get("owned_files"), list) else []
+    if not owned_files:
+        return []
+    violations: list[str] = []
+    for changed in changed_files:
+        if not path_is_owned(changed, owned_files):
+            violations.append(changed)
+    return violations
 
 
 def extract_changed_files(worktree: str) -> list[str]:
@@ -372,15 +591,13 @@ def extract_changed_files(worktree: str) -> list[str]:
         return []
     changed_files = []
     for line in output.splitlines():
-        path = line[3:] if len(line) > 3 and line[2] == " " else line.strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
-        if path:
+        path = porcelain_status_path(line)
+        if path and not is_runtime_cache_path(path):
             changed_files.append(path)
     return changed_files
 
 
-def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str) -> None:
+def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str, *, changed_files: list[str] | None = None) -> None:
     output_path = packet_dir / string_value(config, "output_name")
     data = {
         "packet_id": string_value(config, "packet_id"),
@@ -391,7 +608,7 @@ def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str
         "route_class": string_value(config, "route_class"),
         "selected_ladder": config.get("selected_ladder", []),
         "selection_reason": config.get("selection_reason", ""),
-        "changed_files": extract_changed_files(string_value(config, "worktree")),
+        "changed_files": changed_files if changed_files is not None else extract_changed_files(string_value(config, "worktree")),
         "commands_run": config.get("selected_commands", [item.get("command", "") for item in list_value(config, "attempts")]),
         "tests": [],
         "blockers": [
@@ -455,14 +672,14 @@ def write_terminal_review(packet_dir: Path, config: dict[str, Any], message: str
     write_json(output_path, data)
 
 
-def write_terminal(packet_dir: Path, config: dict[str, Any], message: str) -> None:
+def write_terminal(packet_dir: Path, config: dict[str, Any], message: str, *, changed_files: list[str] | None = None) -> None:
     role = string_value(config, "role")
     if role == "research-worker":
         write_terminal_research(packet_dir, config, message)
     elif role == "reviewer":
         write_terminal_review(packet_dir, config, message)
     elif role == "worker":
-        write_terminal_worker(packet_dir, config, message)
+        write_terminal_worker(packet_dir, config, message, changed_files=changed_files)
     else:
         raise SystemExit(f"unsupported compact runner role: {role}")
 
@@ -490,6 +707,7 @@ def write_telemetry(packet_dir: Path, config: dict[str, Any]) -> None:
         command.extend(["--debug", "--debug-output", debug_name])
     subprocess.run(command, check=False)
     append_debug_event(packet_dir, config, {"phase": "telemetry", "event": "written"})
+    write_packet_summary(packet_dir, config)
 
 
 def run_gemini_probe_command(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], worktree: str) -> int:
@@ -1097,6 +1315,7 @@ def run_packet(packet_dir: Path) -> int:
     clean_outputs(packet_dir, output_name, attempts)
 
     if role == "worker":
+        baseline_changed_files = changed_file_fingerprints(worktree)
         for index, attempt in enumerate(attempts):
             write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
             rc, _ = run_worker_attempt(
@@ -1109,7 +1328,8 @@ def run_packet(packet_dir: Path) -> int:
                 worktree=worktree,
             )
             output_nonempty = output_path.exists() and output_path.stat().st_size > 0
-            dirty = is_worktree_dirty(worktree)
+            packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
+            dirty = bool(packet_changed_files)
             state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
             write_launcher_state(
                 packet_dir,
@@ -1122,6 +1342,14 @@ def run_packet(packet_dir: Path) -> int:
                 output_nonempty=output_nonempty,
             )
             if rc == 0:
+                ownership_violations = worker_ownership_violations(config, packet_changed_files)
+                if ownership_violations:
+                    message = "worker changed files outside owned paths: " + ", ".join(ownership_violations)
+                    (packet_dir / "ownership.blocked.txt").write_text(message + "\n", encoding="utf-8")
+                    write_terminal(packet_dir, config, message, changed_files=packet_changed_files)
+                    write_launcher_state(packet_dir, config, state="blocked", attempt=attempt, attempt_index=index, returncode=rc, dirty=True, output_nonempty=output_nonempty, message=message)
+                    write_telemetry(packet_dir, config)
+                    return 2
                 write_telemetry(packet_dir, config)
                 return 0
             if output_nonempty:
@@ -1132,14 +1360,15 @@ def run_packet(packet_dir: Path) -> int:
                 suffix = "refusing fallback in same worktree." if index < len(attempts) - 1 else "no fallback remains."
                 message = f"{label} failed after leaving dirty worktree; {suffix}"
                 (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
-                write_terminal(packet_dir, config, message)
+                write_terminal(packet_dir, config, message, changed_files=packet_changed_files)
                 write_launcher_state(packet_dir, config, state="blocked", attempt=attempt, attempt_index=index, returncode=rc, dirty=True, output_nonempty=output_nonempty, message=message)
                 write_telemetry(packet_dir, config)
                 return 2
-        if is_worktree_dirty(worktree):
+        packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
+        if packet_changed_files:
             message = "worker failed after leaving dirty worktree; no fallback remains."
             (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
-            write_terminal(packet_dir, config, message)
+            write_terminal(packet_dir, config, message, changed_files=packet_changed_files)
             write_launcher_state(packet_dir, config, state="blocked", dirty=True, message=message)
             write_telemetry(packet_dir, config)
             return 2

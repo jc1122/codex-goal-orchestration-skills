@@ -370,6 +370,7 @@ def compact_readiness(readiness: dict) -> dict:
         "lint_status": readiness.get("lint_status", {}),
         "verified_routes": readiness.get("verified_routes", {}),
         "warnings": readiness.get("warnings", []),
+        "cleanup_plan": readiness.get("cleanup_plan", {}),
         "branch_utilization": readiness.get("branch_utilization", {}),
         "prompt_size_summary": {
             "total_chars": prompt_size.get("total_prompt_chars", prompt_size.get("total_chars")),

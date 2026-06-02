@@ -81,6 +81,9 @@ RESEARCH_SECRET_MARKERS = [
     "aws/credentials",
     "application_default_credentials",
 ]
+WORKER_FORBIDDEN_COMMAND_PATTERNS = [
+    (r"\bgit\s+(add|commit|push|reset|checkout|clean|merge|rebase|stash)\b", "git state mutation"),
+]
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 is_strict_int = STATUS_VALIDATION.is_strict_int
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
@@ -116,6 +119,64 @@ def sha256_text(text: str) -> str:
 
 def is_repo_relative_path(value: str) -> bool:
     return STATUS_VALIDATION.is_repo_relative_path(value, reject_porcelain=True)
+
+
+def goal_config_from_manifest(manifest: object, manifest_path: Path | None) -> dict | None:
+    if isinstance(manifest, dict) and isinstance(manifest.get("goal_config"), dict):
+        return manifest["goal_config"]
+    if isinstance(manifest, dict) and manifest_path is not None:
+        config_path = manifest.get("goal_config_path")
+        if isinstance(config_path, str) and config_path.strip() and is_repo_relative_path(config_path):
+            candidate = (manifest_path.parent / config_path).resolve()
+            try:
+                candidate.relative_to(manifest_path.parent.resolve())
+            except ValueError:
+                return None
+            if candidate.is_file():
+                data = load_json(candidate)
+                if isinstance(data, dict):
+                    return data
+    return None
+
+
+def expected_review_model_policy(defects: list[str], manifest: object, manifest_path: Path | None) -> dict:
+    manifest_root = require_object(defects, manifest, "manifest")
+    policy = manifest_root.get("review_model_policy")
+    goal_config = goal_config_from_manifest(manifest_root, manifest_path)
+    if goal_config is not None:
+        model_policies = goal_config.get("model_policies") if isinstance(goal_config.get("model_policies"), dict) else {}
+        expected = model_policies.get("review_model_policy")
+        if isinstance(expected, dict):
+            if policy != expected:
+                defect(defects, "manifest.review_model_policy", "must match goal_config.model_policies.review_model_policy")
+            return expected
+    if policy != CONTRACT.REVIEW_MODEL_POLICY:
+        defect(defects, "manifest.review_model_policy", "must match shared deterministic review router policy")
+    return CONTRACT.REVIEW_MODEL_POLICY
+
+
+def path_is_owned(path: str, owned_paths: list[str]) -> bool:
+    for owned in owned_paths:
+        if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
+            return True
+    return False
+
+
+def is_runtime_cache_path(path: str) -> bool:
+    parts = [part for part in Path(path).parts if part]
+    if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in parts):
+        return True
+    return path == ".runtime-cache" or path.startswith(".runtime-cache/")
+
+
+def work_items_by_packet(branch: object) -> dict[str, dict]:
+    if not isinstance(branch, dict):
+        return {}
+    result: dict[str, dict] = {}
+    for item in branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []:
+        if isinstance(item, dict) and isinstance(item.get("packet_id"), str):
+            result[item["packet_id"]] = item
+    return result
 
 
 def validate_path_list(defects: list[str], value: object, path: str) -> None:
@@ -157,6 +218,15 @@ def validate_url_list(defects: list[str], value: object, path: str) -> None:
     for index, item in enumerate(require_string_list(defects, value, path)):
         if not (item.startswith("https://") or item.startswith("http://")):
             defect(defects, f"{path}[{index}]", "must be an http(s) source URL")
+
+
+def validate_worker_command_evidence(defects: list[str], commands: object, path: str) -> None:
+    values = require_string_list(defects, commands, path, min_items=1)
+    for index, command in enumerate(values):
+        normalized = " ".join(command.lower().split())
+        for pattern, reason in WORKER_FORBIDDEN_COMMAND_PATTERNS:
+            if re.search(pattern, normalized):
+                defect(defects, f"{path}[{index}]", f"must not list mutating command evidence: {reason}")
 
 
 def validate_research_security(defects: list[str], commands: list[str], local_files: list[str], path: str) -> None:
@@ -280,6 +350,7 @@ def validate_reviewer_route_artifact(
     *,
     packet_id: str,
     manifest: object,
+    manifest_path: Path | None,
 ) -> list[str]:
     route = require_object(defects, route_value, path)
     for key in ["schema_version", "packet_id", "role", "tier", "selected_ladder", "selection_reason", "policy_router"]:
@@ -295,11 +366,9 @@ def validate_reviewer_route_artifact(
     if tier not in CONTRACT.REVIEW_ROUTE_TIERS:
         defect(defects, f"{path}.tier", f"must be one of {list(CONTRACT.REVIEW_ROUTE_TIERS)}")
     selected = require_string_list(defects, route.get("selected_ladder"), f"{path}.selected_ladder", min_items=1)
-    manifest_root = require_object(defects, manifest, "manifest")
-    policy = manifest_root.get("review_model_policy")
-    if policy != CONTRACT.REVIEW_MODEL_POLICY:
-        defect(defects, "manifest.review_model_policy", "must match shared deterministic review router policy")
-    expected = CONTRACT.review_route_for_tier(str(tier)) if tier in CONTRACT.REVIEW_ROUTE_TIERS else []
+    policy = expected_review_model_policy(defects, manifest, manifest_path)
+    routes = policy.get("routes") if isinstance(policy.get("routes"), dict) else {}
+    expected = routes.get(str(tier)) if tier in CONTRACT.REVIEW_ROUTE_TIERS and isinstance(routes.get(str(tier)), list) else []
     if selected and expected and selected != expected:
         defect(defects, f"{path}.selected_ladder", f"must match review_model_policy route for tier {tier!r}")
     selection_reason = require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
@@ -309,9 +378,101 @@ def validate_reviewer_route_artifact(
             defect(defects, f"{path}.heavy_triggers", "must explain heavy reviewer routing with at least one trigger")
         if selection_reason and "default deterministic review tier" in selection_reason.lower():
             defect(defects, f"{path}.selection_reason", "must not be the default reason when heavy reviewer routing is selected")
-    if route.get("policy_router") != CONTRACT.REVIEW_MODEL_POLICY["router"]:
-        defect(defects, f"{path}.policy_router", f"must be {CONTRACT.REVIEW_MODEL_POLICY['router']!r}")
+    expected_router = policy.get("router", CONTRACT.REVIEW_MODEL_POLICY["router"])
+    if route.get("policy_router") != expected_router:
+        defect(defects, f"{path}.policy_router", f"must be {expected_router!r}")
     return selected
+
+
+def validate_launch_config_artifact(
+    defects: list[str],
+    packet_dir: Path,
+    path: str,
+    *,
+    packet_id: str | None,
+    role: str,
+    output_name: str,
+) -> list[str]:
+    config_path = packet_dir / "launch-config.json"
+    if not config_path.exists():
+        defect(defects, path, f"launch config does not exist: {config_path}")
+        return []
+    config = require_object(defects, load_json_artifact(defects, config_path, path), path)
+    if config.get("schema_version") != 1:
+        defect(defects, f"{path}.schema_version", "must be 1")
+    if packet_id and config.get("packet_id") != packet_id:
+        defect(defects, f"{path}.packet_id", "must match packet artifact id")
+    if config.get("role") != role:
+        defect(defects, f"{path}.role", f"must be {role!r}")
+    worktree = require_string(defects, config.get("worktree"), f"{path}.worktree")
+    if worktree and not is_absolute_path(worktree):
+        defect(defects, f"{path}.worktree", "must be an absolute path without traversal")
+    schema_name = require_string(defects, config.get("schema_name"), f"{path}.schema_name")
+    if schema_name and schema_name != "research.schema.json" and not schema_name.endswith(".schema.json"):
+        defect(defects, f"{path}.schema_name", "must name a packet-local schema JSON file")
+    if schema_name and not (packet_dir / schema_name).exists():
+        defect(defects, f"{path}.schema_name", f"schema file does not exist: {packet_dir / schema_name}")
+    configured_output = require_string(defects, config.get("output_name"), f"{path}.output_name")
+    if configured_output != output_name:
+        defect(defects, f"{path}.output_name", f"must be {output_name!r}")
+    if configured_output and not (packet_dir / configured_output).exists():
+        defect(defects, f"{path}.output_name", f"output artifact does not exist: {packet_dir / configured_output}")
+    require_string(defects, config.get("telemetry_script"), f"{path}.telemetry_script")
+    debug_events_name = config.get("debug_events_name")
+    if isinstance(debug_events_name, str) and debug_events_name.strip():
+        debug_path = packet_dir / debug_events_name
+        if not debug_path.exists():
+            defect(defects, f"{path}.debug_events_name", f"debug events artifact does not exist: {debug_path}")
+        else:
+            debug_events: list[dict] = []
+            for line_index, line in enumerate(debug_path.read_text(encoding="utf-8").splitlines(), start=1):
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except Exception as exc:  # noqa: BLE001
+                    defect(defects, f"{path}.debug_events_name[{line_index}]", f"must be JSONL object: {exc}")
+                    continue
+                if isinstance(item, dict):
+                    debug_events.append(item)
+            has_start = any(item.get("packet_id") == packet_id and item.get("phase") == "packet" and item.get("event") == "start" for item in debug_events)
+            has_end = any(item.get("packet_id") == packet_id and item.get("phase") == "packet" and item.get("event") == "end" for item in debug_events)
+            if not has_start:
+                defect(defects, f"{path}.debug_events_name", "must include packet start event")
+            if not has_end:
+                defect(defects, f"{path}.debug_events_name", "must include packet end event")
+    attempts = config.get("attempts")
+    aliases: list[str] = []
+    if not isinstance(attempts, list) or not attempts:
+        defect(defects, f"{path}.attempts", "must be a non-empty array")
+        return aliases
+    for index, raw_attempt in enumerate(attempts):
+        attempt_path = f"{path}.attempts[{index}]"
+        attempt = require_object(defects, raw_attempt, attempt_path)
+        alias = require_string(defects, attempt.get("alias"), f"{attempt_path}.alias")
+        if alias:
+            aliases.append(alias)
+        require_string(defects, attempt.get("provider"), f"{attempt_path}.provider")
+        require_string(defects, attempt.get("model"), f"{attempt_path}.model")
+        require_string(defects, attempt.get("command"), f"{attempt_path}.command")
+        timeout = attempt.get("timeout_seconds")
+        if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+            defect(defects, f"{attempt_path}.timeout_seconds", "must be a positive integer")
+        sandbox = attempt.get("sandbox")
+        if role in {"worker", "reviewer"} and not isinstance(sandbox, str):
+            defect(defects, f"{attempt_path}.sandbox", "must record the attempt sandbox")
+        if role in {"worker", "reviewer"} and attempt.get("provider") == "codex":
+            if attempt.get("ignore_user_config") is not True:
+                defect(defects, f"{attempt_path}.ignore_user_config", "must be true for Codex packet isolation")
+            if attempt.get("ignore_rules") is not True:
+                defect(defects, f"{attempt_path}.ignore_rules", "must be true for Codex packet isolation")
+        event_logs = attempt.get("event_logs")
+        if not isinstance(event_logs, list) or not all(isinstance(item, str) and item.strip() for item in event_logs):
+            defect(defects, f"{attempt_path}.event_logs", "must list packet-local event log paths")
+    selected_ladder = config.get("selected_ladder")
+    if isinstance(selected_ladder, list) and aliases and [item for item in selected_ladder if isinstance(item, str)] != aliases:
+        defect(defects, f"{path}.selected_ladder", "must match launch attempt aliases exactly")
+    return aliases
 
 
 def validate_worker_payload(
@@ -346,7 +507,7 @@ def validate_worker_payload(
     selection_reason = require_string(defects, data.get("selection_reason"), f"{path}.selection_reason")
     validate_route_class_cost(defects, route_class, selected_ladder, f"{path}.selected_ladder", selection_reason)
     validate_path_list(defects, data.get("changed_files"), f"{path}.changed_files")
-    validate_command_list(defects, data.get("commands_run"), f"{path}.commands_run", min_items=1)
+    validate_worker_command_evidence(defects, data.get("commands_run"), f"{path}.commands_run")
     validate_command_list(defects, data.get("tests"), f"{path}.tests")
     blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
     if data.get("status") == "pass" and blockers:
@@ -460,7 +621,8 @@ def validate_worker_artifacts(
     worker_statuses: object,
     branch_status: object,
     *,
-    branch: object,
+    branch_entry: object,
+    branch_name: object,
     manifest_path: Path,
 ) -> None:
     if not isinstance(worker_statuses, list):
@@ -468,8 +630,9 @@ def validate_worker_artifacts(
     require_existing = branch_status in {"pass", "partial"}
     worker_compared_keys = [key for key in CONTRACT.WORKER_STATUS_REQUIRED if key not in {"role", "branch"}]
     research_compared_keys = [key for key in CONTRACT.RESEARCH_STATUS_REQUIRED if key != "branch"]
-    branch_id = branch.get("id") if isinstance(branch, dict) else ""
-    expected_route_classes = expected_worker_route_classes(defects, branch, branch_id) if isinstance(branch_id, str) and branch_id else {}
+    branch_id = branch_entry.get("id") if isinstance(branch_entry, dict) else ""
+    expected_route_classes = expected_worker_route_classes(defects, branch_entry, branch_id) if isinstance(branch_id, str) and branch_id else {}
+    manifest_work_items = work_items_by_packet(branch_entry)
     for index, item in enumerate(worker_statuses):
         if not isinstance(item, dict):
             continue
@@ -496,6 +659,14 @@ def validate_worker_artifacts(
             if require_existing:
                 defect(defects, f"{item_path}.status_path", f"artifact does not exist: {status_artifact}")
             continue
+        validate_launch_config_artifact(
+            defects,
+            status_artifact.parent,
+            f"{item_path}.launch_config_path",
+            packet_id=str(packet_id) if isinstance(packet_id, str) else None,
+            role=item_role,
+            output_name="research.json" if item_role == "research-worker" else "status.json",
+        )
         if item_role == "research-worker":
             artifact = validate_research_artifact(
                 defects,
@@ -510,12 +681,26 @@ def validate_worker_artifacts(
                 f"{item_path}.status_path",
             )
             compared_keys = worker_compared_keys
-        if isinstance(branch, str) and branch.strip() and artifact.get("branch") != branch:
+        if isinstance(branch_name, str) and branch_name.strip() and artifact.get("branch") != branch_name:
             defect(defects, f"{item_path}.status_path.branch", "must match branch status branch")
         if item_role == "worker":
             expected_route_class = expected_route_classes.get(str(packet_id))
             if expected_route_class and artifact.get("route_class") != expected_route_class:
                 defect(defects, f"{item_path}.route_class", "must match manifest work item route_class")
+            manifest_item = manifest_work_items.get(str(packet_id))
+            owned_paths = [
+                value
+                for value in manifest_item.get("owned_paths", [])
+                if isinstance(value, str) and value.strip()
+            ] if isinstance(manifest_item, dict) else []
+            changed_files = artifact.get("changed_files") if isinstance(artifact.get("changed_files"), list) else []
+            for changed_index, changed in enumerate(changed_files):
+                if not isinstance(changed, str):
+                    continue
+                if is_runtime_cache_path(changed):
+                    defect(defects, f"{item_path}.changed_files[{changed_index}]", "must not include runtime cache or bytecode paths")
+                elif artifact.get("status") == "pass" and owned_paths and not path_is_owned(changed, owned_paths):
+                    defect(defects, f"{item_path}.changed_files[{changed_index}]", "must be inside the manifest work item owned_paths")
         for key in compared_keys:
             if artifact.get(key) != item.get(key):
                 defect(defects, f"{item_path}.{key}", "must match packet status artifact")
@@ -1356,6 +1541,14 @@ def validate_review_artifact_for_branch(
     )
     route_path = review_packet_dir / "route.json"
     route_aliases: list[str] = []
+    validate_launch_config_artifact(
+        defects,
+        review_packet_dir,
+        "$.review_status.launch_config_path",
+        packet_id=packet_id if isinstance(packet_id, str) else None,
+        role="reviewer",
+        output_name="review.json",
+    )
     if not route_path.exists():
         defect(defects, "$.review_status.route_path", f"route artifact does not exist: {route_path}")
     else:
@@ -1365,6 +1558,7 @@ def validate_review_artifact_for_branch(
             "$.review_status.route_path",
             packet_id=packet_id if isinstance(packet_id, str) else "",
             manifest=manifest,
+            manifest_path=manifest_path,
         )
     telemetry_path = review_packet_dir / "telemetry.json"
     if reuse_accepted:
@@ -1465,11 +1659,20 @@ def validate_branch_status(
         for index, item in enumerate(worker_statuses):
             validate_packet_status(defects, item, f"$.worker_statuses[{index}]")
     validate_worker_rollup(defects, worker_statuses, status)
+    branch_entry = validate_manifest_branch_contract(
+        defects,
+        root,
+        manifest,
+        manifest_path=manifest_path,
+        status_path=status_path,
+        require_all_workers=status == "pass",
+    )
     validate_worker_artifacts(
         defects,
         worker_statuses,
         status,
-        branch=root.get("branch"),
+        branch_entry=branch_entry,
+        branch_name=root.get("branch"),
         manifest_path=manifest_path,
     )
     worker_count = len(worker_statuses) if isinstance(worker_statuses, list) else 0
@@ -1481,14 +1684,6 @@ def validate_branch_status(
         "$.lite_advice",
         manifest_path=manifest_path,
         branch_id=root_branch_id,
-    )
-    branch_entry = validate_manifest_branch_contract(
-        defects,
-        root,
-        manifest,
-        manifest_path=manifest_path,
-        status_path=status_path,
-        require_all_workers=status == "pass",
     )
     if branch_entry and root_branch_id:
         validate_worker_scheduler(

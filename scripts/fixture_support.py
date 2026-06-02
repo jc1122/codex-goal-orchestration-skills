@@ -465,6 +465,43 @@ def assert_shell_syntax(path: Path) -> None:
         raise SystemExit(f"shell syntax check failed: {path}")
 
 
+def strict_schema_defects(schema: object, path: str = "$") -> list[str]:
+    defects: list[str] = []
+    if not isinstance(schema, dict):
+        return defects
+    schema_type = schema.get("type")
+    if schema_type == "object" or "properties" in schema:
+        if schema.get("additionalProperties") is not False:
+            defects.append(f"{path} missing additionalProperties=false")
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            defects.append(f"{path} missing properties")
+            properties = {}
+        required = schema.get("required")
+        if not isinstance(required, list):
+            defects.append(f"{path} missing required")
+            required = []
+        missing = sorted(set(properties) - {item for item in required if isinstance(item, str)})
+        if missing:
+            defects.append(f"{path} does not require every property: {', '.join(missing)}")
+        for key, subschema in properties.items():
+            defects.extend(strict_schema_defects(subschema, f"{path}.properties.{key}"))
+    if schema_type == "array":
+        if "items" not in schema:
+            defects.append(f"{path} missing items")
+        else:
+            defects.extend(strict_schema_defects(schema.get("items"), f"{path}.items"))
+    return defects
+
+
+def assert_openai_strict_schema(path: Path, label: str) -> dict:
+    schema = read_json(path)
+    defects = strict_schema_defects(schema)
+    if defects:
+        raise SystemExit(f"{label} is not strict-schema compatible: {defects!r}")
+    return schema
+
+
 def assert_compact_runtime_launcher(
     packet_dir: Path,
     role: str,

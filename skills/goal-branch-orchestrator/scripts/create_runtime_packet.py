@@ -372,29 +372,36 @@ def configured_telemetry_attempts(
         kind = harness.get("kind")
         label = event_label_for_alias(alias)
         event_suffix = "jsonl" if kind in {"codex", "opencode"} else "log"
-        attempts.append(
-            {
-                "alias": alias,
-                "provider": kind,
-                "provider_id": model.get("provider"),
-                "model": model.get("model"),
-                "harness": harness_name,
-                "harness_kind": kind,
-                "command_binary": harness.get("command"),
-                "command": configured_route_commands([alias], goal_config)[0],
-                "run_args": harness.get("run_args") or harness.get("smoke_args") or [],
-                "run_readback": harness.get("run_readback", "stdout"),
-                "effort": "configured",
-                "sandbox": sandbox,
-                "timeout_seconds": timeout_seconds,
-                "event_logs": [f"events-{label}.{event_suffix}"],
-                "probe_logs": [],
-                "status_markers": {
-                    "begin": GEMINI_STATUS_BEGIN,
-                    "end": GEMINI_STATUS_END,
-                },
-            }
-        )
+        attempt = {
+            "alias": alias,
+            "provider": kind,
+            "provider_id": model.get("provider"),
+            "model": model.get("model"),
+            "harness": harness_name,
+            "harness_kind": kind,
+            "command_binary": harness.get("command"),
+            "command": configured_route_commands([alias], goal_config)[0],
+            "run_args": harness.get("run_args") or harness.get("smoke_args") or [],
+            "run_readback": harness.get("run_readback", "stdout"),
+            "effort": "configured",
+            "sandbox": sandbox,
+            "timeout_seconds": timeout_seconds,
+            "event_logs": [f"events-{label}.{event_suffix}"],
+            "probe_logs": [],
+            "status_markers": {
+                "begin": GEMINI_STATUS_BEGIN,
+                "end": GEMINI_STATUS_END,
+            },
+        }
+        if kind == "codex":
+            attempt["ignore_user_config"] = True
+            attempt["ignore_rules"] = True
+            attempt["command"] = (
+                "codex exec --ephemeral "
+                + CODEX_LEAN_EXEC_FLAGS_TEXT
+                + f" -m {model.get('model')} -s {sandbox}"
+            )
+        attempts.append(attempt)
     return attempts
 
 
@@ -465,6 +472,8 @@ def worker_telemetry_attempts(selected_ladder: list[str], goal_config: dict | No
                     "ignore_rules": True,
                 }
             )
+    for attempt in attempts:
+        attempt.setdefault("sandbox", "workspace-write")
     return attempts
 
 
@@ -530,11 +539,51 @@ def exact_string_schema(value: str) -> dict:
     return {"type": "string", "const": value}
 
 
+def nullable_string_schema() -> dict:
+    return {"type": ["string", "null"]}
+
+
+def strict_schema_defects(schema: object, path: str = "$") -> list[str]:
+    defects: list[str] = []
+    if not isinstance(schema, dict):
+        return defects
+    schema_type = schema.get("type")
+    is_object = schema_type == "object" or "properties" in schema
+    if is_object:
+        if schema.get("additionalProperties") is not False:
+            defects.append(f"{path}: object schemas must set additionalProperties=false")
+        properties = schema.get("properties")
+        if not isinstance(properties, dict):
+            defects.append(f"{path}: object schemas must define properties")
+            properties = {}
+        required = schema.get("required")
+        if not isinstance(required, list):
+            defects.append(f"{path}: object schemas must define required")
+            required = []
+        missing_required = sorted(set(properties) - {item for item in required if isinstance(item, str)})
+        if missing_required:
+            defects.append(f"{path}: strict schemas must require every property: {', '.join(missing_required)}")
+        for name, subschema in properties.items():
+            defects.extend(strict_schema_defects(subschema, f"{path}.properties.{name}"))
+    if schema_type == "array":
+        if "items" not in schema:
+            defects.append(f"{path}: array schemas must define items")
+        else:
+            defects.extend(strict_schema_defects(schema.get("items"), f"{path}.items"))
+    return defects
+
+
+def validate_openai_strict_schema(schema: dict, schema_name: str) -> None:
+    defects = strict_schema_defects(schema)
+    if defects:
+        raise SystemExit(f"{schema_name} is not OpenAI strict-schema compatible:\n" + "\n".join(defects))
+
+
 def status_schema(packet_id: str, branch: str, worktree: str, selected_ladder: list[str] | None = None) -> dict:
     repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
     nonempty_string = {"type": "string", "minLength": 1}
     selected_ladder_schema = (
-        {"type": "array", "const": selected_ladder}
+        {"type": "array", "items": nonempty_string, "const": selected_ladder}
         if selected_ladder
         else {
             "type": "array",
@@ -565,8 +614,20 @@ def status_schema(packet_id: str, branch: str, worktree: str, selected_ladder: l
     }
 
 
-def review_schema(packet_id: str) -> dict:
+def review_schema(packet_id: str, semantic_hashes: dict[str, str] | None = None, reuse_policy: dict | None = None) -> dict:
     nonempty_string = {"type": "string", "minLength": 1}
+    semantic_hashes = semantic_hashes or {}
+    semantic_properties = {
+        key: {"type": "string", "const": value}
+        for key, value in sorted(semantic_hashes.items())
+    }
+    _reuse_policy = reuse_policy or {
+        "mode": "new",
+        "accepted": False,
+        "semantic_hashes_match": False,
+        "source_review_path": None,
+        "source_telemetry_path": None,
+    }
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "type": "object",
@@ -582,9 +643,30 @@ def review_schema(packet_id: str) -> dict:
             "residual_risks": {"type": "array", "items": nonempty_string},
             "semantic_input_hashes": {
                 "type": "object",
+                "additionalProperties": False,
+                "required": sorted(semantic_properties),
+                "properties": semantic_properties,
             },
             "reuse_policy": {
                 "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "mode",
+                    "accepted",
+                    "semantic_hashes_match",
+                    "source_review_path",
+                    "source_telemetry_path",
+                ],
+                "properties": {
+                    "mode": {"type": "string", "enum": ["new", "reuse"], "const": _reuse_policy.get("mode", "new")},
+                    "accepted": {"type": "boolean", "const": bool(_reuse_policy.get("accepted", False))},
+                    "semantic_hashes_match": {
+                        "type": "boolean",
+                        "const": bool(_reuse_policy.get("semantic_hashes_match", False)),
+                    },
+                    "source_review_path": nullable_string_schema(),
+                    "source_telemetry_path": nullable_string_schema(),
+                },
             },
             "summary": nonempty_string,
         },
@@ -1113,11 +1195,11 @@ git status --short --branch
 git diff --check HEAD
 ```
 
-Review the branch against its prompt, worker status files, diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible.
+Review the branch against its prompt, worker status files, bounded diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible.
 
 The branch orchestrator must have supplied a passing schema v2 `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `semantic_input_hashes` exactly into the final review JSON as `semantic_input_hashes`, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every semantic input hash matches exactly and both the source review and source telemetry are present; otherwise produce a fresh review.
 
-Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. Use those paths before searching any bundle directory.
+Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. Use those paths before searching any bundle directory. Do not read memory, broad bundle directories, full event logs, or unrelated repo files unless a named packet artifact is missing, contradictory, or insufficient to substantiate a concrete finding. Prefer `git diff --stat`, `git diff --name-only`, and targeted file hunks for changed paths over full diffs.
 
 Determine the branch base ref from `compact_reviewer_context`. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
@@ -1424,6 +1506,7 @@ def compact_launch_config(
     worktree: str,
     schema_name: str,
     output_name: str,
+    owned_files: list[str] | None = None,
     selected_ladder: list[str] | None = None,
     route_class: str = DEFAULT_WORKER_ROUTE_CLASS,
     selection_reason: str = "",
@@ -1453,6 +1536,7 @@ def compact_launch_config(
             "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
+            "owned_files": owned_files or [],
             "worker_prompt": WORKER_PACKET_PROMPT,
             "status_markers": {
                 "begin": GEMINI_STATUS_BEGIN,
@@ -1706,7 +1790,7 @@ def main() -> int:
     if args.role == "reviewer":
         schema_name = "review.schema.json"
         output_name = "review.json"
-        schema = review_schema(packet_id)
+        schema = review_schema(packet_id, review_semantic_hashes, review_reuse_policy)
     elif args.role == "research-worker":
         schema_name = "research.schema.json"
         output_name = "research.json"
@@ -1716,6 +1800,7 @@ def main() -> int:
         output_name = "status.json"
         schema = status_schema(packet_id, branch, str(worktree), selected_ladder)
 
+    validate_openai_strict_schema(schema, schema_name)
     task_text = load_task(task_file)
     packet_context: dict | None = None
     packet_context_path = ""
@@ -1744,6 +1829,10 @@ def main() -> int:
         )
         if compact_context is not None:
             task_text, context_files, packet_context = compact_context
+            work_item = packet_context.get("work_item") if isinstance(packet_context, dict) else None
+            manifest_owned_files = compact_list(work_item.get("owned_paths")) if isinstance(work_item, dict) else []
+            if manifest_owned_files:
+                owned_files = manifest_owned_files
 
     write_json(packet_dir / schema_name, schema)
     if packet_context is not None:
@@ -1789,6 +1878,7 @@ def main() -> int:
         str(worktree),
         schema_name,
         output_name,
+        owned_files=owned_files,
         selected_ladder=selected_ladder,
         route_class=route_class,
         selection_reason=selection_reason,

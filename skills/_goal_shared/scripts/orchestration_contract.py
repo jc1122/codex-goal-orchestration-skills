@@ -538,6 +538,7 @@ def codex_telemetry_attempts(
             "model": codex_model(alias),
             "effort": "",
             "command": codex_command(alias, sandbox=sandbox, search=search, lean=lean),
+            "sandbox": sandbox,
             "timeout_seconds": timeout_seconds,
             "event_logs": [f"events-{label}.jsonl"],
             "probe_logs": [],

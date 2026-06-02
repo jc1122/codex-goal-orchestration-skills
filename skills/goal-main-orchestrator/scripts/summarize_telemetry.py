@@ -149,6 +149,7 @@ def iter_scheduler_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
                 "item_ids": data.get("item_ids") if isinstance(data.get("item_ids"), list) else None,
                 "scheduler_seq": item.get("seq"),
                 "timestamp": item.get("timestamp"),
+                "wall_clock_timestamp": item.get("wall_clock_timestamp"),
                 "runtime_ref": item.get("runtime_ref"),
                 "event": item.get("event"),
                 "id": item.get("id"),
@@ -309,8 +310,11 @@ TERMINAL_ARTIFACT_PATTERNS = (
     "branches/*.review.json",
     "branches/*.pre_review_gate.json",
     "workers/*/status.json",
+    "workers/*/packet.summary.json",
     "research/*/research.json",
+    "research/*/packet.summary.json",
     "reviewers/*/review.json",
+    "reviewers/*/packet.summary.json",
     "lite/*/advice.json",
     "amendments/*.decision.json",
     "amendments/*.proposal.json",
@@ -329,6 +333,8 @@ def terminal_artifact_kind(path: Path) -> str:
         return "main_status"
     if path.name == "status.json" and "workers" in parts:
         return "worker_status"
+    if path.name == "packet.summary.json":
+        return "packet_summary"
     if path.name.endswith(".status.json"):
         return "branch_status"
     if path.name.endswith(".review.json") or path.name == "review.json":

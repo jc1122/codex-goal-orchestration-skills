@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import shlex
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -47,6 +48,21 @@ def read_json(path: Path) -> dict:
 def write_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def annotate_status_lanes(branch_status: dict, validation_defects: list[str]) -> None:
+    status = branch_status.get("status")
+    review_status = branch_status.get("review_status")
+    blockers = branch_status.get("blockers")
+    blocker_count = len(blockers) if isinstance(blockers, list) else 0
+    branch_status["schema_status"] = "pass" if not validation_defects else "failed"
+    branch_status["runtime_status"] = status if status in CONTRACT.STATUSES else "failed"
+    branch_status["dod_status"] = (
+        "pass"
+        if status == "pass" and review_status == "mergeable" and blocker_count == 0 and not validation_defects
+        else "incomplete"
+    )
+    branch_status["resume_action"] = "reuse_terminal_status" if not validation_defects else "repair_or_reassemble"
 
 
 def run_shell(command: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -234,6 +250,38 @@ def changed_files_from_git(worktree: Path, base_ref: str) -> list[str]:
     ]
 
 
+def is_runtime_cache_path(path: str) -> bool:
+    parts = [part for part in Path(path).parts if part]
+    if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in parts):
+        return True
+    return path == ".runtime-cache" or path.startswith(".runtime-cache/")
+
+
+def untracked_whitespace_defects(worktree: Path) -> list[str]:
+    result = run_shell("git ls-files --others --exclude-standard", cwd=worktree)
+    if result.returncode != 0:
+        return [f"untracked file scan failed: {result.stdout.strip()}"]
+    defects: list[str] = []
+    for rel_path in result.stdout.splitlines():
+        rel_path = rel_path.strip()
+        if not rel_path or not is_repo_relative_path(rel_path, reject_porcelain=True) or is_runtime_cache_path(rel_path):
+            continue
+        target = (worktree / rel_path).resolve()
+        try:
+            target.relative_to(worktree.resolve())
+        except ValueError:
+            continue
+        if not target.is_file():
+            continue
+        data = target.read_bytes()
+        if b"\0" in data:
+            continue
+        for line_no, line in enumerate(data.decode("utf-8", errors="replace").splitlines(), start=1):
+            if line.endswith((" ", "\t")):
+                defects.append(f"{rel_path}:{line_no}: trailing whitespace in untracked file")
+    return defects
+
+
 def append_unique(target: list[str], value: object) -> None:
     if isinstance(value, str):
         stripped = value.strip()
@@ -267,10 +315,38 @@ def collect_manifest_dod(branch: dict) -> list[str]:
     return items
 
 
-def review_status(bundle_dir: Path, branch: dict) -> tuple[str, list[str]]:
+def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str) -> list[str]:
+    reviewers_dir = bundle_dir / "reviewers"
+    if not reviewers_dir.is_dir():
+        return [f"review artifact is missing: {review_path}"]
+    candidates: list[Path] = []
+    defects: list[str] = []
+    for candidate in sorted(reviewers_dir.glob(f"{branch_id}-R*/review.json")):
+        try:
+            data = read_json(candidate)
+        except Exception as exc:  # noqa: BLE001
+            defects.append(f"candidate reviewer artifact is invalid JSON: {candidate}: {exc}")
+            continue
+        packet_id = data.get("packet_id")
+        if isinstance(packet_id, str) and packet_id.startswith(f"{branch_id}-R") and data.get("role") == "reviewer":
+            candidates.append(candidate)
+    if len(candidates) != 1:
+        if candidates:
+            defects.append("review artifact is missing and reviewer promotion is ambiguous: " + ", ".join(path.as_posix() for path in candidates))
+        else:
+            defects.append(f"review artifact is missing: {review_path}")
+        return defects
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(candidates[0], review_path)
+    return []
+
+
+def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, list[str]]:
     review_path = safe_bundle_path(bundle_dir, branch.get("review_path"), "manifest branch review_path")
     if not review_path.exists():
-        return "missing", [f"review artifact is missing: {review_path}"]
+        promotion_defects = promote_reviewer_output(bundle_dir, review_path, branch_id)
+        if promotion_defects:
+            return "missing", promotion_defects
     review = read_json(review_path)
     verdict = review.get("verdict")
     if verdict not in CONTRACT.REVIEW_STATUSES:
@@ -300,10 +376,16 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
 
     worker_statuses, worker_blockers = collect_worker_statuses(bundle_dir, branch, branch_id)
     worker_parallelism, scheduler_defects = scheduler_rollup(manifest_path, branch, branch_id)
-    inferred_review_status, review_blockers = review_status(bundle_dir, branch)
+    inferred_review_status, review_blockers = review_status(bundle_dir, branch, branch_id)
     base_ref = str(manifest.get("base_ref", "main"))
-    diff_command = f"git diff --check {base_ref}...HEAD"
-    diff_result = run_shell(diff_command, cwd=worktree)
+    diff_commands = [
+        f"git diff --check {base_ref}...HEAD",
+        "git diff --check HEAD",
+        "git diff --cached --check HEAD",
+    ]
+    diff_results = [(command, run_shell(command, cwd=worktree)) for command in diff_commands]
+    untracked_check_command = "git ls-files --others --exclude-standard + internal untracked trailing-whitespace scan"
+    untracked_defects = untracked_whitespace_defects(worktree)
     changed_files = list(args.changed_file) if args.changed_file else changed_files_from_git(worktree, base_ref)
     dod_items = [item for item in args.dod_item if item.strip()]
     if not dod_items:
@@ -312,13 +394,16 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     blockers.extend(worker_blockers)
     blockers.extend(scheduler_defects)
     blockers.extend(review_blockers)
-    if diff_result.returncode != 0:
-        blockers.append(f"diff check failed: {diff_result.stdout.strip()}")
+    for command, diff_result in diff_results:
+        if diff_result.returncode != 0:
+            blockers.append(f"{command} failed: {diff_result.stdout.strip()}")
+    blockers.extend(untracked_defects)
     if not dod_items:
         blockers.append("DoD checklist is missing")
 
     all_workers_pass = bool(worker_statuses) and not worker_blockers
-    can_pass = args.allow_pass and all_workers_pass and inferred_review_status == "mergeable" and diff_result.returncode == 0 and not blockers
+    diff_checks_pass = all(result.returncode == 0 for _command, result in diff_results) and not untracked_defects
+    can_pass = args.allow_pass and all_workers_pass and inferred_review_status == "mergeable" and diff_checks_pass and not blockers
     if args.status:
         status = args.status
     elif can_pass:
@@ -330,7 +415,14 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     if status != "pass" and not blockers:
         blockers.append("Branch status assembled conservatively without explicit pass evidence.")
     tests = list(args.test_evidence) if args.test_evidence else collect_worker_tests(worker_statuses)
-    commands_run = [diff_command]
+    commands_run: list[str] = []
+    for value in args.command_run:
+        append_unique(commands_run, value)
+    for value in tests:
+        append_unique(commands_run, value)
+    for command, _result in diff_results:
+        append_unique(commands_run, command)
+    append_unique(commands_run, untracked_check_command)
     branch_status = {
         "branch_id": branch_id,
         "status": status,
@@ -358,6 +450,25 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         manifest_path=manifest_path,
         status_path=output_path,
     )
+    if validation_defects and branch_status.get("status") == "pass":
+        downgraded_blockers: list[str] = []
+        for value in validation_defects:
+            append_unique(downgraded_blockers, value)
+        branch_status["status"] = "blocked"
+        branch_status["blockers"] = downgraded_blockers
+        branch_status["handoff"] = "Branch status validation failed; pass artifact was downgraded to blocked with validator defects preserved."
+        write_json(output_path, branch_status)
+        validation_defects = BRANCH_VALIDATOR.validate_branch_status(
+            branch_status,
+            branch_id=branch_id,
+            branch=branch_name,
+            worktree=worktree.as_posix(),
+            manifest=manifest,
+            manifest_path=manifest_path,
+            status_path=output_path,
+        )
+    annotate_status_lanes(branch_status, validation_defects)
+    write_json(output_path, branch_status)
     return output_path, branch_status, validation_defects
 
 
@@ -370,6 +481,7 @@ def main() -> int:
     parser.add_argument("--status", choices=list(CONTRACT.STATUSES))
     parser.add_argument("--allow-pass", action="store_true")
     parser.add_argument("--changed-file", action="append", default=[])
+    parser.add_argument("--command-run", action="append", default=[])
     parser.add_argument("--test-evidence", action="append", default=[])
     parser.add_argument("--dod-item", action="append", default=[])
     parser.add_argument("--blocker", action="append", default=[])
