@@ -712,6 +712,27 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
     status = root.get("status")
     if status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
+    schema_status = root.get("schema_status")
+    if schema_status not in {"assembled", "failed"}:
+        defect(defects, "$.schema_status", "must be 'assembled' or 'failed'")
+    runtime_status = root.get("runtime_status")
+    if runtime_status not in STATUSES:
+        defect(defects, "$.runtime_status", f"must be one of {sorted(STATUSES)}")
+    elif runtime_status != status:
+        defect(defects, "$.runtime_status", "must match status")
+    dod_status = root.get("dod_status")
+    if dod_status not in {"pass", "incomplete"}:
+        defect(defects, "$.dod_status", "must be 'pass' or 'incomplete'")
+    elif status == "pass" and dod_status != "pass":
+        defect(defects, "$.dod_status", "must be pass when main status is pass")
+    elif status in {"partial", "blocked", "failed"} and dod_status == "pass":
+        defect(defects, "$.dod_status", "must not be pass when main status is non-pass")
+    review_status = root.get("review_status")
+    if review_status not in REVIEW_STATUSES:
+        defect(defects, "$.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")
+    resume_action = root.get("resume_action")
+    if resume_action not in {"reuse_terminal_status", "resume_or_repair"}:
+        defect(defects, "$.resume_action", "must be reuse_terminal_status or resume_or_repair")
     audit_status = root.get("audit_status")
     if audit_status not in AUDIT_STATUSES:
         defect(defects, "$.audit_status", f"must be one of {sorted(AUDIT_STATUSES)}")

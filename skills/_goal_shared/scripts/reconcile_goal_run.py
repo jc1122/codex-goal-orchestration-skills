@@ -570,6 +570,51 @@ def manifest_path_checks(
     return checks
 
 
+def branch_state_counts(branch_reports: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {status: 0 for status in sorted(RUNTIME_STATUS_VALUES)}
+    counts["missing"] = 0
+    counts["invalid"] = 0
+    for branch in branch_reports:
+        runtime_status = branch.get("runtime_status")
+        validation = branch.get("validation") if isinstance(branch.get("validation"), dict) else {}
+        if runtime_status in RUNTIME_STATUS_VALUES:
+            counts[str(runtime_status)] += 1
+        else:
+            counts["missing"] += 1
+        if validation.get("status") != "pass":
+            counts["invalid"] += 1
+    return counts
+
+
+def choose_resume_action(
+    *,
+    overall_safe_to_reuse: bool,
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+    validation_defects: list[str],
+) -> str:
+    if overall_safe_to_reuse:
+        return "reuse_terminal_status"
+    missing_codes = {str(item.get("code")) for item in missing_artifacts}
+    if {"missing_branch_status", "missing_branch_worktree"} & missing_codes:
+        return "launch_or_resume_branches"
+    if stale_or_unreconciled:
+        return "repair_or_reassemble"
+    if validation_defects:
+        return "repair_or_revalidate"
+    return "assemble_or_validate_final"
+
+
+def compact_issue_ref(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "code": item.get("code"),
+        "owner": item.get("owner"),
+        "kind": item.get("kind"),
+        "path": item.get("path"),
+        "message": item.get("message"),
+    }
+
+
 def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, Any]:
     bundle_dir = manifest_path.parent
     manifest = read_json(manifest_path)
@@ -704,9 +749,36 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         and not stale_or_unreconciled
         and not validation_defects
     )
+    resume_action = choose_resume_action(
+        overall_safe_to_reuse=overall_safe_to_reuse,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+        validation_defects=validation_defects,
+    )
+    terminal_branch_ids = [
+        branch["branch_id"]
+        for branch in branch_reports
+        if branch.get("runtime_status") in RUNTIME_STATUS_VALUES and branch.get("status_path", {}).get("exists") is True
+    ]
+    missing_branch_ids = [
+        branch["branch_id"]
+        for branch in branch_reports
+        if branch.get("runtime_status") == "missing" or branch.get("status_path", {}).get("exists") is not True
+    ]
+    safe_branch_ids = [branch_id for branch_id, reusable in branch_reuse.items() if reusable]
+    blocked_work = [compact_issue_ref(item) for item in [*missing_artifacts, *stale_or_unreconciled]]
     report = {
         "schema_version": 1,
         "status": status,
+        "schema_status": final_state_status,
+        "runtime_status": status,
+        "dod_status": "pass" if status == "pass" and final_state_status == "pass" else "incomplete",
+        "review_status": (
+            main_status_data.get("review_status")
+            if isinstance(main_status_data, dict) and isinstance(main_status_data.get("review_status"), str)
+            else "missing"
+        ),
+        "resume_action": resume_action,
         "generated_at": utc_now(),
         "bundle_dir": bundle_dir.as_posix(),
         "manifest_path": manifest_path.as_posix(),
@@ -729,6 +801,16 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         },
         "main_scheduler": main_scheduler,
         "branches": branch_reports,
+        "current_state": {
+            "branch_counts": branch_state_counts(branch_reports),
+            "terminal_branch_ids": terminal_branch_ids,
+            "missing_branch_ids": missing_branch_ids,
+            "safe_to_reuse_branch_ids": safe_branch_ids,
+            "blocked_work": blocked_work,
+            "main_status_exists": main_status_path.exists(),
+            "main_scheduler_status": main_scheduler.get("validation_status"),
+            "telemetry_summary_exists": telemetry.get("summary_exists"),
+        },
         "telemetry": telemetry,
         "manifest_path_checks": manifest_checks,
         "missing_artifacts": missing_artifacts,

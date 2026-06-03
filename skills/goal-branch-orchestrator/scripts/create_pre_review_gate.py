@@ -475,6 +475,12 @@ SEMANTIC_PROBE_KEYWORDS = (
     "round-trip",
     "round trip",
 )
+SEMANTIC_TARGET_RE = re.compile(
+    r"\b(?:compatible|compatibility|contract|verifier|api|integration)\b"
+    r"(?:\s+(?:with|for|against|to)\s+)"
+    r"([A-Za-z0-9_.:/+-]+)",
+    re.I,
+)
 
 
 def semantic_keyword_present(text: str, keyword: str) -> bool:
@@ -501,15 +507,42 @@ def branch_semantic_probe_requirements(branch: dict) -> list[str]:
     return sorted(dict.fromkeys(requirements))
 
 
+def branch_semantic_probe_targets(branch: dict) -> list[str]:
+    text_parts: list[str] = []
+    for key in ("objective", "scope"):
+        value = branch.get(key)
+        if isinstance(value, str):
+            text_parts.append(value)
+    dod = branch.get("dod")
+    if isinstance(dod, str):
+        text_parts.append(dod)
+    elif isinstance(dod, list):
+        text_parts.extend(item for item in dod if isinstance(item, str))
+    targets: list[str] = []
+    for text in text_parts:
+        for match in SEMANTIC_TARGET_RE.finditer(text):
+            target = match.group(1).strip("`'\".,:;()[]{}").lower()
+            if target and target not in targets:
+                targets.append(target)
+    return targets
+
+
 def semantic_probe_check(branch: dict, tests: dict) -> tuple[dict, list[str]]:
     requirements = branch_semantic_probe_requirements(branch)
+    targets = branch_semantic_probe_targets(branch)
     commands = tests.get("commands") if isinstance(tests.get("commands"), list) else []
     command_values = [item for item in commands if isinstance(item, str) and item.strip()]
-    status = "pass" if not requirements or command_values else "failed"
+    missing_targets: list[str] = []
+    if requirements and targets and command_values:
+        command_text = "\n".join(command_values).lower()
+        missing_targets = [target for target in targets if target not in command_text]
+    status = "pass" if not requirements or (command_values and not missing_targets) else "failed"
     check = {
         "status": status,
         "requirements": requirements,
+        "targets": targets,
         "commands": command_values,
+        "probe_kind": "cross_contract" if requirements else "not_applicable",
         "source": "branch objective/scope/DoD keyword scan",
     }
     defects = []
@@ -517,6 +550,8 @@ def semantic_probe_check(branch: dict, tests: dict) -> tuple[dict, list[str]]:
         defects.append(
             "branch declares checkable compatibility/contract/API/verifier/integration behavior but pre-review has no command-backed semantic probe"
         )
+    for target in missing_targets:
+        defects.append(f"cross-contract semantic probe must mention declared target: {target}")
     return check, defects
 
 

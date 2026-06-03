@@ -353,7 +353,7 @@ def validate_reviewer_route_artifact(
     manifest_path: Path | None,
 ) -> list[str]:
     route = require_object(defects, route_value, path)
-    for key in ["schema_version", "packet_id", "role", "tier", "selected_ladder", "selection_reason", "policy_router"]:
+    for key in ["schema_version", "packet_id", "role", "tier", "selected_ladder", "selection_reason", "policy_router", "policy_routes"]:
         if key not in route:
             defect(defects, path, f"missing key: {key}")
     if route.get("schema_version") != 1:
@@ -369,6 +369,8 @@ def validate_reviewer_route_artifact(
     policy = expected_review_model_policy(defects, manifest, manifest_path)
     routes = policy.get("routes") if isinstance(policy.get("routes"), dict) else {}
     expected = routes.get(str(tier)) if tier in CONTRACT.REVIEW_ROUTE_TIERS and isinstance(routes.get(str(tier)), list) else []
+    if route.get("policy_routes") != routes:
+        defect(defects, f"{path}.policy_routes", "must match manifest review_model_policy.routes")
     if selected and expected and selected != expected:
         defect(defects, f"{path}.selected_ladder", f"must match review_model_policy route for tier {tier!r}")
     selection_reason = require_string(defects, route.get("selection_reason"), f"{path}.selection_reason")
@@ -452,8 +454,12 @@ def validate_launch_config_artifact(
         alias = require_string(defects, attempt.get("alias"), f"{attempt_path}.alias")
         if alias:
             aliases.append(alias)
-        require_string(defects, attempt.get("provider"), f"{attempt_path}.provider")
-        require_string(defects, attempt.get("model"), f"{attempt_path}.model")
+        provider = require_string(defects, attempt.get("provider"), f"{attempt_path}.provider")
+        model = require_string(defects, attempt.get("model"), f"{attempt_path}.model")
+        if provider == "codex" and alias in CONTRACT.CODEX_ROUTE_MODELS:
+            expected_model = CONTRACT.codex_model(alias)
+            if model != expected_model:
+                defect(defects, f"{attempt_path}.model", f"must be {expected_model!r} for alias {alias!r}")
         require_string(defects, attempt.get("command"), f"{attempt_path}.command")
         timeout = attempt.get("timeout_seconds")
         if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
@@ -1621,6 +1627,10 @@ def validate_branch_status(
     required = [
         "branch_id",
         "status",
+        "schema_status",
+        "runtime_status",
+        "dod_status",
+        "resume_action",
         "branch",
         "worktree",
         "worker_statuses",
@@ -1647,6 +1657,24 @@ def validate_branch_status(
     status = root.get("status")
     if status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
+    schema_status = root.get("schema_status")
+    if schema_status not in {"pass", "failed"}:
+        defect(defects, "$.schema_status", "must be 'pass' or 'failed'")
+    runtime_status = root.get("runtime_status")
+    if runtime_status not in STATUSES:
+        defect(defects, "$.runtime_status", f"must be one of {sorted(STATUSES)}")
+    elif runtime_status != status:
+        defect(defects, "$.runtime_status", "must match status")
+    dod_status = root.get("dod_status")
+    if dod_status not in {"pass", "incomplete"}:
+        defect(defects, "$.dod_status", "must be 'pass' or 'incomplete'")
+    elif status == "pass" and dod_status != "pass":
+        defect(defects, "$.dod_status", "must be pass when branch status is pass")
+    elif status in {"partial", "blocked", "failed"} and dod_status == "pass":
+        defect(defects, "$.dod_status", "must not be pass when branch status is non-pass")
+    resume_action = root.get("resume_action")
+    if resume_action not in {"reuse_terminal_status", "repair_or_reassemble"}:
+        defect(defects, "$.resume_action", "must be reuse_terminal_status or repair_or_reassemble")
     require_string(defects, root.get("branch"), "$.branch")
     root_worktree = require_string(defects, root.get("worktree"), "$.worktree")
     if root_worktree and not is_absolute_path(root_worktree):

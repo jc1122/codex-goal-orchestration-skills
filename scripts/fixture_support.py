@@ -370,6 +370,7 @@ def make_scheduler_event(runtime_ref: str) -> Callable[..., dict]:
         return {
             "seq": seq,
             "timestamp": f"2026-05-29T00:00:{seq:02d}Z",
+            "wall_clock_timestamp": f"2026-05-29T00:00:{seq:02d}Z",
             "runtime_ref": runtime_ref,
             "event": event,
             **kwargs,

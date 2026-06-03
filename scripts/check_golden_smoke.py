@@ -754,6 +754,10 @@ def write_pre_review_branch_status(bundle: Path, worker: dict, research: dict, l
         {
             "branch_id": BRANCH_ID,
             "status": "partial",
+            "schema_status": "pass",
+            "runtime_status": "partial",
+            "dod_status": "incomplete",
+            "resume_action": "reuse_terminal_status",
             "branch": BRANCH_NAME,
             "worktree": REPO_ROOT.as_posix(),
             "worker_statuses": [worker_rollup, research_rollup],
@@ -948,6 +952,8 @@ def make_partial_branch_bundle(source_bundle: Path, target_bundle: Path, worker:
     branch_status.update(
         {
             "status": "partial",
+            "runtime_status": "partial",
+            "dod_status": "incomplete",
             "worker_statuses": [worker_rollup],
             "worker_parallelism": {
                 **branch_status["worker_parallelism"],
@@ -1254,6 +1260,9 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
     write_json(scheduler_path, scheduler)
     main_status = read_json(target_bundle / "main.status.json")
     main_status["status"] = "partial"
+    main_status["runtime_status"] = "partial"
+    main_status["dod_status"] = "incomplete"
+    main_status["resume_action"] = "resume_or_repair"
     main_status["branch_parallelism"] = {
         "scheduler_path": "schedulers/main.scheduler.json",
         "launched_ids": [BRANCH_ID],
@@ -1311,6 +1320,15 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
         "B01-W01 is blocked: API tests require unowned runtime dependency `marketnn.golden_missing` that is absent from this branch.",
     ]
     write_json(status_path, status)
+    review_path = target_bundle / "branches" / f"{BRANCH_ID}.review.json"
+    review = read_json(review_path)
+    review["verdict"] = "blocked"
+    review["findings"] = [
+        "Reviewer finding: src/marketnn/reviewer_missing.py is required by the blocked integration path.",
+        "Reviewer finding: tests/test_reviewer_missing.py must cover the reviewer-derived repair path.",
+    ]
+    write_json(review_path, review)
+    write_json(target_bundle / "reviewers" / REVIEW_PACKET / "review.json", review)
 
     create_amendment_decision(
         target_bundle,
@@ -1337,6 +1355,17 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
     )
     packet_dir = target_bundle / "amendments" / "A002.packet"
     assert_shell_syntax(packet_dir / "launch.sh")
+    packet_input = read_json(packet_dir / "input-files.json")
+    source_labels = [
+        item.get("label")
+        for item in packet_input.get("source_files", [])
+        if isinstance(item, dict)
+    ]
+    if f"terminal branch review {BRANCH_ID}" not in source_labels:
+        raise SystemExit("deterministic repair packet did not record terminal branch review as a source file")
+    review_record = packet_input.get("terminal_branch_reviews", {}).get(BRANCH_ID)
+    if not isinstance(review_record, dict) or review_record.get("source_review_path") != review_path.as_posix():
+        raise SystemExit(f"deterministic repair packet did not record source review evidence: {review_record!r}")
     run([str(packet_dir / "launch.sh")])
     proposal = read_json(target_bundle / "amendments" / "A002.proposal.json")
     operations = proposal.get("operations")
@@ -1349,13 +1378,25 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
     for work_item in branch.get("work_items", []):
         if isinstance(work_item, dict):
             owned_paths.extend(path for path in work_item.get("owned_paths", []) if isinstance(path, str))
-    if "src/marketnn/golden_missing.py" not in owned_paths or "tests/test_golden_missing.py" not in owned_paths:
+    expected_repair_paths = {
+        "src/marketnn/golden_missing.py",
+        "tests/test_golden_missing.py",
+        "src/marketnn/reviewer_missing.py",
+        "tests/test_reviewer_missing.py",
+    }
+    missing_repair_paths = sorted(expected_repair_paths - set(owned_paths))
+    if missing_repair_paths:
         raise SystemExit(f"deterministic repair branch missed expected blocker paths: {owned_paths!r}")
+    work_item_text = json.dumps(branch.get("work_items", []), sort_keys=True)
+    if "Reviewer finding addressed" not in work_item_text or "reviewer_missing.py" not in work_item_text:
+        raise SystemExit("deterministic repair branch did not promote reviewer findings into worker DOD")
     if branch.get("recovers_from") != [BRANCH_ID]:
         raise SystemExit("deterministic repair branch must cite recovers_from terminal branch")
     route = read_json(packet_dir / "route.json")
     if route.get("mode") != "deterministic_blocker_repair":
         raise SystemExit("deterministic repair packet route did not record deterministic mode")
+    if route.get("source_review_paths") != [review_path.as_posix()]:
+        raise SystemExit("deterministic repair packet route did not record source review path")
     run(
         [
             "python3",
@@ -1602,6 +1643,13 @@ def main() -> int:
         reconcile_report = json.loads(reconcile_result.stdout)
         if reconcile_report.get("status") != "pass" or reconcile_report.get("final_state_validation", {}).get("status") != "pass":
             raise SystemExit(f"reconcile_goal_run should pass on golden bundle: {reconcile_report!r}")
+        if reconcile_report.get("resume_action") != "reuse_terminal_status":
+            raise SystemExit(f"reconcile_goal_run did not expose reusable terminal resume action: {reconcile_report!r}")
+        if reconcile_report.get("schema_status") != "pass" or reconcile_report.get("runtime_status") != "pass":
+            raise SystemExit(f"reconcile_goal_run did not expose top-level status dimensions: {reconcile_report!r}")
+        golden_state = reconcile_report.get("current_state", {})
+        if golden_state.get("terminal_branch_ids") != [BRANCH_ID] or golden_state.get("safe_to_reuse_branch_ids") != [BRANCH_ID]:
+            raise SystemExit(f"reconcile_goal_run did not summarize reusable terminal branch state: {golden_state!r}")
         for rel_path in ["orchestration.state.json", "resume.report.json"]:
             if not (bundle / rel_path).exists():
                 raise SystemExit(f"reconcile_goal_run --write did not create {rel_path}")
@@ -1657,6 +1705,11 @@ def main() -> int:
         missing_branch_status_report = json.loads(missing_branch_status_result.stdout)
         if missing_branch_status_report.get("status") != "blocked":
             raise SystemExit(f"missing branch status should reconcile to blocked: {missing_branch_status_report!r}")
+        if missing_branch_status_report.get("resume_action") != "launch_or_resume_branches":
+            raise SystemExit(f"missing branch status should route to branch launch/resume: {missing_branch_status_report!r}")
+        missing_state = missing_branch_status_report.get("current_state", {})
+        if BRANCH_ID not in missing_state.get("missing_branch_ids", []):
+            raise SystemExit(f"missing branch status should be listed in current_state.missing_branch_ids: {missing_state!r}")
         if missing_branch_status_report.get("final_state_validation", {}).get("status") != "failed":
             raise SystemExit(f"missing branch status should fail final validation: {missing_branch_status_report!r}")
         if missing_branch_status_report.get("safe_to_reuse", {}).get("overall") is not False:
@@ -1698,6 +1751,18 @@ def main() -> int:
         write_json(route_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json", telemetry_data)
         route_mismatch_result = validate_branch(route_mismatch_bundle, expect=1)
         assert_any_contains(route_mismatch_result.stdout, ["route.json selected_ladder", "must be one of"], "reviewer route/telemetry mismatch fixture")
+
+        model_mismatch_bundle = tmp_path / "reviewer-alias-model-mismatch"
+        shutil.copytree(bundle, model_mismatch_bundle)
+        rewrite_copied_branch_paths(model_mismatch_bundle)
+        launch_config = read_json(model_mismatch_bundle / "reviewers" / REVIEW_PACKET / "launch-config.json")
+        launch_config["attempts"][0]["model"] = "gpt-5.5"
+        write_json(model_mismatch_bundle / "reviewers" / REVIEW_PACKET / "launch-config.json", launch_config)
+        telemetry_model_data = read_json(model_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json")
+        telemetry_model_data["attempts"][0]["model"] = "gpt-5.5"
+        write_json(model_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json", telemetry_model_data)
+        model_mismatch_result = validate_branch(model_mismatch_bundle, expect=1)
+        assert_contains(model_mismatch_result.stdout, "for alias", "reviewer alias/model mismatch fixture")
 
         worker_cost_misuse_bundle = tmp_path / "worker-route-class-cost-misuse"
         shutil.copytree(bundle, worker_cost_misuse_bundle)

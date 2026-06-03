@@ -23,7 +23,20 @@ def _load_path_rules():
     return module
 
 
+def _load_contract():
+    path = Path(__file__).resolve().parent / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
 LITE_VALIDATION_STATUSES = {"pass", "failed"}
@@ -171,8 +184,12 @@ def validate_telemetry_artifact(
         item_path = f"{path}.attempts[{index}]"
         attempt = require_object(defects, item, item_path)
         alias = require_string(defects, attempt.get("alias"), f"{item_path}.alias")
-        require_string(defects, attempt.get("provider"), f"{item_path}.provider")
-        require_string(defects, attempt.get("model"), f"{item_path}.model")
+        provider = require_string(defects, attempt.get("provider"), f"{item_path}.provider")
+        model = require_string(defects, attempt.get("model"), f"{item_path}.model")
+        if provider == "codex" and alias in CONTRACT.CODEX_ROUTE_MODELS:
+            expected_model = CONTRACT.codex_model(alias)
+            if model != expected_model:
+                defect(defects, f"{item_path}.model", f"must be {expected_model!r} for alias {alias!r}")
         if attempt.get("effort") is not None:
             require_string(defects, attempt.get("effort"), f"{item_path}.effort")
         require_string(defects, attempt.get("command"), f"{item_path}.command")
@@ -512,6 +529,13 @@ def validate_scheduler_ledger(
         timestamp = event.get("timestamp")
         if not isinstance(timestamp, str) or not timestamp.strip() or TIMESTAMP_RE.search(timestamp) is None:
             defect(defects, f"{event_path}.timestamp", "must be an ISO-like timestamp string")
+        wall_clock_timestamp = event.get("wall_clock_timestamp")
+        if (
+            not isinstance(wall_clock_timestamp, str)
+            or not wall_clock_timestamp.strip()
+            or TIMESTAMP_RE.search(wall_clock_timestamp) is None
+        ):
+            defect(defects, f"{event_path}.wall_clock_timestamp", "must be an ISO-like timestamp string")
         require_string(defects, event.get("runtime_ref"), f"{event_path}.runtime_ref")
         event_name = event.get("event")
         if event_name not in {

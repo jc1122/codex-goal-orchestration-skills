@@ -78,6 +78,46 @@ def append_unique(values: list[str], value: str | None) -> None:
         values.append(value)
 
 
+def normalized_text_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip())
+    return result
+
+
+def review_evidence_record(path: Path) -> dict:
+    data = load_json_object(path)
+    fields = {
+        "findings": normalized_text_list(data.get("findings")),
+        "verification_gaps": normalized_text_list(data.get("verification_gaps")),
+        "residual_risks": normalized_text_list(data.get("residual_risks")),
+        "commands_run": normalized_text_list(data.get("commands_run")),
+    }
+    return {
+        "source_review_path": path.as_posix(),
+        "source_review_sha256": sha256_file(path),
+        "packet_id": data.get("packet_id") if isinstance(data.get("packet_id"), str) else None,
+        "verdict": data.get("verdict") if isinstance(data.get("verdict"), str) else None,
+        **fields,
+    }
+
+
+def review_items_for_repair(evidence: object) -> list[str]:
+    if not isinstance(evidence, dict):
+        return []
+    items: list[str] = []
+    for field in ["findings", "verification_gaps"]:
+        for item in normalized_text_list(evidence.get(field)):
+            items.append(f"review {field}: {item}")
+    for item in normalized_text_list(evidence.get("residual_risks")):
+        if FILE_RE.search(item) or MODULE_RE.search(item):
+            items.append(f"review residual_risks: {item}")
+    return items
+
+
 def blockers_from_status(status: dict) -> list[str]:
     blockers: list[str] = []
     for item in status.get("blockers", []):
@@ -92,7 +132,7 @@ def blockers_from_status(status: dict) -> list[str]:
     return blockers
 
 
-def extract_repair_paths(blockers: list[str]) -> tuple[list[str], list[str]]:
+def extract_repair_paths(blockers: list[str], *, review_context: bool = False) -> tuple[list[str], list[str]]:
     owned_paths: list[str] = []
     verification_tests: list[str] = []
     for blocker in blockers:
@@ -111,14 +151,33 @@ def extract_repair_paths(blockers: list[str]) -> tuple[list[str], list[str]]:
             path = safe_path(raw_path)
             if not path:
                 continue
+            if review_context and path.startswith("tests/"):
+                append_unique(owned_paths, path)
+                append_unique(verification_tests, path)
+                continue
             if path.startswith("tests/") and "fail to collect" in lowered and not ("absent" in lowered or "not found" in lowered):
                 append_unique(verification_tests, path)
                 continue
-            if missing_context:
+            if missing_context or review_context:
                 append_unique(owned_paths, path)
             elif path.startswith("tests/"):
                 append_unique(verification_tests, path)
     return owned_paths, verification_tests
+
+
+def append_unique_many(target: list[str], values: list[str]) -> None:
+    for value in values:
+        append_unique(target, value)
+
+
+def source_review_path(branch: dict, bundle_dir: Path) -> Path | None:
+    value = branch.get("review_path")
+    if not isinstance(value, str) or relative_path_defect(value, "review_path"):
+        return None
+    path = bundle_dir / value
+    if path.exists() and path.is_file():
+        return path
+    return None
 
 
 def all_owned_paths(manifest: dict) -> dict[str, str]:
@@ -195,6 +254,8 @@ def repair_branch(
     owned_paths: list[str],
     verification_tests: list[str],
     has_overlap: bool,
+    review_evidence: dict | None = None,
+    review_items: list[str] | None = None,
 ) -> dict:
     job_id = str(manifest.get("job_id", "goal"))
     base_ref = str(manifest.get("base_ref", "main"))
@@ -219,6 +280,8 @@ def repair_branch(
         nonempty_groups = kept + [("mixed", merged_paths)]
 
     work_items = []
+    review_items = review_items or []
+    review_source = review_evidence.get("source_review_path") if isinstance(review_evidence, dict) else None
     for index, (name, paths) in enumerate(nonempty_groups, start=1):
         verification = [f"git diff --check {base_ref}...HEAD"]
         if any(path.startswith("src/") for path in paths):
@@ -226,16 +289,26 @@ def repair_branch(
         group_tests = [path for path in paths + verification_tests if path.startswith("tests/")]
         if group_tests:
             verification.append("env PYTHONPATH=src python3 -m pytest " + " ".join(dict.fromkeys(group_tests)) + " -q")
+        matching_review_items = [
+            item
+            for item in review_items
+            if any(path in item for path in paths)
+        ]
+        review_dod = [
+            f"Reviewer evidence from {review_source} is resolved for this worker's assigned paths."
+        ] if isinstance(review_source, str) and matching_review_items else []
+        review_dod.extend(f"Reviewer finding addressed: {item}" for item in matching_review_items[:6])
         work_items.append(
             {
                 "id": f"W{index:02d}",
-                "objective": f"Repair {name} blockers from terminal branch {terminal_branch_id}.",
+                "objective": f"Repair {name} blockers and reviewer findings from terminal branch {terminal_branch_id}.",
                 "owned_paths": paths,
                 "context_files": context_files,
                 "verification": verification,
                 "dod": [
                     f"Paths assigned to this worker resolve terminal {terminal_branch_id} blocker evidence.",
                     "Focused verification commands pass or preserve explicit residual blocker evidence.",
+                    *review_dod,
                 ],
                 **(
                     {
@@ -250,8 +323,8 @@ def repair_branch(
     branch = {
         "id": branch_id,
         "title": f"Repair {terminal_branch_id} Blockers",
-        "objective": f"Deterministically repair missing local files and tests cited by terminal branch {terminal_branch_id} blockers.",
-        "scope": "Repair branch added by deterministic blocker diagnosis; terminal branch evidence remains immutable.",
+        "objective": f"Deterministically repair local files and tests cited by terminal branch {terminal_branch_id} blockers or reviewer findings.",
+        "scope": "Repair branch added by deterministic blocker and reviewer-finding diagnosis; terminal branch evidence remains immutable.",
         "branch_name": branch_name,
         "worktree_path": f".worktrees/{branch_name}",
         "depends_on": [],
@@ -261,6 +334,11 @@ def repair_branch(
         "tests": branch_tests(base_ref, owned_paths, verification_tests),
         "dod": [
             f"Terminal blocker paths from {terminal_branch_id} are implemented or explicitly narrowed.",
+            *(
+                [f"Reviewer findings from {review_source} are implemented or explicitly narrowed."]
+                if isinstance(review_source, str) and review_items
+                else []
+            ),
             "Native branch status can be re-evaluated without missing local-file blocker evidence.",
         ],
     }
@@ -295,6 +373,12 @@ def generate_proposal(input_data: dict) -> dict:
             continue
         blockers = blockers_from_status(status)
         owned_paths, verification_tests = extract_repair_paths(blockers)
+        reviews = input_data.get("terminal_branch_reviews")
+        review_evidence = reviews.get(terminal_branch_id) if isinstance(reviews, dict) else None
+        review_items = review_items_for_repair(review_evidence)
+        review_owned_paths, review_verification_tests = extract_repair_paths(review_items, review_context=True)
+        append_unique_many(owned_paths, review_owned_paths)
+        append_unique_many(verification_tests, review_verification_tests)
         if not owned_paths:
             continue
         has_overlap = any(path in existing_owned for path in owned_paths)
@@ -313,6 +397,8 @@ def generate_proposal(input_data: dict) -> dict:
                     owned_paths=owned_paths,
                     verification_tests=verification_tests,
                     has_overlap=has_overlap,
+                    review_evidence=review_evidence if isinstance(review_evidence, dict) else None,
+                    review_items=review_items,
                 ),
             }
         )
@@ -320,7 +406,7 @@ def generate_proposal(input_data: dict) -> dict:
         "schema_version": 1,
         "amendment_id": input_data["amendment_id"],
         "job_id": input_data["job_id"],
-        "rationale": "Deterministic blocker diagnosis converted terminal non-pass missing-file evidence into repair branches.",
+        "rationale": "Deterministic blocker and reviewer-finding diagnosis converted terminal non-pass evidence into repair branches.",
         "operations": operations,
     }
 
@@ -444,6 +530,7 @@ def create_packet(args: argparse.Namespace) -> Path:
         source_record(decision_path, "amendment launch decision"),
         source_record(main_prompt, "main prompt"),
     ]
+    terminal_reviews: dict[str, dict] = {}
     audit_path = resolve_absolute_path(args.prompt_audit, "--prompt-audit", must_exist=True) if args.prompt_audit else bundle_dir / "audit" / "prompt-audit.json"
     add_if_exists(records, audit_path, "prompt audit")
     scheduler_path = manifest.get("parallelization", {}).get("scheduler_path") if isinstance(manifest.get("parallelization"), dict) else None
@@ -455,6 +542,17 @@ def create_packet(args: argparse.Namespace) -> Path:
         value = branch.get("status_path")
         if isinstance(value, str) and not relative_path_defect(value, "status_path"):
             add_if_exists(records, bundle_dir / value, f"terminal branch status {branch['id']}")
+        review_path = source_review_path(branch, bundle_dir)
+        if review_path is not None:
+            add_if_exists(records, review_path, f"terminal branch review {branch['id']}")
+            try:
+                terminal_reviews[branch["id"]] = review_evidence_record(review_path)
+            except Exception as exc:  # noqa: BLE001
+                terminal_reviews[branch["id"]] = {
+                    "source_review_path": review_path.as_posix(),
+                    "source_review_sha256": sha256_file(review_path),
+                    "load_error": str(exc),
+                }
 
     packet = {
         "schema_version": 1,
@@ -470,8 +568,9 @@ def create_packet(args: argparse.Namespace) -> Path:
         "active_branch_ids": sorted(active),
         "terminal_branch_ids": sorted(terminal),
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
+        "terminal_branch_reviews": terminal_reviews,
         "selected_ladder": [],
-        "selection_reason": "Deterministic blocker diagnosis from terminal status artifacts.",
+        "selection_reason": "Deterministic blocker and reviewer-finding diagnosis from terminal artifacts.",
         "source_files": records,
     }
     route = {
@@ -480,8 +579,13 @@ def create_packet(args: argparse.Namespace) -> Path:
         "role": CONTRACT.AMENDER_ROLE,
         "mode": DETERMINISTIC_MODE,
         "selected_ladder": [],
-        "selection_reason": "Deterministic blocker diagnosis from terminal status artifacts.",
+        "selection_reason": "Deterministic blocker and reviewer-finding diagnosis from terminal artifacts.",
         "policy": CONTRACT.AMENDER_MODEL_POLICY,
+        "source_review_paths": sorted(
+            item["source_review_path"]
+            for item in terminal_reviews.values()
+            if isinstance(item, dict) and isinstance(item.get("source_review_path"), str)
+        ),
     }
     write_json(packet_dir / "input-files.json", packet)
     write_json(packet_dir / "route.json", route)

@@ -161,6 +161,74 @@ def run_pre_review_manifest_command_fixture(tmp_path: Path, bundle: Path) -> Non
     )
     assert_contains(missing_probe.stdout, "command-backed semantic probe", "missing semantic probe fixture")
 
+    self_probe_bundle = tmp_path / "pre-review-self-referential-semantic-probe"
+    shutil.copytree(bundle, self_probe_bundle)
+    write_valid_research_fixture(self_probe_bundle)
+    manifest = read_json(self_probe_bundle / "job.manifest.json")
+    branches = manifest.get("branches")
+    if not isinstance(branches, list) or not isinstance(branches[0], dict):
+        raise SystemExit("fixture manifest must contain at least one branch")
+    branches[0]["tests"] = ["python3 -c 'print(\"self check only\")'"]
+    branches[0]["dod"] = ["Branch-level API compatibility with goal_fixture_api is verified before reviewer launch."]
+    write_json(self_probe_bundle / "job.manifest.json", manifest)
+    write_worker_scheduler(self_probe_bundle)
+    assemble_branch_status(self_probe_bundle)
+    self_probe = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (self_probe_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--dod-item",
+            "self-referential command must not satisfy cross-contract compatibility",
+            "--json",
+        ],
+        expect=1,
+    )
+    assert_contains(self_probe.stdout, "declared target: goal_fixture_api", "self-referential semantic probe fixture")
+
+    target_probe_bundle = tmp_path / "pre-review-target-semantic-probe"
+    shutil.copytree(bundle, target_probe_bundle)
+    write_valid_research_fixture(target_probe_bundle)
+    manifest = read_json(target_probe_bundle / "job.manifest.json")
+    branches = manifest.get("branches")
+    if not isinstance(branches, list) or not isinstance(branches[0], dict):
+        raise SystemExit("fixture manifest must contain at least one branch")
+    target_command = "python3 -c 'print(\"goal_fixture_api compatibility probe\")'"
+    branches[0]["tests"] = [target_command]
+    branches[0]["dod"] = ["Branch-level API compatibility with goal_fixture_api is verified before reviewer launch."]
+    write_json(target_probe_bundle / "job.manifest.json", manifest)
+    write_worker_scheduler(target_probe_bundle)
+    assemble_branch_status(target_probe_bundle)
+    target_probe_result = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (target_probe_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--dod-item",
+            "targeted command satisfies cross-contract compatibility",
+            "--json",
+        ]
+    )
+    _target_result = json.loads(target_probe_result.stdout)
+    target_gate = read_json(target_probe_bundle / "branches" / "B01.pre_review_gate.json")
+    target_semantic_probes = target_gate.get("checks", {}).get("semantic_probes", {})
+    if target_semantic_probes.get("status") != "pass" or target_semantic_probes.get("targets") != ["goal_fixture_api"]:
+        raise SystemExit(f"targeted semantic probe fixture should pass with declared target: {target_semantic_probes!r}")
+
     capitalization_bundle = tmp_path / "pre-review-capitalization-not-api"
     shutil.copytree(bundle, capitalization_bundle)
     write_valid_research_fixture(capitalization_bundle)
@@ -253,6 +321,10 @@ def branch_status(bundle: Path, research: dict, *, status: str = "partial") -> d
     return {
         "branch_id": "B01",
         "status": status,
+        "schema_status": "pass",
+        "runtime_status": status,
+        "dod_status": "incomplete" if status != "pass" else "pass",
+        "resume_action": "reuse_terminal_status",
         "branch": "preparedness-research-fixture",
         "worktree": ROOT.as_posix(),
         "worker_statuses": [
@@ -1902,6 +1974,15 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         **multi_branch_refill,
         "manifest_sha256": "sha256:" + "0" * 64,
     }
+    missing_wall_clock = {
+        **multi_branch_refill,
+        "events": [
+            {key: value for key, value in event.items() if key != "wall_clock_timestamp"}
+            if index == 0
+            else event
+            for index, event in enumerate(multi_branch_refill["events"])
+        ],
+    }
     vague_reason = {
         **base,
         "events": [
@@ -1972,6 +2053,7 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         ("missing-refill-event", missing_refill, main_ids, main_deps, 2, False, True),
         ("under-capacity-without-reason", under_capacity_without_reason, main_ids, main_deps, 2, False, True),
         ("stale-scheduler-manifest-hash", stale_scheduler, main_ids, main_deps, 2, False, True),
+        ("missing-wall-clock-timestamp", missing_wall_clock, main_ids, main_deps, 2, False, True),
         ("vague-reason-code-rejection", vague_reason, main_ids, main_deps, 2, False, False),
         ("dependency-failed-blocking", dependency_failed, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, True, False),
         ("dependency-failed-wrong-reason", dependency_failed_wrong_reason, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, False, False),
@@ -3190,6 +3272,10 @@ def run_repair_gate_fixture(bundle: Path) -> None:
     status_data = {
         "branch_id": "B01",
         "status": "blocked",
+        "schema_status": "pass",
+        "runtime_status": "blocked",
+        "dod_status": "incomplete",
+        "resume_action": "reuse_terminal_status",
         "branch": "preparedness-research-fixture",
         "worktree": ROOT.as_posix(),
         "worker_statuses": [],
@@ -4400,10 +4486,39 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
             "capacity": 1,
             "item_ids": ["B01"],
             "events": [
-                {"seq": 1, "timestamp": "2026-01-01T00:00:00+00:00", "runtime_ref": "fixture", "event": "ready", "id": "B01"},
-                {"seq": 2, "timestamp": "2026-01-01T00:00:01+00:00", "runtime_ref": "fixture", "event": "launch", "id": "B01"},
-                {"seq": 3, "timestamp": "2026-01-01T00:00:02+00:00", "runtime_ref": "fixture", "event": "finish", "id": "B01", "status": "pass"},
-                {"seq": 4, "timestamp": "2026-01-01T00:00:03+00:00", "runtime_ref": "fixture", "event": "close", "id": "B01"},
+                {
+                    "seq": 1,
+                    "timestamp": "2026-01-01T00:00:00+00:00",
+                    "wall_clock_timestamp": "2026-01-01T00:00:00+00:00",
+                    "runtime_ref": "fixture",
+                    "event": "ready",
+                    "id": "B01",
+                },
+                {
+                    "seq": 2,
+                    "timestamp": "2026-01-01T00:00:01+00:00",
+                    "wall_clock_timestamp": "2026-01-01T00:00:01+00:00",
+                    "runtime_ref": "fixture",
+                    "event": "launch",
+                    "id": "B01",
+                },
+                {
+                    "seq": 3,
+                    "timestamp": "2026-01-01T00:00:02+00:00",
+                    "wall_clock_timestamp": "2026-01-01T00:00:02+00:00",
+                    "runtime_ref": "fixture",
+                    "event": "finish",
+                    "id": "B01",
+                    "status": "pass",
+                },
+                {
+                    "seq": 4,
+                    "timestamp": "2026-01-01T00:00:03+00:00",
+                    "wall_clock_timestamp": "2026-01-01T00:00:03+00:00",
+                    "runtime_ref": "fixture",
+                    "event": "close",
+                    "id": "B01",
+                },
             ],
         },
     )

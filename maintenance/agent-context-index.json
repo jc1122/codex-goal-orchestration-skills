@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:23636687134c5913a31b5eef2d1a5e76506e23edfae2f9eadd70f887c06c14fd"
+    "source_fingerprint": "sha256:64054acdd3a9939fa0a754825f266f4bc6949f7d83e6b60ba976167b9ac5154a"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,14 +16,14 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 4860,
-      "approx_tokens": 55356,
+      "lines": 4975,
+      "approx_tokens": 56569,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3476:run_base_ref_default_fixture:800l",
-        "2560:run_runtime_packet_fixtures:521l",
-        "1315:run_negative_amendment_fixtures:289l",
-        "750:run_preflight_brief_lint_fixtures:282l"
+        "3562:run_base_ref_default_fixture:800l",
+        "2642:run_runtime_packet_fixtures:521l",
+        "1387:run_negative_amendment_fixtures:289l",
+        "822:run_preflight_brief_lint_fixtures:282l"
       ]
     },
     {
@@ -68,14 +68,14 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 1765,
-      "approx_tokens": 21230,
+      "lines": 1793,
+      "approx_tokens": 21651,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1462:validate_review_artifact_for_branch:144l",
-        "619:validate_worker_artifacts:140l",
-        "1608:validate_branch_status:120l",
-        "387:validate_launch_config_artifact:89l"
+        "1468:validate_review_artifact_for_branch:144l",
+        "1614:validate_branch_status:142l",
+        "625:validate_worker_artifacts:140l",
+        "389:validate_launch_config_artifact:93l"
       ]
     }
   ],

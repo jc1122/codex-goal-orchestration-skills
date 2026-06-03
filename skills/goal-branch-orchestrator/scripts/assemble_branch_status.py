@@ -439,6 +439,7 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "blockers": blockers if status != "pass" else [],
         "handoff": args.handoff or "Branch status assembled from manifest-owned runtime artifacts.",
     }
+    annotate_status_lanes(branch_status, [])
     write_json(output_path, branch_status)
 
     validation_defects = BRANCH_VALIDATOR.validate_branch_status(
