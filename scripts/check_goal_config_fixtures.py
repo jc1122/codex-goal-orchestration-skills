@@ -508,8 +508,11 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     require(route["default_ladder"] == ["demanding_agent", "lite_agent"], "packet default ladder must use config")
     require("goal_config" in route["selection_reason"], "packet route reason should cite goal_config")
     require("Codex Spark" not in route["selection_reason"], "configured route reason must not cite legacy Codex ladder")
+    selected_ladder_schema = status_schema["properties"]["selected_ladder"]
     require(
-        status_schema["properties"]["selected_ladder"].get("const") == ["lite_agent"],
+        selected_ladder_schema.get("minItems") == 1
+        and selected_ladder_schema.get("maxItems") == 1
+        and selected_ladder_schema.get("items", {}).get("enum") == ["lite_agent"],
         "worker status schema must accept the configured selected ladder",
     )
     attempts = launch_config.get("attempts", [])

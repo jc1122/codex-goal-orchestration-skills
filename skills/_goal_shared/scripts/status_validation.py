@@ -43,6 +43,7 @@ LITE_VALIDATION_STATUSES = {"pass", "failed"}
 SAFE_PACKET_RE = PATH_RULES.SAFE_PACKET_LABEL_RE
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}")
+SCHEDULER_EVENT_SCHEMA_VERSION = 2
 is_strict_int = PATH_RULES.is_strict_int
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 
@@ -494,6 +495,9 @@ def validate_scheduler_ledger(
     under_capacity_excuses: set[str] = set()
     max_observed = 0
     refill_required = False
+    event_manifest_allowed: set[str] = set(allowed_manifest_sha256s or [])
+    if manifest_path is not None and not event_manifest_allowed:
+        event_manifest_allowed = {sha256_file(manifest_path)}
 
     def eligible_ids() -> list[str]:
         eligible = []
@@ -561,6 +565,23 @@ def validate_scheduler_ledger(
 
         before_eligible = eligible_ids()
         before_unexcused = unexcused_eligible()
+
+        event_schema_version = event.get("schema_version")
+        has_event_schema_version = event_schema_version is not None
+        if has_event_schema_version and not isinstance(event_schema_version, int):
+            defect(defects, f"{event_path}.schema_version", "must be an integer")
+            event_schema_version = None
+
+        if has_event_schema_version and event_schema_version is not None and event_schema_version >= SCHEDULER_EVENT_SCHEMA_VERSION:
+            event_manifest_sha = event.get("manifest_sha256")
+            if not isinstance(event_manifest_sha, str) or not SHA256_RE.fullmatch(event_manifest_sha):
+                defect(defects, f"{event_path}.manifest_sha256", "must be sha256:<64 lowercase hex chars>")
+            elif manifest_path is not None and event_manifest_sha not in event_manifest_allowed:
+                defect(defects, f"{event_path}.manifest_sha256", "must match current or archived manifest hash")
+
+            event_epoch = event.get("manifest_epoch")
+            if not isinstance(event_epoch, str) or not event_epoch.strip():
+                defect(defects, f"{event_path}.manifest_epoch", "must be a non-empty string")
         if before_unexcused and len(active) < capacity:
             addresses_idle = False
             event_id = event.get("id")

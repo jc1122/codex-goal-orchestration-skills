@@ -11,7 +11,11 @@ from pathlib import Path
 from amendment_lib import (
     CONTRACT,
     branch_map,
+    add_lineage_stage,
+    amendment_lineage_path,
     ensure_amendment_id,
+    init_lineage,
+    lineage_path_rel,
     load_json_object,
     protected_ids,
     relative_path_defect,
@@ -260,14 +264,7 @@ def repair_branch(
     job_id = str(manifest.get("job_id", "goal"))
     base_ref = str(manifest.get("base_ref", "main"))
     branch_name = f"{job_id}-repair-{terminal_branch_id.lower()}"
-    context_files = ["main.prompt.md"]
-    status_rel = repo_relative(status_path, repo_root)
-    if status_rel:
-        context_files.append(status_rel)
-    bundle_prompt = bundle_dir / "main.prompt.md"
-    prompt_rel = repo_relative(bundle_prompt, repo_root)
-    if prompt_rel and prompt_rel not in context_files:
-        context_files.append(prompt_rel)
+    context_files: list[str] = []
     groups: dict[str, list[str]] = {"runtime": [], "tests": [], "scripts": [], "docs": [], "other": []}
     for path in owned_paths:
         groups[work_item_group(path)].append(path)
@@ -329,6 +326,8 @@ def repair_branch(
         "worktree_path": f".worktrees/{branch_name}",
         "depends_on": [],
         "recovers_from": [terminal_branch_id],
+        "supersedes": [terminal_branch_id],
+        "recovery_mode": "replacement_branch",
         "max_active_worker_packets": CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH,
         "work_items": work_items,
         "tests": branch_tests(base_ref, owned_paths, verification_tests),
@@ -457,6 +456,28 @@ def emit_proposal(input_path: Path, proposal_path: Path, telemetry_path: Path) -
     input_data = load_json_object(input_path)
     proposal = generate_proposal(input_data)
     write_json(proposal_path, proposal)
+    amendment_id = ensure_amendment_id(input_data.get("amendment_id"))
+    bundle_dir = proposal_path.parent.parent
+    lineage_path = amendment_lineage_path(bundle_dir, amendment_id)
+    lineage = init_lineage(amendment_id)
+    proposal_rel = lineage_path_rel(bundle_dir, proposal_path)
+    generated_sha = sha256_file(proposal_path)
+    add_lineage_stage(lineage, stage="generated_proposal", path=proposal_rel, sha256=generated_sha, parent_sha256=None)
+    add_lineage_stage(
+        lineage,
+        stage="deterministic_repair",
+        path=proposal_rel,
+        sha256=generated_sha,
+        parent_sha256=generated_sha,
+    )
+    add_lineage_stage(
+        lineage,
+        stage="final_proposal",
+        path=proposal_rel,
+        sha256=generated_sha,
+        parent_sha256=generated_sha,
+    )
+    write_json(lineage_path, lineage)
     command = f"python3 {Path(__file__).resolve().as_posix()} --emit-proposal --input-files {input_path.as_posix()} --proposal {proposal_path.as_posix()} --telemetry {telemetry_path.as_posix()}"
     write_json(telemetry_path, telemetry(str(input_data["amendment_id"]), proposal_path, input_path, telemetry_path, command))
 
@@ -587,6 +608,44 @@ def create_packet(args: argparse.Namespace) -> Path:
             if isinstance(item, dict) and isinstance(item.get("source_review_path"), str)
         ),
     }
+    precomputed_proposal = generate_proposal(packet)
+    if not precomputed_proposal.get("operations"):
+        no_op_path = amendments_dir / f"{amendment_id}.no-op.json"
+        no_op_record = {
+            "schema_version": 1,
+            "amendment_id": amendment_id,
+            "job_id": manifest.get("job_id"),
+            "status": "no_legal_future_work",
+            "reason_code": "no_legal_future_work",
+            "reason": "Deterministic blocker repair found terminal non-pass evidence but no legal future-work operation to propose.",
+            "manifest": manifest_path.as_posix(),
+            "manifest_sha256": sha256_file(manifest_path),
+            "decision_path": decision_path.as_posix(),
+            "generated_operations_count": 0,
+            "terminal_branch_ids": sorted(terminal),
+            "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
+            "source_files": records,
+        }
+        write_json(no_op_path, no_op_record)
+        updated_decision = dict(decision)
+        updated_decision.update(
+            {
+                "decision": "skip",
+                "reason_code": "no_legal_future_work",
+                "reason": no_op_record["reason"],
+                "packet_path": None,
+                "proposal_path": None,
+                "validation_path": None,
+                "accepted_path": None,
+                "no_op_path": no_op_path.as_posix(),
+            }
+        )
+        write_json(decision_path, updated_decision)
+        try:
+            packet_dir.rmdir()
+        except OSError:
+            pass
+        return no_op_path
     write_json(packet_dir / "input-files.json", packet)
     write_json(packet_dir / "route.json", route)
     (packet_dir / "task.md").write_text("Deterministically diagnose terminal branch blockers and write a repair-branch proposal.\n", encoding="utf-8")

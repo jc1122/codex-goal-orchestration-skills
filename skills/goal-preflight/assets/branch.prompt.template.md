@@ -11,6 +11,15 @@ Dependency context: {dependency_context}
 
 Runtime rules appendix: {runtime_rules_path}
 Runtime rules sha256: {runtime_rules_sha256}
+Runtime index: {runtime_index_path}
+Runtime index sha256: {runtime_index_sha256}
+Route contract sha256: {route_contract_sha256}
+Route catalog refresh required: {route_contract_catalog_refresh_required}
+Execution strategy: {execution_strategy_id}
+Execution setup commands:
+{execution_strategy_setup}
+Execution validation env: {execution_strategy_env}
+Ownership feasibility: {ownership_feasibility_status}; commands needing review: {ownership_feasibility_needs_review}
 
 ## Objective
 
@@ -80,6 +89,8 @@ Return blocked if either command fails.
 ## Definition of Done
 
 - `{runtime_rules_path}` was read and followed before worker, reviewer, or Lite packet dispatch.
+- `{runtime_index_path}` and the route contract hash above were used as the first navigation surface before broad artifact reads.
+- Execution setup commands and validation env above were applied before command-backed acceptance checks.
 - Branch skill and Codex CLI availability bootstrap passed before worker dispatch.
 - 1 to {worker_packet_count} worker packets were used for this branch; worker/research-worker/reviewer/Lite packets wrote same-packet `telemetry.json`.
 - `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.

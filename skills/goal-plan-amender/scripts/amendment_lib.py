@@ -62,10 +62,29 @@ PROTECTED_BRANCH_KEYS = (
     "max_active_worker_packets",
     "worker_parallelism",
     "recovers_from",
+    "supersedes",
+    "recovery_mode",
     "contention_reason",
     "worker_contention_reason",
 )
 NONPASS_TERMINAL_STATUSES = {"partial", "blocked", "failed"}
+RUNTIME_BRIEF_PRESERVED_KEYS = (
+    "repo_status",
+    "preflight_compatibility",
+    "preflight_input_precedence",
+    "preflight_warnings",
+    "execution_strategy",
+)
+RUNTIME_MANIFEST_PROVENANCE_KEYS = (
+    "goal_config_path",
+    "goal_config_sha256",
+    "goal_config_summary",
+    "goal_config_check_path",
+    "goal_config_check_sha256",
+    "goal_config_check_summary",
+    "goal_config_provenance",
+    "route_policy_degraded_telemetry_waiver",
+)
 
 
 def json_text(data: object) -> str:
@@ -97,8 +116,112 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def raw_sha256_text(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
 def canonical_sha256(data: object) -> str:
     return sha256_text(json_text(data))
+
+
+def amendment_lineage_path(bundle_dir: Path, amendment_id: str) -> Path:
+    return bundle_dir / "amendments" / f"{amendment_id}.lineage.json"
+
+
+def make_lineage_stage(
+    stage: str,
+    path: str,
+    sha256: str,
+    *,
+    parent_sha256: str | None = None,
+) -> dict[str, str]:
+    record: dict[str, str] = {
+        "stage": stage,
+        "path": path,
+        "sha256": sha256,
+    }
+    if parent_sha256 is not None:
+        record["parent_sha256"] = parent_sha256
+    return record
+
+
+def init_lineage(amendment_id: str, *, schema_version: int = 1) -> dict:
+    return {
+        "schema_version": schema_version,
+        "amendment_id": amendment_id,
+        "stages": [],
+    }
+
+
+def _validate_lineage_stages(value: object) -> list[dict]:
+    if not isinstance(value, list):
+        return []
+    stages: list[dict] = []
+    for item in value:
+        if isinstance(item, dict):
+            stage = item.get("stage")
+            path = item.get("path")
+            sha = item.get("sha256")
+            if isinstance(stage, str) and isinstance(path, str) and isinstance(sha, str):
+                stages.append(item)
+    return stages
+
+
+def load_lineage(path: Path, amendment_id: str | None = None) -> dict:
+    if not path.exists():
+        return init_lineage(amendment_id or "", schema_version=1)
+    data = load_json_object(path)
+    if not isinstance(data, dict):
+        return init_lineage(amendment_id or "", schema_version=1)
+    stored_schema_version = data.get("schema_version", 1)
+    if not isinstance(stored_schema_version, int):
+        stored_schema_version = 1
+    result = init_lineage(amendment_id or str(data.get("amendment_id", "")), schema_version=stored_schema_version)
+    result["stages"] = _validate_lineage_stages(data.get("stages"))
+    if isinstance(data.get("meta"), dict):
+        result["meta"] = copy.deepcopy(data["meta"])
+    return result
+
+
+def add_lineage_stage(
+    lineage: dict,
+    *,
+    stage: str,
+    path: str,
+    sha256: str,
+    parent_sha256: str | None = None,
+) -> dict:
+    stages = lineage.setdefault("stages", [])
+    if not isinstance(stages, list):
+        stages = []
+        lineage["stages"] = stages
+    next_stage = make_lineage_stage(stage, path, sha256, parent_sha256=parent_sha256)
+    for existing in stages:
+        if (
+            isinstance(existing, dict)
+            and existing.get("stage") == stage
+            and existing.get("path") == path
+            and existing.get("sha256") == sha256
+        ):
+            return lineage
+    stages.append(next_stage)
+    return lineage
+
+
+def latest_lineage_sha(lineage: dict) -> str | None:
+    stages = _validate_lineage_stages(lineage.get("stages"))
+    if not stages:
+        return None
+    last = stages[-1]
+    value = last.get("sha256")
+    return value if isinstance(value, str) else None
+
+
+def lineage_path_rel(bundle_dir: Path, artifact_path: Path) -> str:
+    try:
+        return artifact_path.resolve().relative_to(bundle_dir.resolve()).as_posix()
+    except Exception:
+        return artifact_path.as_posix()
 
 
 def branch_map(manifest: dict) -> dict[str, dict]:
@@ -132,7 +255,7 @@ def manifest_to_brief(manifest: dict) -> dict:
     parallelization = manifest.get("parallelization", {})
     if not isinstance(parallelization, dict):
         parallelization = {}
-    return {
+    brief = {
         "job_id": manifest.get("job_id"),
         "title": manifest.get("title") or manifest.get("job_id"),
         "base_ref": manifest.get("base_ref", "main"),
@@ -154,17 +277,111 @@ def manifest_to_brief(manifest: dict) -> dict:
         "runtime_rules_sha256": manifest.get("runtime_rules_sha256"),
         "branches": [branch_brief_from_manifest(branch) for branch in manifest.get("branches", []) if isinstance(branch, dict)],
     }
+    for key in RUNTIME_BRIEF_PRESERVED_KEYS:
+        if key in manifest:
+            brief[key] = copy.deepcopy(manifest[key])
+    return brief
 
 
-def normalize_candidate_manifest(manifest: dict) -> tuple[dict, dict]:
+def finalize_candidate_runtime_metadata(candidate: dict) -> dict:
+    candidate["runtime_index_path"] = "runtime.index.json"
+    runtime_index = PREFLIGHT.build_runtime_index(candidate)
+    candidate["runtime_index_sha256"] = raw_sha256_text(PREFLIGHT.canonical_json_text(runtime_index))
+    return runtime_index
+
+
+def enrich_brief_runtime_metadata(brief: dict, candidate: dict, *, bundle_dir: Path | None = None) -> dict:
+    enriched = copy.deepcopy(brief)
+    if bundle_dir is not None:
+        enriched["bundle_root"] = bundle_dir.resolve().as_posix()
+    repo_status = candidate.get("repo_status") if isinstance(candidate.get("repo_status"), dict) else {}
+    repo_root = repo_status.get("repo_root")
+    if isinstance(repo_root, str) and repo_root:
+        enriched["repo_root"] = repo_root
+    for key in [
+        "runtime_index_path",
+        "runtime_index_sha256",
+        "route_contract",
+        "route_contract_sha256",
+        "execution_strategy",
+        "ownership_feasibility",
+    ]:
+        if key in candidate:
+            enriched[key] = copy.deepcopy(candidate[key])
+    return enriched
+
+
+def write_runtime_index(bundle_dir: Path, candidate: dict) -> None:
+    runtime_index = PREFLIGHT.build_runtime_index(candidate)
+    expected_hash = candidate.get("runtime_index_sha256")
+    actual_hash = raw_sha256_text(PREFLIGHT.canonical_json_text(runtime_index))
+    if expected_hash != actual_hash:
+        raise SystemExit("candidate runtime_index_sha256 does not match regenerated runtime.index.json")
+    write_json(bundle_dir / "runtime.index.json", runtime_index)
+
+
+def load_runtime_sidecar(bundle_dir: Path, relative_path: str) -> dict | None:
+    if relative_path_defect(relative_path, relative_path):
+        return None
+    path = bundle_dir / relative_path
+    if not path.is_file():
+        return None
+    return load_json_object(path)
+
+
+def hydrate_brief_runtime_sidecars(brief: dict, manifest: dict, bundle_dir: Path | None) -> None:
+    if bundle_dir is None:
+        return
+    if manifest.get("goal_config_path") == "goal.config.json":
+        goal_config = load_runtime_sidecar(bundle_dir, "goal.config.json")
+        if goal_config is not None:
+            brief["goal_config"] = goal_config
+    if manifest.get("goal_config_check_path") == "goal-config.check.json":
+        goal_config_check = load_runtime_sidecar(bundle_dir, "goal-config.check.json")
+        if goal_config_check is not None:
+            brief["goal_config_check"] = goal_config_check
+
+
+def preserve_runtime_manifest_provenance(source: dict, normalized: dict) -> None:
+    for key in RUNTIME_MANIFEST_PROVENANCE_KEYS:
+        if key in source and key not in normalized:
+            normalized[key] = copy.deepcopy(source[key])
+
+
+def prompt_regeneration_branch_ids(candidate: dict, protected_branch_ids: set[str]) -> list[str]:
+    ids: list[str] = []
+    protected = set(protected_branch_ids)
+    for branch in candidate.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        branch_id = branch.get("id")
+        if isinstance(branch_id, str) and branch_id not in protected:
+            ids.append(branch_id)
+    return ids
+
+
+def normalize_candidate_manifest(manifest: dict, bundle_dir: Path | None = None) -> tuple[dict, dict]:
     brief = PREFLIGHT.normalize_brief(manifest_to_brief(manifest))
+    hydrate_brief_runtime_sidecars(brief, manifest, bundle_dir)
     for key in ["source_attachments", "source_attachment_promotions", "runtime_cap", "runtime_rules_path", "runtime_rules_sha256"]:
         if key in manifest:
             brief[key] = copy.deepcopy(manifest[key])
-    normalized = PREFLIGHT.manifest_from_normalized_brief(brief)
+    normalized = PREFLIGHT.manifest_from_normalized_brief(brief, bundle_dir)
+    preserve_runtime_manifest_provenance(manifest, normalized)
+    for branch in normalized.get("branches", []) if isinstance(normalized.get("branches"), list) else []:
+        if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
+            continue
+        source = branch_map(manifest).get(branch["id"])
+        if not isinstance(source, dict):
+            continue
+        for key in ["recovers_from", "supersedes", "recovery_mode"]:
+            if key in source:
+                branch[key] = copy.deepcopy(source[key])
     for key in ["amendment_history", "obsolete_branches"]:
         if key in manifest:
             normalized[key] = copy.deepcopy(manifest[key])
+    finalize_candidate_runtime_metadata(normalized)
+    brief = enrich_brief_runtime_metadata(brief, normalized)
     return normalized, brief
 
 
@@ -521,17 +738,18 @@ def validate_candidate_with_lint(
     candidate: dict,
     normalized_brief: dict,
     *,
-    changed_branch_ids: list[str],
+    prompt_branch_ids: list[str],
 ) -> list[str]:
     bundle_dir = manifest_path.parent
     with tempfile.TemporaryDirectory(prefix="goal-amender-lint-") as tmp:
         tmp_bundle = Path(tmp) / "bundle"
         shutil.copytree(bundle_dir, tmp_bundle)
         write_json(tmp_bundle / "job.manifest.json", candidate)
+        write_runtime_index(tmp_bundle, candidate)
         PREFLIGHT.write_bundle_prompts(
-            normalized_brief,
+            enrich_brief_runtime_metadata(normalized_brief, candidate, bundle_dir=tmp_bundle),
             tmp_bundle,
-            branch_ids=set(changed_branch_ids),
+            branch_ids=set(prompt_branch_ids),
             write_main=False,
         )
         lint = PREFLIGHT.lint_bundle(tmp_bundle, write_output=False)
@@ -606,7 +824,7 @@ def validate_proposal(
 
     if candidate is not None and not defects:
         try:
-            candidate, normalized_brief = normalize_candidate_manifest(candidate)
+            candidate, normalized_brief = normalize_candidate_manifest(candidate, manifest_path.parent)
         except SystemExit as exc:
             defects.append(str(exc))
         except Exception as exc:  # noqa: BLE001
@@ -616,12 +834,13 @@ def validate_proposal(
         defects.extend(protected_entries_unchanged(manifest, candidate, protected))
 
     if candidate is not None and normalized_brief is not None and not defects and run_lint:
+        prompt_branch_ids = prompt_regeneration_branch_ids(candidate, protected)
         defects.extend(
             validate_candidate_with_lint(
                 manifest_path,
                 candidate,
                 normalized_brief,
-                changed_branch_ids=changed_branch_ids,
+                prompt_branch_ids=prompt_branch_ids,
             )
         )
 

@@ -48,6 +48,7 @@ REASON_CODES = {
     "stale_active",
     "timeout",
 }
+SCHEDULER_EVENT_SCHEMA_VERSION = 2
 
 
 def read_json(path: Path) -> dict:
@@ -79,6 +80,15 @@ def sha256_file(path: Path) -> str:
 
 def deterministic_timestamp(seq: int) -> str:
     return (datetime(2000, 1, 1, tzinfo=UTC) + timedelta(seconds=seq)).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def manifest_epoch(manifest: dict) -> str:
+    value = manifest.get("manifest_epoch")
+    if value is None:
+        value = manifest.get("epoch", "current")
+    if not isinstance(value, str) or not value.strip():
+        return "current"
+    return value
 
 
 def require_string_list(value: object, field: str) -> list[str]:
@@ -351,7 +361,16 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
     }
 
 
-def append_event(ledger: dict, *, event: str, runtime_ref: str, timestamp_value: str | None, **fields: object) -> dict:
+def append_event(
+    ledger: dict,
+    *,
+    event: str,
+    runtime_ref: str,
+    timestamp_value: str | None,
+    manifest_sha256: str,
+    manifest_epoch_value: str,
+    **fields: object,
+) -> dict:
     seq = len(ledger["events"]) + 1
     data = {
         "seq": seq,
@@ -359,6 +378,9 @@ def append_event(ledger: dict, *, event: str, runtime_ref: str, timestamp_value:
         "wall_clock_timestamp": datetime.now(UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "runtime_ref": runtime_ref,
         "event": event,
+        "schema_version": SCHEDULER_EVENT_SCHEMA_VERSION,
+        "manifest_sha256": manifest_sha256,
+        "manifest_epoch": manifest_epoch_value,
     }
     data.update(fields)
     ledger["events"].append(data)
@@ -383,7 +405,14 @@ def validate_ids(ids: list[str], known: set[str], field: str) -> list[str]:
     return result
 
 
-def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_value: str) -> tuple[list[dict], dict]:
+def apply_actions(
+    args: argparse.Namespace,
+    ledger: dict,
+    spec: dict,
+    timestamp_value: str,
+    manifest_sha: str,
+    manifest_epoch_value: str,
+) -> tuple[list[dict], dict]:
     item_ids = list(spec["item_ids"])
     dependencies = dict(spec["dependencies"])
     capacity = int(spec["capacity"])
@@ -396,7 +425,17 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
         already_ready = set(state["ready"])
         for item_id in state["eligible"]:
             if item_id not in already_ready:
-                appended.append(append_event(ledger, event="ready", runtime_ref=args.runtime_ref, timestamp_value=timestamp_value, id=item_id))
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="ready",
+                        runtime_ref=args.runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        id=item_id,
+                    )
+                )
 
     for item_id in validate_ids(args.launch, known, "--launch"):
         state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
@@ -404,7 +443,17 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
             raise SystemExit(f"--launch {item_id} is not currently eligible")
         if state["remaining_capacity"] <= 0:
             raise SystemExit(f"--launch {item_id} would exceed scheduler capacity")
-        appended.append(append_event(ledger, event="launch", runtime_ref=args.runtime_ref, timestamp_value=timestamp_value, id=item_id))
+        appended.append(
+            append_event(
+                ledger,
+                event="launch",
+                runtime_ref=args.runtime_ref,
+                timestamp_value=timestamp_value,
+                manifest_sha256=manifest_sha,
+                manifest_epoch_value=manifest_epoch_value,
+                id=item_id,
+            )
+        )
 
     if args.finish:
         if not args.status:
@@ -413,7 +462,18 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
             state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
             if item_id not in state["active"]:
                 raise SystemExit(f"--finish {item_id} is not active")
-            appended.append(append_event(ledger, event="finish", runtime_ref=args.runtime_ref, timestamp_value=timestamp_value, id=item_id, status=args.status))
+            appended.append(
+                append_event(
+                    ledger,
+                    event="finish",
+                    runtime_ref=args.runtime_ref,
+                    timestamp_value=timestamp_value,
+                    manifest_sha256=manifest_sha,
+                    manifest_epoch_value=manifest_epoch_value,
+                    id=item_id,
+                    status=args.status,
+                )
+            )
     elif args.status:
         raise SystemExit("--status is allowed only with --finish")
 
@@ -423,7 +483,17 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
             raise SystemExit(f"--close {item_id} is not active")
         if item_id not in state["finished"]:
             raise SystemExit(f"--close {item_id} has not finished")
-        appended.append(append_event(ledger, event="close", runtime_ref=args.runtime_ref, timestamp_value=timestamp_value, id=item_id))
+        appended.append(
+            append_event(
+                ledger,
+                event="close",
+                runtime_ref=args.runtime_ref,
+                timestamp_value=timestamp_value,
+                manifest_sha256=manifest_sha,
+                manifest_epoch_value=manifest_epoch_value,
+                id=item_id,
+            )
+        )
         after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
         if after_close["remaining_capacity"] > 0 and after_close["unexcused"]:
             appended.append(
@@ -432,6 +502,8 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
                     event="refill",
                     runtime_ref=args.runtime_ref,
                     timestamp_value=timestamp_value,
+                    manifest_sha256=manifest_sha,
+                    manifest_epoch_value=manifest_epoch_value,
                     eligible_ids=after_close["unexcused"],
                 )
             )
@@ -447,6 +519,8 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
                 event="defer",
                 runtime_ref=args.runtime_ref,
                 timestamp_value=timestamp_value,
+                manifest_sha256=manifest_sha,
+                manifest_epoch_value=manifest_epoch_value,
                 id=item_id,
                 reason_code=reason_code,
                 reason=reason,
@@ -461,6 +535,8 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
                 event="blocked",
                 runtime_ref=args.runtime_ref,
                 timestamp_value=timestamp_value,
+                manifest_sha256=manifest_sha,
+                manifest_epoch_value=manifest_epoch_value,
                 id=item_id,
                 reason_code=reason_code,
                 reason=reason,
@@ -478,6 +554,8 @@ def apply_actions(args: argparse.Namespace, ledger: dict, spec: dict, timestamp_
                 event="under_capacity",
                 runtime_ref=args.runtime_ref,
                 timestamp_value=timestamp_value,
+                manifest_sha256=manifest_sha,
+                manifest_epoch_value=manifest_epoch_value,
                 eligible_ids=state["unexcused"],
                 reason_code=reason_code,
                 reason=reason,
@@ -542,6 +620,8 @@ def close_from_artifacts(
     *,
     runtime_ref: str,
     timestamp_value: str | None,
+    manifest_sha: str,
+    manifest_epoch_value: str,
     terminal_statuses: dict[str, str],
 ) -> tuple[list[dict], dict]:
     item_ids = list(spec["item_ids"])
@@ -557,14 +637,34 @@ def close_from_artifacts(
         already_ready = set(state["ready"])
         for item_id in state["eligible"]:
             if item_id not in already_ready:
-                appended.append(append_event(ledger, event="ready", runtime_ref=runtime_ref, timestamp_value=timestamp_value, id=item_id))
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="ready",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        id=item_id,
+                    )
+                )
                 progressed = True
 
         state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
         finished = set(state["finished"])
         for item_id in state["active"]:
             if item_id in finished:
-                appended.append(append_event(ledger, event="close", runtime_ref=runtime_ref, timestamp_value=timestamp_value, id=item_id))
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="close",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        id=item_id,
+                    )
+                )
                 progressed = True
                 after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
                 if after_close["remaining_capacity"] > 0 and after_close["unexcused"]:
@@ -574,6 +674,8 @@ def close_from_artifacts(
                             event="refill",
                             runtime_ref=runtime_ref,
                             timestamp_value=timestamp_value,
+                            manifest_sha256=manifest_sha,
+                            manifest_epoch_value=manifest_epoch_value,
                             eligible_ids=after_close["unexcused"],
                         )
                     )
@@ -592,6 +694,8 @@ def close_from_artifacts(
                         event="finish",
                         runtime_ref=runtime_ref,
                         timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
                         id=item_id,
                         status=status,
                     )
@@ -605,7 +709,17 @@ def close_from_artifacts(
         launchable = [item_id for item_id in state["launchable"] if item_id in terminal_statuses]
         while launchable and state["remaining_capacity"] > 0:
             item_id = launchable.pop(0)
-            appended.append(append_event(ledger, event="launch", runtime_ref=runtime_ref, timestamp_value=timestamp_value, id=item_id))
+            appended.append(
+                append_event(
+                    ledger,
+                    event="launch",
+                    runtime_ref=runtime_ref,
+                    timestamp_value=timestamp_value,
+                    manifest_sha256=manifest_sha,
+                    manifest_epoch_value=manifest_epoch_value,
+                    id=item_id,
+                )
+            )
             progressed = True
             state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
             launchable = [candidate for candidate in state["launchable"] if candidate in terminal_statuses]
@@ -665,16 +779,27 @@ def main() -> int:
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     manifest = read_json(manifest_path)
+    manifest_sha = sha256_file(manifest_path)
+    manifest_epoch_value = manifest_epoch(manifest)
     spec = scheduler_spec(manifest_path, manifest, args.scope, args.branch_id)
     ledger_path = (manifest_path.parent / spec["path"]).resolve()
     ledger = load_or_create_ledger(ledger_path, spec, manifest_path, create=args.init)
-    appended, state = apply_actions(args, ledger, spec, args.timestamp)
+    appended, state = apply_actions(
+        args,
+        ledger,
+        spec,
+        args.timestamp,
+        manifest_sha=manifest_sha,
+        manifest_epoch_value=manifest_epoch_value,
+    )
     if args.close_from_artifacts:
         artifact_appended, state = close_from_artifacts(
             ledger,
             spec,
             runtime_ref=args.runtime_ref,
             timestamp_value=args.timestamp,
+            manifest_sha=manifest_sha,
+            manifest_epoch_value=manifest_epoch_value,
             terminal_statuses=artifact_statuses(manifest_path, manifest, args.scope, args.branch_id),
         )
         appended.extend(artifact_appended)

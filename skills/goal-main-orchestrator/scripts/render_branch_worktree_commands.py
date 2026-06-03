@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -52,6 +53,11 @@ TERMINAL_STATUSES = {"pass", "partial", "blocked", "failed"}
 MODEL_AUDIT_LADDER = ["gpt-5.5", "gpt-5.4"]
 DETERMINISTIC_AUDIT_LADDER = ["deterministic-prompt-audit"]
 AUDIT_LADDERS = [MODEL_AUDIT_LADDER, DETERMINISTIC_AUDIT_LADDER]
+NATIVE_DELEGATION_ENVS = (
+    "GOAL_NATIVE_BRANCH_DELEGATION",
+    "CODEX_NATIVE_BRANCH_DELEGATION",
+    "CODEX_NATIVE_AGENT_DELEGATION",
+)
 
 
 def git_ok(repo_root: Path, *args: str) -> bool:
@@ -66,6 +72,29 @@ def git_ok(repo_root: Path, *args: str) -> bool:
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
+
+
+def write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as handle:
+        json.dump(data, handle, indent=2, sort_keys=True)
+        handle.write("\n")
+
+
+def env_flag_enabled(name: str) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return False
+    return value.strip().lower() in {"1", "true", "yes", "on", "available"}
+
+
+def native_delegation_available(explicit: bool) -> tuple[bool, str | None]:
+    if explicit:
+        return True, "explicit_flag"
+    for name in NATIVE_DELEGATION_ENVS:
+        if env_flag_enabled(name):
+            return True, f"env:{name}"
+    return False, None
 
 
 def validate_audit_telemetry(audit_path: Path) -> None:
@@ -379,6 +408,105 @@ def require_unique_manifest_values(branches: list[dict]) -> None:
             seen_paths[value] = label
 
 
+def select_delegation_mode(
+    requested_mode: str,
+    native_available: bool,
+    fallback_reason: str,
+) -> tuple[str, str | None]:
+    if requested_mode == "native":
+        return "native_agent", None
+    if requested_mode == "cli":
+        return "cli_worktree", "explicit_cli_delegation_mode"
+    if native_available:
+        return "native_agent", None
+    return "cli_worktree", fallback_reason
+
+
+def worktree_command(branch: dict, repo_root: Path, base_ref: str) -> str:
+    name = str(branch["branch_name"])
+    worktree_rel = require_relative_path(str(branch["worktree_path"]), "worktree_path")
+    worktree_path = resolve(repo_root, worktree_rel)
+    return f"git worktree add -b {shell_quote(name)} {shell_quote(worktree_path.as_posix())} {shell_quote(base_ref)}"
+
+
+def branch_delegation_entry(
+    branch: dict,
+    manifest_path: Path,
+    repo_root: Path,
+    base_ref: str,
+    selected_mode: str,
+    fallback_reason: str | None,
+    native_available: bool,
+    native_availability_source: str | None,
+) -> dict:
+    branch_id = str(branch["id"])
+    prompt_rel = require_relative_path(str(branch["prompt"]), f"branch {branch_id}.prompt")
+    worktree_rel = require_relative_path(str(branch["worktree_path"]), f"branch {branch_id}.worktree_path")
+    command = worktree_command(branch, repo_root, base_ref)
+    return {
+        "branch_id": branch_id,
+        "preferred_delegation": "native_agent",
+        "selected_delegation": selected_mode,
+        "native_agent_available": native_available,
+        "native_agent_availability_source": native_availability_source,
+        "cli_fallback_reason": fallback_reason,
+        "native_agent": {
+            "skill": "goal-branch-orchestrator",
+            "branch_prompt": prompt_rel,
+            "manifest": manifest_path.as_posix(),
+            "repo_root": repo_root.as_posix(),
+            "worktree_path": resolve(repo_root, worktree_rel).as_posix(),
+            "branch_name": str(branch["branch_name"]),
+            "status_path": str(branch["status_path"]),
+            "review_path": str(branch["review_path"]),
+            "pre_review_gate_path": str(branch["pre_review_gate_path"]),
+            "instructions": "Spawn a native branch-orchestrator agent for this branch and wait on native agent completion before collecting artifacts.",
+        },
+        "cli_worktree_fallback": {
+            "allowed": selected_mode == "cli_worktree",
+            "reason": fallback_reason,
+            "command": command,
+            "base_ref": base_ref,
+        },
+    }
+
+
+def render_delegation_plan(
+    branches: list[dict],
+    manifest_path: Path,
+    repo_root: Path,
+    base_ref: str,
+    selected_mode: str,
+    fallback_reason: str | None,
+    native_available: bool,
+    native_availability_source: str | None,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "kind": "branch-delegation-plan",
+        "manifest": manifest_path.as_posix(),
+        "repo_root": repo_root.as_posix(),
+        "preferred_delegation": "native_agent",
+        "selected_delegation": selected_mode,
+        "native_agent_available": native_available,
+        "native_agent_availability_source": native_availability_source,
+        "cli_fallback_reason": fallback_reason,
+        "branches": [
+            branch_delegation_entry(
+                branch,
+                manifest_path,
+                repo_root,
+                base_ref,
+                selected_mode,
+                fallback_reason,
+                native_available,
+                native_availability_source,
+            )
+            for branch in branches
+        ],
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
@@ -391,6 +519,24 @@ def main() -> int:
     parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted branch ids, one per line.")
     parser.add_argument("--limit", type=int, help="Maximum branch ids to print with --list-ready; values above remaining capacity are clamped.")
     parser.add_argument("--list-waves", action="store_true")
+    parser.add_argument(
+        "--delegation-mode",
+        choices=["auto", "native", "cli"],
+        default="auto",
+        help="For selected branch rendering, prefer native branch-agent delegation when available and record CLI fallback provenance.",
+    )
+    parser.add_argument(
+        "--native-agent-available",
+        action="store_true",
+        help="Treat native branch-agent delegation as available for this render.",
+    )
+    parser.add_argument(
+        "--native-agent-unavailable-reason",
+        default="native_agent_delegation_unavailable",
+        help="Fallback reason recorded when --delegation-mode auto selects CLI worktrees.",
+    )
+    parser.add_argument("--delegation-report", help="Write a JSON branch delegation plan with native/CLI selection provenance.")
+    parser.add_argument("--json", action="store_true", help="Print the branch delegation plan as JSON instead of shell/comments.")
     args = parser.parse_args()
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
@@ -629,6 +775,7 @@ def main() -> int:
         raise SystemExit(f"base_ref is not safe: {base_ref!r}")
     if not git_ok(repo_root, "rev-parse", "--verify", "--quiet", f"{base_ref}^{{commit}}"):
         raise SystemExit(f"base_ref does not resolve to a commit: {base_ref}")
+    selected_branches = []
     seen_names = set()
     seen_worktrees = set()
     for branch in manifest_branches:
@@ -649,8 +796,41 @@ def main() -> int:
         seen_worktrees.add(worktree_path)
         if worktree_path.exists():
             raise SystemExit(f"target worktree path already exists: {worktree_path}")
-        worktree = worktree_path.as_posix()
-        print(f"git worktree add -b {shell_quote(name)} {shell_quote(worktree)} {shell_quote(base_ref)}")
+        selected_branches.append(branch)
+    native_available, native_source = native_delegation_available(args.native_agent_available)
+    selected_mode, fallback_reason = select_delegation_mode(
+        args.delegation_mode,
+        native_available,
+        str(args.native_agent_unavailable_reason or "native_agent_delegation_unavailable"),
+    )
+    plan = render_delegation_plan(
+        selected_branches,
+        manifest_path,
+        repo_root,
+        base_ref,
+        selected_mode,
+        fallback_reason,
+        native_available,
+        native_source,
+    )
+    if args.delegation_report:
+        report_path = resolve_absolute_path(args.delegation_report, "--delegation-report", must_exist=False)
+        write_json(report_path, plan)
+    if args.json:
+        print(json.dumps(plan, indent=2, sort_keys=True))
+    elif selected_mode == "native_agent":
+        for entry in plan["branches"]:
+            native = entry["native_agent"]
+            print(f"# native-agent branch delegation: {entry['branch_id']}")
+            print(f"# skill: {native['skill']}")
+            print(f"# manifest: {native['manifest']}")
+            print(f"# branch_prompt: {native['branch_prompt']}")
+            print(f"# worktree_path: {native['worktree_path']}")
+            print("# cli fallback command, only if native delegation is unavailable:")
+            print(f"# {entry['cli_worktree_fallback']['command']}")
+    else:
+        for entry in plan["branches"]:
+            print(entry["cli_worktree_fallback"]["command"])
 
     return 0
 

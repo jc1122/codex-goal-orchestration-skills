@@ -543,11 +543,20 @@ def write_audit(bundle: Path) -> None:
     )
 
 
-def worker_status() -> dict:
+def worker_status(bundle: Path) -> dict:
+    manifest_hash = sha256_file(bundle / "job.manifest.json")
+    route_id = f"{WORKER_PACKET}:normal-code:codex-mini"
     return {
         "packet_id": WORKER_PACKET,
         "role": "worker",
         "status": "pass",
+        "branch_id": BRANCH_ID,
+        "work_item_id": "W01",
+        "manifest_hash": manifest_hash,
+        "manifest_epoch": "current",
+        "worktree_path": REPO_ROOT.as_posix(),
+        "route_id": route_id,
+        "evidence_summary": "Synthetic normal-worker pass evidence for golden offline smoke.",
         "branch": BRANCH_NAME,
         "worktree": REPO_ROOT.as_posix(),
         "route_class": "normal-code",
@@ -585,17 +594,28 @@ def research_status() -> dict:
 
 
 def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
-    worker = worker_status()
+    worker = worker_status(bundle)
     worker_dir = bundle / "workers" / WORKER_PACKET
     write_json(worker_dir / "status.json", worker)
     write_json(
         worker_dir / "route.json",
         {
+            "schema_version": 1,
             "packet_id": WORKER_PACKET,
             "role": "worker",
+            "branch_id": BRANCH_ID,
+            "branch": BRANCH_NAME,
             "route_class": worker["route_class"],
             "selected_ladder": worker["selected_ladder"],
             "selection_reason": worker["selection_reason"],
+            "policy_router": "golden-smoke",
+            "policy_version": "goal-route-policy-v2",
+            "route_policy_version": "goal-route-policy-v2",
+            "default_ladder": ["codex-mini"],
+            "allowed_aliases": ["codex-mini"],
+            "route_catalog_sha256": None,
+            "route_catalog_source": None,
+            "model_catalog": {},
         },
     )
     write_json(
@@ -617,6 +637,55 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
                 )
             ],
         ),
+    )
+    write_json(
+        worker_dir / "launcher-state.json",
+        {
+            "schema_version": 1,
+            "packet_id": WORKER_PACKET,
+            "role": "worker",
+            "state_machine": "active -> timeout|fail-clean|fail-dirty|pass|blocked",
+            "terminal_state": "pass",
+            "events": [
+                {
+                    "seq": 1,
+                    "state": "pass",
+                    "attempt_index": 0,
+                    "alias": "codex-mini",
+                    "provider": "codex",
+                    "model": "gpt-5.4-mini",
+                    "returncode": 0,
+                    "dirty": False,
+                    "output_nonempty": True,
+                    "rendered_command": "codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write",
+                    "executed_command": "codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write",
+                }
+            ],
+        },
+    )
+    write_json(
+        worker_dir / "packet.summary.json",
+        {
+            "schema_version": 1,
+            "packet_id": WORKER_PACKET,
+            "role": "worker",
+            "route_class": worker["route_class"],
+            "selected_ladder": worker["selected_ladder"],
+            "selection_reason": worker["selection_reason"],
+            "worktree": REPO_ROOT.as_posix(),
+            "output_path": "status.json",
+            "output_exists": True,
+            "output_status": "pass",
+            "changed_files": [],
+            "blockers": [],
+            "telemetry_path": "telemetry.json",
+            "telemetry_exists": True,
+            "launcher_state_path": "launcher-state.json",
+            "launcher_state_exists": True,
+            "terminal_state": "pass",
+            "attempts": [{"attempt_index": 0, "alias": "codex-mini", "state": "pass", "failure_class": "none"}],
+            "next_action": "validate_and_collect",
+        },
     )
 
     research = research_status()
@@ -650,6 +719,52 @@ def write_worker_artifacts(bundle: Path) -> tuple[dict, dict]:
                 ),
             ],
         ),
+    )
+    write_json(
+        research_dir / "launcher-state.json",
+        {
+            "schema_version": 1,
+            "packet_id": RESEARCH_PACKET,
+            "role": "research-worker",
+            "state_machine": "active -> timeout|fail-clean|fail-dirty|pass|blocked",
+            "terminal_state": "pass",
+            "events": [
+                {
+                    "seq": 1,
+                    "state": "pass",
+                    "attempt_index": 0,
+                    "alias": "codex-research",
+                    "provider": "codex",
+                    "model": "gpt-5.4",
+                    "returncode": 0,
+                    "dirty": False,
+                    "output_nonempty": True,
+                }
+            ],
+        },
+    )
+    write_json(
+        research_dir / "packet.summary.json",
+        {
+            "schema_version": 1,
+            "packet_id": RESEARCH_PACKET,
+            "role": "research-worker",
+            "selected_ladder": ["codex-research", "codex-research-mini"],
+            "selection_reason": "Golden smoke research-worker route.",
+            "worktree": REPO_ROOT.as_posix(),
+            "output_path": "research.json",
+            "output_exists": True,
+            "output_status": "pass",
+            "changed_files": [],
+            "blockers": [],
+            "telemetry_path": "telemetry.json",
+            "telemetry_exists": True,
+            "launcher_state_path": "launcher-state.json",
+            "launcher_state_exists": True,
+            "terminal_state": "pass",
+            "attempts": [{"attempt_index": 0, "alias": "codex-research", "state": "pass", "failure_class": "none"}],
+            "next_action": "validate_and_collect",
+        },
     )
     return worker, research
 
@@ -782,6 +897,7 @@ def write_pre_review_branch_status(bundle: Path, worker: dict, research: dict, l
             },
             "lite_advice": [lite_record],
             "review_status": "missing",
+            "review_waiver_path": "branches/B01.review-waiver.json",
             "changed_files": [],
             "commands_run": ["git diff --check main...HEAD"],
             "tests": ["bash -n generated launchers", "installed validators passed"],
@@ -792,6 +908,23 @@ def write_pre_review_branch_status(bundle: Path, worker: dict, research: dict, l
             ],
             "blockers": ["Reviewer has not run yet; pre-review status is intentionally partial."],
             "handoff": "Golden offline smoke pre-review branch status.",
+        },
+    )
+    write_json(
+        bundle / "branches" / "B01.review-waiver.json",
+        {
+            "schema_version": 1,
+            "kind": "review-waiver",
+            "branch_id": BRANCH_ID,
+            "branch_status": "partial",
+            "review_status": "missing",
+            "review_path": "branches/B01.review.json",
+            "reviewer_launch_skipped": True,
+            "reason_code": "branch_non_pass_terminal_blocker",
+            "reason": "Golden smoke pre-review status is partial until synthetic reviewer artifact is written.",
+            "validated_by": "check_golden_smoke.py",
+            "blockers": ["Reviewer has not run yet; pre-review status is intentionally partial."],
+            "branch_status_path": "branches/B01.status.json",
         },
     )
 
@@ -964,11 +1097,29 @@ def make_partial_branch_bundle(source_bundle: Path, target_bundle: Path, worker:
                 "max_observed_active": 1,
             },
             "review_status": "missing",
+            "review_waiver_path": "branches/B01.review-waiver.json",
             "blockers": ["Partial fixture intentionally leaves B01-W02 unlaunched with scheduler evidence."],
             "handoff": "Partial branch fixture.",
         }
     )
     write_json(target_bundle / "branches" / "B01.status.json", branch_status)
+    write_json(
+        target_bundle / "branches" / "B01.review-waiver.json",
+        {
+            "schema_version": 1,
+            "kind": "review-waiver",
+            "branch_id": BRANCH_ID,
+            "branch_status": "partial",
+            "review_status": "missing",
+            "review_path": "branches/B01.review.json",
+            "reviewer_launch_skipped": True,
+            "reason_code": "branch_non_pass_terminal_blocker",
+            "reason": "Partial fixture intentionally leaves research packet unlaunched.",
+            "validated_by": "check_golden_smoke.py",
+            "blockers": branch_status["blockers"],
+            "branch_status_path": "branches/B01.status.json",
+        },
+    )
     (target_bundle / "branches" / "B01.review.json").unlink()
 
 
@@ -982,6 +1133,9 @@ def make_refill_assembly_bundle(source_bundle: Path, target_bundle: Path) -> Non
     branch["worker_parallelism"]["serial_reasons"] = ["Golden smoke serializes workers to exercise refill status assembly."]
     write_json(target_bundle / "job.manifest.json", manifest)
     manifest_sha = sha256_file(target_bundle / "job.manifest.json")
+    worker_artifact = read_json(target_bundle / "workers" / WORKER_PACKET / "status.json")
+    worker_artifact["manifest_hash"] = manifest_sha
+    write_json(target_bundle / "workers" / WORKER_PACKET / "status.json", worker_artifact)
     write_json(
         target_bundle / "schedulers" / "B01.worker.scheduler.json",
         {
@@ -1181,11 +1335,39 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
     )
     for rel_path in [
         "amendments/A001.accepted.json",
+        "amendments/A001.lineage.json",
         "amendments/A001.job.manifest.before.json",
         "branches/B02.prompt.md",
     ]:
         if not (target_bundle / rel_path).exists():
             raise SystemExit(f"amendment smoke missing {rel_path}")
+    accepted = read_json(target_bundle / "amendments" / "A001.accepted.json")
+    lineage_path = target_bundle / "amendments" / "A001.lineage.json"
+    if accepted.get("lineage_path") != lineage_path.as_posix():
+        raise SystemExit(f"golden amendment accepted artifact did not record lineage path: {accepted!r}")
+    lineage = read_json(lineage_path)
+    stages = [item.get("stage") for item in lineage.get("stages", []) if isinstance(item, dict)]
+    expected_tail = ["final_proposal", "validation", "manifest_before", "manifest_after", "acceptance"]
+    if stages[-5:] != expected_tail:
+        raise SystemExit(f"golden amendment lineage tail mismatch: {stages!r}")
+    for index in range(1, len(stages)):
+        current = lineage["stages"][index]
+        previous = lineage["stages"][index - 1]
+        if not isinstance(current, dict) or not isinstance(previous, dict):
+            raise SystemExit(f"golden amendment lineage stage entry invalid: {lineage.get('stages')!r}")
+        current_parent = current.get("parent_sha256")
+        previous_sha = previous.get("sha256")
+        if current_parent is not None and current_parent != previous_sha:
+            raise SystemExit(
+                f"golden amendment lineage parent hash broken at {current.get('stage')!r}: "
+                f"{current_parent!r} != {previous_sha!r}"
+            )
+    preflight_report = (target_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
+    assert_all_contains(
+        preflight_report,
+        ["Status: initial_epoch_only", "Accepted amendment: A001", "runtime.index.json"],
+        "amended preflight report epoch notice",
+    )
     run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
     ready = run(
         [
@@ -1392,6 +1574,8 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
         raise SystemExit("deterministic repair branch did not promote reviewer findings into worker DOD")
     if branch.get("recovers_from") != [BRANCH_ID]:
         raise SystemExit("deterministic repair branch must cite recovers_from terminal branch")
+    if branch.get("supersedes") != [BRANCH_ID] or branch.get("recovery_mode") != "replacement_branch":
+        raise SystemExit("deterministic repair branch must record replacement recovery semantics")
     route = read_json(packet_dir / "route.json")
     if route.get("mode") != "deterministic_blocker_repair":
         raise SystemExit("deterministic repair packet route did not record deterministic mode")
@@ -1440,6 +1624,28 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
         raise SystemExit(f"deterministic repair should add B02, got {accepted.get('changed_branch_ids')!r}")
     if not (target_bundle / "branches" / "B02.prompt.md").exists():
         raise SystemExit("deterministic blocker repair did not regenerate B02 prompt")
+    lineage_path = target_bundle / "amendments" / "A002.lineage.json"
+    if not lineage_path.exists():
+        raise SystemExit("deterministic blocker repair missing lineage artifact")
+    lineage = read_json(lineage_path)
+    stages = [item.get("stage") for item in lineage.get("stages", []) if isinstance(item, dict)]
+    required = ["generated_proposal", "deterministic_repair", "final_proposal", "validation", "manifest_before", "manifest_after", "acceptance"]
+    if stages[-7:] != required:
+        raise SystemExit(f"deterministic blocker repair lineage tail mismatch: {stages!r}")
+    if accepted.get("lineage_path") != lineage_path.as_posix():
+        raise SystemExit(f"deterministic repair acceptance did not preserve lineage path: {accepted!r}")
+    for index in range(1, len(stages)):
+        current = lineage["stages"][index]
+        previous = lineage["stages"][index - 1]
+        if not isinstance(current, dict) or not isinstance(previous, dict):
+            raise SystemExit(f"deterministic repair lineage stage entry invalid: {lineage.get('stages')!r}")
+        current_parent = current.get("parent_sha256")
+        previous_sha = previous.get("sha256")
+        if current_parent is not None and current_parent != previous_sha:
+            raise SystemExit(
+                f"deterministic repair lineage parent hash broken at {current.get('stage')!r}: "
+                f"{current_parent!r} != {previous_sha!r}"
+            )
     run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
 
 

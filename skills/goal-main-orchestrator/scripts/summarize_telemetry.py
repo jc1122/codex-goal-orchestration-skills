@@ -323,6 +323,24 @@ TERMINAL_ARTIFACT_PATTERNS = (
 )
 
 
+STATE_CHANGE_KIND_ACTIONS = {
+    "main_status": "main_status_write",
+    "prompt_audit": "prompt_audit_write",
+    "prompt_audit_phase": "prompt_audit_phase_write",
+    "branch_status": "branch_status_write",
+    "review": "review_write",
+    "pre_review_gate": "pre_review_gate_write",
+    "worker_status": "worker_status_write",
+    "packet_summary": "packet_summary_write",
+    "research": "research_write",
+    "lite_advice": "lite_advice_write",
+    "amendment_decision": "amendment_decision_write",
+    "amendment_proposal": "amendment_proposal_write",
+    "amendment_validation": "amendment_validation_write",
+    "amendment_acceptance": "amendment_acceptance_write",
+}
+
+
 def terminal_artifact_kind(path: Path) -> str:
     parts = path.parts
     if path.name == "prompt-audit.json":
@@ -356,6 +374,92 @@ def terminal_artifact_kind(path: Path) -> str:
     return "artifact"
 
 
+def manifest_epoch_from_bundle(bundle_dir: Path) -> str | None:
+    manifest_path = bundle_dir / "job.manifest.json"
+    data = read_json_object(manifest_path)
+    if not isinstance(data, dict):
+        return None
+    value = data.get("manifest_epoch") or data.get("epoch") or "current"
+    return str(value)
+
+
+def state_change_actor(kind: str) -> str:
+    if kind.startswith("amendment_"):
+        return "goal-plan-amender"
+    if kind in {"main_status", "prompt_audit", "prompt_audit_phase"}:
+        return "goal-main-orchestrator"
+    if kind in {"branch_status", "review", "pre_review_gate", "worker_status", "research"}:
+        return "goal-branch-orchestrator"
+    if kind in {"packet_summary", "lite_advice"}:
+        return "runtime-packet-runner"
+    return "goal-orchestration-skill"
+
+
+def state_change_state(data: dict[str, Any] | None, kind: str) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    for key in ("status", "verdict", "decision", "terminal_state", "can_start"):
+        value = data.get(key)
+        if isinstance(value, (str, bool)):
+            return str(value)
+    if kind == "pre_review_gate":
+        value = data.get("overall_status")
+        if isinstance(value, str):
+            return value
+    return None
+
+
+def state_change_previous_state(data: dict[str, Any] | None) -> str | None:
+    if not isinstance(data, dict):
+        return None
+    stale = data.get("stale_reason")
+    if isinstance(stale, str) and stale.strip():
+        return f"stale:{stale}"
+    previous = data.get("previous_state")
+    if isinstance(previous, str) and previous.strip():
+        return previous
+    return None
+
+
+def terminal_artifact_trace_record(bundle_dir: Path, path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    data = read_json_object(path)
+    artifact = compact_artifact_ref(bundle_dir, path)
+    kind = terminal_artifact_kind(path)
+    trace = {
+        "event_type": "terminal_artifact",
+        "source": rel_path(bundle_dir, path),
+        "artifact_kind": kind,
+        "artifact": artifact,
+        "status": data.get("status") if isinstance(data, dict) else None,
+        "review_status": data.get("review_status") if isinstance(data, dict) else None,
+        "can_start": data.get("can_start") if isinstance(data, dict) else None,
+        "packet_id": data.get("packet_id") if isinstance(data, dict) else None,
+        "branch_id": data.get("branch_id") if isinstance(data, dict) else None,
+        "job_id": data.get("job_id") if isinstance(data, dict) else None,
+        "amendment_id": data.get("amendment_id") if isinstance(data, dict) else None,
+    }
+    state_change = {
+        "event_type": "state_change",
+        "source": rel_path(bundle_dir, path),
+        "action_type": STATE_CHANGE_KIND_ACTIONS.get(kind, "artifact_write"),
+        "actor": state_change_actor(kind),
+        "artifact_kind": kind,
+        "artifact_paths": [rel_path(bundle_dir, path)],
+        "artifact_hashes": {rel_path(bundle_dir, path): artifact.get("sha256")},
+        "manifest_epoch": manifest_epoch_from_bundle(bundle_dir),
+        "previous_state": state_change_previous_state(data),
+        "new_state": state_change_state(data, kind),
+        "packet_id": trace.get("packet_id"),
+        "branch_id": trace.get("branch_id"),
+        "job_id": trace.get("job_id"),
+        "amendment_id": trace.get("amendment_id"),
+    }
+    return (
+        {key: value for key, value in trace.items() if value is not None},
+        {key: value for key, value in state_change.items() if value is not None},
+    )
+
+
 def iter_terminal_artifact_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
     paths: list[Path] = []
@@ -366,22 +470,9 @@ def iter_terminal_artifact_trace_events(bundle_dir: Path) -> list[dict[str, Any]
         if path in seen or not path.is_file():
             continue
         seen.add(path)
-        data = read_json_object(path)
-        artifact = compact_artifact_ref(bundle_dir, path)
-        trace = {
-            "event_type": "terminal_artifact",
-            "source": rel_path(bundle_dir, path),
-            "artifact_kind": terminal_artifact_kind(path),
-            "artifact": artifact,
-            "status": data.get("status") if isinstance(data, dict) else None,
-            "review_status": data.get("review_status") if isinstance(data, dict) else None,
-            "can_start": data.get("can_start") if isinstance(data, dict) else None,
-            "packet_id": data.get("packet_id") if isinstance(data, dict) else None,
-            "branch_id": data.get("branch_id") if isinstance(data, dict) else None,
-            "job_id": data.get("job_id") if isinstance(data, dict) else None,
-            "amendment_id": data.get("amendment_id") if isinstance(data, dict) else None,
-        }
-        append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
+        terminal_trace, state_change = terminal_artifact_trace_record(bundle_dir, path)
+        append_trace_event(events, terminal_trace)
+        append_trace_event(events, state_change)
     return events
 
 
@@ -510,6 +601,7 @@ def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
             "model_attempt": 40,
             "packet_telemetry": 50,
             "terminal_artifact": 60,
+            "state_change": 70,
             "trace_defect": 90,
         }.get(str(event.get("event_type")), 80)
         return (timestamp, source, type_order, source_seq)
@@ -666,6 +758,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
         "event_log_bytes": 0,
         "model_prompt_chars_estimate": 0,
         "model_prompt_bytes_estimate": 0,
+        "attempts_with_known_tokens": 0,
         "known_usage": zero_usage(),
     }
     by_role: dict[str, dict[str, Any]] = {}
@@ -743,6 +836,12 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
                 bucket["attempts_called"] += 1
                 bucket["model_prompt_chars_estimate"] += packet_prompt_chars
                 bucket["model_prompt_bytes_estimate"] += packet_prompt_bytes
+                usage = attempt.get("usage")
+                if isinstance(usage, dict) and any(
+                    isinstance(usage.get(key), int) and not isinstance(usage.get(key), bool)
+                    for key in USAGE_KEYS
+                ):
+                    totals["attempts_with_known_tokens"] += 1
             if attempt.get("accepted") is True:
                 accepted_aliases[alias] = accepted_aliases.get(alias, 0) + 1
                 if alias in PREMIUM_ALIASES:
@@ -796,6 +895,9 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
                     "provider": attempt.get("provider"),
                     "model": attempt.get("model"),
                     "effort": attempt.get("effort"),
+                    "attempt_id": attempt.get("attempt_id"),
+                    "candidate_attempts_index": attempt.get("candidate_attempts_index"),
+                    "not_executed_reason": attempt.get("not_executed_reason"),
                     "called": attempt.get("called") is True,
                     "accepted": attempt.get("accepted") is True,
                     "known_usage": attempt.get("usage") if isinstance(attempt.get("usage"), dict) else None,
@@ -816,9 +918,44 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
             }
         )
 
+    known_token_coverage_ratio = (
+        round(totals["attempts_with_known_tokens"] / totals["attempts_called"], 6)
+        if totals["attempts_called"] > 0
+        else None
+    )
+    token_totals_status = (
+        "none"
+        if totals["attempts_called"] == 0
+        else "complete"
+        if totals["attempts_with_known_tokens"] == totals["attempts_called"]
+        else "partial"
+    )
+
     cost_summary = {
         "declared_attempts": totals["attempts_declared"],
         "called_attempts": totals["attempts_called"],
+        "candidate_attempts": totals["attempts_declared"],
+        "executed_attempts": totals["attempts_called"],
+        "known_token_coverage": {
+            "attempts_with_known_tokens": totals["attempts_with_known_tokens"],
+            "executed_attempts": totals["attempts_called"],
+            "ratio": known_token_coverage_ratio,
+        },
+        "token_totals_status": token_totals_status,
+        "token_totals_note": "token totals are partial unless every executed attempt exposes token usage",
+        "canonical_packet_totals": {
+            "packet_count": totals["packet_count"],
+            "accepted_packets": sum(accepted_aliases.values()),
+        },
+        "attempt_totals": {
+            "candidate_attempts": totals["attempts_declared"],
+            "executed_attempts": totals["attempts_called"],
+            "accepted_attempts": totals["accepted_attempts"],
+        },
+        "retry_history_totals": {
+            "fallback_count": fallback_count,
+            "failed_same_class_attempts": failed_same_class_attempts,
+        },
         "accepted_aliases": dict(sorted(accepted_aliases.items())),
         "declared_aliases": dict(sorted(declared_aliases.items())),
         "called_aliases": dict(sorted(called_aliases.items())),
@@ -1130,6 +1267,8 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             "by_role": {role: compact_model_bucket(bucket) for role, bucket in model_by_role.items()},
             "attempts_declared": success["attempts_declared"],
             "attempts_called": success["attempts_called"],
+            "candidate_attempts": success["attempts_declared"],
+            "executed_attempts": success["attempts_called"],
             "accepted_attempts": success["accepted_attempts"],
             "known_token_coverage_ratio": known_token_coverage_ratio,
             "known_token_coverage": {
@@ -1179,6 +1318,8 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             "packet_count": success["packet_count"],
             "attempts_declared": success["attempts_declared"],
             "attempts_called": success["attempts_called"],
+            "candidate_attempts": success["attempts_declared"],
+            "executed_attempts": success["attempts_called"],
             "accepted_attempts": success["accepted_attempts"],
             "attempts_with_known_tokens": success["attempts_with_known_tokens"],
             "accepted_aliases": dict(sorted(success["accepted_aliases"].items())),

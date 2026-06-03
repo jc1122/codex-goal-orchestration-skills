@@ -62,6 +62,10 @@ def annotate_status_lanes(branch_status: dict, validation_defects: list[str]) ->
         if status == "pass" and review_status == "mergeable" and blocker_count == 0 and not validation_defects
         else "incomplete"
     )
+    branch_status["artifact_valid"] = not validation_defects
+    branch_status["runtime_success"] = status == "pass"
+    branch_status["dod_complete"] = branch_status["dod_status"] == "pass"
+    branch_status["review_complete"] = review_status == "mergeable"
     branch_status["resume_action"] = "reuse_terminal_status" if not validation_defects else "repair_or_reassemble"
 
 
@@ -254,6 +258,10 @@ def is_runtime_cache_path(path: str) -> bool:
     parts = [part for part in Path(path).parts if part]
     if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in parts):
         return True
+    if any(part.endswith(".egg-info") for part in parts):
+        return True
+    if path.endswith((".pyc", ".pyo", ".egg-info")):
+        return True
     return path == ".runtime-cache" or path.startswith(".runtime-cache/")
 
 
@@ -356,6 +364,37 @@ def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, 
     return "mergeable", []
 
 
+def review_waiver_rel_path(branch_id: str) -> str:
+    return f"branches/{branch_id}.review-waiver.json"
+
+
+def write_review_waiver(
+    bundle_dir: Path,
+    branch: dict,
+    branch_id: str,
+    branch_status: dict,
+) -> None:
+    rel_path = branch_status.get("review_waiver_path")
+    if not isinstance(rel_path, str) or not rel_path.strip():
+        return
+    review_path = branch.get("review_path")
+    waiver = {
+        "schema_version": 1,
+        "kind": "review-waiver",
+        "branch_id": branch_id,
+        "branch_status": branch_status.get("status"),
+        "review_status": branch_status.get("review_status"),
+        "review_path": review_path if isinstance(review_path, str) else "",
+        "reviewer_launch_skipped": True,
+        "reason_code": "branch_non_pass_terminal_blocker",
+        "reason": "Branch is non-pass with terminal blocker evidence; launch a reviewer only after repair produces pass-ready evidence.",
+        "validated_by": "assemble_branch_status.py",
+        "blockers": branch_status.get("blockers", []),
+        "branch_status_path": branch.get("status_path"),
+    }
+    write_json(bundle_dir / rel_path, waiver)
+
+
 def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
@@ -439,6 +478,9 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "blockers": blockers if status != "pass" else [],
         "handoff": args.handoff or "Branch status assembled from manifest-owned runtime artifacts.",
     }
+    if status != "pass" and inferred_review_status == "missing":
+        branch_status["review_waiver_path"] = review_waiver_rel_path(branch_id)
+        write_review_waiver(bundle_dir, branch, branch_id, branch_status)
     annotate_status_lanes(branch_status, [])
     write_json(output_path, branch_status)
 
@@ -458,6 +500,9 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         branch_status["status"] = "blocked"
         branch_status["blockers"] = downgraded_blockers
         branch_status["handoff"] = "Branch status validation failed; pass artifact was downgraded to blocked with validator defects preserved."
+        if branch_status.get("review_status") == "missing":
+            branch_status["review_waiver_path"] = review_waiver_rel_path(branch_id)
+            write_review_waiver(bundle_dir, branch, branch_id, branch_status)
         write_json(output_path, branch_status)
         validation_defects = BRANCH_VALIDATOR.validate_branch_status(
             branch_status,

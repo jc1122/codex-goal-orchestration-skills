@@ -253,6 +253,18 @@ def _verified_routes_summary(manifest: dict) -> dict[str, object]:
     accepted = summary.get("accepted_route_count")
     route_verified = isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
     summary["route_model_availability_verified"] = route_verified
+    token_telemetry = summary.get("token_telemetry") if isinstance(summary.get("token_telemetry"), dict) else {}
+    unavailable = token_telemetry.get("unavailable_routes")
+    available = token_telemetry.get("available_routes")
+    if route_verified and isinstance(unavailable, int) and not isinstance(unavailable, bool):
+        summary["telemetry_capability_status"] = "partial" if unavailable > 0 else "complete"
+    elif route_verified:
+        summary["telemetry_capability_status"] = "unknown"
+    else:
+        summary["telemetry_capability_status"] = "not_verified"
+    if isinstance(available, int) and isinstance(unavailable, int) and not isinstance(available, bool) and not isinstance(unavailable, bool):
+        total = available + unavailable
+        summary["token_telemetry_coverage_ratio"] = round(available / total, 6) if total > 0 else None
     if route_verified:
         summary["route_verification_status"] = summary.get("route_verification_status") or "routes_verified"
         return summary
@@ -406,7 +418,6 @@ def _config_status_blocks_launch(goal_config_status: str) -> bool:
     return goal_config_status not in {
         "no goal config supplied",
         "goal config check pass",
-        "config_schema_pass_routes_unverified",
     }
 
 
@@ -425,6 +436,8 @@ def _repo_runtime_gate(manifest: dict) -> dict[str, object]:
 def _launch_blockers(
     *,
     goal_config_status: str,
+    manifest: dict,
+    verified_routes: dict[str, object],
     lint_brief: dict[str, object],
     lint_bundle: dict[str, object],
     repair_gate: dict[str, object],
@@ -433,6 +446,18 @@ def _launch_blockers(
     blockers: list[str] = []
     if _config_status_blocks_launch(goal_config_status):
         blockers.append(goal_config_status)
+    token_telemetry = verified_routes.get("token_telemetry") if isinstance(verified_routes.get("token_telemetry"), dict) else {}
+    unavailable = token_telemetry.get("unavailable_routes")
+    waiver = manifest.get("route_policy_degraded_telemetry_waiver")
+    waiver_accepted = isinstance(waiver, dict) and waiver.get("accepted") is True and isinstance(waiver.get("reason"), str) and waiver.get("reason", "").strip()
+    if (
+        verified_routes.get("route_model_availability_verified") is True
+        and isinstance(unavailable, int)
+        and not isinstance(unavailable, bool)
+        and unavailable > 0
+        and not waiver_accepted
+    ):
+        blockers.append("route_token_telemetry_degraded_without_waiver")
     if lint_brief["status"] not in {"pass", "missing"}:
         blockers.append(f"brief lint {lint_brief['status']}")
     if lint_bundle["status"] != "pass":
@@ -461,6 +486,21 @@ def _readiness_warnings(
                 "code": "route_availability_unverified",
                 "severity": "warning",
                 "message": f"{goal_config_status}; worker route alias recommendations are deferred until accepted routes are verified.",
+            }
+        )
+    token_telemetry = verified_routes.get("token_telemetry") if isinstance(verified_routes.get("token_telemetry"), dict) else {}
+    unavailable = token_telemetry.get("unavailable_routes")
+    if (
+        verified_routes.get("route_model_availability_verified") is True
+        and isinstance(unavailable, int)
+        and not isinstance(unavailable, bool)
+        and unavailable > 0
+    ):
+        warnings.append(
+            {
+                "code": "route_token_telemetry_degraded",
+                "severity": "warning",
+                "message": f"{unavailable} verified route(s) lack token telemetry; runtime launch requires route_policy_degraded_telemetry_waiver.accepted=true or telemetry-capable route pruning.",
             }
         )
     ratio = utilization.get("utilization_ratio")
@@ -600,19 +640,23 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         status = "blocked"
     if runtime_gate["status"] != "pass":
         status = "blocked"
+    verified_routes = _verified_routes_summary(manifest)
     launch_blockers = _launch_blockers(
         goal_config_status=goal_config_status,
+        manifest=manifest,
+        verified_routes=verified_routes,
         lint_brief=lint_brief,
         lint_bundle=lint_bundle,
         repair_gate=repair_gate,
         runtime_gate=runtime_gate,
     )
+    if launch_blockers:
+        status = "blocked"
     launch_allowed = status == "pass" and not launch_blockers
 
     branch_dag = _collect_bundle_dag(manifest)
     route_policy = _route_policy_summary(manifest)
     caps = _caps_summary(manifest)
-    verified_routes = _verified_routes_summary(manifest)
     utilization = _branch_utilization_summary(manifest)
     warnings = _readiness_warnings(
         manifest,
@@ -686,19 +730,23 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         status = "blocked"
     if runtime_gate["status"] != "pass":
         status = "blocked"
+    verified_routes = _verified_routes_summary(manifest)
     launch_blockers = _launch_blockers(
         goal_config_status=goal_config_status,
+        manifest=manifest,
+        verified_routes=verified_routes,
         lint_brief=lint_brief,
         lint_bundle=lint_bundle,
         repair_gate=repair_gate,
         runtime_gate=runtime_gate,
     )
+    if launch_blockers:
+        status = "blocked"
     launch_allowed = status == "pass" and not launch_blockers
 
     manifest_path = bundle_dir / "job.manifest.json"
     prompt_size = _prompt_size_report(bundle_dir, manifest)
     artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
-    verified_routes = _verified_routes_summary(manifest)
     utilization = _branch_utilization_summary(manifest)
     warnings = _readiness_warnings(
         manifest,

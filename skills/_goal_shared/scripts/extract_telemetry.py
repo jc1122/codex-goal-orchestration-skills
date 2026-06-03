@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 from typing import Any
+from datetime import datetime
 
 
 TOKEN_KEYS = {
@@ -175,20 +176,188 @@ def _artifact_hash_record(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
+def _timing_from_json_event(data: dict[str, Any]) -> dict[str, Any] | None:
+    elapsed_ms = data.get("elapsed_ms")
+    exit_status = data.get("exit_status", data.get("returncode"))
+    timed_out = data.get("timed_out")
+    status_text = str(data.get("status", "")).lower()
+    event_text = str(data.get("event", "")).lower()
+    message_text = str(data.get("message", "")).lower()
+    combined = " ".join(part for part in [status_text, event_text, message_text] if part)
+    timeout_detected = timed_out is True or "timed out" in combined or "timeout" in combined
+    completed = (
+        exit_status == 0
+        or status_text in {"ok", "pass", "success", "completed"}
+        or event_text in {"end", "complete", "completed"}
+    )
+    if isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool) and elapsed_ms >= 0:
+        return {
+            "started_at": data.get("started_at"),
+            "completed_at": data.get("completed_at") or data.get("timestamp"),
+            "elapsed_seconds": round(elapsed_ms / 1000, 6),
+            "timed_out": False if completed else (True if timeout_detected else None),
+            "timing_source": "json_event_elapsed_ms",
+        }
+    if completed:
+        return {
+            "started_at": data.get("started_at"),
+            "completed_at": data.get("completed_at") or data.get("timestamp"),
+            "elapsed_seconds": None,
+            "timed_out": False,
+            "timing_source": "json_event_completion",
+        }
+    if timeout_detected:
+        return {
+            "started_at": data.get("started_at"),
+            "completed_at": data.get("completed_at") or data.get("timestamp"),
+            "elapsed_seconds": None,
+            "timed_out": True,
+            "timing_source": "json_event_timeout",
+        }
+    return None
+
+
+def _timing_from_jsonl(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    best: dict[str, Any] | None = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            data = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+        timing = _timing_from_json_event(data)
+        if timing is None:
+            continue
+        if timing.get("timed_out") is False:
+            return timing
+        best = timing
+    return best
+
+
+def _parse_iso_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    text = value.strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _elapsed_seconds_from_timestamps(start: object, end: object) -> float | None:
+    start_time = _parse_iso_timestamp(start)
+    end_time = _parse_iso_timestamp(end)
+    if start_time is None or end_time is None:
+        return None
+    delta = end_time - start_time
+    if delta.total_seconds() < 0:
+        return None
+    return round(delta.total_seconds(), 6)
+
+
+def _packet_debug_timing(packet_dir: Path) -> dict[str, Any] | None:
+    path = packet_dir / "debug.events.jsonl"
+    if not path.exists():
+        return None
+    start_at = None
+    completed_at = None
+    elapsed_seconds = None
+    timed_out = None
+    exit_status = None
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.strip():
+            continue
+        try:
+            event = json.loads(line)
+        except Exception:
+            continue
+        if not isinstance(event, dict):
+            continue
+        event_name = str(event.get("event", "")).lower()
+        if event_name == "start" and start_at is None:
+            start_at = event.get("timestamp")
+        if event_name == "end":
+            completed_at = event.get("timestamp")
+            exit_status = event.get("exit_status")
+            elapsed_ms = event.get("elapsed_ms")
+            if isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool) and elapsed_ms >= 0:
+                elapsed_seconds = round(elapsed_ms / 1000, 6)
+            timing = _timing_from_json_event(event)
+            if timing is not None and timing.get("timed_out") is not None:
+                timed_out = timing.get("timed_out")
+
+    if start_at is None and completed_at is None:
+        return None
+    if elapsed_seconds is None:
+        elapsed_seconds = _elapsed_seconds_from_timestamps(start_at, completed_at)
+    if timed_out is None:
+        if exit_status == 0:
+            timed_out = False
+        else:
+            timed_out = None
+    return {
+        "started_at": start_at,
+        "completed_at": completed_at,
+        "elapsed_seconds": elapsed_seconds,
+        "timed_out": timed_out,
+        "timing_source": "packet_debug_events",
+    }
+
+
+def _stable_attempt_id(packet_id: str, role: str, alias: str, provider: str, model: str, command: str, index: int) -> str:
+    key = "|".join([
+        packet_id or "-",
+        role or "-",
+        str(index),
+        alias or "-",
+        provider or "-",
+        model or "-",
+        command or "-",
+    ])
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+    return f"{packet_id}:{role}:{index + 1:03d}:{digest}"
+
+
+def _normalize_not_executed_reason(
+    *,
+    index: int,
+    called_before: bool,
+    called: bool,
+    output_json: dict[str, Any] | None,
+    spec: dict[str, Any],
+) -> str | None:
+    if called:
+        return None
+    if str(spec.get("not_executed_reason", "")).strip():
+        return str(spec.get("not_executed_reason"))
+    output_status = str(output_json.get("status", "")).lower() if output_json else ""
+    if output_status in {"blocked", "fail-clean", "fail-dirty", "failed"}:
+        return "dirty_stop"
+    if called_before or index > 0:
+        return "fallback_not_needed"
+    return "catalog_pruned"
+
+
 def _attempt_timeout_detected(log_paths: list[Path]) -> bool | None:
     if not log_paths:
         return None
     for path in log_paths:
         if not path.exists():
             continue
+        timing = _timing_from_jsonl(path)
+        if timing is not None and isinstance(timing.get("timed_out"), bool):
+            return bool(timing["timed_out"])
         try:
             text = path.read_text(encoding="utf-8", errors="replace").lower()
         except Exception:
             continue
         if "timed out" in text or "timeout" in text:
             return True
-    if any(path.exists() for path in log_paths):
-        return False
     return None
 
 
@@ -208,10 +377,26 @@ def build_telemetry(
     output_json = read_json(output_path)
     route_class = output_json.get("route_class") if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str) else None
     attempts = []
-    for spec in attempt_specs:
+    for index, spec in enumerate(attempt_specs):
         event_logs = [file_stats(packet_dir / str(path)) for path in spec.get("event_logs", [])]
         probe_logs = [file_stats(packet_dir / str(path)) for path in spec.get("probe_logs", [])]
         called = any(item["exists"] for item in event_logs + probe_logs)
+        not_executed_reason = _normalize_not_executed_reason(
+            index=index,
+            called_before=any(item.get("called") for item in attempts),
+            called=called,
+            output_json=output_json,
+            spec=spec,
+        )
+        attempt_id = _stable_attempt_id(
+            packet_id=packet_id,
+            role=role,
+            alias=str(spec.get("alias", "")),
+            provider=str(spec.get("provider", "")),
+            model=str(spec.get("model", "")),
+            command=str(spec.get("command", "")),
+            index=index,
+        )
         logs = event_logs + probe_logs
         timeout_seconds = spec.get("timeout_seconds")
         if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
@@ -224,6 +409,9 @@ def build_telemetry(
                 "effort": spec.get("effort") or None,
                 "command": spec.get("command", ""),
                 "timeout_seconds": timeout_seconds,
+                "attempt_id": attempt_id,
+                "candidate_attempts_index": index + 1,
+                "not_executed_reason": not_executed_reason,
                 "called": called,
                 "event_logs": event_logs,
                 "probe_logs": probe_logs,
@@ -254,6 +442,8 @@ def build_telemetry(
         "totals": {
             "attempts_declared": len(attempts),
             "attempts_called": len(called_attempts),
+            "candidate_attempts": len(attempts),
+            "executed_attempts": len(called_attempts),
             "event_log_chars": total_log_chars,
             "event_log_bytes": total_log_bytes,
             "known_usage": sum_usage(called_attempts),
@@ -276,11 +466,12 @@ def build_debug_telemetry(
 ) -> dict[str, Any]:
     route_class = output_json.get("route_class") if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str) else None
     attempts: list[dict[str, Any]] = []
+    packet_timing = _packet_debug_timing(packet_dir)
     determinism_artifacts: list[dict[str, Any]] = [
         _artifact_hash_record(packet_dir / prompt_name, "prompt"),
         _artifact_hash_record(packet_dir / output_name, "output"),
     ]
-    for spec in attempt_specs:
+    for index, spec in enumerate(attempt_specs):
         event_log_paths = [packet_dir / str(path) for path in spec.get("event_logs", []) if isinstance(path, str)]
         probe_log_paths = [packet_dir / str(path) for path in spec.get("probe_logs", []) if isinstance(path, str)]
         event_logs = [file_stats(path) for path in event_log_paths]
@@ -291,11 +482,58 @@ def build_debug_telemetry(
             timeout_seconds = None
         timed_out = _attempt_timeout_detected(event_log_paths + probe_log_paths)
         timed_out = bool(timed_out) if isinstance(timed_out, bool) else None
+        attempt_timing = None
+        timing_unsupported_reason = None
+        for path in event_log_paths + probe_log_paths:
+            attempt_timing = _timing_from_jsonl(path)
+            if attempt_timing is not None:
+                break
+        accepted = bool(telemetry["accepted_alias"] == spec.get("alias", ""))
+        if called and packet_timing is not None and attempt_timing is None:
+            attempt_timing = packet_timing
+        elif packet_timing is not None and isinstance(attempt_timing, dict):
+            packet_timed_out = packet_timing.get("timed_out")
+            event_timed_out = attempt_timing.get("timed_out")
+            if packet_timed_out is not None and event_timed_out is None:
+                attempt_timing["timed_out"] = packet_timed_out
+        if attempt_timing is None:
+            attempt_timing = {
+                "started_at": None,
+                "completed_at": None,
+                "elapsed_seconds": None,
+                "timed_out": timed_out,
+                "timing_source": "timeout_text_scan" if timed_out is not None else "unknown",
+            }
+            timing_unsupported_reason = "attempt_timings_unavailable"
         for path in event_log_paths:
             determinism_artifacts.append(_artifact_hash_record(path, "event_logs"))
         for path in probe_log_paths:
             determinism_artifacts.append(_artifact_hash_record(path, "probe_logs"))
         usage = sum_usage(event_logs + probe_logs)
+        if attempt_timing.get("started_at") is not None and attempt_timing.get("completed_at") is not None:
+            timing_unsupported_reason = None
+        if attempt_timing.get("timed_out") is None and timed_out is not None:
+            attempt_timing["timed_out"] = timed_out
+        if attempt_timing.get("timed_out") is None and packet_timing is not None and packet_timing.get("timed_out") is not None:
+            attempt_timing["timed_out"] = packet_timing.get("timed_out")
+        if timing_unsupported_reason is None and called and attempt_timing.get("timed_out") is None:
+            timing_unsupported_reason = "timing_unsupported_or_missing"
+        not_executed_reason = _normalize_not_executed_reason(
+            index=index,
+            called_before=any(item.get("called") for item in attempts),
+            called=called,
+            output_json=output_json,
+            spec=spec,
+        )
+        attempt_id = _stable_attempt_id(
+            packet_id=packet_id,
+            role=role,
+            alias=str(spec.get("alias", "")),
+            provider=str(spec.get("provider", "")),
+            model=str(spec.get("model", "")),
+            command=str(spec.get("command", "")),
+            index=index,
+        )
         attempts.append(
             {
                 "alias": spec.get("alias", ""),
@@ -304,15 +542,20 @@ def build_debug_telemetry(
                 "effort": spec.get("effort") or None,
                 "command": spec.get("command", ""),
                 "timeout_seconds": timeout_seconds,
+                "attempt_id": attempt_id,
+                "candidate_attempts_index": index + 1,
+                "not_executed_reason": not_executed_reason,
                 "called": called,
-                "accepted": bool(telemetry["accepted_alias"] == spec.get("alias", "")),
+                "accepted": accepted,
                 "usage": usage,
+                "timing_unsupported_reason": timing_unsupported_reason,
                 "timing": {
                     "configured_timeout_seconds": timeout_seconds,
-                    "started_at": None,
-                    "completed_at": None,
-                    "elapsed_seconds": None,
-                    "timed_out": timed_out,
+                    "started_at": attempt_timing.get("started_at"),
+                    "completed_at": attempt_timing.get("completed_at"),
+                    "elapsed_seconds": attempt_timing.get("elapsed_seconds"),
+                    "timed_out": attempt_timing.get("timed_out"),
+                    "timing_source": attempt_timing.get("timing_source"),
                 },
             }
         )
@@ -351,9 +594,11 @@ def build_debug_telemetry(
         "determinism": {
             "artifacts": determinism_artifacts,
         },
-        "success_metrics": {
+    "success_metrics": {
             "attempts_declared": len(attempts),
             "attempts_called": sum(1 for attempt in attempts if attempt.get("called") is True),
+            "candidate_attempts": len(attempts),
+            "executed_attempts": sum(1 for attempt in attempts if attempt.get("called") is True),
             "accepted_alias": telemetry["accepted_alias"],
             "accepted_attempts": sum(1 for attempt in attempts if attempt.get("accepted") is True),
             "fallback_count": max(0, sum(1 for attempt in attempts if attempt.get("called") is True) - 1),

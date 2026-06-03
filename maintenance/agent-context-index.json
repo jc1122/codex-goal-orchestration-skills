@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:64054acdd3a9939fa0a754825f266f4bc6949f7d83e6b60ba976167b9ac5154a"
+    "source_fingerprint": "sha256:a1bd63f935230e076271cc93bddffba0e2282ca90d57d826969c60d9bf23cd51"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,66 +16,66 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 4975,
-      "approx_tokens": 56569,
+      "lines": 6299,
+      "approx_tokens": 74536,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3562:run_base_ref_default_fixture:800l",
-        "2642:run_runtime_packet_fixtures:521l",
-        "1387:run_negative_amendment_fixtures:289l",
-        "822:run_preflight_brief_lint_fixtures:282l"
+        "3066:run_runtime_packet_fixtures:965l",
+        "4464:run_base_ref_default_fixture:862l",
+        "1488:run_negative_amendment_fixtures:362l",
+        "5372:run_telemetry_summary_fixture:313l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2269,
-      "approx_tokens": 27370,
+      "lines": 2696,
+      "approx_tokens": 32662,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "1224:normalize_brief:180l",
-        "2077:create_bundle:112l",
-        "1833:manifest_from_normalized_brief:102l",
-        "132:example_brief:88l"
+        "2207:manifest_from_normalized_brief:127l",
+        "2490:create_bundle:126l",
+        "1843:build_runtime_index:96l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 1931,
-      "approx_tokens": 24744,
+      "lines": 2077,
+      "approx_tokens": 27362,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1023:lint:822l",
-        "722:validate_preflight_lite_records:152l",
-        "936:validate_goal_config_manifest:85l",
-        "876:validate_telemetry_policy:58l"
+        "1155:lint:836l",
+        "745:validate_preflight_lite_records:152l",
+        "1046:validate_runtime_metadata:107l",
+        "959:validate_goal_config_manifest:85l"
       ]
     },
     {
-      "path": "scripts/check_goal_config_fixtures.py",
-      "owner": "repo-scripts",
-      "lines": 1863,
-      "approx_tokens": 21996,
-      "rule": "--help or JSON before implementation source",
+      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 2273,
+      "approx_tokens": 24245,
+      "rule": "manifest/help/defects before source",
       "top_functions": [
-        "524:main:1336l",
-        "267:run_integration_fixture:255l",
-        "156:write_fake_opencode_discovery_scripts:43l",
-        "229:build_integration_brief:36l"
+        "1877:main:393l",
+        "956:compact_worker_context:118l",
+        "1787:compact_launch_config:88l",
+        "1475:worker_prompt:82l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 1793,
-      "approx_tokens": 21651,
+      "lines": 1985,
+      "approx_tokens": 23918,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1468:validate_review_artifact_for_branch:144l",
-        "1614:validate_branch_status:142l",
-        "625:validate_worker_artifacts:140l",
-        "389:validate_launch_config_artifact:93l"
+        "672:validate_worker_artifacts:156l",
+        "1776:validate_branch_status:153l",
+        "1582:validate_review_artifact_for_branch:148l",
+        "425:validate_launch_config_artifact:102l"
       ]
     }
   ],
@@ -208,6 +208,7 @@
       "depends_on": [
         "_goal_shared",
         "goal-branch-orchestrator",
+        "goal-plan-amender",
         "goal-preflight"
       ]
     },
@@ -235,6 +236,7 @@
       "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
+        "goal-config",
         "goal-preflight"
       ]
     },
@@ -418,6 +420,8 @@
       "paths": [
         "skills/goal-main-orchestrator/SKILL.md",
         "skills/goal-main-orchestrator/references/main-runtime-contract.md",
+        "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+        "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
         "skills/goal-main-orchestrator/scripts/validate_main_status.py"
       ]
     },
@@ -426,7 +430,8 @@
       "target": "goal-plan-amender",
       "paths": [
         "skills/goal-main-orchestrator/SKILL.md",
-        "skills/goal-main-orchestrator/references/main-runtime-contract.md"
+        "skills/goal-main-orchestrator/references/main-runtime-contract.md",
+        "skills/goal-main-orchestrator/scripts/summarize_telemetry.py"
       ]
     },
     {
@@ -455,6 +460,13 @@
         "skills/goal-plan-amender/scripts/scheduler_tick.py",
         "skills/goal-plan-amender/scripts/script_only_repair_gate.py",
         "skills/goal-plan-amender/scripts/validate_lite_advice.py"
+      ]
+    },
+    {
+      "source": "goal-plan-amender",
+      "target": "goal-config",
+      "paths": [
+        "skills/goal-plan-amender/scripts/amendment_lib.py"
       ]
     },
     {
@@ -504,6 +516,7 @@
       "paths": [
         "skills/goal-preflight/assets/branch.prompt.template.md",
         "skills/goal-preflight/assets/runtime-rules.template.md",
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
     },
@@ -526,6 +539,7 @@
         "skills/goal-preflight/assets/main.prompt.template.md",
         "skills/goal-preflight/references/actionability-rubric.md",
         "skills/goal-preflight/references/bundle-contract.md",
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
         "skills/goal-preflight/scripts/lint_goal_bundle.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
@@ -535,6 +549,7 @@
       "target": "goal-plan-amender",
       "paths": [
         "skills/goal-preflight/references/bundle-contract.md",
+        "skills/goal-preflight/scripts/create_goal_bundle.py",
         "skills/goal-preflight/scripts/render_goal_bootloader.py"
       ]
     }

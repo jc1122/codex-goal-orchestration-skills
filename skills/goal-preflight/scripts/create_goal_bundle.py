@@ -1564,6 +1564,380 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_json_text(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def sha256_json(value: object) -> str:
+    return hashlib.sha256(canonical_json_text(value).encode("utf-8")).hexdigest()
+
+
+COMMAND_PATH_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".csv", ".sh")
+PYTHON_BIN_NAMES = {"python", "python3", "py"}
+RUNTIME_INFRA_PATH_PREFIXES = (
+    "skills/_goal_shared/",
+    "skills/goal-branch-orchestrator/",
+    "skills/goal-main-orchestrator/",
+    "skills/goal-plan-amender/",
+    "skills/goal-preflight/",
+)
+
+
+def path_is_covered(path: str, owner: str) -> bool:
+    path_norm = path.rstrip("/")
+    owner_norm = owner.rstrip("/")
+    return path_norm == owner_norm or path_norm.startswith(owner_norm + "/") or owner_norm.startswith(path_norm + "/")
+
+
+def clean_command_token(token: str) -> str:
+    return token.strip().strip("'\"`").rstrip(".,;:)")
+
+
+def is_runtime_infra_path(path: str) -> bool:
+    return path.startswith(RUNTIME_INFRA_PATH_PREFIXES)
+
+
+def command_path_tokens(command: str) -> list[str]:
+    paths = []
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    for token in tokens:
+        cleaned = clean_command_token(token)
+        if not cleaned or cleaned.startswith("-") or "://" in cleaned or cleaned.startswith("$"):
+            continue
+        if "<" in cleaned or ">" in cleaned:
+            continue
+        if cleaned.startswith("./"):
+            cleaned = cleaned[2:]
+        if cleaned.startswith("/") or cleaned.startswith("../"):
+            continue
+        if is_runtime_infra_path(cleaned):
+            continue
+        if any(cleaned.endswith(ext) for ext in COMMAND_PATH_EXTENSIONS) or "/" in cleaned:
+            try:
+                paths.append(require_relative_path(cleaned, "command_path"))
+            except SystemExit:
+                continue
+    return sorted(set(paths))
+
+
+def python_modules_from_command(command: str) -> list[str]:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    modules = []
+    for index, token in enumerate(tokens):
+        if token == "-m" and index > 0 and tokens[index - 1] in PYTHON_BIN_NAMES and index + 1 < len(tokens):
+            module = tokens[index + 1].strip()
+            if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*", module):
+                modules.append(module)
+    return modules
+
+
+def module_candidate_paths(module: str, repo_root: Path | None) -> list[str]:
+    module_path = module.replace(".", "/")
+    candidates = [
+        f"{module_path}.py",
+        f"{module_path}/__init__.py",
+        f"{module_path}/__main__.py",
+        f"src/{module_path}.py",
+        f"src/{module_path}/__init__.py",
+        f"src/{module_path}/__main__.py",
+    ]
+    if repo_root is None:
+        return candidates
+    existing = [path for path in candidates if (repo_root / path).exists()]
+    return existing or candidates
+
+
+IMPORT_RE = re.compile(r"^\s*(?:from\s+([A-Za-z_][A-Za-z0-9_\.]*)\s+import|import\s+([A-Za-z_][A-Za-z0-9_\.]*))", re.MULTILINE)
+
+
+def import_dependency_paths(path: str, repo_root: Path | None) -> list[str]:
+    if repo_root is None or not path.endswith(".py"):
+        return []
+    target = repo_root / path
+    if not target.is_file() or target.stat().st_size > 256_000:
+        return []
+    try:
+        text = target.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return []
+    deps: list[str] = []
+    for match in IMPORT_RE.finditer(text):
+        module = match.group(1) or match.group(2) or ""
+        root = module.split(".", 1)[0]
+        if root in {"argparse", "collections", "dataclasses", "json", "os", "pathlib", "pytest", "sys", "typing", "unittest"}:
+            continue
+        deps.extend(candidate for candidate in module_candidate_paths(module, repo_root) if (repo_root / candidate).exists())
+        if "." in module:
+            deps.extend(candidate for candidate in module_candidate_paths(root, repo_root) if (repo_root / candidate).exists())
+    return sorted(set(deps))
+
+
+def command_required_paths(command: str, repo_root: Path | None) -> tuple[list[str], list[str]]:
+    paths = command_path_tokens(command)
+    modules = python_modules_from_command(command)
+    inferred = []
+    for module in modules:
+        inferred.extend(module_candidate_paths(module, repo_root))
+    for path in list(paths):
+        inferred.extend(import_dependency_paths(path, repo_root))
+    return sorted(set(paths + inferred)), sorted(set(modules))
+
+
+def infer_execution_strategy(repo_root: Path, branches: list[dict]) -> dict:
+    has_src = (repo_root / "src").is_dir()
+    has_project_config = (repo_root / "pyproject.toml").is_file() or (repo_root / "setup.py").is_file() or (repo_root / "setup.cfg").is_file()
+    module_commands = []
+    src_module_paths = []
+    for branch in branches:
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            for command in item.get("verification", []):
+                if not isinstance(command, str):
+                    continue
+                modules = python_modules_from_command(command)
+                if modules:
+                    module_commands.append(command)
+                for module in modules:
+                    src_module_paths.extend(path for path in module_candidate_paths(module, repo_root) if path.startswith("src/"))
+    if has_src and has_project_config and module_commands:
+        strategy = "editable_install_src_package"
+        setup_commands = ["python3 -m pip install -e ."]
+        validation_env = {"PYTHONPATH": "src"}
+        reason = "src layout with project metadata and python -m validation detected; use one editable-install strategy before CLI/import acceptance commands"
+    elif has_src:
+        strategy = "pythonpath_src"
+        setup_commands = []
+        validation_env = {"PYTHONPATH": "src"}
+        reason = "src layout detected without a package-install validation signal; run validation with PYTHONPATH=src"
+    else:
+        strategy = "repo_root_direct"
+        setup_commands = []
+        validation_env = {}
+        reason = "no src package layout detected; run validation from repository root"
+    return {
+        "schema_version": 1,
+        "id": strategy,
+        "strategy": strategy,
+        "setup_commands": setup_commands,
+        "validation_env": validation_env,
+        "module_entrypoint_commands": sorted(set(module_commands)),
+        "module_entrypoint_paths": sorted(set(src_module_paths)),
+        "reason": reason,
+    }
+
+
+def build_ownership_feasibility(branches: list[dict], repo_root: Path | None) -> dict:
+    branch_owned = {
+        branch["id"]: [path for path in branch.get("owned_paths", []) if isinstance(path, str)]
+        for branch in branches
+        if isinstance(branch.get("id"), str)
+    }
+    records = []
+    dependency_recommendations = []
+    for branch in branches:
+        branch_id = branch["id"]
+        branch_paths = branch_owned.get(branch_id, [])
+        dependency_paths = [
+            path
+            for dep_id in branch.get("depends_on", [])
+            for path in branch_owned.get(dep_id, [])
+        ]
+        other_branch_paths = {
+            other_id: paths
+            for other_id, paths in branch_owned.items()
+            if other_id != branch_id and other_id not in set(branch.get("depends_on", []))
+        }
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            work_item_id = item.get("id", "unknown")
+            for command in item.get("verification", []):
+                if not isinstance(command, str) or not command.strip():
+                    continue
+                required_paths, modules = command_required_paths(command, repo_root)
+                outside_paths = [path for path in required_paths if not any(path_is_covered(path, owner) for owner in branch_paths)]
+                dependency_covered = [path for path in outside_paths if any(path_is_covered(path, owner) for owner in dependency_paths)]
+                uncovered_paths = [path for path in outside_paths if path not in dependency_covered]
+                owning_branch_candidates = []
+                for path in uncovered_paths:
+                    owners = [
+                        other_id
+                        for other_id, paths in other_branch_paths.items()
+                        if any(path_is_covered(path, owner) for owner in paths)
+                    ]
+                    if owners:
+                        owning_branch_candidates.append({"path": path, "owners": owners})
+                        dependency_recommendations.append(
+                            {
+                                "branch_id": branch_id,
+                                "work_item_id": work_item_id,
+                                "path": path,
+                                "recommended_depends_on": owners,
+                                "reason": "verification command requires a path owned by a sibling branch",
+                            }
+                        )
+                missing_owned_paths = [
+                    path
+                    for path in uncovered_paths
+                    if not any(path == item["path"] for item in owning_branch_candidates)
+                ]
+                status = "pass" if not uncovered_paths else "needs_review"
+                records.append(
+                    {
+                        "branch_id": branch_id,
+                        "work_item_id": work_item_id,
+                        "command": command,
+                        "status": status,
+                        "module_entrypoints": modules,
+                        "required_paths": required_paths,
+                        "branch_owned_paths": branch_paths,
+                        "dependency_covered_paths": dependency_covered,
+                        "uncovered_paths": uncovered_paths,
+                        "owning_branch_candidates": owning_branch_candidates,
+                        "missing_owned_paths": missing_owned_paths,
+                        "recommended_action": (
+                            "none"
+                            if status == "pass"
+                            else "co-locate required paths in this branch or add explicit depends_on and merge sequencing before dispatch"
+                        ),
+                    }
+                )
+    needs_review = [record for record in records if record.get("status") != "pass"]
+    return {
+        "schema_version": 1,
+        "status": "needs_review" if needs_review else "pass",
+        "command_count": len(records),
+        "needs_review_count": len(needs_review),
+        "dependency_recommendations": dependency_recommendations,
+        "commands": records,
+    }
+
+
+def build_route_contract(goal_config_check: dict | None, *, goal_config_check_sha256: str | None, worker_policy: dict) -> dict:
+    summary = compact_goal_config_check_summary(goal_config_check or {}) if isinstance(goal_config_check, dict) else {}
+    accepted_route_count = summary.get("accepted_route_count")
+    verified = route_availability_verified_from_check(goal_config_check)
+    return {
+        "schema_version": 1,
+        "policy_router": worker_policy.get("policy_router") or ("goal-config-v1" if goal_config_check_sha256 else "deterministic-v1"),
+        "policy_version": worker_policy.get("policy_version") or "preflight-route-contract-v1",
+        "goal_config_check_path": "goal-config.check.json" if goal_config_check_sha256 else None,
+        "goal_config_check_sha256": goal_config_check_sha256,
+        "goal_config_check_status": summary.get("status", "not_configured"),
+        "route_model_availability_verified": verified is True,
+        "route_recommendations_enabled": verified is True,
+        "accepted_route_count": accepted_route_count if isinstance(accepted_route_count, int) and not isinstance(accepted_route_count, bool) else 0,
+        "catalog_refresh_required": verified is not True,
+        "route_catalog_source": "goal_config_check" if goal_config_check_sha256 else "branch_runtime_model_catalog",
+        "diagnostic_note": route_deferred_text(goal_config_check) if verified is not True else "route availability verified by goal-config check hash",
+    }
+
+
+def build_runtime_index(manifest: dict) -> dict:
+    branches = []
+    worker_packet_count = 0
+    for branch in manifest.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        workers = []
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            packet_id = item.get("packet_id") or f"{branch.get('id')}-{item.get('id')}"
+            worker_type = item.get("worker_type", "worker")
+            if worker_type in {"research", "research-worker"}:
+                artifact_root = "research"
+                status_name = "research.json"
+                role = "research-worker"
+            else:
+                artifact_root = "workers"
+                status_name = "status.json"
+                role = "worker"
+            workers.append(
+                {
+                    "packet_id": packet_id,
+                    "work_item_id": item.get("id"),
+                    "worker_type": role,
+                    "status_path": f"{artifact_root}/{packet_id}/{status_name}",
+                    "summary_path": f"{artifact_root}/{packet_id}/packet.summary.json",
+                    "telemetry_path": f"{artifact_root}/{packet_id}/telemetry.json",
+                    "load_policy": "targeted_runtime_only",
+                }
+            )
+        worker_packet_count += len(workers)
+        branches.append(
+            {
+                "id": branch.get("id"),
+                "prompt": branch.get("prompt"),
+                "status_path": branch.get("status_path"),
+                "review_path": branch.get("review_path"),
+                "pre_review_gate_path": branch.get("pre_review_gate_path"),
+                "worker_scheduler_path": branch.get("worker_parallelism", {}).get("scheduler_path")
+                if isinstance(branch.get("worker_parallelism"), dict)
+                else None,
+                "workers": workers,
+            }
+        )
+    return {
+        "schema_version": 1,
+        "kind": "goal-runtime-index",
+        "job_id": manifest.get("job_id"),
+        "manifest_path": "job.manifest.json",
+        "main_prompt": manifest.get("main_prompt"),
+        "runtime_rules": {
+            "path": manifest.get("runtime_rules_path"),
+            "sha256": manifest.get("runtime_rules_sha256"),
+            "load_policy": "read_before_dispatch",
+        },
+        "route_contract": {
+            "sha256": manifest.get("route_contract_sha256"),
+            "catalog_refresh_required": manifest.get("route_contract", {}).get("catalog_refresh_required")
+            if isinstance(manifest.get("route_contract"), dict)
+            else None,
+        },
+        "execution_strategy": {
+            "id": manifest.get("execution_strategy", {}).get("id")
+            if isinstance(manifest.get("execution_strategy"), dict)
+            else None,
+            "setup_commands": manifest.get("execution_strategy", {}).get("setup_commands", [])
+            if isinstance(manifest.get("execution_strategy"), dict)
+            else [],
+            "validation_env": manifest.get("execution_strategy", {}).get("validation_env", {})
+            if isinstance(manifest.get("execution_strategy"), dict)
+            else {},
+        },
+        "ownership_feasibility": {
+            "status": manifest.get("ownership_feasibility", {}).get("status")
+            if isinstance(manifest.get("ownership_feasibility"), dict)
+            else None,
+            "needs_review_count": manifest.get("ownership_feasibility", {}).get("needs_review_count")
+            if isinstance(manifest.get("ownership_feasibility"), dict)
+            else None,
+        },
+        "branches": branches,
+        "machine_artifacts": [
+            {"path": "preflight.lint.json", "role": "preflight-lint", "load_policy": "summary_only"},
+            {"path": "PREFLIGHT_REPORT.md", "role": "human-report", "load_policy": "initial_epoch_summary"},
+            {"path": "readiness.json", "role": "readiness", "load_policy": "generated_by_render_goal_bootloader"},
+            {"path": "run.trace.jsonl", "role": "runtime-trace", "load_policy": "query_with_targeted_scripts"},
+            {"path": "telemetry.summary.json", "role": "telemetry", "load_policy": "summary_only"},
+        ],
+        "large_artifact_policy": "Use this index and role-specific paths first; load large machine artifacts only through targeted scripts or compact summaries.",
+        "counts": {
+            "branch_count": len(branches),
+            "worker_packet_count": worker_packet_count,
+            "machine_artifact_count": 5,
+        },
+    }
+
+
 def provenance_path(path: Path, bundle_dir: Path) -> dict:
     resolved = path.resolve()
     try:
@@ -1836,6 +2210,15 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
     model_policies = goal_config.get("model_policies", {}) if goal_config else {}
     worker_model_policy = normalize_worker_model_policy(model_policies.get("worker_model_policy", WORKER_MODEL_POLICY))
     worker_route_recommendations_enabled = route_recommendations_enabled(goal_config_check)
+    repo_root = Path(brief["repo_root"]) if isinstance(brief.get("repo_root"), str) and brief["repo_root"] else None
+    goal_config_check_sha256 = (
+        sha256_file(bundle_dir / "goal-config.check.json")
+        if bundle_dir is not None and (bundle_dir / "goal-config.check.json").is_file()
+        else None
+    )
+    route_contract = build_route_contract(goal_config_check, goal_config_check_sha256=goal_config_check_sha256, worker_policy=worker_model_policy)
+    execution_strategy = brief.get("execution_strategy") if isinstance(brief.get("execution_strategy"), dict) else infer_execution_strategy(repo_root or Path.cwd(), brief["branches"])
+    ownership_feasibility = build_ownership_feasibility(brief["branches"], repo_root)
     return {
         "job_id": brief["job_id"],
         "title": brief.get("title") or brief["job_id"],
@@ -1858,6 +2241,10 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "lite_advisor_policy": LITE_ADVISOR_POLICY,
         "research_worker_policy": RESEARCH_WORKER_POLICY,
         "review_model_policy": model_policies.get("review_model_policy", REVIEW_MODEL_POLICY),
+        "route_contract": route_contract,
+        "route_contract_sha256": sha256_json(route_contract),
+        "execution_strategy": execution_strategy,
+        "ownership_feasibility": ownership_feasibility,
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
 	        "telemetry_policy": brief["telemetry_policy"],
@@ -1905,6 +2292,8 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
                     worker_model_policy,
                     recommendations_enabled=worker_route_recommendations_enabled,
                 ),
+                "execution_strategy_ref": execution_strategy.get("id"),
+                "route_contract_sha256": sha256_json(route_contract),
                 "max_active_worker_packets": branch["max_active_worker_packets"],
 	                "worker_parallelism": branch["worker_parallelism"],
 	                **(
@@ -1915,6 +2304,16 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
 	                **(
 	                    {"recovers_from": branch["recovers_from"]}
                     if isinstance(branch.get("recovers_from"), list)
+                    else {}
+                ),
+                **(
+                    {"supersedes": branch["supersedes"]}
+                    if isinstance(branch.get("supersedes"), list)
+                    else {}
+                ),
+                **(
+                    {"recovery_mode": branch["recovery_mode"]}
+                    if isinstance(branch.get("recovery_mode"), str) and branch["recovery_mode"].strip()
                     else {}
                 ),
                 **(
@@ -1990,6 +2389,9 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     goal_config_check = brief.get("goal_config_check") if isinstance(brief.get("goal_config_check"), dict) else None
     route_enabled = route_recommendations_enabled(goal_config_check)
     route_deferred = route_deferred_text(goal_config_check)
+    execution_strategy = brief.get("execution_strategy") if isinstance(brief.get("execution_strategy"), dict) else {}
+    ownership_feasibility = brief.get("ownership_feasibility") if isinstance(brief.get("ownership_feasibility"), dict) else {}
+    route_contract = brief.get("route_contract") if isinstance(brief.get("route_contract"), dict) else {}
     default_worker_ladder_text = (
         CONTRACT.format_worker_ladder(default_worker_ladder)
         if route_enabled
@@ -2017,6 +2419,17 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         dependency_context=branch.get("dependency_context_reason") or "none",
         runtime_rules_path=brief.get("runtime_rules_path", RUNTIME_RULES_PATH),
         runtime_rules_sha256=brief.get("runtime_rules_sha256", ""),
+        runtime_index_path=brief.get("runtime_index_path", "runtime.index.json"),
+        runtime_index_sha256=brief.get("runtime_index_sha256", ""),
+        execution_strategy_id=execution_strategy.get("id", "not_recorded"),
+        execution_strategy_setup=bullets(execution_strategy.get("setup_commands", []), fallback="- No setup command required."),
+        execution_strategy_env=", ".join(f"{key}={value}" for key, value in sorted(execution_strategy.get("validation_env", {}).items()))
+        if isinstance(execution_strategy.get("validation_env"), dict) and execution_strategy.get("validation_env")
+        else "none",
+        route_contract_sha256=brief.get("route_contract_sha256", ""),
+        route_contract_catalog_refresh_required=str(route_contract.get("catalog_refresh_required", "unknown")).lower(),
+        ownership_feasibility_status=ownership_feasibility.get("status", "not_recorded"),
+        ownership_feasibility_needs_review=ownership_feasibility.get("needs_review_count", "unknown"),
         max_active_worker_packets=branch["max_active_worker_packets"],
         effective_worker_cap=effective_worker_cap,
         worker_packet_count=worker_packet_count,
@@ -2111,6 +2524,7 @@ def create_bundle(
     ensure_bundle_dirs(bundle_dir)
     brief["bundle_root"] = bundle_dir.resolve().as_posix()
     brief["repo_root"] = repo_root.resolve().as_posix()
+    brief["execution_strategy"] = infer_execution_strategy(repo_root, brief["branches"])
     preflight_warnings = []
     git_ignore_warning_record = bundle_git_ignore_warning_record(repo_root, bundle_dir)
     if git_ignore_warning_record:
@@ -2150,7 +2564,16 @@ def create_bundle(
         else:
             provenance["check"] = {"source_path": "inline", "source_path_type": "inline", "copied_path": "goal-config.check.json"}
         manifest["goal_config_provenance"] = provenance
-    write(bundle_dir / "job.manifest.json", json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    manifest["runtime_index_path"] = "runtime.index.json"
+    runtime_index = build_runtime_index(manifest)
+    write(bundle_dir / "runtime.index.json", canonical_json_text(runtime_index))
+    manifest["runtime_index_sha256"] = sha256_file(bundle_dir / "runtime.index.json")
+    brief["runtime_index_path"] = manifest["runtime_index_path"]
+    brief["runtime_index_sha256"] = manifest["runtime_index_sha256"]
+    brief["route_contract"] = manifest["route_contract"]
+    brief["route_contract_sha256"] = manifest["route_contract_sha256"]
+    brief["ownership_feasibility"] = manifest["ownership_feasibility"]
+    write(bundle_dir / "job.manifest.json", canonical_json_text(manifest))
 
     write_bundle_prompts(brief, bundle_dir)
 
@@ -2165,6 +2588,10 @@ def create_bundle(
             f"Branches: {len(brief['branches'])}",
             f"Waves: {len(brief['waves'])}",
             f"Runtime rules appendix: {RUNTIME_RULES_PATH} sha256={brief.get('runtime_rules_sha256')}",
+            f"Runtime index: runtime.index.json sha256={manifest.get('runtime_index_sha256')}",
+            f"Execution strategy: {manifest['execution_strategy']['id']} ({manifest['execution_strategy']['reason']})",
+            f"Route contract: sha256={manifest['route_contract_sha256']} catalog_refresh_required={manifest['route_contract']['catalog_refresh_required']}",
+            f"Ownership feasibility: {manifest['ownership_feasibility']['status']} ({manifest['ownership_feasibility']['needs_review_count']} command(s) need review)",
             f"Max active branch agents: {brief['max_active_branch_agents']}",
             f"Runtime readiness gate: {repo_runtime_gate_summary(brief['repo_status'])}",
             f"Config precedence: {brief['preflight_input_precedence']['note']}",

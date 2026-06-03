@@ -44,6 +44,7 @@ BRANCH_VALIDATOR = _load_module(
 
 
 TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendments")
+STALE_ARTIFACT_ROOTS = ("branches/stale", "branches.stale", "reviewers/stale", "reviewers.stale")
 RUNTIME_STATUS_VALUES = set(CONTRACT.STATUSES)
 REVIEW_STATUS_VALUES = set(CONTRACT.REVIEW_STATUSES)
 
@@ -113,6 +114,108 @@ def artifact_ref(bundle_dir: Path, path: Path) -> dict[str, Any]:
         "sha256": sha256_file(path),
         "size_bytes": path.stat().st_size if path.is_file() else None,
     }
+
+
+def stale_artifact_kind(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return "json"
+    if suffix in {".md", ".txt", ".log", ".jsonl"}:
+        return suffix.removeprefix(".")
+    return "artifact"
+
+
+def infer_stale_reason(root_name: str) -> str:
+    if root_name.startswith("branches"):
+        return "branch_artifact_superseded_or_archived"
+    if root_name.startswith("reviewers"):
+        return "reviewer_artifact_superseded_or_archived"
+    return "stale_runtime_archive"
+
+
+def build_stale_artifact_index(bundle_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+    retention_epoch = str(manifest.get("manifest_epoch") or manifest.get("epoch") or "current")
+    entries: list[dict[str, Any]] = []
+    for root_name in STALE_ARTIFACT_ROOTS:
+        root = bundle_dir / root_name
+        if not root.is_dir():
+            continue
+        for path in sorted(item for item in root.rglob("*") if item.is_file()):
+            if path.name == "stale-artifacts.index.json":
+                continue
+            entries.append(
+                {
+                    "artifact_path": rel_path(bundle_dir, path),
+                    "artifact_kind": stale_artifact_kind(path),
+                    "original_hash": sha256_file(path),
+                    "size_bytes": path.stat().st_size,
+                    "stale_reason": infer_stale_reason(root_name),
+                    "superseding_artifact": None,
+                    "excluded_from_current_evidence": True,
+                    "retention_epoch": retention_epoch,
+                }
+            )
+    return {
+        "schema_version": 1,
+        "kind": "stale-artifacts-index",
+        "generated_at": utc_now(),
+        "bundle_dir": bundle_dir.as_posix(),
+        "retention_epoch": retention_epoch,
+        "scan_roots": list(STALE_ARTIFACT_ROOTS),
+        "entries": entries,
+        "entry_count": len(entries),
+    }
+
+
+def stale_artifact_index_state(
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> dict[str, Any]:
+    expected = build_stale_artifact_index(bundle_dir, manifest)
+    index_path = bundle_dir / "stale-artifacts.index.json"
+    state: dict[str, Any] = {
+        "path": "stale-artifacts.index.json",
+        "exists": index_path.exists(),
+        "entry_count": expected["entry_count"],
+        "scan_roots": expected["scan_roots"],
+    }
+    if expected["entry_count"] == 0:
+        return state
+    if not index_path.exists():
+        add_issue(
+            stale_or_unreconciled,
+            code="missing_stale_artifact_index",
+            path="stale-artifacts.index.json",
+            kind="stale_artifact_index",
+            owner="main",
+            message="stale archive artifacts exist but no bundle-level stale-artifacts.index.json records their exclusion",
+        )
+        return state
+    data, error = read_json_or_none(index_path)
+    if data is None:
+        add_issue(
+            stale_or_unreconciled,
+            code="invalid_stale_artifact_index",
+            path="stale-artifacts.index.json",
+            kind="stale_artifact_index",
+            owner="main",
+            message=error or "stale artifact index is not a JSON object",
+        )
+        return state
+    expected_entries = expected.get("entries")
+    actual_entries = data.get("entries")
+    state["indexed_entry_count"] = len(actual_entries) if isinstance(actual_entries, list) else None
+    if actual_entries != expected_entries:
+        add_issue(
+            stale_or_unreconciled,
+            code="stale_artifact_index_out_of_date",
+            path="stale-artifacts.index.json",
+            kind="stale_artifact_index",
+            owner="main",
+            message="stale-artifacts.index.json does not match current stale archive contents",
+        )
+    return state
 
 
 def add_issue(target: list[dict[str, Any]], *, code: str, path: Path | str, kind: str, owner: str, message: str) -> None:
@@ -586,6 +689,42 @@ def branch_state_counts(branch_reports: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
+def string_list(value: object) -> list[str]:
+    return [item for item in value if isinstance(item, str) and item.strip()] if isinstance(value, list) else []
+
+
+def manifest_branches_by_id(branches: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {branch_id: branch for branch in branches if isinstance((branch_id := branch.get("id")), str) and branch_id.strip()}
+
+
+def branch_report_successful(branch: dict[str, Any]) -> bool:
+    validation = branch.get("validation") if isinstance(branch.get("validation"), dict) else {}
+    return branch.get("runtime_status") == "pass" and branch.get("review_status") == "mergeable" and validation.get("status") == "pass"
+
+
+def manifest_branch_declares_recovery(manifest_branch: dict[str, Any] | None, target_branch_id: str) -> bool:
+    if not isinstance(manifest_branch, dict):
+        return False
+    return any(target_branch_id in string_list(manifest_branch.get(field)) for field in ["recovers_from", "supersedes"])
+
+
+def recovered_branch_ids(branches: list[dict[str, Any]], branch_reports: list[dict[str, Any]]) -> set[str]:
+    manifest_by_id = manifest_branches_by_id(branches)
+    successful_branch_ids = {
+        str(branch.get("branch_id"))
+        for branch in branch_reports
+        if isinstance(branch.get("branch_id"), str) and branch_report_successful(branch)
+    }
+    recovered: set[str] = set()
+    for branch in branch_reports:
+        target_branch_id = branch.get("branch_id")
+        if not isinstance(target_branch_id, str) or branch.get("runtime_status") not in {"partial", "blocked", "failed"}:
+            continue
+        if any(manifest_branch_declares_recovery(manifest_by_id.get(recovery_id), target_branch_id) for recovery_id in successful_branch_ids):
+            recovered.add(target_branch_id)
+    return recovered
+
+
 def choose_resume_action(
     *,
     overall_safe_to_reuse: bool,
@@ -633,6 +772,11 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         bundle_dir,
         stale_or_unreconciled=stale_or_unreconciled,
         missing_artifacts=missing_artifacts,
+    )
+    stale_index = stale_artifact_index_state(
+        bundle_dir,
+        manifest,
+        stale_or_unreconciled,
     )
     branch_reports = [
         branch_summary(
@@ -760,6 +904,17 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         for branch in branch_reports
         if branch.get("runtime_status") in RUNTIME_STATUS_VALUES and branch.get("status_path", {}).get("exists") is True
     ]
+    recovered_ids = recovered_branch_ids(branches, branch_reports)
+    blocked_branches = [
+        {
+            "branch_id": branch["branch_id"],
+            "runtime_status": branch.get("runtime_status"),
+            "review_status": branch.get("review_status"),
+            "validation_status": branch.get("validation", {}).get("status"),
+        }
+        for branch in branch_reports
+        if branch.get("runtime_status") in {"partial", "blocked", "failed"} and branch.get("branch_id") not in recovered_ids
+    ]
     missing_branch_ids = [
         branch["branch_id"]
         for branch in branch_reports
@@ -767,6 +922,27 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
     ]
     safe_branch_ids = [branch_id for branch_id, reusable in branch_reuse.items() if reusable]
     blocked_work = [compact_issue_ref(item) for item in [*missing_artifacts, *stale_or_unreconciled]]
+    blocked_work_remaining = [
+        *blocked_work,
+        *[
+            {
+                "code": "terminal_branch_nonpass",
+                "owner": item["branch_id"],
+                "kind": "branch_status",
+                "path": next(
+                    (
+                        branch.get("status_path", {}).get("path")
+                        for branch in branch_reports
+                        if branch.get("branch_id") == item["branch_id"]
+                    ),
+                    None,
+                ),
+                "message": f"branch {item['branch_id']} runtime_status is {item['runtime_status']}",
+            }
+            for item in blocked_branches
+        ],
+    ]
+    goal_complete = status == "pass" and final_state_status == "pass" and not blocked_work_remaining
     report = {
         "schema_version": 1,
         "status": status,
@@ -779,6 +955,12 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             else "missing"
         ),
         "resume_action": resume_action,
+        "artifact_reuse_safe": overall_safe_to_reuse,
+        "goal_complete": goal_complete,
+        "blocked_branches": blocked_branches,
+        "recovered_branches": sorted(recovered_ids),
+        "blocked_work_remaining": blocked_work_remaining,
+        "next_required_action": resume_action,
         "generated_at": utc_now(),
         "bundle_dir": bundle_dir.as_posix(),
         "manifest_path": manifest_path.as_posix(),
@@ -812,12 +994,14 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             "telemetry_summary_exists": telemetry.get("summary_exists"),
         },
         "telemetry": telemetry,
+        "stale_artifact_index": stale_index,
         "manifest_path_checks": manifest_checks,
         "missing_artifacts": missing_artifacts,
         "stale_or_unreconciled": stale_or_unreconciled,
         "safe_to_reuse": {
             "overall": overall_safe_to_reuse,
             "branches": branch_reuse,
+            "interpretation": "artifact reuse safety only; inspect goal_complete and blocked_work_remaining for completion state",
         },
         "next_commands": sorted(dict.fromkeys(next_commands)),
         "final_state_validation": {
@@ -844,6 +1028,8 @@ def main() -> int:
     repo_root = STATUS_VALIDATION.resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True) if args.repo_root else None
     if args.write:
         materialize_main_status_if_missing(manifest_path)
+        manifest = read_json(manifest_path)
+        write_json(manifest_path.parent / "stale-artifacts.index.json", build_stale_artifact_index(manifest_path.parent, manifest))
     report = build_report(manifest_path, repo_root=repo_root)
     if args.write:
         write_json(manifest_path.parent / "orchestration.state.json", report)

@@ -203,6 +203,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def canonical_json_text(value: object) -> str:
+    return json.dumps(value, indent=2, sort_keys=True) + "\n"
+
+
+def sha256_json(value: object) -> str:
+    return hashlib.sha256(canonical_json_text(value).encode("utf-8")).hexdigest()
+
+
 def load_bundle_json(defect, bundle_dir: Path, relative_path: str, label: str) -> dict | None:
     path = bundle_dir / relative_path
     if not path.is_file():
@@ -241,6 +249,8 @@ MANIFEST_REQUIRED_KEYS = (
     "main_prompt",
     "runtime_rules_path",
     "runtime_rules_sha256",
+    "runtime_index_path",
+    "runtime_index_sha256",
     "base_ref",
     "artifact_policy",
     "cleanup_policy",
@@ -254,6 +264,10 @@ MANIFEST_REQUIRED_KEYS = (
     "lite_model_policy",
     "lite_advisor_policy",
     "review_model_policy",
+    "route_contract",
+    "route_contract_sha256",
+    "execution_strategy",
+    "ownership_feasibility",
     "orchestration_watchdog",
     "preflight_lite_advice",
     "preflight_input_precedence",
@@ -324,6 +338,8 @@ BRANCH_REQUIRED_KEYS = (
     "depends_on",
     "owned_paths",
     "work_items",
+    "execution_strategy_ref",
+    "route_contract_sha256",
     "max_active_worker_packets",
     "worker_parallelism",
 )
@@ -334,6 +350,13 @@ BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER = (
     "Work Items",
     "Runtime rules appendix",
     "Runtime rules sha256",
+    "Runtime index",
+    "Runtime index sha256",
+    "Route contract sha256",
+    "Execution strategy",
+    "Execution setup commands",
+    "Execution validation env",
+    "Ownership feasibility",
     "Branch Runtime Parameters",
     "Max active worker packets",
     "Effective worker launch cap",
@@ -1020,6 +1043,115 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
     return config, status
 
 
+def validate_runtime_metadata(defect, bundle_dir: Path, manifest: dict) -> dict | None:
+    route_contract = manifest.get("route_contract")
+    if not isinstance(route_contract, dict):
+        defect("job.manifest.json", "critical", "route_contract must be an object")
+        route_contract = {}
+    elif route_contract.get("schema_version") != 1:
+        defect("job.manifest.json", "critical", "route_contract.schema_version must be 1")
+    route_hash = manifest.get("route_contract_sha256")
+    if not isinstance(route_hash, str) or not route_hash:
+        defect("job.manifest.json", "critical", "route_contract_sha256 must be present")
+    elif sha256_json(route_contract) != route_hash:
+        defect("job.manifest.json", "critical", "route_contract_sha256 does not match route_contract")
+    if not isinstance(route_contract.get("catalog_refresh_required"), bool):
+        defect("job.manifest.json", "critical", "route_contract.catalog_refresh_required must be boolean")
+    if not isinstance(route_contract.get("route_recommendations_enabled"), bool):
+        defect("job.manifest.json", "critical", "route_contract.route_recommendations_enabled must be boolean")
+    if route_contract.get("goal_config_check_path") is not None and route_contract.get("goal_config_check_path") != "goal-config.check.json":
+        defect("job.manifest.json", "critical", "route_contract.goal_config_check_path must be goal-config.check.json when present")
+    route_check_hash = route_contract.get("goal_config_check_sha256")
+    if route_check_hash is not None and route_check_hash != manifest.get("goal_config_check_sha256"):
+        defect("job.manifest.json", "critical", "route_contract.goal_config_check_sha256 must match manifest goal_config_check_sha256")
+
+    execution_strategy = manifest.get("execution_strategy")
+    if not isinstance(execution_strategy, dict):
+        defect("job.manifest.json", "critical", "execution_strategy must be an object")
+        execution_strategy = {}
+    elif execution_strategy.get("schema_version") != 1:
+        defect("job.manifest.json", "critical", "execution_strategy.schema_version must be 1")
+    for key in ("id", "strategy", "reason"):
+        if not isinstance(execution_strategy.get(key), str) or not execution_strategy.get(key, "").strip():
+            defect("job.manifest.json", "critical", f"execution_strategy.{key} must be a non-empty string")
+    setup_commands = execution_strategy.get("setup_commands")
+    if not isinstance(setup_commands, list) or any(not isinstance(item, str) or not item.strip() for item in setup_commands):
+        defect("job.manifest.json", "critical", "execution_strategy.setup_commands must be an array of strings")
+    validation_env = execution_strategy.get("validation_env")
+    if not isinstance(validation_env, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in validation_env.items()):
+        defect("job.manifest.json", "critical", "execution_strategy.validation_env must be an object of string values")
+
+    ownership = manifest.get("ownership_feasibility")
+    if not isinstance(ownership, dict):
+        defect("job.manifest.json", "critical", "ownership_feasibility must be an object")
+        ownership = {}
+    elif ownership.get("schema_version") != 1:
+        defect("job.manifest.json", "critical", "ownership_feasibility.schema_version must be 1")
+    if ownership.get("status") not in {"pass", "needs_review"}:
+        defect("job.manifest.json", "critical", "ownership_feasibility.status must be pass or needs_review")
+    commands = ownership.get("commands")
+    if not isinstance(commands, list):
+        defect("job.manifest.json", "critical", "ownership_feasibility.commands must be an array")
+        commands = []
+    for index, record in enumerate(commands):
+        path = f"ownership_feasibility.commands[{index}]"
+        if not isinstance(record, dict):
+            defect("job.manifest.json", "critical", f"{path} must be an object")
+            continue
+        if record.get("status") not in {"pass", "needs_review"}:
+            defect("job.manifest.json", "critical", f"{path}.status must be pass or needs_review")
+        for key in ("branch_id", "work_item_id", "command", "recommended_action"):
+            if not isinstance(record.get(key), str) or not record.get(key, "").strip():
+                defect("job.manifest.json", "critical", f"{path}.{key} must be a non-empty string")
+        for key in ("required_paths", "branch_owned_paths", "dependency_covered_paths", "uncovered_paths", "missing_owned_paths"):
+            values = record.get(key)
+            if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
+                defect("job.manifest.json", "critical", f"{path}.{key} must be an array of strings")
+    needs_review_count = ownership.get("needs_review_count")
+    if not is_strict_int(needs_review_count) or needs_review_count < 0:
+        defect("job.manifest.json", "critical", "ownership_feasibility.needs_review_count must be a non-negative integer")
+
+    runtime_index_value = manifest.get("runtime_index_path")
+    runtime_index_error = relative_path_defect(runtime_index_value, "runtime_index_path")
+    runtime_index = None
+    if runtime_index_error:
+        defect("job.manifest.json", "critical", runtime_index_error)
+    elif runtime_index_value != "runtime.index.json":
+        defect("job.manifest.json", "critical", "runtime_index_path must be 'runtime.index.json'")
+    else:
+        runtime_index = load_bundle_json(defect, bundle_dir, "runtime.index.json", "runtime_index")
+    index_hash = manifest.get("runtime_index_sha256")
+    if not isinstance(index_hash, str) or not index_hash:
+        defect("job.manifest.json", "critical", "runtime_index_sha256 must be present")
+    elif (bundle_dir / "runtime.index.json").is_file() and sha256_file(bundle_dir / "runtime.index.json") != index_hash:
+        defect("job.manifest.json", "critical", "runtime_index_sha256 does not match runtime.index.json")
+    if runtime_index is None:
+        return None
+    if runtime_index.get("schema_version") != 1:
+        defect("runtime.index.json", "critical", "runtime index schema_version must be 1")
+    if runtime_index.get("kind") != "goal-runtime-index":
+        defect("runtime.index.json", "critical", "runtime index kind must be goal-runtime-index")
+    if runtime_index.get("manifest_path") != "job.manifest.json":
+        defect("runtime.index.json", "critical", "runtime index manifest_path must be job.manifest.json")
+    runtime_rules = runtime_index.get("runtime_rules") if isinstance(runtime_index.get("runtime_rules"), dict) else {}
+    if runtime_rules.get("path") != manifest.get("runtime_rules_path") or runtime_rules.get("sha256") != manifest.get("runtime_rules_sha256"):
+        defect("runtime.index.json", "critical", "runtime index runtime_rules must match manifest runtime rules path/hash")
+    index_route_contract = runtime_index.get("route_contract") if isinstance(runtime_index.get("route_contract"), dict) else {}
+    if index_route_contract.get("sha256") != manifest.get("route_contract_sha256"):
+        defect("runtime.index.json", "critical", "runtime index route_contract.sha256 must match manifest")
+    index_execution = runtime_index.get("execution_strategy") if isinstance(runtime_index.get("execution_strategy"), dict) else {}
+    if index_execution.get("id") != execution_strategy.get("id"):
+        defect("runtime.index.json", "critical", "runtime index execution_strategy.id must match manifest")
+    index_ownership = runtime_index.get("ownership_feasibility") if isinstance(runtime_index.get("ownership_feasibility"), dict) else {}
+    if index_ownership.get("status") != ownership.get("status"):
+        defect("runtime.index.json", "critical", "runtime index ownership_feasibility.status must match manifest")
+    index_counts = runtime_index.get("counts") if isinstance(runtime_index.get("counts"), dict) else {}
+    branch_count = len(manifest.get("branches", [])) if isinstance(manifest.get("branches"), list) else 0
+    if index_counts.get("branch_count") != branch_count:
+        defect("runtime.index.json", "warning", "runtime index branch_count differs from current manifest; regenerate after topology amendments")
+    return runtime_index
+
+
 def lint(bundle_dir: Path) -> dict:
     git_status = _git_repo_status(bundle_dir)
     defects: list[dict] = []
@@ -1072,6 +1204,7 @@ def lint(bundle_dir: Path) -> dict:
     validate_preflight_lite_records(defect, bundle_dir, manifest)
     validate_telemetry_policy(defect, manifest)
     goal_config, config_check_status = validate_goal_config_manifest(defect, bundle_dir, manifest)
+    runtime_index = validate_runtime_metadata(defect, bundle_dir, manifest)
     check_summary = manifest.get("goal_config_check_summary") if isinstance(manifest.get("goal_config_check_summary"), dict) else {}
     if check_summary.get("status") == "pass":
         accepted_routes = check_summary.get("accepted_route_count")
@@ -1662,6 +1795,11 @@ def lint(bundle_dir: Path) -> dict:
             worker_serial_reasons = []
         if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism.get("parallelization_rationale", "").strip():
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelization_rationale must be non-empty")
+        manifest_execution_strategy = manifest.get("execution_strategy") if isinstance(manifest.get("execution_strategy"), dict) else {}
+        if branch.get("execution_strategy_ref") != manifest_execution_strategy.get("id"):
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} execution_strategy_ref must match manifest execution_strategy.id")
+        if branch.get("route_contract_sha256") != manifest.get("route_contract_sha256"):
+            defect("job.manifest.json", "critical", f"branch {branch.get('id')} route_contract_sha256 must match manifest route_contract_sha256")
         if is_strict_int(max_workers) and max_workers < MAX_WORKER_PACKETS_PER_BRANCH and not worker_serial_reasons:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets below 4 requires worker_parallelism.serial_reasons")
         if is_strict_int(max_workers) and isinstance(work_items, list) and len(work_items) == 1 and max_workers > 1 and not worker_serial_reasons:
@@ -1725,6 +1863,14 @@ def lint(bundle_dir: Path) -> dict:
         )
         if not has_dod(text):
             defect(str(prompt_path), "critical", f"branch {branch.get('id')} lacks a falsifiable Definition of Done")
+        if runtime_index is not None and manifest.get("runtime_index_path") not in text:
+            defect(str(prompt_path), "major", f"branch {branch.get('id')} prompt must reference runtime_index_path")
+        route_hash = manifest.get("route_contract_sha256")
+        if isinstance(route_hash, str) and route_hash and route_hash not in text:
+            defect(str(prompt_path), "major", f"branch {branch.get('id')} prompt must embed route_contract_sha256")
+        strategy_id = manifest.get("execution_strategy", {}).get("id") if isinstance(manifest.get("execution_strategy"), dict) else None
+        if isinstance(strategy_id, str) and strategy_id and strategy_id not in text:
+            defect(str(prompt_path), "major", f"branch {branch.get('id')} prompt must embed execution strategy id")
 
     if worker_route_class_count and default_normal_route_count == worker_route_class_count:
         defect(

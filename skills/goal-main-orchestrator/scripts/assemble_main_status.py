@@ -98,8 +98,44 @@ def audit_status(bundle_dir: Path, blockers: list[str]) -> str:
     return str(status)
 
 
+def recovery_map(branches: list[dict]) -> dict[str, list[str]]:
+    recoveries: dict[str, list[str]] = {}
+    for branch in branches:
+        branch_id = branch.get("id")
+        if not isinstance(branch_id, str) or not branch_id.strip():
+            continue
+        for field in ["recovers_from", "supersedes"]:
+            values = branch.get(field)
+            if not isinstance(values, list):
+                continue
+            for target in values:
+                if isinstance(target, str) and target.strip():
+                    recoveries.setdefault(target, [])
+                    if branch_id not in recoveries[target]:
+                        recoveries[target].append(branch_id)
+    return recoveries
+
+
+def recovery_branch_ids(summary: dict) -> list[str]:
+    value = summary.get("recovered_by")
+    return [item for item in value if isinstance(item, str) and item.strip()] if isinstance(value, list) else []
+
+
+def branch_is_successful(summary: dict | None) -> bool:
+    return bool(summary and summary.get("status") == "pass" and summary.get("review_status") == "mergeable")
+
+
+def branch_is_complete_or_recovered(summary: dict, by_id: dict[str, dict]) -> bool:
+    if branch_is_successful(summary):
+        return True
+    if summary.get("recovery_status") != "recovered":
+        return False
+    return any(branch_is_successful(by_id.get(branch_id)) for branch_id in recovery_branch_ids(summary))
+
+
 def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]) -> list[dict]:
     summaries = []
+    branch_recoveries = recovery_map(branches)
     for branch in branches:
         branch_id = str(branch["id"])
         status_rel = str(branch.get("status_path", ""))
@@ -117,23 +153,41 @@ def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]
         if review_status not in REVIEW_STATUSES:
             blockers.append(f"branch {branch_id} status artifact has invalid review_status: {review_status!r}")
             review_status = "missing"
-        if status_value != "pass":
-            for item in status_data.get("blockers", []):
-                if isinstance(item, str) and item.strip():
-                    blockers.append(f"{branch_id}: {item.strip()}")
-            if not status_data.get("blockers"):
-                blockers.append(f"branch {branch_id} ended {status_value}")
-        elif review_status != "mergeable":
-            blockers.append(f"branch {branch_id} passed but review_status is {review_status}")
-        summaries.append(
-            {
-                "branch_id": branch_id,
-                "status": status_value,
-                "status_path": status_rel,
-                "review_path": review_rel,
-                "review_status": review_status,
-            }
-        )
+        summary = {
+            "branch_id": branch_id,
+            "status": status_value,
+            "status_path": status_rel,
+            "review_path": review_rel,
+            "review_status": review_status,
+        }
+        recovered_by = branch_recoveries.get(branch_id, [])
+        if recovered_by:
+            summary["recovered_by"] = recovered_by
+            summary["recovery_status"] = "pending"
+        review_waiver_path = status_data.get("review_waiver_path")
+        if isinstance(review_waiver_path, str) and review_waiver_path.strip():
+            summary["review_waiver_path"] = review_waiver_path
+        summaries.append(summary)
+    by_id = {str(item["branch_id"]): item for item in summaries if isinstance(item.get("branch_id"), str)}
+    for summary in summaries:
+        branch_id = str(summary["branch_id"])
+        if summary.get("status") == "pass":
+            if summary.get("review_status") != "mergeable":
+                blockers.append(f"branch {branch_id} passed but review_status is {summary.get('review_status')}")
+            continue
+        recovered_by = recovery_branch_ids(summary)
+        if recovered_by and any(branch_is_successful(by_id.get(recovery_id)) for recovery_id in recovered_by):
+            summary["recovery_status"] = "recovered"
+            continue
+        if recovered_by:
+            summary["recovery_status"] = "pending"
+        status_rel = str(summary.get("status_path", ""))
+        status_data = load_json(bundle_dir / status_rel) if status_rel and (bundle_dir / status_rel).exists() else {}
+        for item in status_data.get("blockers", []):
+            if isinstance(item, str) and item.strip():
+                blockers.append(f"{branch_id}: {item.strip()}")
+        if not status_data.get("blockers"):
+            blockers.append(f"branch {branch_id} ended {summary.get('status')}")
     return summaries
 
 
@@ -263,10 +317,8 @@ def choose_status(audit: str, branches: list[dict], expected_branch_count: int, 
     if audit in {"blocked", "missing"}:
         return "blocked"
     complete_branch_set = len(branches) == expected_branch_count
-    all_branch_pass = complete_branch_set and all(
-        item.get("status") == "pass" and item.get("review_status") == "mergeable"
-        for item in branches
-    )
+    by_id = {str(item["branch_id"]): item for item in branches if isinstance(item.get("branch_id"), str)}
+    all_branch_pass = complete_branch_set and all(branch_is_complete_or_recovered(item, by_id) for item in branches)
     if all_branch_pass and not blockers:
         return "pass"
     if branches:
@@ -279,7 +331,11 @@ def aggregate_review_status(branch_statuses: list[dict], expected_branch_count: 
         return "missing"
     if len(branch_statuses) < expected_branch_count:
         return "missing"
-    review_statuses = {str(item.get("review_status", "missing")) for item in branch_statuses}
+    by_id = {str(item["branch_id"]): item for item in branch_statuses if isinstance(item.get("branch_id"), str)}
+    review_statuses = {
+        "mergeable" if branch_is_complete_or_recovered(item, by_id) else str(item.get("review_status", "missing"))
+        for item in branch_statuses
+    }
     if review_statuses == {"mergeable"}:
         return "mergeable"
     if "failed" in review_statuses or "blocked" in review_statuses:
@@ -321,6 +377,10 @@ def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summa
         "runtime_status": status,
         "dod_status": "pass" if status == "pass" and not blockers else "incomplete",
         "review_status": review_status,
+        "artifact_valid": True,
+        "runtime_success": status == "pass",
+        "dod_complete": status == "pass" and not blockers,
+        "review_complete": review_status == "mergeable",
         "resume_action": "reuse_terminal_status" if status == "pass" and not blockers else "resume_or_repair",
         "audit_status": audit,
         "branch_parallelism": branch_parallelism,
@@ -367,7 +427,15 @@ def main() -> int:
         write_decision=not args.no_write_amendment_decision,
         summary_text=args.summary,
     )
-    result = {"status": data["status"], "status_path": out_path.as_posix(), "blockers": data["blockers"]}
+    result = {
+        "status": data["status"],
+        "status_path": out_path.as_posix(),
+        "blockers": data["blockers"],
+        "artifact_valid": data.get("artifact_valid"),
+        "runtime_success": data.get("runtime_success"),
+        "dod_complete": data.get("dod_complete"),
+        "review_complete": data.get("review_complete"),
+    }
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:

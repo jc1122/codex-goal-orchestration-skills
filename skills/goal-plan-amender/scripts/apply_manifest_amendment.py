@@ -12,13 +12,21 @@ from pathlib import Path
 from amendment_lib import (
     CONTRACT,
     PREFLIGHT,
+    add_lineage_stage,
+    amendment_lineage_path,
+    enrich_brief_runtime_metadata,
     ensure_amendment_id,
+    latest_lineage_sha,
+    lineage_path_rel,
+    load_lineage,
     load_json_object,
+    prompt_regeneration_branch_ids,
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
     validate_proposal,
     write_json,
+    write_runtime_index,
 )
 from validate_amender_packet import validate_packet
 
@@ -34,10 +42,10 @@ def atomic_write_json(path: Path, data: object) -> None:
     os.replace(tmp_name, path)
 
 
-def changed_prompt_paths(bundle_dir: Path, candidate: dict, changed_branch_ids: set[str]) -> list[Path]:
+def branch_prompt_paths(bundle_dir: Path, candidate: dict, branch_ids: set[str]) -> list[Path]:
     paths: list[Path] = []
     for branch in candidate.get("branches", []):
-        if not isinstance(branch, dict) or branch.get("id") not in changed_branch_ids:
+        if not isinstance(branch, dict) or branch.get("id") not in branch_ids:
             continue
         prompt = branch.get("prompt")
         if not isinstance(prompt, str) or relative_path_defect(prompt, "prompt"):
@@ -54,6 +62,29 @@ def restore_prompt_backups(backups: dict[Path, str | None]) -> None:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+
+def mark_preflight_report_initial_epoch(bundle_dir: Path, amendment_id: str, manifest_sha256: str) -> None:
+    report_path = bundle_dir / "PREFLIGHT_REPORT.md"
+    if not report_path.exists():
+        return
+    text = report_path.read_text(encoding="utf-8")
+    marker = f"Accepted amendment: {amendment_id}"
+    if marker in text and "initial_epoch_only" in text:
+        return
+    notice = "\n".join(
+        [
+            "",
+            "## Runtime Amendment Notice",
+            "",
+            "Status: initial_epoch_only",
+            f"Accepted amendment: {amendment_id}",
+            f"Current manifest sha256: {manifest_sha256}",
+            "This preflight report describes the initial bundle topology. Use job.manifest.json, runtime.index.json, amendment accepted records, and current scheduler/status artifacts for amended runtime topology.",
+            "",
+        ]
+    )
+    report_path.write_text(text.rstrip() + "\n" + notice, encoding="utf-8")
 
 
 def require_launch_packet_validation(manifest_path: Path, proposal_path: Path, amendment_id: str) -> None:
@@ -140,6 +171,17 @@ def main() -> int:
         write_json(validation_path, fresh_validation)
         raise SystemExit("fresh amendment validation failed; live manifest was not changed")
 
+    lineage_path = amendment_lineage_path(bundle_dir, amendment_id)
+    lineage = load_lineage(lineage_path, amendment_id=amendment_id)
+    parent_sha = latest_lineage_sha(lineage)
+    add_lineage_stage(
+        lineage,
+        stage="final_proposal",
+        path=lineage_path_rel(bundle_dir, proposal_path),
+        sha256=validation.get("proposal_sha256", fresh_validation.get("proposal_sha256", "sha256:")),
+        parent_sha256=parent_sha,
+    )
+
     amendments_dir = bundle_dir / "amendments"
     archive_path = amendments_dir / f"{amendment_id}.job.manifest.before.json"
     accepted_path = amendments_dir / f"{amendment_id}.accepted.json"
@@ -148,24 +190,61 @@ def main() -> int:
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     archive_path.write_text(manifest_path.read_text(encoding="utf-8"), encoding="utf-8")
 
-    changed_branch_ids = set(fresh_validation.get("changed_branch_ids", []))
+    protected_branch_ids = set(str(item) for item in fresh_validation.get("protected_branch_ids", []) if isinstance(item, str))
+    regenerated_branch_ids = set(prompt_regeneration_branch_ids(candidate, protected_branch_ids))
     prompt_backups = {
         path: path.read_text(encoding="utf-8") if path.exists() else None
-        for path in changed_prompt_paths(bundle_dir, candidate, changed_branch_ids)
+        for path in branch_prompt_paths(bundle_dir, candidate, regenerated_branch_ids)
     }
+    report_path = bundle_dir / "PREFLIGHT_REPORT.md"
+    report_backup = report_path.read_text(encoding="utf-8") if report_path.exists() else None
+    runtime_index_path = bundle_dir / "runtime.index.json"
+    runtime_index_backup = runtime_index_path.read_text(encoding="utf-8") if runtime_index_path.exists() else None
     try:
         atomic_write_json(manifest_path, candidate)
-        PREFLIGHT.write_bundle_prompts(normalized_brief, bundle_dir, branch_ids=changed_branch_ids, write_main=False)
+        write_runtime_index(bundle_dir, candidate)
+        prompt_brief = enrich_brief_runtime_metadata(normalized_brief, candidate, bundle_dir=bundle_dir)
+        PREFLIGHT.write_bundle_prompts(prompt_brief, bundle_dir, branch_ids=regenerated_branch_ids, write_main=False)
         lint = PREFLIGHT.lint_bundle(bundle_dir, write_output=True)
         if lint.get("status") != "pass":
             raise SystemExit("amended manifest failed lint and was restored")
         if fresh_validation.get("candidate_manifest_sha256") != sha256_file(manifest_path):
             raise SystemExit("written manifest sha256 does not match validated candidate manifest")
+        mark_preflight_report_initial_epoch(bundle_dir, amendment_id, sha256_file(manifest_path))
     except BaseException:
         if archive_path.exists():
             manifest_path.write_text(archive_path.read_text(encoding="utf-8"), encoding="utf-8")
         restore_prompt_backups(prompt_backups)
+        if report_backup is None:
+            try:
+                report_path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            report_path.write_text(report_backup, encoding="utf-8")
+        if runtime_index_backup is None:
+            try:
+                runtime_index_path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            runtime_index_path.write_text(runtime_index_backup, encoding="utf-8")
         raise
+    manifest_sha256_after = sha256_file(manifest_path)
+    add_lineage_stage(
+        lineage,
+        stage="manifest_before",
+        path=lineage_path_rel(bundle_dir, archive_path),
+        sha256=fresh_validation["manifest_sha256_before"],
+        parent_sha256=latest_lineage_sha(lineage),
+    )
+    add_lineage_stage(
+        lineage,
+        stage="manifest_after",
+        path=lineage_path_rel(bundle_dir, manifest_path),
+        sha256=manifest_sha256_after,
+        parent_sha256=latest_lineage_sha(lineage),
+    )
 
     accepted = {
         "schema_version": 1,
@@ -183,11 +262,20 @@ def main() -> int:
         "regenerated_prompts": [
             branch["prompt"]
             for branch in candidate.get("branches", [])
-            if isinstance(branch, dict) and branch.get("id") in changed_branch_ids and isinstance(branch.get("prompt"), str)
+            if isinstance(branch, dict) and branch.get("id") in regenerated_branch_ids and isinstance(branch.get("prompt"), str)
         ],
         "lint_status": lint.get("status"),
+        "lineage_path": lineage_path.as_posix(),
     }
     write_json(accepted_path, accepted)
+    add_lineage_stage(
+        lineage,
+        stage="acceptance",
+        path=lineage_path_rel(bundle_dir, accepted_path),
+        sha256=sha256_file(accepted_path),
+        parent_sha256=latest_lineage_sha(lineage),
+    )
+    write_json(lineage_path, lineage)
     print(accepted_path)
     return 0
 

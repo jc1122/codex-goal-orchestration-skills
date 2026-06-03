@@ -26,6 +26,7 @@ def _load_shared_script(module_name: str, script_name: str, label: str):
 CONTRACT = _load_shared_script("goal_shared_orchestration_contract", "orchestration_contract.py", "shared orchestration contract")
 STATUS_VALIDATION = _load_shared_script("goal_shared_status_validation", "status_validation.py", "shared status validation helpers")
 CONTEXT_PACK = _load_shared_script("goal_shared_context_pack", "context_pack.py", "shared context pack helper")
+BRANCH_VALIDATOR = None
 GEMINI_COMMAND = "gemini"
 GEMINI_APPROVAL_MODE = "yolo"
 GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
@@ -49,9 +50,12 @@ GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
 MAX_CONTEXT_PACK_CHARS = CONTEXT_PACK.DEFAULT_TOTAL_CHARS
 MAX_CONTEXT_FILE_CHARS = CONTEXT_PACK.DEFAULT_PER_FILE_CHARS
+MAX_PACKET_PROMPT_CHARS = 40000
+APPROX_CHARS_PER_TOKEN = 4
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 ALLOWED_WORKER_ROUTES = CONTRACT.ALLOWED_WORKER_ROUTES
 DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
+ROUTE_POLICY_VERSION = "goal-route-policy-v2"
 WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
 WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
 WORKER_ROUTE_LABELS = {
@@ -89,6 +93,19 @@ safe_branch_name = PATH_RULES.safe_branch_name
 shell_quote = CONTRACT.shell_quote
 
 
+def branch_validator():
+    global BRANCH_VALIDATOR
+    if BRANCH_VALIDATOR is None:
+        path = Path(__file__).resolve().parent / "validate_branch_status.py"
+        spec = importlib.util.spec_from_file_location("goal_branch_validate_branch_status", path)
+        if spec is None or spec.loader is None:
+            raise SystemExit(f"could not load branch status validator: {path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        BRANCH_VALIDATOR = module
+    return BRANCH_VALIDATOR
+
+
 def nonempty_text(value: object) -> str:
     return value.strip() if isinstance(value, str) else ""
 
@@ -106,6 +123,76 @@ def normalize_context_files(values: list[str]) -> list[str]:
         path = resolve_absolute_path(value, "--context-file", must_exist=True)
         normalized.append(path.as_posix())
     return normalized
+
+
+def _validate_file_in_base(raw: object, base: Path, *, label: str, allow_escape: bool = False) -> str | None:
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    path_text = raw.strip()
+    if "\\" in path_text:
+        return f"{label} must use POSIX path separators: {path_text!r}"
+    path = Path(path_text)
+    resolved = path if path.is_absolute() else (base / path).resolve()
+    if not allow_escape and not path.is_absolute():
+        try:
+            resolved.relative_to(base.resolve())
+        except ValueError:
+            return f"{label} must stay within base directory {base.as_posix()}; got {path_text!r}"
+    if not resolved.is_file():
+        return f"{label} does not exist as a file: {path_text!r} (resolved: {resolved.as_posix()})"
+    return None
+
+
+def validate_runtime_context_inputs(
+    *,
+    packet_id: str,
+    worktree: Path,
+    context_files: list[str],
+    manifest: dict | None,
+    manifest_branch_id: str,
+    manifest_path: Path | None,
+    manifest_work_item: dict | None,
+) -> None:
+    defects: list[str] = []
+    for context_file in context_files:
+        defect = _validate_file_in_base(context_file, worktree, label=f"{packet_id} context file {context_file}")
+        if defect is not None:
+            defects.append(defect)
+
+    if manifest_work_item is not None:
+        manifest_context_files = compact_list(manifest_work_item.get("context_files"))
+        for context_file in manifest_context_files:
+            defect = _validate_file_in_base(
+                context_file,
+                worktree,
+                label=f"{packet_id} manifest context file {context_file}",
+                allow_escape=True,
+            )
+            if defect is not None:
+                defects.append(defect)
+
+    if manifest is not None and manifest_path is not None:
+        branch = branch_entry(manifest, manifest_branch_id)
+        if isinstance(branch, dict):
+            dependency_base = manifest_path.parent
+            for dep_id in compact_list(branch.get("depends_on")):
+                dependency = branch_entry(manifest, dep_id)
+                if not isinstance(dependency, dict):
+                    continue
+                for field in ("status_path", "review_path", "pre_review_gate_path"):
+                    dependency_path = dependency.get(field)
+                    if isinstance(dependency_path, str):
+                        defect = _validate_file_in_base(
+                            dependency_path,
+                            dependency_base,
+                            label=f"{packet_id} dependency {dep_id} {field}",
+                            allow_escape=False,
+                        )
+                        if defect is not None:
+                            defects.append(defect)
+
+    if defects:
+        raise SystemExit("runtime packet pre-launch validation failed:\n" + "\n".join(f"- {item}" for item in defects))
 
 
 def normalize_worker_ladder(
@@ -290,6 +377,7 @@ def apply_model_catalog_to_worker_ladder(
         )
     metadata = {
         "path": catalog_path.as_posix(),
+        "sha256": CONTEXT_PACK.sha256_file(catalog_path),
         "source": data.get("source"),
         "status": data.get("status"),
         "checked_aliases": checked_aliases,
@@ -401,6 +489,11 @@ def configured_telemetry_attempts(
                 + CODEX_LEAN_EXEC_FLAGS_TEXT
                 + f" -m {model.get('model')} -s {sandbox}"
             )
+        if kind == "gemini":
+            attempt["probe_model"] = str(model.get("model") or "")
+            attempt["probe_timeout_seconds"] = GEMINI_PROBE_TIMEOUT_SECONDS
+            attempt["probe_prompt"] = GEMINI_PROBE_PROMPT
+            attempt["probe_logs"] = [f"events-{label}-probe.log"]
         attempts.append(attempt)
     return attempts
 
@@ -547,6 +640,8 @@ def strict_schema_defects(schema: object, path: str = "$") -> list[str]:
     defects: list[str] = []
     if not isinstance(schema, dict):
         return defects
+    if "const" in schema and isinstance(schema.get("const"), (list, dict)):
+        defects.append(f"{path}: OpenAI structured output schemas do not support non-scalar const values")
     schema_type = schema.get("type")
     is_object = schema_type == "object" or "properties" in schema
     if is_object:
@@ -579,11 +674,27 @@ def validate_openai_strict_schema(schema: dict, schema_name: str) -> None:
         raise SystemExit(f"{schema_name} is not OpenAI strict-schema compatible:\n" + "\n".join(defects))
 
 
-def status_schema(packet_id: str, branch: str, worktree: str, selected_ladder: list[str] | None = None) -> dict:
+def status_schema(
+    packet_id: str,
+    branch: str,
+    worktree: str,
+    selected_ladder: list[str] | None = None,
+    *,
+    branch_id: str = "",
+    work_item_id: str = "",
+    manifest_hash: str = "",
+    manifest_epoch: str = "current",
+    route_id: str = "",
+) -> dict:
     repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
     nonempty_string = {"type": "string", "minLength": 1}
     selected_ladder_schema = (
-        {"type": "array", "items": nonempty_string, "const": selected_ladder}
+        {
+            "type": "array",
+            "minItems": len(selected_ladder),
+            "maxItems": len(selected_ladder),
+            "items": {"type": "string", "enum": selected_ladder},
+        }
         if selected_ladder
         else {
             "type": "array",
@@ -600,6 +711,13 @@ def status_schema(packet_id: str, branch: str, worktree: str, selected_ladder: l
             "packet_id": exact_string_schema(packet_id),
             "role": exact_string_schema("worker"),
             "status": {"type": "string", "enum": list(CONTRACT.STATUSES)},
+            "branch_id": exact_string_schema(branch_id),
+            "work_item_id": exact_string_schema(work_item_id),
+            "manifest_hash": exact_string_schema(manifest_hash),
+            "manifest_epoch": exact_string_schema(manifest_epoch),
+            "worktree_path": exact_string_schema(worktree),
+            "route_id": exact_string_schema(route_id),
+            "evidence_summary": nonempty_string,
             "branch": exact_string_schema(branch),
             "worktree": exact_string_schema(worktree),
             "route_class": {"type": "string", "enum": list(WORKER_ROUTE_CLASSES)},
@@ -715,6 +833,42 @@ def context_section(worktree: str, context_files: list[str], *, include_worktree
         include_worktree_excerpts=include_worktree_excerpts,
     )
     return CONTEXT_PACK.markdown_from_pack(pack)
+
+
+def context_budget_report(
+    *,
+    prompt_text: str,
+    task_text: str,
+    context_files: list[str],
+    include_worktree_context_excerpts: bool,
+) -> dict:
+    prompt_chars = len(prompt_text)
+    task_chars = len(task_text)
+    estimate = max(1, round(prompt_chars / APPROX_CHARS_PER_TOKEN))
+    status = "pass" if prompt_chars <= MAX_PACKET_PROMPT_CHARS else "blocked"
+    return {
+        "schema_version": 1,
+        "status": status,
+        "prompt_chars": prompt_chars,
+        "prompt_tokens_estimate": estimate,
+        "prompt_char_limit": MAX_PACKET_PROMPT_CHARS,
+        "task_chars": task_chars,
+        "context_files_count": len(context_files),
+        "context_pack_total_char_limit": MAX_CONTEXT_PACK_CHARS,
+        "context_pack_per_file_char_limit": MAX_CONTEXT_FILE_CHARS,
+        "worktree_context_mode": "embedded_excerpt" if include_worktree_context_excerpts else "path_reference",
+        "load_policy": "bounded_context_pack_and_path_manifest",
+    }
+
+
+def enforce_context_budget(packet_id: str, report: dict) -> None:
+    if report.get("status") == "pass":
+        return
+    raise SystemExit(
+        "runtime packet context budget exceeded before launch: "
+        f"{packet_id} prompt_chars={report.get('prompt_chars')} "
+        f"limit={report.get('prompt_char_limit')}"
+    )
 
 
 def load_task(path: Path | None) -> str:
@@ -936,10 +1090,32 @@ def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
                 next_index = max(next_index, int(suffix) + 1)
     archive_dir = attempts_dir / f"attempt-{next_index:03d}"
     archive_dir.mkdir()
+    index_entries = []
     for child in sorted(packet_dir.iterdir()):
         if child.name == "attempts":
             continue
-        child.rename(archive_dir / child.name)
+        archived_path = archive_dir / child.name
+        index_entries.append(
+            {
+                "artifact_path": child.relative_to(packet_dir).as_posix(),
+                "archived_path": archived_path.relative_to(packet_dir).as_posix(),
+                "original_sha256": CONTEXT_PACK.sha256_file(child) if child.is_file() else None,
+                "stale_reason": "packet_replaced",
+                "superseding_packet": packet_dir.name,
+                "excluded_from_current_evidence": True,
+                "retention_epoch": archive_dir.name,
+            }
+        )
+        child.rename(archived_path)
+    write_json(
+        packet_dir / "stale-artifacts.index.json",
+        {
+            "schema_version": 1,
+            "packet_id": packet_dir.name,
+            "retention_epoch": archive_dir.name,
+            "entries": index_entries,
+        },
+    )
 
 
 def branch_entry(manifest: dict, branch_id: str) -> dict:
@@ -1157,6 +1333,8 @@ def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id
         "selected_ladder": route,
         "selection_reason": "; ".join(reasons),
         "policy_router": policy.get("router", CONTRACT.REVIEW_MODEL_POLICY["router"]),
+        "policy_version": policy.get("version", ROUTE_POLICY_VERSION),
+        "route_policy_version": ROUTE_POLICY_VERSION,
         "policy_routes": routes or CONTRACT.REVIEW_MODEL_POLICY["routes"],
         "heavy_triggers": reasons if tier == "heavy" else [],
         "route_classes": branch_route_classes(branch),
@@ -1306,12 +1484,25 @@ def worker_prompt(
     route_class: str,
     selection_reason: str,
     include_worktree_context_excerpts: bool,
+    *,
+    branch_id: str = "",
+    work_item_id: str = "",
+    manifest_hash: str = "",
+    manifest_epoch: str = "current",
+    route_id: str = "",
 ) -> str:
     example_status = json.dumps(
         {
             "packet_id": packet_id,
             "role": "worker",
             "status": "blocked",
+            "branch_id": branch_id,
+            "work_item_id": work_item_id,
+            "manifest_hash": manifest_hash,
+            "manifest_epoch": manifest_epoch,
+            "worktree_path": worktree,
+            "route_id": route_id,
+            "evidence_summary": "replace with concise evidence summary",
             "branch": branch,
             "worktree": worktree,
             "route_class": route_class,
@@ -1338,7 +1529,7 @@ Selected worker ladder: {", ".join(selected_ladder)}
 Route class: {route_class}
 Route selection reason: {selection_reason}
 
-Copy `route_class`, `selected_ladder`, and `selection_reason` exactly into the final worker status. Do not change model aliases, model ids, effort levels, or provider order.
+Copy `branch_id`, `work_item_id`, `manifest_hash`, `manifest_epoch`, `worktree_path`, `route_id`, `route_class`, `selected_ladder`, and `selection_reason` exactly into the final worker status. Do not change model aliases, model ids, effort levels, or provider order.
 
 {optional_list("Owned files/modules", owned_files)}
 
@@ -1379,6 +1570,7 @@ def prompt_for(
     selection_reason: str,
     packet_context_path: str = "",
     include_worktree_context_excerpts: bool = False,
+    worker_attribution: dict[str, str] | None = None,
 ) -> str:
     if role == "reviewer":
         return reviewer_prompt(packet_id, branch, worktree, schema_name, context_files, packet_context_path, include_worktree_context_excerpts)
@@ -1387,9 +1579,24 @@ def prompt_for(
             packet_id, branch, worktree, schema_name, owned_files, context_files, task_text, include_worktree_context_excerpts
         )
     if role == "worker":
+        attribution = worker_attribution or {}
         return worker_prompt(
-            packet_id, branch, worktree, schema_name, owned_files, context_files, task_text,
-            selected_ladder or list(DEFAULT_WORKER_LADDER), route_class, selection_reason, include_worktree_context_excerpts,
+            packet_id,
+            branch,
+            worktree,
+            schema_name,
+            owned_files,
+            context_files,
+            task_text,
+            selected_ladder or list(DEFAULT_WORKER_LADDER),
+            route_class,
+            selection_reason,
+            include_worktree_context_excerpts,
+            branch_id=attribution.get("branch_id", ""),
+            work_item_id=attribution.get("work_item_id", ""),
+            manifest_hash=attribution.get("manifest_hash", ""),
+            manifest_epoch=attribution.get("manifest_epoch", "current"),
+            route_id=attribution.get("route_id", ""),
         )
     raise SystemExit(f"unsupported role for prompt generation: {role}")
 
@@ -1499,6 +1706,84 @@ def launch_config_base(
     }
 
 
+def annotate_attempt_metadata(config: dict) -> dict:
+    attempts = config.get("attempts")
+    if not isinstance(attempts, list):
+        return config
+    for attempt in attempts:
+        if not isinstance(attempt, dict):
+            continue
+        command = attempt.get("command")
+        if isinstance(command, str) and command.strip():
+            attempt.setdefault("rendered_command", command)
+        attempt.setdefault("route_policy_version", ROUTE_POLICY_VERSION)
+        attempt.setdefault(
+            "telemetry_capability",
+            {
+                "token_usage": "best_effort",
+                "source": "provider_or_harness_output",
+            },
+        )
+    return config
+
+
+def _nonempty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def validate_launch_config_adapter(config: dict) -> None:
+    attempts = config.get("attempts")
+    defects: list[str] = []
+    if not isinstance(attempts, list) or not attempts:
+        defects.append("launch-config attempts must be a non-empty array")
+    else:
+        for index, attempt in enumerate(attempts):
+            path = f"attempts[{index}]"
+            if not isinstance(attempt, dict):
+                defects.append(f"{path} must be an object")
+                continue
+            provider = attempt.get("harness_kind") or attempt.get("provider")
+            if provider not in {"codex", "gemini", "opencode", "generic-cli", "copilot"}:
+                defects.append(f"{path}.provider must be a supported route adapter, got {provider!r}")
+                continue
+            for key in ["alias", "model", "command", "rendered_command", "route_policy_version"]:
+                if not _nonempty_string(attempt.get(key)):
+                    defects.append(f"{path}.{key} must be a non-empty string")
+            timeout = attempt.get("timeout_seconds")
+            if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+                defects.append(f"{path}.timeout_seconds must be a positive integer")
+            telemetry_capability = attempt.get("telemetry_capability")
+            if not isinstance(telemetry_capability, dict) or not _nonempty_string(telemetry_capability.get("token_usage")):
+                defects.append(f"{path}.telemetry_capability.token_usage must describe token telemetry support")
+            if provider in {"gemini", "copilot"} and not _nonempty_string(attempt.get("probe_model")):
+                defects.append(f"{path}.probe_model is required for {provider} probe validation")
+            if provider == "gemini":
+                for key in ["gemini_command", "gemini_probe_prompt", "gemini_approval_mode"]:
+                    if not _nonempty_string(config.get(key)):
+                        defects.append(f"launch-config.{key} is required for gemini attempts")
+            if provider == "copilot" and not _nonempty_string(config.get("copilot_command")):
+                defects.append("launch-config.copilot_command is required for copilot attempts")
+            if provider in {"opencode", "generic-cli"}:
+                if not _nonempty_string(attempt.get("command_binary")):
+                    defects.append(f"{path}.command_binary is required for {provider} attempts")
+                run_args = attempt.get("run_args")
+                if not isinstance(run_args, list):
+                    defects.append(f"{path}.run_args must be an array for {provider} attempts")
+                if not _nonempty_string(attempt.get("run_readback")):
+                    defects.append(f"{path}.run_readback is required for {provider} attempts")
+            if provider == "generic-cli":
+                markers = attempt.get("status_markers")
+                if not isinstance(markers, dict) or not _nonempty_string(markers.get("begin")) or not _nonempty_string(markers.get("end")):
+                    defects.append(f"{path}.status_markers begin/end are required for generic-cli marker extraction")
+    selected_ladder = config.get("selected_ladder")
+    if selected_ladder is not None:
+        aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)] if isinstance(attempts, list) else []
+        if selected_ladder != aliases:
+            defects.append("launch-config selected_ladder must exactly match attempt aliases")
+    if defects:
+        raise SystemExit("launch-config adapter validation failed before launch:\n" + "\n".join(defects))
+
+
 def compact_launch_config(
     role: str,
     packet_id: str,
@@ -1528,7 +1813,7 @@ def compact_launch_config(
         else {}
     )
     if role == "worker":
-        return {
+        return annotate_attempt_metadata({
             **launch_config_base(
                 "worker", packet_id, branch, worktree, schema_name, output_name, "workspace-write", WORKER_ATTEMPT_TIMEOUT_SECONDS
             ),
@@ -1551,9 +1836,9 @@ def compact_launch_config(
             "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
             "gemini_approval_mode": GEMINI_APPROVAL_MODE,
             "gemini_command": GEMINI_COMMAND,
-        }
+        })
     if role == "research-worker":
-        return {
+        return annotate_attempt_metadata({
             **launch_config_base(
                 "research-worker", packet_id, branch, worktree, schema_name, output_name, "read-only", RESEARCH_ATTEMPT_TIMEOUT_SECONDS
             ),
@@ -1561,14 +1846,14 @@ def compact_launch_config(
             "attempts": research_telemetry_attempts(),
             "telemetry_script": telemetry_script,
             "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
-        }
+        })
     if role == "reviewer":
         reviewer_ladder = reviewer_ladder_from_route(review_route)
         terminal_commands = [
             configured_route_commands([alias], goal_config)[0] if goal_config else CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
             for alias in reviewer_ladder
         ]
-        return {
+        return annotate_attempt_metadata({
             **launch_config_base(
                 "reviewer", packet_id, branch, worktree, schema_name, output_name, "read-only", REVIEWER_ATTEMPT_TIMEOUT_SECONDS
             ),
@@ -1585,7 +1870,7 @@ def compact_launch_config(
             },
             "terminal_commands": terminal_commands,
             "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
-        }
+        })
     return None
 
 
@@ -1696,6 +1981,11 @@ def main() -> int:
             manifest_path=manifest_path,
             branch_id=branch_id,
             review_packet_id=packet_id,
+            required_input_paths=branch_validator().required_pre_review_input_paths(
+                branch_entry(manifest, branch_id),
+                branch_id,
+                bundle_dir=manifest_path.parent,
+            ),
         )
         if defects:
             raise SystemExit("pre-review gate failed; refusing reviewer packet generation:\n" + "\n".join(defects))
@@ -1722,6 +2012,7 @@ def main() -> int:
     route_class = DEFAULT_WORKER_ROUTE_CLASS
     selection_reason = ""
     model_catalog: dict | None = None
+    manifest_work_item: dict | None = None
     if args.role == "worker":
         normalized_worker_routes: list[str] = []
         for item in args.worker_route:
@@ -1729,7 +2020,6 @@ def main() -> int:
                 normalized_worker_routes.append(item)
             else:
                 normalized_worker_routes.extend(item)
-        manifest_work_item: dict | None = None
         manifest_context = find_manifest_context(context_files, manifest_branch_id, packet_id)
         if manifest_context is not None:
             _manifest_path, _manifest, _branch_data, manifest_work_item = manifest_context
@@ -1782,11 +2072,7 @@ def main() -> int:
             worker_policy if goal_config_from_manifest(manifest, manifest_path) else None,
         )
 
-    out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
-    packet_dir = out_dir / packet_id
-    archive_existing_packet_dir(packet_dir, replace=args.replace)
-    packet_dir.mkdir(parents=True, exist_ok=True)
-
+    worker_attribution: dict[str, str] = {}
     if args.role == "reviewer":
         schema_name = "review.schema.json"
         output_name = "review.json"
@@ -1798,10 +2084,35 @@ def main() -> int:
     else:
         schema_name = "status.schema.json"
         output_name = "status.json"
-        schema = status_schema(packet_id, branch, str(worktree), selected_ladder)
+        manifest_hash = CONTEXT_PACK.sha256_file(manifest_path) if manifest_path else ""
+        work_item_id = manifest_work_item.get("id") if isinstance(manifest_work_item, dict) else ""
+        manifest_epoch = str(manifest.get("manifest_epoch") or manifest.get("epoch") or "current") if isinstance(manifest, dict) else "current"
+        route_id = f"{packet_id}:{route_class}:{','.join(selected_ladder or [])}"
+        worker_attribution = {
+            "branch_id": manifest_branch_id,
+            "work_item_id": str(work_item_id),
+            "manifest_hash": manifest_hash,
+            "manifest_epoch": manifest_epoch,
+            "worktree_path": str(worktree),
+            "route_id": route_id,
+            "evidence_summary": "worker output is attributed to manifest, work item, route, and worktree",
+        }
+        schema = status_schema(
+            packet_id,
+            branch,
+            str(worktree),
+            selected_ladder,
+            branch_id=manifest_branch_id,
+            work_item_id=str(work_item_id),
+            manifest_hash=manifest_hash,
+            manifest_epoch=manifest_epoch,
+            route_id=route_id,
+        )
 
     validate_openai_strict_schema(schema, schema_name)
     task_text = load_task(task_file)
+    out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
+    packet_dir = out_dir / packet_id
     packet_context: dict | None = None
     packet_context_path = ""
     if args.role == "reviewer":
@@ -1834,29 +2145,46 @@ def main() -> int:
             if manifest_owned_files:
                 owned_files = manifest_owned_files
 
-    write_json(packet_dir / schema_name, schema)
-    if packet_context is not None:
-        write_json(packet_dir / "packet-context.json", packet_context)
-    (packet_dir / "prompt.md").write_text(
-        prompt_for(
-            args.role,
-            packet_id,
-            branch,
-            str(worktree),
-            schema_name,
-            owned_files,
-            context_files,
-            task_text,
-            selected_ladder,
-            route_class,
-            selection_reason,
-            packet_context_path,
-            args.include_worktree_context_excerpts,
-        ),
-        encoding="utf-8",
+    validate_runtime_context_inputs(
+        packet_id=packet_id,
+        worktree=worktree,
+        context_files=context_files,
+        manifest=manifest,
+        manifest_branch_id=manifest_branch_id,
+        manifest_path=manifest_path,
+        manifest_work_item=manifest_work_item,
     )
+
+    prompt_text = prompt_for(
+        args.role,
+        packet_id,
+        branch,
+        str(worktree),
+        schema_name,
+        owned_files,
+        context_files,
+        task_text,
+        selected_ladder,
+        route_class,
+        selection_reason,
+        packet_context_path,
+        args.include_worktree_context_excerpts,
+        worker_attribution=worker_attribution,
+    )
+    context_budget = context_budget_report(
+        prompt_text=prompt_text,
+        task_text=task_text,
+        context_files=context_files,
+        include_worktree_context_excerpts=args.include_worktree_context_excerpts,
+    )
+    enforce_context_budget(packet_id, context_budget)
+    if packet_context is not None:
+        packet_context["context_budget"] = context_budget
+
+    route: dict | None = None
     if args.role == "worker":
         route = {
+            "schema_version": 1,
             "packet_id": packet_id,
             "role": "worker",
             "branch_id": manifest_branch_id,
@@ -1864,13 +2192,18 @@ def main() -> int:
             "route_class": route_class,
             "selected_ladder": selected_ladder,
             "selection_reason": selection_reason,
+            "policy_router": worker_policy_from_manifest(manifest).get("router", "goal-config-v1"),
+            "policy_version": worker_policy_from_manifest(manifest).get("version", ROUTE_POLICY_VERSION),
+            "route_policy_version": ROUTE_POLICY_VERSION,
             "default_ladder": policy_default_ladder(worker_policy_from_manifest(manifest)),
             "allowed_aliases": policy_allowed_routes(worker_policy_from_manifest(manifest)),
+            "route_catalog_sha256": model_catalog.get("sha256") if isinstance(model_catalog, dict) else None,
+            "route_catalog_source": model_catalog.get("source") if isinstance(model_catalog, dict) else None,
             "model_catalog": model_catalog or {},
+            "context_budget": context_budget,
         }
-        write_json(packet_dir / "route.json", route)
     elif args.role == "reviewer" and review_route is not None:
-        write_json(packet_dir / "route.json", review_route)
+        route = review_route
     launch_config = compact_launch_config(
         args.role,
         packet_id,
@@ -1889,6 +2222,29 @@ def main() -> int:
         telemetry_debug=telemetry_debug,
         goal_config=goal_config_from_manifest(manifest, manifest_path),
     )
+    if launch_config is not None:
+        launch_config["context_budget"] = context_budget
+        if args.role == "worker":
+            launch_config.update(worker_attribution)
+        validate_launch_config_adapter(launch_config)
+        launch_config["adapter_validation"] = {
+            "status": "pass",
+            "checked_attempts": [
+                attempt.get("alias")
+                for attempt in launch_config.get("attempts", [])
+                if isinstance(attempt, dict) and isinstance(attempt.get("alias"), str)
+            ],
+        }
+
+    archive_existing_packet_dir(packet_dir, replace=args.replace)
+    packet_dir.mkdir(parents=True, exist_ok=True)
+
+    write_json(packet_dir / schema_name, schema)
+    if packet_context is not None:
+        write_json(packet_dir / "packet-context.json", packet_context)
+    (packet_dir / "prompt.md").write_text(prompt_text, encoding="utf-8")
+    if route is not None:
+        write_json(packet_dir / "route.json", route)
     if launch_config is not None:
         write_json(packet_dir / "launch-config.json", launch_config)
     launch_path = packet_dir / "launch.sh"

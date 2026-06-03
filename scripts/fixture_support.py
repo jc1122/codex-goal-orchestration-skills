@@ -470,6 +470,8 @@ def strict_schema_defects(schema: object, path: str = "$") -> list[str]:
     defects: list[str] = []
     if not isinstance(schema, dict):
         return defects
+    if "const" in schema and isinstance(schema.get("const"), (list, dict)):
+        defects.append(f"{path} uses non-scalar const")
     schema_type = schema.get("type")
     if schema_type == "object" or "properties" in schema:
         if schema.get("additionalProperties") is not False:

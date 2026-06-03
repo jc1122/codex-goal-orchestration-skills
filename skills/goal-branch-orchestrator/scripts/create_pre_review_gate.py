@@ -135,7 +135,7 @@ def ownership_check(branch: dict, branch_status: dict) -> dict:
 
 
 def required_input_hashes(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[dict[str, str], list[str]]:
-    rel_paths = BRANCH_VALIDATOR.required_pre_review_input_paths(branch, branch_id)
+    rel_paths = BRANCH_VALIDATOR.required_pre_review_input_paths(branch, branch_id, bundle_dir=bundle_dir)
     hashes: dict[str, str] = {}
     defects = []
     for rel_path in rel_paths:
@@ -168,7 +168,61 @@ def expected_worker_packet_ids(branch: dict, branch_id: str) -> list[str]:
     return result
 
 
-def worker_pass_defects(branch: dict, branch_status: dict, branch_id: str) -> list[str]:
+def manifest_item_packet_id(branch_id: str, item: dict) -> str:
+    packet_id = item.get("packet_id")
+    if isinstance(packet_id, str) and packet_id.strip():
+        return packet_id
+    item_id = item.get("id")
+    return f"{branch_id}-{item_id}" if isinstance(item_id, str) and item_id.strip() else ""
+
+
+def packet_terminal_defects(bundle_dir: Path, branch: dict, branch_id: str, packet_id: str, status: dict) -> list[str]:
+    work_items = branch.get("work_items")
+    item = None
+    if isinstance(work_items, list):
+        item = next(
+            (
+                candidate
+                for candidate in work_items
+                if isinstance(candidate, dict) and manifest_item_packet_id(branch_id, candidate) == packet_id
+            ),
+            None,
+        )
+    packet_root = BRANCH_VALIDATOR.packet_artifact_root(
+        item.get("worker_type", "worker") if isinstance(item, dict) else "worker",
+        packet_id,
+    )
+    launcher_path = bundle_dir / packet_root / "launcher-state.json"
+    summary_path = bundle_dir / packet_root / "packet.summary.json"
+    defects: list[str] = []
+    if not launcher_path.exists():
+        defects.append(f"worker packet {packet_id} missing launcher-state.json before reviewer launch")
+    else:
+        launcher = read_json(launcher_path)
+        if status.get("status") == "pass" and launcher.get("terminal_state") != "pass":
+            defects.append(
+                f"worker packet {packet_id} launcher-state terminal_state must be 'pass' before reviewer launch, "
+                f"got {launcher.get('terminal_state')!r}"
+            )
+    if not summary_path.exists():
+        defects.append(f"worker packet {packet_id} missing packet.summary.json before reviewer launch")
+    else:
+        summary = read_json(summary_path)
+        if status.get("status") == "pass":
+            if summary.get("terminal_state") != "pass":
+                defects.append(
+                    f"worker packet {packet_id} packet.summary terminal_state must be 'pass' before reviewer launch, "
+                    f"got {summary.get('terminal_state')!r}"
+                )
+            if summary.get("output_status") != "pass":
+                defects.append(
+                    f"worker packet {packet_id} packet.summary output_status must be 'pass' before reviewer launch, "
+                    f"got {summary.get('output_status')!r}"
+                )
+    return defects
+
+
+def worker_pass_defects(bundle_dir: Path, branch: dict, branch_status: dict, branch_id: str) -> list[str]:
     defects = []
     expected_ids = expected_worker_packet_ids(branch, branch_id)
     statuses = branch_status.get("worker_statuses")
@@ -189,6 +243,7 @@ def worker_pass_defects(branch: dict, branch_status: dict, branch_id: str) -> li
         blockers = status.get("blockers")
         if isinstance(blockers, list) and blockers:
             defects.append(f"worker packet {packet_id} still has blockers before reviewer launch")
+        defects.extend(packet_terminal_defects(bundle_dir, branch, branch_id, packet_id, status))
     extra = sorted(packet_id for packet_id in by_packet if packet_id not in set(expected_ids))
     if extra:
         defects.append("branch status contains worker packets not declared by manifest: " + ", ".join(extra))
@@ -232,6 +287,10 @@ def git_lines(command: list[str], *, cwd: Path, defects: list[str], label: str) 
 def is_runtime_cache_path(path: str) -> bool:
     parts = [part for part in Path(path).parts if part]
     if any(part in {"__pycache__", ".pytest_cache", ".ruff_cache"} for part in parts):
+        return True
+    if any(part.endswith(".egg-info") for part in parts):
+        return True
+    if path.endswith((".pyc", ".pyo", ".egg-info")):
         return True
     return path == ".runtime-cache" or path.startswith(".runtime-cache/")
 
@@ -362,7 +421,15 @@ def review_route_policy(branch: dict, branch_id: str, manifest: dict) -> dict:
     }
 
 
-def pre_review_evidence(branch_id: str, tests: dict, dod_items: list[str], diff_command: str, ownership: dict) -> dict:
+def pre_review_evidence(
+    branch_id: str,
+    tests: dict,
+    dod_items: list[str],
+    diff_command: str,
+    ownership: dict,
+    *,
+    declared_dod_items: list[str] | None = None,
+) -> dict:
     return {
         "schema_version": 1,
         "branch_id": branch_id,
@@ -370,6 +437,8 @@ def pre_review_evidence(branch_id: str, tests: dict, dod_items: list[str], diff_
         "dod_evidence": {
             "status": "pass" if dod_items else "failed",
             "items": dod_items,
+            "declared_items": declared_dod_items or [],
+            "declared_items_are_evidence": False,
         },
         "diff_check": {
             "command": diff_command,
@@ -570,10 +639,14 @@ def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict, br
         if result.returncode != 0:
             defects.append(f"test command failed ({result.returncode}): {command}\n{result.stdout.strip()}")
     evidence = list(args.test_evidence)
+    declared_status_tests = []
     if not commands and not evidence:
         status_tests = branch_status.get("tests")
         if isinstance(status_tests, list) and all(isinstance(item, str) and item.strip() for item in status_tests):
-            evidence = list(status_tests)
+            declared_status_tests = list(status_tests)
+            defects.append(
+                "branch status declared tests are informational; pre-review requires executed commands, explicit evidence, or --skip-tests"
+            )
     if not commands and not evidence:
         defects.append("test evidence is required; pass --test-command, --test-evidence, or --skip-tests")
     check = {"status": "pass" if not defects else "failed"}
@@ -583,6 +656,9 @@ def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict, br
         check["manifest_commands"] = manifest_commands
     if evidence:
         check["evidence"] = evidence
+    if declared_status_tests:
+        check["declared_status_tests"] = declared_status_tests
+        check["declared_status_tests_are_evidence"] = False
     return check, defects
 
 
@@ -650,17 +726,25 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     write_json(bundle_dir / freshness_rel_path, freshness_snapshot)
     route_policy_rel_path = BRANCH_VALIDATOR.review_route_policy_path(branch_id)
     write_json(bundle_dir / route_policy_rel_path, review_route_policy(branch, branch_id, manifest))
-    worker_defects = worker_pass_defects(branch, branch_status, branch_id)
+    worker_defects = worker_pass_defects(bundle_dir, branch, branch_status, branch_id)
     ownership = ownership_check(branch, branch_status)
     semantic_probes, semantic_probe_defects = semantic_probe_check(branch, tests)
     dod_items = [item for item in args.dod_item if item.strip()]
-    if not dod_items:
-        dod_value = branch_status.get("dod_checklist")
-        if isinstance(dod_value, list):
-            dod_items = [item for item in dod_value if isinstance(item, str) and item.strip()]
-    dod_defects = [] if dod_items else ["DoD evidence is required; pass --dod-item or provide branch status dod_checklist"]
+    dod_value = branch_status.get("dod_checklist")
+    declared_dod_items = [item for item in dod_value if isinstance(item, str) and item.strip()] if isinstance(dod_value, list) else []
+    dod_defects = [] if dod_items else ["DoD evidence is required; pass --dod-item. Branch status dod_checklist is informational only."]
     evidence_rel_path = BRANCH_VALIDATOR.review_evidence_path(branch_id)
-    write_json(bundle_dir / evidence_rel_path, pre_review_evidence(branch_id, tests, dod_items, diff_command, ownership))
+    write_json(
+        bundle_dir / evidence_rel_path,
+        pre_review_evidence(
+            branch_id,
+            tests,
+            dod_items,
+            diff_command,
+            ownership,
+            declared_dod_items=declared_dod_items,
+        ),
+    )
     semantic_hashes, hash_defects = required_input_hashes(bundle_dir, branch, branch_id)
     reuse, reuse_eligibility, reuse_defects = reuse_policy(
         args,
@@ -697,6 +781,8 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "dod_evidence": {
             "status": "pass" if not dod_defects else "failed",
             "items": dod_items,
+            "declared_items": declared_dod_items,
+            "declared_items_are_evidence": False,
         },
     }
     defects = []
@@ -753,7 +839,11 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             manifest_path=manifest_path,
             branch_id=branch_id,
             review_packet_id=review_packet_id,
-            required_input_paths=BRANCH_VALIDATOR.required_pre_review_input_paths(branch, branch_id),
+            required_input_paths=BRANCH_VALIDATOR.required_pre_review_input_paths(
+                branch,
+                branch_id,
+                bundle_dir=bundle_dir,
+            ),
         )
         if validation_defects:
             gate["status"] = "failed"

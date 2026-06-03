@@ -194,7 +194,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "branch_schedule",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --audit /abs/bundle/audit/prompt-audit.json --list-ready --limit 4",
-                "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap",
+                "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap; for each selected branch, prefer native branch-agent delegation and use render_branch_worktree_commands.py --branch Bxx --delegation-report /abs/bundle/branches/Bxx.delegation.json to record native-vs-CLI selection before falling back to CLI worktrees",
             },
             {
                 "id": "scheduler",

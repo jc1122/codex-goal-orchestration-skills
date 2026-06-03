@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
+from typing import Any
 
 
 def _load_contract():
@@ -58,6 +59,7 @@ validate_scheduler_artifact = STATUS_VALIDATION.validate_scheduler_artifact
 validate_scheduler_rollup = STATUS_VALIDATION.validate_scheduler_rollup
 relative_hashes = STATUS_VALIDATION.relative_hashes
 validate_reuse_policy = STATUS_VALIDATION.validate_reuse_policy
+archived_manifest_sha256s = STATUS_VALIDATION.archived_manifest_sha256s
 archived_manifest_hashes_by_rel_path = STATUS_VALIDATION.archived_manifest_hashes_by_rel_path
 is_repo_relative_path = STATUS_VALIDATION.is_repo_relative_path
 is_absolute_path = STATUS_VALIDATION.is_absolute_path
@@ -99,6 +101,52 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
         defect(defects, f"{path}.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")
     if data.get("status") == "pass" and review_status != "mergeable":
         defect(defects, f"{path}.review_status", "must be mergeable when branch status is pass")
+    recovered_by = data.get("recovered_by")
+    if recovered_by is not None:
+        require_string_list(defects, recovered_by, f"{path}.recovered_by", min_items=1)
+    recovery_status = data.get("recovery_status")
+    if recovery_status is not None and recovery_status not in {"pending", "recovered"}:
+        defect(defects, f"{path}.recovery_status", "must be pending or recovered")
+    if recovery_status == "recovered" and not isinstance(recovered_by, list):
+        defect(defects, f"{path}.recovered_by", "is required when recovery_status is recovered")
+    review_waiver_path = data.get("review_waiver_path")
+    if review_waiver_path is not None and (
+        not isinstance(review_waiver_path, str) or not review_waiver_path.strip() or not is_repo_relative_path(review_waiver_path)
+    ):
+        defect(defects, f"{path}.review_waiver_path", "must be a repo-relative path without traversal")
+
+
+def branch_summary_success(item: dict | None) -> bool:
+    return bool(item and item.get("status") == "pass" and item.get("review_status") == "mergeable")
+
+
+def manifest_branch_declares_recovery(manifest_branch: dict[str, Any] | None, target_branch_id: object) -> bool:
+    if not isinstance(target_branch_id, str) or not target_branch_id.strip():
+        return False
+    if not isinstance(manifest_branch, dict):
+        return False
+    for field in ["recovers_from", "supersedes"]:
+        values = manifest_branch.get(field)
+        if isinstance(values, list) and target_branch_id in [item for item in values if isinstance(item, str)]:
+            return True
+    return False
+
+
+def branch_summary_recovered(item: dict, by_id: dict[str, dict], manifest_by_id: dict[str, dict[str, Any]]) -> bool:
+    if branch_summary_success(item):
+        return True
+    if item.get("recovery_status") != "recovered":
+        return False
+    target_branch_id = item.get("branch_id")
+    recovered_by = item.get("recovered_by")
+    if not isinstance(recovered_by, list):
+        return False
+    return any(
+        isinstance(branch_id, str)
+        and branch_summary_success(by_id.get(branch_id))
+        and manifest_branch_declares_recovery(manifest_by_id.get(branch_id), target_branch_id)
+        for branch_id in recovered_by
+    )
 
 
 def validate_audit_artifacts(defects: list[str], root: dict, *, manifest_path: Path, require_artifacts: bool) -> None:
@@ -429,10 +477,10 @@ def load_branch_status_validator(defects: list[str]):
     return module
 
 
-def expected_branches_from_manifest(defects: list[str], manifest: object) -> dict[str, dict[str, str]]:
+def expected_branches_from_manifest(defects: list[str], manifest: object) -> dict[str, dict[str, Any]]:
     data = require_object(defects, manifest, "manifest")
     branches = data.get("branches")
-    expected: dict[str, dict[str, str]] = {}
+    expected: dict[str, dict[str, Any]] = {}
     seen_values: dict[str, dict[str, str]] = {
         "id": {},
         "branch_name": {},
@@ -476,6 +524,8 @@ def expected_branches_from_manifest(defects: list[str], manifest: object) -> dic
                 "review_path": review_path,
                 "branch_name": branch_name,
                 "depends_on": branch_data.get("depends_on", []),
+                "recovers_from": branch_data.get("recovers_from", []),
+                "supersedes": branch_data.get("supersedes", []),
             }
     return expected
 
@@ -513,6 +563,7 @@ def validate_main_scheduler(
         dependencies=dependencies,
         capacity=max_active,
         manifest_path=manifest_path,
+        allowed_manifest_sha256s=archived_manifest_sha256s(manifest_path),
         require_all_launched=status == "pass",
     )
     validate_scheduler_rollup(
@@ -545,7 +596,7 @@ def validate_main_scheduler(
         defect(defects, "$.branch_parallelism.max_observed_active", "must justify observed branch parallelism below available ready width with manifest.parallelization.serial_reasons")
 
 
-def validate_manifest_branch_coverage(defects: list[str], root: dict, expected: dict[str, dict[str, str]]) -> None:
+def validate_manifest_branch_coverage(defects: list[str], root: dict, expected: dict[str, dict[str, Any]]) -> None:
     branch_statuses = root.get("branch_statuses")
     if not isinstance(branch_statuses, list):
         return
@@ -628,7 +679,7 @@ def validate_review_artifact(
 def validate_branch_artifacts(
     defects: list[str],
     root: dict,
-    expected: dict[str, dict[str, str]],
+    expected: dict[str, dict[str, Any]],
     *,
     manifest: object,
     manifest_path: Path,
@@ -676,8 +727,11 @@ def validate_branch_artifacts(
                     defect(defects, f"{item_path}.status", "must match branch status artifact status")
                 if branch_status.get("review_status") != item.get("review_status"):
                     defect(defects, f"{item_path}.review_status", "must match branch status artifact review_status")
+                if item.get("review_waiver_path") is not None and branch_status.get("review_waiver_path") != item.get("review_waiver_path"):
+                    defect(defects, f"{item_path}.review_waiver_path", "must match branch status artifact review_waiver_path")
 
-        require_review_artifact = require_artifacts or item.get("review_status") != "missing"
+        recovered = item.get("recovery_status") == "recovered"
+        require_review_artifact = (require_artifacts and not recovered) or item.get("review_status") != "missing"
         if not review_artifact.exists():
             if require_review_artifact:
                 defect(defects, f"{item_path}.review_path", f"artifact does not exist: {review_artifact}")
@@ -747,9 +801,18 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
         for index, item in enumerate(branch_statuses):
             validate_branch_summary(defects, item, f"$.branch_statuses[{index}]")
         if status == "pass":
+            by_id = {
+                str(item["branch_id"]): item
+                for item in branch_statuses
+                if isinstance(item, dict) and isinstance(item.get("branch_id"), str)
+            }
             for index, item in enumerate(branch_statuses):
-                if isinstance(item, dict) and item.get("status") != "pass":
-                    defect(defects, f"$.branch_statuses[{index}].status", "must be pass when main status is pass")
+                if isinstance(item, dict) and not branch_summary_recovered(item, by_id, expected_branches):
+                    defect(
+                        defects,
+                        f"$.branch_statuses[{index}].status",
+                        "must be pass or recovered by a manifest-declared passing mergeable branch when main status is pass",
+                    )
     validate_manifest_branch_coverage(defects, root, expected_branches)
     validate_main_scheduler(
         defects,
@@ -784,6 +847,19 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
     return defects
 
 
+def outcome_lanes(data: object, defects: list[str]) -> dict[str, bool]:
+    root = data if isinstance(data, dict) else {}
+    status = root.get("status")
+    dod_status = root.get("dod_status")
+    review_status = root.get("review_status")
+    return {
+        "artifact_valid": not defects,
+        "runtime_success": status == "pass",
+        "dod_complete": dod_status == "pass",
+        "review_complete": review_status == "mergeable",
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--status", required=True)
@@ -794,13 +870,19 @@ def main() -> int:
 
     status_path = resolve_absolute_path(args.status, "--status", must_exist=True)
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+    status_data = load_json(status_path)
     defects = validate_main_status(
-        load_json(status_path),
+        status_data,
         job_id=args.job_id,
         manifest=load_json(manifest_path),
         manifest_path=manifest_path,
     )
-    result = {"status": "pass" if not defects else "failed", "status_path": status_path.as_posix(), "defects": defects}
+    result = {
+        "status": "pass" if not defects else "failed",
+        "status_path": status_path.as_posix(),
+        "defects": defects,
+        **outcome_lanes(status_data, defects),
+    }
     if args.json:
         print(json.dumps(result, indent=2, sort_keys=True))
     else:

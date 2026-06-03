@@ -223,7 +223,9 @@ Do not read full worker logs unless a branch status is missing, failed, or incon
 
 Lite advice, when present, is a context router. Read validated Lite `advice.json` first to choose targeted original files, then open only cited originals needed for verification. Do not read Lite summaries and all originals by default. Lite cannot satisfy audit, branch, review, merge, cleanup, or DoD evidence requirements.
 
-Do not read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Main verifies branch-skill availability, creates branch worktrees, and dispatches branch sessions; the branch session is responsible for loading and following the branch skill.
+Do not read `goal-branch-orchestrator/SKILL.md` in the main orchestrator context. Main verifies branch-skill availability and dispatches branch sessions; the branch session is responsible for loading and following the branch skill.
+
+Prefer native branch-agent delegation whenever the runtime surface provides it. Before launching a selected branch, render and preserve a delegation report, for example `render_branch_worktree_commands.py --branch Bxx --delegation-report /abs/bundle/branches/Bxx.delegation.json`. The report records `preferred_delegation=native_agent`, the selected native or CLI mode, native availability provenance, and any CLI fallback reason. Use CLI worktree commands only as an explicit fallback when native delegation is unavailable or the user/runtime explicitly requests CLI mode.
 
 While branch orchestrator agents are active, main must wait rather than poll. Use the native agent wait mechanism with the longest practical timeout. A no-completion wait result is not evidence that a branch is stalled. Main must not inspect worker packets, research-worker packets, reviewer packets, branch worktrees, process tables, or branch status files during active-branch waiting, and must not send status-check nudges. Inspect branch artifacts only after a branch agent completes, explicitly reports `blocked`/`failed`/`partial`, or the user explicitly switches to debug mode.
 
