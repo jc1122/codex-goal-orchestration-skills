@@ -1893,6 +1893,38 @@ def main() -> int:
         if unpromoted_report.get("safe_to_reuse", {}).get("overall") is not False:
             raise SystemExit(f"reconcile_goal_run must not mark failed final state reusable: {unpromoted_report!r}")
 
+        pre_review_regen_bundle = tmp_path / "pre-review-regeneration"
+        shutil.copytree(bundle, pre_review_regen_bundle)
+        rewrite_copied_branch_paths(pre_review_regen_bundle)
+        (pre_review_regen_bundle / "branches" / "B01.pre_review_gate.json").unlink()
+        regen_result = run(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "create_pre_review_gate.py"),
+                "--manifest",
+                (pre_review_regen_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                BRANCH_ID,
+                "--worktree",
+                REPO_ROOT.as_posix(),
+                "--review-packet-id",
+                REVIEW_PACKET,
+                "--replace",
+                "--test-evidence",
+                "pre-review regeneration fixture tests pass",
+                "--dod-item",
+                "pre-review regeneration fixture DoD evidence",
+                "--json",
+            ]
+        )
+        regen = json.loads(regen_result.stdout)
+        if regen.get("status") != "pass":
+            raise SystemExit(f"pre-review gate regeneration should tolerate missing stale gate evidence: {regen!r}")
+        regen_gate = read_json(pre_review_regen_bundle / "branches" / "B01.pre_review_gate.json")
+        allowed_status_defects = regen_gate.get("checks", {}).get("status_validation", {}).get("bootstrap_allowed_defects")
+        if not allowed_status_defects:
+            raise SystemExit(f"pre-review regeneration should record allowed stale status defects: {regen_gate!r}")
+
         missing_branch_status_bundle = tmp_path / "reconcile-missing-branch-status"
         shutil.copytree(bundle, missing_branch_status_bundle)
         rewrite_copied_branch_paths(missing_branch_status_bundle)
@@ -1947,6 +1979,38 @@ def main() -> int:
             expect=1,
         )
         assert_contains(mismatch_result.stdout, "semantic_input_hashes", "reviewer reuse/hash mismatch fixture")
+
+        stale_promotion_bundle = tmp_path / "stale-review-promotion"
+        shutil.copytree(bundle, stale_promotion_bundle)
+        rewrite_copied_branch_paths(stale_promotion_bundle)
+        (stale_promotion_bundle / "branches" / "B01.review.json").unlink()
+        stale_gate = read_json(stale_promotion_bundle / "branches" / "B01.pre_review_gate.json")
+        stale_gate["semantic_input_hashes"]["branches/B01.prompt.md"] = "sha256:" + "2" * 64
+        write_json(stale_promotion_bundle / "branches" / "B01.pre_review_gate.json", stale_gate)
+        stale_promotion_result = run(
+            [
+                "python3",
+                skill_script("goal-branch-orchestrator", "assemble_branch_status.py"),
+                "--manifest",
+                (stale_promotion_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                BRANCH_ID,
+                "--worktree",
+                REPO_ROOT.as_posix(),
+                "--allow-pass",
+                "--replace",
+                "--test-evidence",
+                "stale reviewer promotion fixture tests pass",
+                "--dod-item",
+                "stale reviewer promotion fixture DoD evidence",
+                "--json",
+            ]
+        )
+        stale_promotion = json.loads(stale_promotion_result.stdout)
+        if stale_promotion.get("branch_status") != "partial" or stale_promotion.get("review_status") != "missing":
+            raise SystemExit(f"stale reviewer output should not be promoted into canonical status: {stale_promotion!r}")
+        if (stale_promotion_bundle / "branches" / "B01.review.json").exists():
+            raise SystemExit("stale reviewer output was promoted back into branches/B01.review.json")
 
         route_mismatch_bundle = tmp_path / "reviewer-route-telemetry-mismatch"
         shutil.copytree(bundle, route_mismatch_bundle)

@@ -327,6 +327,20 @@ def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str)
     reviewers_dir = bundle_dir / "reviewers"
     if not reviewers_dir.is_dir():
         return [f"review artifact is missing: {review_path}"]
+    gate_path = bundle_dir / CONTRACT.pre_review_gate_path(branch_id)
+    if not gate_path.exists():
+        return [f"review artifact is missing and current pre-review gate is missing: {gate_path}"]
+    gate = read_json(gate_path)
+    if gate.get("status") != "pass":
+        return [f"review artifact is missing and current pre-review gate is not pass: {gate_path}"]
+    gate_hashes = gate.get("semantic_input_hashes")
+    if not isinstance(gate_hashes, dict):
+        return [f"review artifact is missing and current pre-review gate lacks semantic_input_hashes: {gate_path}"]
+    expected_hashes = {
+        key: value
+        for key, value in gate_hashes.items()
+        if isinstance(key, str) and isinstance(value, str)
+    }
     candidates: list[Path] = []
     defects: list[str] = []
     for candidate in sorted(reviewers_dir.glob(f"{branch_id}-R*/review.json")):
@@ -337,6 +351,15 @@ def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str)
             continue
         packet_id = data.get("packet_id")
         if isinstance(packet_id, str) and packet_id.startswith(f"{branch_id}-R") and data.get("role") == "reviewer":
+            candidate_hashes = data.get("semantic_input_hashes")
+            current_hashes = {
+                key: value
+                for key, value in candidate_hashes.items()
+                if isinstance(key, str) and isinstance(value, str)
+            } if isinstance(candidate_hashes, dict) else {}
+            if current_hashes != expected_hashes:
+                defects.append(f"candidate reviewer artifact is stale for current pre-review gate: {candidate}")
+                continue
             candidates.append(candidate)
     if len(candidates) != 1:
         if candidates:

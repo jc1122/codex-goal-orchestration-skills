@@ -61,7 +61,17 @@ def resolve_path(value: str, label: str, *, must_exist: bool) -> Path:
     return path
 
 
-def add_defect(defects: list[dict[str, str]], file: str, severity: str, message: str) -> None:
+def normalize_severity(value: object) -> str:
+    severity = str(value or "").strip().lower()
+    if severity in {"critical", "major", "minor"}:
+        return severity
+    if severity in {"warning", "warn", "info", "review"}:
+        return "minor"
+    return "major"
+
+
+def add_defect(defects: list[dict[str, str]], file: str, severity: object, message: str) -> None:
+    severity = normalize_severity(severity)
     defects.append({"file": file, "severity": severity, "message": message})
 
 

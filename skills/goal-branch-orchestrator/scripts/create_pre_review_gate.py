@@ -88,6 +88,33 @@ def run_shell_command(command: str, *, cwd: Path) -> subprocess.CompletedProcess
     )
 
 
+def status_validation_defects(output: str) -> list[str]:
+    try:
+        data = json.loads(output)
+    except Exception:
+        return []
+    defects = data.get("defects") if isinstance(data, dict) else None
+    if not isinstance(defects, list):
+        return []
+    return [item for item in defects if isinstance(item, str)]
+
+
+def expected_pre_review_bootstrap_defect(message: str) -> bool:
+    allowed_prefixes = (
+        "$.review_status.pre_review_gate",
+        "$.review_status.semantic_input_hashes",
+        "$.review_status.reuse_policy.source_review_path.semantic_input_hashes",
+    )
+    return message.startswith(allowed_prefixes)
+
+
+def allowed_status_bootstrap_defects(output: str) -> list[str]:
+    defects = status_validation_defects(output)
+    if defects and all(expected_pre_review_bootstrap_defect(item) for item in defects):
+        return defects
+    return []
+
+
 def branch_entry(manifest: dict, branch_id: str) -> dict:
     branches = manifest.get("branches")
     if not isinstance(branches, list):
@@ -703,6 +730,12 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "--json",
     ]
     status_result = run_command(status_command)
+    bootstrap_allowed_status_defects = (
+        allowed_status_bootstrap_defects(status_result.stdout)
+        if status_result.returncode != 0
+        else []
+    )
+    status_validation_passed = status_result.returncode == 0 or bool(bootstrap_allowed_status_defects)
     manifest_command = [
         "python3",
         (PREFLIGHT_SCRIPTS / "lint_goal_bundle.py").as_posix(),
@@ -759,7 +792,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             "command": shlex.join(manifest_command),
         },
         "status_validation": {
-            "status": "pass" if status_result.returncode == 0 else "failed",
+            "status": "pass" if status_validation_passed else "failed",
             "command": shlex.join(status_command),
         },
         "tests": tests,
@@ -788,7 +821,10 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     defects = []
     if manifest_result.returncode != 0:
         defects.append("manifest validation failed:\n" + manifest_result.stdout.strip())
-    if status_result.returncode != 0:
+    if bootstrap_allowed_status_defects:
+        checks["status_validation"]["bootstrap_allowed_defects"] = bootstrap_allowed_status_defects
+        checks["status_validation"]["bootstrap_reason"] = "allowed stale or missing pre-review artifacts while creating replacement gate"
+    elif status_result.returncode != 0:
         defects.append("branch status validation failed:\n" + status_result.stdout.strip())
     if diff_result.returncode != 0:
         defects.append(f"diff check failed:\n{diff_result.stdout.strip()}")

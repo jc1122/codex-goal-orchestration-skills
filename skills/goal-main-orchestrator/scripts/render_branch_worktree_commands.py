@@ -69,6 +69,28 @@ def git_ok(repo_root: Path, *args: str) -> bool:
     ).returncode == 0
 
 
+def git_output(repo_root: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise SystemExit(f"git {' '.join(args)} failed:\n{result.stdout.strip()}")
+    return result.stdout
+
+
+def branch_exists(repo_root: Path, name: str) -> bool:
+    return git_ok(repo_root, "show-ref", "--verify", "--quiet", f"refs/heads/{name}")
+
+
+def branch_checked_out_in_worktree(repo_root: Path, name: str) -> bool:
+    target = f"branch refs/heads/{name}"
+    return any(line.strip() == target for line in git_output(repo_root, "worktree", "list", "--porcelain").splitlines())
+
+
 def load_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         return json.load(handle)
@@ -426,6 +448,8 @@ def worktree_command(branch: dict, repo_root: Path, base_ref: str) -> str:
     name = str(branch["branch_name"])
     worktree_rel = require_relative_path(str(branch["worktree_path"]), "worktree_path")
     worktree_path = resolve(repo_root, worktree_rel)
+    if branch_exists(repo_root, name):
+        return f"git worktree add {shell_quote(worktree_path.as_posix())} {shell_quote(name)}"
     return f"git worktree add -b {shell_quote(name)} {shell_quote(worktree_path.as_posix())} {shell_quote(base_ref)}"
 
 
@@ -787,8 +811,8 @@ def main() -> int:
         seen_names.add(name)
         if not safe_branch_name(name) or not git_ok(repo_root, "check-ref-format", "--branch", name):
             raise SystemExit(f"branch_name is not safe: {name!r}")
-        if git_ok(repo_root, "show-ref", "--verify", "--quiet", f"refs/heads/{name}"):
-            raise SystemExit(f"target branch already exists: {name}")
+        if branch_exists(repo_root, name) and branch_checked_out_in_worktree(repo_root, name):
+            raise SystemExit(f"target branch is already checked out in a worktree: {name}")
         worktree_rel = require_relative_path(branch["worktree_path"], "worktree_path")
         worktree_path = resolve(repo_root, worktree_rel)
         if worktree_path in seen_worktrees:

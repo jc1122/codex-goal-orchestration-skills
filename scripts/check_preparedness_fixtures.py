@@ -2911,6 +2911,39 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"CLI fallback plan should record a reason: {fallback_plan!r}")
     if not fallback_result.stdout.strip().startswith("git worktree add -b "):
         raise SystemExit(f"CLI fallback should still render the worktree command: {fallback_result.stdout!r}")
+    existing_branch_manifest = read_json(main_bundle / "job.manifest.json")
+    existing_branch_name = "goal-fixture-existing-branch-test"
+    existing_worktree_path = ".worktrees/goal-fixture-existing-branch-test"
+    if subprocess.run(["git", "branch", "--list", existing_branch_name], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False).stdout.strip():
+        raise SystemExit(f"temporary fixture branch already exists: {existing_branch_name}")
+    for branch in existing_branch_manifest["branches"]:
+        if branch.get("id") == "B02":
+            branch["branch_name"] = existing_branch_name
+            branch["worktree_path"] = existing_worktree_path
+    write_json(main_bundle / "job.manifest.json", existing_branch_manifest)
+    try:
+        run(["git", "branch", existing_branch_name, "HEAD"])
+        existing_branch_result = run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+                "--manifest",
+                (main_bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--audit",
+                audit_path.as_posix(),
+                "--branch",
+                "B02",
+                "--delegation-mode",
+                "cli",
+            ]
+        )
+    finally:
+        subprocess.run(["git", "branch", "-D", existing_branch_name], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+    existing_branch_command = existing_branch_result.stdout.strip()
+    if not existing_branch_command.startswith("git worktree add ") or " -b " in existing_branch_command:
+        raise SystemExit(f"existing branch without attached worktree should render non-creating add command: {existing_branch_result.stdout!r}")
 
 
 def load_script_module(name: str, relative_path: str):
@@ -4263,6 +4296,65 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
     stale_audit = read_json(stale_audit_dir / "prompt-audit.json")
     if stale_audit.get("status") != "failed" or stale_audit.get("can_start") is not False:
         raise SystemExit(f"deterministic prompt audit should fail stale validator snippets: {stale_audit!r}")
+    warning_brief = {
+        "job_id": "prompt-audit-warning-only",
+        "base_ref": "main",
+        "goal": "Exercise warning-only deterministic prompt audit validation.",
+        "source_summary": "The fixture uses generated branch prompts with a serial dependency warning.",
+        "required_evidence": ["Warning-only deterministic audit artifacts validate."],
+        "final_dod": ["The prompt audit validator accepts normalized non-blocking severities."],
+        "max_active_branch_agents": 2,
+        "serial_reasons": ["Fixture intentionally serializes B02 after B01."],
+        "branches": [
+            branch_fixture("B01", "README.md"),
+            branch_fixture("B02", "skills/goal-preflight/SKILL.md", depends_on=["B01"]),
+        ],
+    }
+    warning_brief_path = tmp_path / "prompt-audit-warning-only.json"
+    warning_bundle = tmp_path / "prompt-audit-warning-only"
+    write_json(warning_brief_path, warning_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            warning_brief_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            warning_bundle.as_posix(),
+        ]
+    )
+    warning_audit_dir = warning_bundle / "audit"
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py",
+            "--manifest",
+            (warning_bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit-dir",
+            warning_audit_dir.as_posix(),
+        ]
+    )
+    warning_audit = read_json(warning_audit_dir / "prompt-audit.json")
+    warning_severities = {item.get("severity") for item in warning_audit.get("defects", []) if isinstance(item, dict)}
+    if warning_audit.get("status") != "pass" or "warning" in warning_severities or "minor" not in warning_severities:
+        raise SystemExit(f"deterministic prompt audit should normalize warning-only defects to minor: {warning_audit!r}")
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py",
+            "--audit",
+            (warning_audit_dir / "prompt-audit.json").as_posix(),
+            "--manifest",
+            (warning_bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--require-pass",
+        ]
+    )
 
 
 def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
