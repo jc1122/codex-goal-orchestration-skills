@@ -909,26 +909,28 @@ def package_skeletons_for_path(path: str) -> list[str]:
     return skeletons
 
 
-def assign_package_skeleton_owned_paths(work_items: list[dict]) -> None:
-    globally_owned = {
-        value
-        for item in work_items
-        for value in item.get("owned_paths", [])
-        if isinstance(value, str)
-    }
+def assign_package_skeleton_context_files(work_items: list[dict], repo_root: Path | None = None) -> None:
     for item in work_items:
         owned_paths = item.get("owned_paths")
-        if not isinstance(owned_paths, list):
+        context_files = item.get("context_files")
+        if not isinstance(owned_paths, list) or not isinstance(context_files, list):
             continue
         additions: list[str] = []
         for path in list(owned_paths):
             if not isinstance(path, str):
                 continue
             for skeleton in package_skeletons_for_path(path):
-                if skeleton not in globally_owned and skeleton not in additions:
+                if skeleton in context_files:
+                    continue
+                if repo_root is None:
+                    if not Path(skeleton).exists():
+                        continue
+                elif not (repo_root / skeleton).exists():
+                    continue
+                if skeleton not in context_files and skeleton not in additions:
                     additions.append(skeleton)
-                    globally_owned.add(skeleton)
-        owned_paths.extend(additions)
+        if additions:
+            context_files.extend(additions)
 
 
 def bullets(values: object, fallback: str = "- none") -> str:
@@ -1109,7 +1111,7 @@ def format_work_items(branch_id_value: str, items: list[dict]) -> str:
     return "\n\n".join(chunks)
 
 
-def normalize_work_items(items: object, branch_id_value: str, *, branch_context: dict) -> list[dict]:
+def normalize_work_items(items: object, branch_id_value: str, *, branch_context: dict, repo_root: Path | None = None) -> list[dict]:
     if not isinstance(items, list):
         raise SystemExit(f"branch {branch_id_value} work_items must be a list")
     if len(items) < 1 or len(items) > MAX_WORKER_PACKETS_PER_BRANCH:
@@ -1161,7 +1163,7 @@ def normalize_work_items(items: object, branch_id_value: str, *, branch_context:
                 raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends on unknown work item: {dep}")
             if order[dep] >= index:
                 raise SystemExit(f"branch {branch_id_value} work item {item['id']} depends_on must reference only prior work item ids: {dep}")
-    assign_package_skeleton_owned_paths(normalized)
+    assign_package_skeleton_context_files(normalized, repo_root=repo_root)
     return normalized
 
 
@@ -1529,7 +1531,12 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
                 for key in ["contention_reason", "worker_contention_reason"]
             ),
         }
-        work_items = normalize_work_items(original.get("work_items", []), bid, branch_context=branch_context)
+        work_items = normalize_work_items(
+            original.get("work_items", []),
+            bid,
+            branch_context=branch_context,
+            repo_root=repo_root,
+        )
         owned_paths = derived_owned_paths(work_items)
         if max_workers < MAX_WORKER_PACKETS_PER_BRANCH:
             append_reason_once(
@@ -2690,7 +2697,14 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
     bundle_root = str(brief.get("bundle_root") or "/absolute/path/to/bundle")
     manifest_path = f"{bundle_root}/job.manifest.json"
     branch_status_path = f"{bundle_root}/{branch['status_path']}"
-    branch_model_catalog_path = f"{bundle_root}/branches/{branch['id']}.model-catalog.json"
+    raw_runtime_rules_path = brief.get("runtime_rules_path")
+    if not isinstance(raw_runtime_rules_path, str):
+        raw_runtime_rules_path = RUNTIME_RULES_PATH
+    runtime_rules_path = (
+        raw_runtime_rules_path
+        if Path(raw_runtime_rules_path).is_absolute()
+        else f"{bundle_root}/{raw_runtime_rules_path}"
+    )
     goal_config = brief.get("goal_config") if isinstance(brief.get("goal_config"), dict) else None
     worker_policy = (
         goal_config.get("model_policies", {}).get("worker_model_policy", WORKER_MODEL_POLICY)
@@ -2725,13 +2739,12 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         base_ref=brief["base_ref"],
         manifest_path_shell=shlex.quote(manifest_path),
         branch_status_path_shell=shlex.quote(branch_status_path),
-        branch_model_catalog_path_shell=shlex.quote(branch_model_catalog_path),
         branch_name=branch["branch_name"],
         worktree_path=branch["worktree_path"],
         wave=branch["wave"],
         depends_on=bullets(branch.get("depends_on", [])),
         dependency_context=branch.get("dependency_context_reason") or "none",
-        runtime_rules_path=brief.get("runtime_rules_path", RUNTIME_RULES_PATH),
+        runtime_rules_path=runtime_rules_path,
         runtime_rules_sha256=brief.get("runtime_rules_sha256", ""),
         runtime_index_path=brief.get("runtime_index_path", "runtime.index.json"),
         runtime_index_sha256=brief.get("runtime_index_sha256", ""),

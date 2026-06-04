@@ -1409,9 +1409,73 @@ def run_python_interpreter_normalization_fixture(tmp_path: Path) -> None:
     )
     if command != expected_command:
         raise SystemExit(f"python interpreter normalization fixture mismatch: {command!r}")
-    if "ft10_solver/__init__.py" not in work_item.get("owned_paths", []):
-        raise SystemExit(f"package skeleton ownership was not assigned: {work_item.get('owned_paths')!r}")
+    if "ft10_solver/__init__.py" in work_item.get("owned_paths", []):
+        raise SystemExit(f"package skeleton should be context-only unless explicitly owned: {work_item.get('owned_paths')!r}")
     assert_contains((bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8"), command, "python interpreter prompt")
+
+
+def run_package_skeleton_context_fixture(tmp_path: Path) -> None:
+    package_repo = tmp_path / "package-skeleton-context"
+    package_repo.mkdir(parents=True, exist_ok=True)
+    (package_repo / "src").mkdir()
+    (package_repo / "src" / "fixture_pkg").mkdir()
+    (package_repo / "src" / "fixture_pkg" / "__init__.py").write_text("# fixture package\n", encoding="utf-8")
+    (package_repo / "src" / "fixture_pkg" / "worker.py").write_text("# fixture module\n", encoding="utf-8")
+    (package_repo / "README.md").write_text("Package skeleton fixture.\n", encoding="utf-8")
+    brief = {
+        "job_id": "package-skeleton-context-fixture",
+        "base_ref": "main",
+        "goal": "Validate package skeletons are added as context only when pre-existing.",
+        "source_summary": "Worker-owned modules in existing packages should infer parent __init__.py only as context evidence.",
+        "required_evidence": ["Generated manifest lists the existing package skeleton in context_files and not owned_paths."],
+        "final_dod": ["Package skeleton context inference should preserve deterministic ownership separation."],
+        "max_active_branch_agents": 1,
+        "branches": [
+            {
+                "id": "B01",
+                "objective": "Validate existing package skeleton context inference.",
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "objective": "Create fixture file edits under an existing package.",
+                        "owned_paths": ["src/fixture_pkg/worker.py"],
+                        "context_files": ["README.md"],
+                        "verification": ["python3 -m py_compile src/fixture_pkg/worker.py"],
+                        "dod": ["package skeleton is context-only inference"],
+                    },
+                    {
+                        "id": "W02",
+                        "objective": "Create a second fixture file edit under the same existing package.",
+                        "owned_paths": ["src/fixture_pkg/second_worker.py"],
+                        "context_files": ["README.md"],
+                        "verification": ["python3 -m py_compile src/fixture_pkg/second_worker.py"],
+                        "dod": ["package skeleton context is available to every worker that edits the package"],
+                    }
+                ],
+            }
+        ],
+    }
+    brief_path = tmp_path / "package-skeleton-context.json"
+    bundle = tmp_path / "package-skeleton-context-bundle"
+    write_json(brief_path, brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            brief_path.as_posix(),
+            "--repo-root",
+            package_repo.as_posix(),
+            "--out-dir",
+            bundle.as_posix(),
+        ]
+    )
+    manifest = read_json(bundle / "job.manifest.json")
+    for work_item in manifest["branches"][0]["work_items"]:
+        if "src/fixture_pkg/__init__.py" not in work_item.get("context_files", []):
+            raise SystemExit(f"missing inferred package skeleton context file: {work_item.get('context_files')!r}")
+        if "src/fixture_pkg/__init__.py" in work_item.get("owned_paths", []):
+            raise SystemExit(f"inferred package skeleton was incorrectly owned: {work_item.get('owned_paths')!r}")
 
 
 def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
@@ -2562,6 +2626,79 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"scheduler_tick artifact closeout status mismatch: {auto_data['state']['finished_status']!r}")
     if auto_data["state"]["max_observed_active"] != 2:
         raise SystemExit("scheduler_tick artifact closeout did not preserve saturated main launch evidence")
+    auto_worker_dir = tmp_path / "scheduler-tick-worker-artifacts"
+    worker_manifest = auto_worker_dir / "job.manifest.json"
+    write_json(
+        worker_manifest,
+        {
+            "branches": [
+                {
+                    "id": "B01",
+                    "max_active_worker_packets": 4,
+                    "worker_parallelism": {
+                        "scheduler_path": "schedulers/B01.worker.scheduler.json",
+                        "max_worker_packets_per_branch": 4,
+                    },
+                    "work_items": [
+                        {
+                            "id": "W01",
+                            "packet_id": "B01-W01",
+                            "objective": "Closed pass worker.",
+                            "owned_paths": ["README.md"],
+                            "context_files": ["README.md"],
+                            "depends_on": [],
+                            "verification": ["git diff --check main...HEAD"],
+                            "dod": ["pass worker artifact is available"],
+                        },
+                        {
+                            "id": "W02",
+                            "packet_id": "B01-W02",
+                            "objective": "Closed blocked worker.",
+                            "owned_paths": ["skills/goal-preflight/SKILL.md"],
+                            "context_files": ["README.md"],
+                            "depends_on": [],
+                            "verification": ["git diff --check main...HEAD"],
+                            "dod": ["blocked worker artifact is available"],
+                        },
+                    ],
+                }
+            ]
+        },
+    )
+    (auto_worker_dir / "workers").mkdir(parents=True, exist_ok=True)
+    write_json(auto_worker_dir / "workers" / "B01-W01" / "status.json", {"status": "pass"})
+    write_json(auto_worker_dir / "workers" / "B01-W02" / "status.json", {"status": "blocked"})
+    auto_worker_result = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
+            "--manifest",
+            worker_manifest.as_posix(),
+            "--scope",
+            "worker",
+            "--branch-id",
+            "B01",
+            "--runtime-ref",
+            "scheduler-tick-worker-artifact-fixture",
+            "--init",
+            "--record-ready",
+            "--close-from-artifacts",
+            "--validate-final",
+            "--json",
+        ]
+    )
+    auto_worker_data = json.loads(auto_worker_result.stdout)
+    if auto_worker_data["state"]["finished_status"] != {"B01-W01": "pass", "B01-W02": "blocked"}:
+        raise SystemExit(
+            f"scheduler_tick worker closeout status mismatch: {auto_worker_data['state']['finished_status']!r}"
+        )
+    auto_worker_ledger = read_json(auto_worker_dir / "schedulers" / "B01.worker.scheduler.json")
+    events = auto_worker_ledger.get("events", [])
+    finish_events = [event for event in events if isinstance(event, dict) and event.get("event") == "finish"]
+    if len(finish_events) < 2:
+        raise SystemExit(f"scheduler_tick worker closeout should emit two finish events, got {len(finish_events)}")
+    if auto_worker_data["state"]["max_observed_active"] != 2:
+        raise SystemExit("scheduler_tick worker closeout should close all terminal artifacts under open worker capacity")
     append_ledgers = []
     for suffix in ["a", "b"]:
         append_dir = tmp_path / f"append-scheduler-event-repeat-{suffix}"
@@ -4857,7 +4994,8 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     assert_all_contains(
         spaced_branch_prompt,
         [
-            f"> {shlex.quote((spaced_bundle / 'branches' / 'B01.model-catalog.json').as_posix())}",
+            "check_model_catalog.py --json --require-codex",
+            (spaced_bundle / "runtime-rules.md").as_posix(),
             f"--manifest {shlex.quote((spaced_bundle / 'job.manifest.json').as_posix())}",
             f"--status {shlex.quote((spaced_bundle / 'branches' / 'B01.status.json').as_posix())}",
         ],
@@ -6447,6 +6585,7 @@ def main() -> int:
         run_launch_ready_helper_fixtures(tmp_path)
         run_preflight_brief_lint_fixtures(tmp_path)
         run_python_interpreter_normalization_fixture(tmp_path)
+        run_package_skeleton_context_fixture(tmp_path)
         run_topology_fixtures(tmp_path)
         run_amendment_fixtures(tmp_path)
         run_pre_review_manifest_command_fixture(tmp_path, bundle)

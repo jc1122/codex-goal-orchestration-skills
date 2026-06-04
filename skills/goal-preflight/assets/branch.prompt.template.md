@@ -73,7 +73,7 @@ Telemetry policy mode is `{telemetry_policy_mode}`.
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_goal_skill_availability.py --skills-root "$GOAL_SKILLS_ROOT" --require goal-branch-orchestrator --require-codex-cli && \
-python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex > {branch_model_catalog_path_shell}
+python3 "$GOAL_SKILLS_ROOT"/goal-branch-orchestrator/scripts/check_model_catalog.py --json --require-codex
 ```
 
 Return blocked if either command fails.

@@ -456,6 +456,7 @@ def apply_actions(
     item_ids = list(spec["item_ids"])
     dependencies = dict(spec["dependencies"])
     capacity = int(spec["capacity"])
+    # Allow repair relaunches in normal operation; artifact closeout handles this separately.
     allow_relaunch = spec.get("kind") == "branch-worker-pool"
     known = set(item_ids)
     appended: list[dict] = []
@@ -667,7 +668,9 @@ def close_from_artifacts(
     item_ids = list(spec["item_ids"])
     dependencies = dict(spec["dependencies"])
     capacity = int(spec["capacity"])
-    allow_relaunch = spec.get("kind") == "branch-worker-pool"
+    # Artifact closeout should only replay terminal evidence; avoid automatic relaunch.
+    allow_relaunch = False
+    worker_scope = spec.get("kind") == "branch-worker-pool"
     appended: list[dict] = []
     max_steps = max(10, len(item_ids) * 8)
 
@@ -689,25 +692,83 @@ def close_from_artifacts(
                     )
                 )
                 progressed = True
+        if progressed:
+            continue
 
         state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
-        finished = set(state["finished"])
-        for item_id in state["active"]:
-            if item_id in finished:
+        blocked_candidates = [
+            item_id
+            for item_id in state["closed"]
+            if worker_scope
+            and terminal_statuses.get(item_id) in TERMINAL_STATUSES
+            and terminal_statuses.get(item_id) != "pass"
+            and item_id not in state["blocked"]
+        ]
+        if blocked_candidates:
+            if state["remaining_capacity"] > 0:
                 appended.append(
                     append_event(
                         ledger,
-                        event="close",
+                        event="refill",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        eligible_ids=blocked_candidates,
+                    )
+                )
+            for item_id in blocked_candidates:
+                status = terminal_statuses[item_id]
+                reason_code = "process_exited_blocked" if status == "blocked" else "artifact_invalid"
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="blocked",
                         runtime_ref=runtime_ref,
                         timestamp_value=timestamp_value,
                         manifest_sha256=manifest_sha,
                         manifest_epoch_value=manifest_epoch_value,
                         id=item_id,
+                        reason_code=reason_code,
+                        reason=f"status artifact reported {status}",
                     )
                 )
-                progressed = True
-                after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
-                if after_close["remaining_capacity"] > 0 and after_close["unexcused"]:
+            state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+            if state["remaining_capacity"] > 0 and state["unexcused"]:
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="refill",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        eligible_ids=state["unexcused"],
+                    )
+                )
+            continue
+
+        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        finished = set(state["finished"])
+        for item_id in state["active"]:
+            if item_id not in finished:
+                continue
+            terminal_status = terminal_statuses.get(item_id, "pass")
+            appended.append(
+                append_event(
+                    ledger,
+                    event="close",
+                    runtime_ref=runtime_ref,
+                    timestamp_value=timestamp_value,
+                    manifest_sha256=manifest_sha,
+                    manifest_epoch_value=manifest_epoch_value,
+                    id=item_id,
+                )
+            )
+            progressed = True
+            after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+            if worker_scope and terminal_status in TERMINAL_STATUSES and terminal_status != "pass" and item_id not in after_close["blocked"]:
+                if after_close["remaining_capacity"] > 0:
                     appended.append(
                         append_event(
                             ledger,
@@ -716,10 +777,36 @@ def close_from_artifacts(
                             timestamp_value=timestamp_value,
                             manifest_sha256=manifest_sha,
                             manifest_epoch_value=manifest_epoch_value,
-                            eligible_ids=after_close["unexcused"],
+                            eligible_ids=[item_id],
                         )
                     )
-                break
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="blocked",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        id=item_id,
+                        reason_code="process_exited_blocked" if terminal_status == "blocked" else "artifact_invalid",
+                        reason=f"status artifact reported {terminal_status}",
+                    )
+                )
+                after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+            if after_close["remaining_capacity"] > 0 and after_close["unexcused"]:
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="refill",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        eligible_ids=after_close["unexcused"],
+                    )
+                )
+            break
         if progressed:
             continue
 
@@ -746,7 +833,10 @@ def close_from_artifacts(
             continue
 
         state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
-        launchable = [item_id for item_id in state["launchable"] if item_id in terminal_statuses]
+        closed = set(state["closed"])
+        launchable = [
+            item_id for item_id in state["launchable"] if item_id in terminal_statuses and item_id not in closed
+        ]
         while launchable and state["remaining_capacity"] > 0:
             item_id = launchable.pop(0)
             appended.append(
@@ -762,9 +852,15 @@ def close_from_artifacts(
             )
             progressed = True
             state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
-            launchable = [candidate for candidate in state["launchable"] if candidate in terminal_statuses]
-        if not progressed:
-            return appended, state
+            closed = set(state["closed"])
+            launchable = [
+                candidate for candidate in state["launchable"]
+                if candidate in terminal_statuses and candidate not in closed
+            ]
+        if progressed:
+            continue
+
+        return appended, state
 
     raise SystemExit("--close-from-artifacts did not converge; inspect scheduler ledger")
 
