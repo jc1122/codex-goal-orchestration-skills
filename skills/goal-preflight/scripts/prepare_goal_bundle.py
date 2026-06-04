@@ -60,6 +60,77 @@ def safe_name(path: Path) -> str:
     return value or "goal-config"
 
 
+def config_path_from_report(report: dict, config: Path) -> Path | None:
+    value = report.get("config_path")
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return Path(value).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+def report_matches_config(report: dict, config: Path) -> bool:
+    report_config = config_path_from_report(report, config)
+    if report_config is None:
+        return False
+    try:
+        return report_config == config.resolve()
+    except (OSError, ValueError):
+        return False
+
+
+def routes_verified(report: dict) -> bool:
+    if not isinstance(report, dict) or report.get("status") != "pass":
+        return False
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    if summary.get("route_verification_status") == "routes_verified":
+        return True
+    accepted_route_count = summary.get("accepted_route_count")
+    return isinstance(accepted_route_count, int) and not isinstance(accepted_route_count, bool) and accepted_route_count > 0
+
+
+def find_reusable_route_verified_check(config: Path, explicit: Path | None, check_dir: Path) -> Path | None:
+    candidate_paths: list[Path] = []
+    if explicit is not None:
+        candidate_paths.append(explicit)
+
+    preferred = (
+        f"{config.name}.smoke.json",
+        f"{config.stem}.smoke.json",
+        f"{config.stem}.preflight.smoke.json",
+        "goal-config-smoke.json",
+    )
+    for name in preferred:
+        path = config.parent / name
+        if path.is_file():
+            candidate_paths.append(path)
+
+    for path in sorted(config.parent.glob("*smoke*.json")):
+        if path.is_file() and path not in candidate_paths:
+            candidate_paths.append(path)
+
+    if check_dir.is_dir():
+        for path in sorted(check_dir.glob("*.preflight-check.json")):
+            if path.is_file() and path not in candidate_paths:
+                candidate_paths.append(path)
+
+    seen: set[Path] = set()
+    for candidate in candidate_paths:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if not candidate.is_file():
+            continue
+        try:
+            report = read_json(candidate)
+        except Exception:  # noqa: BLE001
+            continue
+        if routes_verified(report) and report_matches_config(report, config):
+            return candidate
+    return None
+
+
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
 
@@ -304,6 +375,8 @@ def route_availability_verified(candidate: dict | None) -> bool:
         return False
     check = read_json(path)
     summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
+    if summary.get("route_verification_status") == "routes_verified":
+        return True
     accepted = summary.get("accepted_route_count")
     return isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
 
@@ -494,11 +567,12 @@ def candidate_configs(brief: Path, repo_root: Path, out_dir: Path, explicit: lis
     return paths
 
 
-def check_config_candidate(config: Path, check_dir: Path) -> dict:
+def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path | None = None) -> dict:
     check_script = SKILLS_ROOT / "goal-config" / "scripts" / "check_goal_config.py"
     stem = safe_name(config)
     original_report = check_dir / f"{stem}.preflight-check.json"
     remediated_config = check_dir / f"{stem}.remediated.json"
+    reusable_check = find_reusable_route_verified_check(config, explicit_check, check_dir)
     command = [
         sys.executable,
         check_script.as_posix(),
@@ -533,13 +607,21 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
         "original_check_telemetry": subprocess_telemetry(command, result, elapsed_ms),
     }
     if result.returncode == 0 and original.get("status") == "pass":
+        selected_check_path = original_report
+        selection_reason = "original config passed preflight compatibility"
+        if reusable_check is not None:
+            selected_check_path = reusable_check
+            selection_reason = (
+                "original config passed preflight compatibility "
+                "with route verification reused from explicit/colocated smoke evidence"
+            )
         candidate.update(
             {
                 "selected": True,
                 "eligible": True,
                 "selected_config_path": config.as_posix(),
-                "selected_check_path": original_report.as_posix(),
-                "selection_reason": "original config passed preflight compatibility",
+                "selected_check_path": selected_check_path.as_posix(),
+                "selection_reason": selection_reason,
             }
         )
         return candidate
@@ -582,7 +664,16 @@ def check_config_candidate(config: Path, check_dir: Path) -> dict:
     return candidate
 
 
-def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[str], skip: bool, *, audit_all: bool = False) -> dict:
+def select_config(
+    brief: Path,
+    repo_root: Path,
+    out_dir: Path,
+    explicit: list[str],
+    skip: bool,
+    *,
+    audit_all: bool = False,
+    explicit_check: Path | None = None,
+) -> dict:
     selection_path = out_dir / "goal-config-selection.json"
     if skip:
         selection = {
@@ -598,7 +689,7 @@ def select_config(brief: Path, repo_root: Path, out_dir: Path, explicit: list[st
     check_dir = out_dir / "config-checks"
     candidates = []
     for path in candidate_configs(brief, repo_root, out_dir, explicit):
-        candidate = check_config_candidate(path, check_dir)
+        candidate = check_config_candidate(path, check_dir, explicit_check=explicit_check)
         candidates.append(candidate)
         if candidate.get("eligible") and not audit_all:
             break
@@ -627,6 +718,10 @@ def main() -> int:
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--goal-config", action="append", default=[], help="Candidate config path. Repeat to control selection order.")
+    parser.add_argument(
+        "--goal-config-check",
+        help="Optional passing check report to use when a supplied goal-config has a route-verified smoke/discovery file.",
+    )
     parser.add_argument("--no-goal-config", action="store_true", help="Do not auto-detect or embed a goal config.")
     parser.add_argument("--allow-blocked-readiness", action="store_true", help="Return zero even when readiness is blocked.")
     parser.add_argument(
@@ -719,7 +814,22 @@ def main() -> int:
 
     before = artifact_snapshot(out_dir)
     start = time.perf_counter()
-    config_selection = select_config(brief, repo_root, out_dir, args.goal_config, args.no_goal_config, audit_all=args.verbose or brief_requests_debug(brief_data))
+    goal_config_check = (
+        resolve_absolute_path(args.goal_config_check, "--goal-config-check", must_exist=True)
+        if args.goal_config_check
+        else None
+    )
+    if goal_config_check is not None and not args.goal_config:
+        raise SystemExit("--goal-config-check requires --goal-config")
+    config_selection = select_config(
+        brief,
+        repo_root,
+        out_dir,
+        args.goal_config,
+        args.no_goal_config,
+        audit_all=args.verbose or brief_requests_debug(brief_data),
+        explicit_check=goal_config_check,
+    )
     commands.append(
         phase_record(
             "config_selection",

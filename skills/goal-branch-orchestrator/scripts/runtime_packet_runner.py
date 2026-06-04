@@ -957,6 +957,7 @@ def run_with_timeout(
         proc = subprocess.Popen(
             full_command,
             cwd=cwd,
+            stdin=subprocess.PIPE if stdin_data is not None else None,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             env=env,

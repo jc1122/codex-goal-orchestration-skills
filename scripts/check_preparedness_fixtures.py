@@ -3507,6 +3507,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     fake_codex.write_text(
         "#!/usr/bin/env python3\n"
         "import json, pathlib, sys\n"
+        "prompt = sys.stdin.read()\n"
+        "if not prompt.strip():\n"
+        "    print('No prompt provided via stdin.', file=sys.stderr)\n"
+        "    sys.exit(2)\n"
         "args = sys.argv[1:]\n"
         "out = pathlib.Path(args[args.index('-o') + 1])\n"
         "cfg = json.loads((out.parent / 'launch-config.json').read_text(encoding='utf-8'))\n"
@@ -5124,6 +5128,56 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     config_debug_compat = config_debug_manifest.get("preflight_compatibility", {}).get("telemetry", {})
     if config_debug_compat.get("policy_transformation") != "raw_text_true_is_sanitized_to_manifest_raw_text_false":
         raise SystemExit(f"goal_config raw_text policy transformation should be recorded: {config_debug_compat!r}")
+
+    colocated_smoke_debug_check = tmp_path / "goal-config-smoke.json"
+    if colocated_smoke_debug_check.exists():
+        colocated_smoke_debug_check.unlink()
+    write_json(
+        colocated_smoke_debug_check,
+        {
+            "status": "pass",
+            "mode": "smoke",
+            "check_mode": "smoke",
+            "config_validation_mode": "smoke",
+            "config_path": config_debug_path.as_posix(),
+            "summary": {
+                "route_verification_status": "routes_verified",
+                "accepted_route_count": 7,
+                "checked_role_count": 1,
+                "harness_count": 1,
+                "failure_count": 0,
+            },
+        },
+    )
+    colocated_smoke_bundle = tmp_path / "preflight-colocated-smoke-bundle"
+    colocated_smoke_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                colocated_smoke_bundle.as_posix(),
+                "--goal-config",
+                config_debug_path.as_posix(),
+                "--json",
+                "--allow-blocked-readiness",
+            ]
+        ).stdout
+    )
+    colocated_selection = colocated_smoke_result.get("config_selection", {})
+    if colocated_selection.get("selected_check_path") != colocated_smoke_debug_check.as_posix():
+        raise SystemExit(
+            f"prepare should auto-reuse colocated route-verified smoke check: {colocated_selection.get('selected_check_path')!r}"
+        )
+    if colocated_selection.get("route_model_availability_verified") is not True:
+        raise SystemExit(f"prepare should expose colocated smoke route verification as verified: {colocated_selection!r}")
+    colocated_readiness = read_json(colocated_smoke_bundle / "readiness.json")
+    if "config_schema_pass_routes_unverified" in colocated_readiness.get("launch_blockers", []):
+        raise SystemExit(f"colocated route-verified smoke check should prevent schema_pass_routes_unverified: {colocated_readiness!r}")
 
     shutil.copyfile(config_debug_path, branch_default_repo / "goal.preflight.config.json")
     shutil.copyfile(config_debug_path, branch_default_repo / "goal.config.json")

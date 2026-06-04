@@ -1012,6 +1012,8 @@ def route_availability_verified_from_check(goal_config_check: dict | None) -> bo
     if not isinstance(goal_config_check, dict):
         return None
     summary = goal_config_check.get("summary") if isinstance(goal_config_check.get("summary"), dict) else {}
+    if summary.get("route_verification_status") == "routes_verified":
+        return True
     accepted = summary.get("accepted_route_count")
     return isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
 
