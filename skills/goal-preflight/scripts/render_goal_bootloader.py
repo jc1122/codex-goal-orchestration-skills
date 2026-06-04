@@ -185,11 +185,13 @@ def _repair_gate_status(bundle_dir: Path) -> dict[str, object]:
         return {"status": "missing", "path": str(path)}
     payload = _read_json(path, "repair gate report")
     status = payload.get("status")
+    actions = payload.get("actions", [])
     if status not in {"pass", "blocked", "failed"}:
         status = "pass" if payload.get("decision") == "pass_no_actions" else "blocked"
     return {
         "status": status,
         "decision": payload.get("decision"),
+        "actions": actions if isinstance(actions, list) else [],
         "path": str(path),
         "model_launch_allowed": payload.get("model_launch_allowed"),
         "script_repair_model_launch_allowed": payload.get("script_repair_model_launch_allowed"),
@@ -562,6 +564,14 @@ def _readiness_next_commands(
             f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --readiness --json'
         )
         return commands
+    if "bootloader launch handoff stale" in launch_blockers:
+        commands.append(
+            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --write'
+        )
+        commands.append(
+            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --readiness --json'
+        )
+        return commands
     if launch_blockers:
         blockers = ", ".join(sorted(set(launch_blockers)))
         commands.append(
@@ -636,30 +646,26 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     telemetry_mode = manifest.get("telemetry_policy", {}).get("mode", "standard")
     status = "pass"
     goal_config_status = _config_compatibility(manifest)
-    if _config_status_blocks_launch(goal_config_status):
-        status = "blocked"
     lint_brief = _lint_status(bundle_dir, "brief")
     lint_bundle = _lint_status(bundle_dir, "bundle")
     repair_gate = _repair_gate_status(bundle_dir)
     runtime_gate = _repo_runtime_gate(manifest)
-    if lint_brief["status"] not in {"pass", "missing"}:
-        status = "blocked"
-    if lint_bundle["status"] != "pass":
-        status = "blocked"
-    if repair_gate["status"] != "pass":
-        status = "blocked"
-    if runtime_gate["status"] != "pass":
-        status = "blocked"
     verified_routes = _verified_routes_summary(manifest)
-    launch_blockers = _launch_blockers(
-        goal_config_status=goal_config_status,
-        manifest=manifest,
-        verified_routes=verified_routes,
-        lint_brief=lint_brief,
+    launch_blockers = _bootloader_launch_blockers(
+        _launch_blockers(
+            goal_config_status=goal_config_status,
+            manifest=manifest,
+            verified_routes=verified_routes,
+            lint_brief=lint_brief,
+            lint_bundle=lint_bundle,
+            repair_gate=repair_gate,
+            runtime_gate=runtime_gate,
+        ),
         lint_bundle=lint_bundle,
         repair_gate=repair_gate,
-        runtime_gate=runtime_gate,
     )
+    if not launch_blockers and _bootloader_launch_handoff_is_stale(bootloader_text, lint_bundle, repair_gate):
+        launch_blockers = ["bootloader launch handoff stale"]
     if launch_blockers:
         status = "blocked"
     launch_allowed = status == "pass" and not launch_blockers
@@ -727,30 +733,26 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     telemetry_mode = manifest.get("telemetry_policy", {}).get("mode", "standard")
     status = "pass"
     goal_config_status = _config_compatibility(manifest)
-    if _config_status_blocks_launch(goal_config_status):
-        status = "blocked"
     lint_brief = _lint_status(bundle_dir, "brief")
     lint_bundle = _lint_status(bundle_dir, "bundle")
     repair_gate = _repair_gate_status(bundle_dir)
     runtime_gate = _repo_runtime_gate(manifest)
-    if lint_brief["status"] not in {"pass", "missing"}:
-        status = "blocked"
-    if lint_bundle["status"] != "pass":
-        status = "blocked"
-    if repair_gate["status"] != "pass":
-        status = "blocked"
-    if runtime_gate["status"] != "pass":
-        status = "blocked"
     verified_routes = _verified_routes_summary(manifest)
-    launch_blockers = _launch_blockers(
-        goal_config_status=goal_config_status,
-        manifest=manifest,
-        verified_routes=verified_routes,
-        lint_brief=lint_brief,
+    launch_blockers = _bootloader_launch_blockers(
+        _launch_blockers(
+            goal_config_status=goal_config_status,
+            manifest=manifest,
+            verified_routes=verified_routes,
+            lint_brief=lint_brief,
+            lint_bundle=lint_bundle,
+            repair_gate=repair_gate,
+            runtime_gate=runtime_gate,
+        ),
         lint_bundle=lint_bundle,
         repair_gate=repair_gate,
-        runtime_gate=runtime_gate,
     )
+    if not launch_blockers and _bootloader_launch_handoff_is_stale(bootloader_text, lint_bundle, repair_gate):
+        launch_blockers = ["bootloader launch handoff stale"]
     if launch_blockers:
         status = "blocked"
     launch_allowed = status == "pass" and not launch_blockers
@@ -868,12 +870,72 @@ def _readiness_result_kind(readiness: dict) -> tuple[str, str, str | None]:
 _BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS = {"bundle lint missing", "repair gate missing"}
 
 
-def _bootloader_launch_blockers(launch_blockers: list[str]) -> list[str]:
-    return [
-        item
-        for item in launch_blockers
-        if isinstance(item, str) and item not in _BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS
-    ]
+def _has_only_bootloader_launch_phrase_defects(lint_bundle: dict[str, object]) -> bool:
+    defects = lint_bundle.get("defects", ())
+    if not isinstance(defects, list):
+        return False
+    phrase_missing = False
+    for defect in defects:
+        if not isinstance(defect, dict):
+            return False
+        severity = defect.get("severity")
+        if severity not in {"critical", "major"}:
+            continue
+        if defect.get("file") != "goal-bootloader.md":
+            return False
+        message = str(defect.get("message", ""))
+        if not message.startswith("bootloader missing phrase:"):
+            return False
+        phrase_missing = True
+    return phrase_missing
+
+
+def _repair_gate_is_bundle_lint_only(repair_gate: dict[str, object]) -> bool:
+    if not isinstance(repair_gate, dict):
+        return False
+    if repair_gate.get("status") == "pass":
+        return False
+    actions = repair_gate.get("actions", ())
+    if not isinstance(actions, list) or not actions:
+        return False
+    return all(
+        isinstance(item, dict) and item.get("kind") == "bundle_lint_repair"
+        for item in actions
+    )
+
+
+def _bootloader_launch_handoff_is_stale(
+    bootloader_text: str,
+    lint_bundle: dict[str, object],
+    repair_gate: dict[str, object],
+) -> bool:
+    has_handoff = "Use $goal-main-orchestrator" in bootloader_text
+    is_blocked_bootloader = "BLOCKED READINESS" in bootloader_text
+    if has_handoff and not is_blocked_bootloader:
+        return False
+    return (
+        is_blocked_bootloader
+        or _has_only_bootloader_launch_phrase_defects(lint_bundle)
+        or _repair_gate_is_bundle_lint_only(repair_gate)
+    )
+
+
+def _bootloader_launch_blockers(
+    launch_blockers: list[str],
+    *,
+    lint_bundle: dict[str, object],
+    repair_gate: dict[str, object],
+) -> list[str]:
+    deferred = set(_BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS)
+    if "bundle lint failed" in launch_blockers and _has_only_bootloader_launch_phrase_defects(lint_bundle):
+        deferred.add("bundle lint failed")
+    if (
+        "repair gate blocked" in launch_blockers
+        and _repair_gate_is_bundle_lint_only(repair_gate)
+        and _has_only_bootloader_launch_phrase_defects(lint_bundle)
+    ):
+        deferred.add("repair gate blocked")
+    return [item for item in launch_blockers if isinstance(item, str) and item not in deferred]
 
 
 def _compute_bootloader_launch_readiness(bundle_dir: Path, repo_root: Path | None, bootloader_text: str) -> tuple[str, list[str]]:
@@ -897,7 +959,9 @@ def _compute_bootloader_launch_readiness(bundle_dir: Path, repo_root: Path | Non
             lint_bundle=lint_bundle,
             repair_gate=repair_gate,
             runtime_gate=runtime_gate,
-        )
+        ),
+        lint_bundle=lint_bundle,
+        repair_gate=repair_gate,
     )
     if launch_blockers:
         status = "blocked"

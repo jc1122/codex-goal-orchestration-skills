@@ -5406,7 +5406,6 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     shutil.copytree(pipeline_bundle, degraded_telemetry_bundle)
     degraded_manifest_path = degraded_telemetry_bundle / "job.manifest.json"
     degraded_manifest = read_json(degraded_manifest_path)
-    degraded_manifest["goal_config_summary"] = {"profile": "fixture"}
     degraded_manifest["goal_config_check_summary"] = {
         "status": "pass",
         "accepted_route_count": 2,
@@ -5436,6 +5435,17 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"partial token telemetry should be an explicit launch blocker: {degraded_readiness!r}")
     if degraded_readiness.get("verified_routes", {}).get("telemetry_capability_status") != "partial":
         raise SystemExit(f"readiness should expose partial route telemetry capability: {degraded_readiness!r}")
+    blocked_bootloader_text = run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/render_goal_bootloader.py",
+            "--bundle-dir",
+            degraded_telemetry_bundle.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+        ]
+    ).stdout
+    assert_contains(blocked_bootloader_text, "BLOCKED READINESS", "pre-waiver degraded telemetry bootloader should be blocked")
     degraded_manifest["route_policy_degraded_telemetry_waiver"] = {
         "accepted": True,
         "reason": "Fixture explicitly accepts partial token telemetry for launch readiness.",
@@ -5496,11 +5506,85 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         "refreshed degraded telemetry preflight report",
     )
     assert_not_contains(refreshed_report, "route_token_telemetry_degraded_without_waiver", "refreshed preflight report stale blocker")
+    (degraded_telemetry_bundle / "goal-bootloader.md").write_text(blocked_bootloader_text, encoding="utf-8")
+    stale_handoff_readiness = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/render_goal_bootloader.py",
+                "--bundle-dir",
+                degraded_telemetry_bundle.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--readiness",
+                "--json",
+            ]
+        ).stdout
+    )
+    if stale_handoff_readiness.get("launch_allowed") is not False:
+        raise SystemExit(f"stale blocked bootloader handoff should not be launch-allowed before --write: {stale_handoff_readiness!r}")
+    if "bootloader launch handoff stale" not in stale_handoff_readiness.get("launch_blockers", []):
+        raise SystemExit(f"stale blocked bootloader should advertise a bootloader refresh blocker: {stale_handoff_readiness!r}")
+    if not any("--write" in str(command) for command in stale_handoff_readiness.get("next_commands", [])):
+        raise SystemExit(f"stale blocked bootloader readiness should include a --write repair command: {stale_handoff_readiness!r}")
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/render_goal_bootloader.py",
+            "--bundle-dir",
+            degraded_telemetry_bundle.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--write",
+        ]
+    )
+    waived_bootloader = (degraded_telemetry_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
+    assert_not_contains(waived_bootloader, "BLOCKED READINESS", "waived degraded telemetry bootloader should be launch-ready")
+    assert_contains(waived_bootloader, "Use $goal-main-orchestrator", "waived degraded telemetry bootloader should include main orchestrator handoff")
+    waived_lint = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_goal_bundle.py",
+                "--bundle-dir",
+                degraded_telemetry_bundle.as_posix(),
+                "--no-write",
+                "--json",
+            ]
+        ).stdout
+    )
+    if waived_lint.get("status") != "pass":
+        raise SystemExit(f"waived degraded telemetry bundle lint should pass after launch-ready bootloader render: {waived_lint!r}")
+    if any(
+        isinstance(defect, dict)
+        and defect.get("file") == "goal-bootloader.md"
+        and str(defect.get("message", "")).startswith("bootloader missing phrase:")
+        for defect in waived_lint.get("defects", [])
+    ):
+        raise SystemExit(f"bootloader phrase defects should be resolved after convergence: {waived_lint!r}")
+    waived_repair_gate = json.loads(
+        run(
+            [
+                "python3",
+                "skills/_goal_shared/scripts/script_only_repair_gate.py",
+                "--manifest",
+                (degraded_telemetry_bundle / "job.manifest.json").as_posix(),
+                "--bundle-dir",
+                degraded_telemetry_bundle.as_posix(),
+                "--scope",
+                "preflight",
+                "--json",
+            ]
+        ).stdout
+    )
+    if waived_repair_gate.get("status") != "pass":
+        raise SystemExit(f"waived degraded telemetry repair gate should pass after convergence: {waived_repair_gate!r}")
+    if waived_repair_gate.get("action_count", 0) != 0:
+        raise SystemExit(f"waived degraded telemetry repair gate should not return bundle-lint actions: {waived_repair_gate!r}")
 
     degraded_blocked_bundle = tmp_path / "preflight-degraded-token-telemetry-blocked-bundle"
     shutil.copytree(pipeline_bundle, degraded_blocked_bundle)
     blocked_manifest = read_json(degraded_blocked_bundle / "job.manifest.json")
-    blocked_manifest["goal_config_summary"] = {"profile": "fixture"}
     blocked_manifest["goal_config_check_summary"] = {
         "status": "pass",
         "accepted_route_count": 2,
