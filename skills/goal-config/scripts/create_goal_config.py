@@ -667,13 +667,36 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             "heavy": heavy,
         }
 
+    models = config.get("models") if isinstance(config.get("models"), dict) else {}
+
+    def external_worker_ladder(values: list[str]) -> list[str]:
+        external: list[str] = []
+        for alias in values:
+            model = models.get(alias)
+            harness = model.get("harness") if isinstance(model, dict) else None
+            if str(harness).lower() != "codex":
+                external.append(alias)
+        return unique(external)
+
     worker_allowed = unique(worker)
     cheaper_ladder = cheaper_worker_ladder(worker)
+    if len(worker) > 3:
+        terminal_ladder = external_worker_ladder(worker) or unique(worker[-2:])
+        small_ladder = unique(worker[1:])
+        normal_ladder = worker
+    elif len(worker) > 2:
+        terminal_ladder = [worker[-1]]
+        small_ladder = cheaper_ladder
+        normal_ladder = worker
+    else:
+        terminal_ladder = [worker[-1]]
+        small_ladder = cheaper_ladder
+        normal_ladder = cheaper_ladder
     worker_route_classes = {
-        "mechanical": [worker[-1]],
-        "docs": [worker[-1]],
-        "small-edit": cheaper_ladder,
-        "normal-code": cheaper_ladder,
+        "mechanical": terminal_ladder,
+        "docs": terminal_ladder,
+        "small-edit": small_ladder,
+        "normal-code": normal_ladder,
         "complex-code": worker,
         "custom": worker,
     }
@@ -798,6 +821,14 @@ def base_config(contract: Any) -> dict[str, Any]:
                 model=contract.CODEX_ROUTE_MODELS["codex-mini"],
                 purpose="cheap fallback and mechanical work",
             ),
+            "worker_opencode": model_entry(
+                alias="opencode-deepseek-v4-flash",
+                role="worker_opencode",
+                harness="opencode",
+                provider="deepseek",
+                model="deepseek/deepseek-v4-flash",
+                purpose="external fallback for worker packets when Codex routes disconnect",
+            ),
             "demanding_agent": model_entry(
                 alias="gpt-5.4",
                 role="demanding_agent",
@@ -809,7 +840,7 @@ def base_config(contract: Any) -> dict[str, Any]:
         },
         "model_ladders": {
             "lite": ["lite_agent"],
-            "worker": ["worker_primary", "worker_fallback"],
+            "worker": ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"],
             "reviewer": ["demanding_agent"],
             "amender": ["demanding_agent", "worker_primary"],
             "demanding": ["demanding_agent", "worker_primary"],

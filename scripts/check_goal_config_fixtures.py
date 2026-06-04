@@ -657,6 +657,49 @@ def main() -> int:
             set(current_override["harness_smokes"]) == set(current_override["models"]),
             "current-default must generate smoke definitions for all roles",
         )
+        current_worker_ladder = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+        require(
+            current_override["model_ladders"]["worker"] == current_worker_ladder,
+            "current-default worker ladder must keep Opencode and Gemini external fallbacks",
+        )
+        current_worker_policy = current_override["model_policies"]["worker_model_policy"]
+        require(
+            current_worker_policy["default_ladder"] == current_worker_ladder,
+            "current-default worker policy default ladder must match model_ladders.worker",
+        )
+        require(
+            current_worker_policy["allowed_routes"] == current_worker_ladder,
+            "current-default worker policy allowed routes must include the external fallback",
+        )
+        require(
+            [current_override["models"][role]["harness"] for role in current_worker_ladder]
+            == ["codex", "opencode", "codex", "gemini"],
+            "current-default worker fallback ladder must diversify beyond Codex",
+        )
+        require(
+            current_override["models"]["worker_opencode"]["provider"] == "deepseek",
+            "worker_opencode provider mismatch",
+        )
+        require(
+            current_override["models"]["worker_opencode"]["model"] == "deepseek/deepseek-v4-flash",
+            "worker_opencode model mismatch",
+        )
+        require(
+            current_worker_policy["route_classes"]["normal-code"] == current_worker_ladder,
+            "normal-code workers must retain Codex routes before external fallbacks",
+        )
+        require(
+            current_worker_policy["route_classes"]["small-edit"] == [
+                "worker_opencode",
+                "worker_fallback",
+                "lite_agent",
+            ],
+            "small-edit workers should prefer Opencode before cheap Codex fallback",
+        )
+        require(
+            current_worker_policy["route_classes"]["docs"] == ["worker_opencode", "lite_agent"],
+            "docs workers should use cheap external fallback routes",
+        )
 
         thorough_state_path = tmp_path / "goal-config-thorough-state.json"
         run(
