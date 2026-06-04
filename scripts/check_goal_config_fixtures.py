@@ -747,6 +747,17 @@ def main() -> int:
         require(thorough_state["phase"] == "config_created", "create state should record config_created phase")
         require(thorough_state["complete"] is False, "create state should not mark validation complete")
         require("--smoke" in thorough_state["next_command"], "debug validation state should route to smoke check")
+        goal_config_phase_manifest = run(
+            [
+                sys.executable,
+                (ROOT / "skills" / "goal-config" / "scripts" / "runtime_phase_manifest.py").as_posix(),
+                "--markdown",
+            ]
+        ).stdout
+        require(
+            "for validation.mode=smoke or debug, add --smoke" in goal_config_phase_manifest,
+            "goal-config phase manifest should not prescribe plain --for-preflight for debug configs",
+        )
 
         run(
             [

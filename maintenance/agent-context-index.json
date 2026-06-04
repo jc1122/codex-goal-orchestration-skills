@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:a84c4717dedc2c61af091d1ee517d661c1cdae32f7e7455a1aa9bc3fdbefb357"
+    "source_fingerprint": "sha256:f70f6d4fa10e83546fd290de3e16377cd1c02d261007b00fc0dbdb66fc6953bc"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,27 +16,27 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 8048,
-      "approx_tokens": 95793,
+      "lines": 8141,
+      "approx_tokens": 96985,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "5373:run_base_ref_default_fixture:1167l",
+        "5373:run_base_ref_default_fixture:1260l",
         "3579:run_runtime_packet_fixtures:1163l",
-        "7298:run_branch_status_negative_fixtures:710l",
+        "7391:run_branch_status_negative_fixtures:710l",
         "1774:run_negative_amendment_fixtures:362l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3030,
-      "approx_tokens": 35956,
+      "lines": 3092,
+      "approx_tokens": 36794,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1491:normalize_brief:234l",
-        "2817:create_bundle:133l",
-        "2528:manifest_from_normalized_brief:127l",
-        "2164:build_runtime_index:96l"
+        "1548:normalize_brief:238l",
+        "2879:create_bundle:133l",
+        "2589:manifest_from_normalized_brief:128l",
+        "2225:build_runtime_index:96l"
       ]
     },
     {
@@ -68,14 +68,14 @@
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2077,
-      "approx_tokens": 27362,
+      "lines": 2107,
+      "approx_tokens": 27742,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1155:lint:836l",
-        "745:validate_preflight_lite_records:152l",
-        "1046:validate_runtime_metadata:107l",
-        "959:validate_goal_config_manifest:85l"
+        "1185:lint:836l",
+        "775:validate_preflight_lite_records:152l",
+        "1076:validate_runtime_metadata:107l",
+        "989:validate_goal_config_manifest:85l"
       ]
     }
   ],

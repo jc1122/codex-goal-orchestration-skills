@@ -57,8 +57,9 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "preflight_compatibility",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --for-preflight --stdout summary --output /abs/goal-config-preflight.json --state-output /abs/goal-config-state.json",
-                "pass": "status=pass with config_validation_mode and check_mode recorded",
-                "on_fail": "repair cap, telemetry, validation-mode, or preflight schema defects before model availability checks",
+                "agent_does": "for validation.mode=smoke or debug, add --smoke or reuse the later smoke report as the preflight compatibility check; plain --for-preflight is only the model-check compatibility path",
+                "pass": "status=pass with config_validation_mode and check_mode recorded; smoke/debug configs must pass with check_mode=smoke or discover",
+                "on_fail": "if validation mode requires smoke/discover, rerun this phase with --smoke before treating it as a config defect; otherwise repair cap, telemetry, validation-mode, or preflight schema defects before model availability checks",
             },
             {
                 "id": "model_check",

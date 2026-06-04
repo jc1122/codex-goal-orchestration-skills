@@ -213,6 +213,10 @@ def normalization_defect_path(message: str) -> str:
         return "$.runtime_cap"
     if message.startswith("telemetry_policy ") or message.startswith("telemetry_policy."):
         return "$.telemetry_policy"
+    if message.startswith("route_policy_degraded_telemetry_waiver ") or message.startswith(
+        "route_policy_degraded_telemetry_waiver."
+    ):
+        return "$.route_policy_degraded_telemetry_waiver"
     return "$"
 
 

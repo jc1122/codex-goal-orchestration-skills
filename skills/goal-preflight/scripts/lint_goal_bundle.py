@@ -105,17 +105,47 @@ def normalized_worker_policy(policy: dict) -> dict:
     if not isinstance(default_ladder, list) or not default_ladder:
         default_ladder = DEFAULT_WORKER_LADDER
     default_ladder = [str(alias) for alias in default_ladder if isinstance(alias, str) and alias]
-    cheap_ladder = cheaper_worker_ladder(default_ladder)
-    cheapest = [cheap_ladder[-1]] if cheap_ladder else [default_ladder[-1]]
-    result["route_classes"] = {
-        "mechanical": cheapest,
-        "docs": cheapest,
-        "small-edit": cheap_ladder,
-        "normal-code": cheap_ladder,
-        "complex-code": default_ladder,
-        "custom": default_ladder,
-    }
-    result["route_class_ladder_source"] = "preflight_deterministic_cheap_subsequences"
+    allowed_routes = result.get("allowed_routes")
+    if not isinstance(allowed_routes, list) or not allowed_routes:
+        allowed_routes = default_ladder
+    allowed_routes = [str(alias) for alias in allowed_routes if isinstance(alias, str) and alias]
+    route_classes = result.get("route_classes")
+    normalized_route_classes: dict[str, list[str]] | None = None
+    if isinstance(route_classes, dict) and default_ladder and allowed_routes:
+        allowed_set = set(allowed_routes)
+        candidate: dict[str, list[str]] = {}
+        for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
+            ladder = route_classes.get(route_class)
+            if not isinstance(ladder, list) or not ladder:
+                break
+            aliases = [alias for alias in ladder if isinstance(alias, str) and alias]
+            if len(aliases) != len(ladder):
+                break
+            if any(alias not in allowed_set for alias in aliases):
+                break
+            if [alias for alias in default_ladder if alias in aliases] != aliases:
+                break
+            candidate[route_class] = aliases
+        else:
+            normalized_route_classes = candidate
+    if normalized_route_classes is not None:
+        result["route_classes"] = normalized_route_classes
+        result["route_class_ladder_source"] = result.get(
+            "route_class_ladder_source",
+            "goal_config.model_policies.worker_model_policy.route_classes",
+        )
+    else:
+        cheap_ladder = cheaper_worker_ladder(default_ladder)
+        cheapest = [cheap_ladder[-1]] if cheap_ladder else [default_ladder[-1]]
+        result["route_classes"] = {
+            "mechanical": cheapest,
+            "docs": cheapest,
+            "small-edit": cheap_ladder,
+            "normal-code": cheap_ladder,
+            "complex-code": default_ladder,
+            "custom": default_ladder,
+        }
+        result["route_class_ladder_source"] = "preflight_deterministic_cheap_subsequences"
     return result
 
 

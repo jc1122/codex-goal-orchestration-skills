@@ -244,6 +244,7 @@ def brief_schema_summary() -> dict:
             "telemetry_policy": "manifest-owned opt-in telemetry policy object; supported modes are standard and debug, raw_text must be false, collect names debug metric groups",
             "telemetry_mode": "lean shorthand; set to debug to expand the full safe debug telemetry policy",
             "debug_telemetry": "boolean shorthand; true means telemetry_mode=debug, false means standard unless telemetry_policy says otherwise",
+            "route_policy_degraded_telemetry_waiver": "optional object {accepted: true, reason: non-empty string}; allows runtime launch when verified routes lack token telemetry but the operator accepts character/timing telemetry fallback",
             "source_attachments": "array of repo-relative file paths or {path,label,kind}; use for large benchmark/spec files instead of pasting them into goal; required when the brief references an exact instance/list/source that is not fully inline",
             "runtime_cap": "string or object declaring any concrete runtime/time cap mentioned in success criteria, including CLI flag when applicable",
             "goal_config": "optional copied model/provider/harness configuration supplied through --goal-config; manifest stores only compact summaries and hashes; do not hand-author in the brief",
@@ -699,6 +700,27 @@ def normalize_brief_telemetry_policy(brief: dict) -> dict:
     return policy
 
 
+def normalize_route_policy_degraded_telemetry_waiver(value: object) -> dict | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise SystemExit("route_policy_degraded_telemetry_waiver must be an object")
+    unknown_keys = set(value) - {"accepted", "reason"}
+    if unknown_keys:
+        unknown = ", ".join(sorted(str(key) for key in unknown_keys))
+        raise SystemExit(f"route_policy_degraded_telemetry_waiver contains unsupported keys: {unknown}")
+    accepted = value.get("accepted")
+    if not isinstance(accepted, bool):
+        raise SystemExit("route_policy_degraded_telemetry_waiver.accepted must be a boolean")
+    reason = value.get("reason")
+    if accepted and (not isinstance(reason, str) or not reason.strip()):
+        raise SystemExit("route_policy_degraded_telemetry_waiver.reason must be a non-empty string when accepted=true")
+    normalized = {"accepted": accepted}
+    if isinstance(reason, str) and reason.strip():
+        normalized["reason"] = reason.strip()
+    return normalized
+
+
 def normalize_reason_list(value: object, fallback: str = "") -> list[str]:
     if isinstance(value, list):
         return [item.strip() for item in value if isinstance(item, str) and item.strip()]
@@ -1000,13 +1022,48 @@ def deterministic_route_class_ladders(worker_policy: dict) -> dict[str, list[str
     }
 
 
+def valid_route_class_ladders(worker_policy: dict, route_classes: object) -> dict[str, list[str]] | None:
+    default_ladder = worker_policy.get("default_ladder")
+    allowed_routes = worker_policy.get("allowed_routes")
+    if not isinstance(default_ladder, list) or not default_ladder:
+        return None
+    if not isinstance(allowed_routes, list) or not allowed_routes:
+        allowed_routes = default_ladder
+    default_aliases = [alias for alias in default_ladder if isinstance(alias, str) and alias]
+    allowed_aliases = [alias for alias in allowed_routes if isinstance(alias, str) and alias]
+    if not default_aliases or not allowed_aliases or not isinstance(route_classes, dict):
+        return None
+    allowed_set = set(allowed_aliases)
+    normalized: dict[str, list[str]] = {}
+    for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
+        ladder = route_classes.get(route_class)
+        if not isinstance(ladder, list) or not ladder:
+            return None
+        aliases = [alias for alias in ladder if isinstance(alias, str) and alias]
+        if len(aliases) != len(ladder):
+            return None
+        if any(alias not in allowed_set for alias in aliases):
+            return None
+        if [alias for alias in default_aliases if alias in aliases] != aliases:
+            return None
+        normalized[route_class] = aliases
+    return normalized
+
+
 def normalize_worker_model_policy(policy: dict) -> dict:
     if not isinstance(policy, dict):
         policy = WORKER_MODEL_POLICY
     normalized = dict(policy)
-    route_classes = deterministic_route_class_ladders(normalized)
-    normalized["route_classes"] = route_classes
-    normalized["route_class_ladder_source"] = "preflight_deterministic_cheap_subsequences"
+    route_classes = valid_route_class_ladders(normalized, normalized.get("route_classes"))
+    if route_classes is not None:
+        normalized["route_classes"] = route_classes
+        normalized["route_class_ladder_source"] = normalized.get(
+            "route_class_ladder_source",
+            "goal_config.model_policies.worker_model_policy.route_classes",
+        )
+    else:
+        normalized["route_classes"] = deterministic_route_class_ladders(normalized)
+        normalized["route_class_ladder_source"] = "preflight_deterministic_cheap_subsequences"
     return normalized
 
 
@@ -1628,6 +1685,9 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
     if not isinstance(preflight_lite_advice, list):
         raise SystemExit("preflight_lite_advice must be an array when supplied")
     telemetry_policy = normalize_brief_telemetry_policy(brief)
+    degraded_telemetry_waiver = normalize_route_policy_degraded_telemetry_waiver(
+        brief.get("route_policy_degraded_telemetry_waiver")
+    )
 
     waves = brief.get("waves") or dependency_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
@@ -1719,6 +1779,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
         "waves": waves,
         "preflight_lite_advice": preflight_lite_advice,
         "telemetry_policy": telemetry_policy,
+        "route_policy_degraded_telemetry_waiver": degraded_telemetry_waiver,
         "source_attachments": normalize_source_attachments(brief.get("source_attachments"), repo_root=repo_root),
         "runtime_cap": normalize_runtime_cap(brief.get("runtime_cap")),
     }
@@ -2568,11 +2629,12 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
         "ownership_feasibility": ownership_feasibility,
         "orchestration_watchdog": ORCHESTRATION_WATCHDOG,
         "preflight_lite_advice": brief["preflight_lite_advice"],
-	        "telemetry_policy": brief["telemetry_policy"],
+        "telemetry_policy": brief["telemetry_policy"],
+        "route_policy_degraded_telemetry_waiver": brief.get("route_policy_degraded_telemetry_waiver"),
         "source_attachments": brief.get("source_attachments", []),
         **({"source_attachment_promotions": brief["source_attachment_promotions"]} if isinstance(brief.get("source_attachment_promotions"), list) and brief["source_attachment_promotions"] else {}),
-	        **({"runtime_cap": brief["runtime_cap"]} if brief.get("runtime_cap") is not None else {}),
-	        "repo_status": brief.get("repo_status", {}),
+        **({"runtime_cap": brief["runtime_cap"]} if brief.get("runtime_cap") is not None else {}),
+        "repo_status": brief.get("repo_status", {}),
         "preflight_compatibility": brief.get("preflight_compatibility", {"status": "not_configured", "defects": []}),
         "preflight_input_precedence": brief.get("preflight_input_precedence", {}),
         "preflight_warnings": brief.get("preflight_warnings", []),

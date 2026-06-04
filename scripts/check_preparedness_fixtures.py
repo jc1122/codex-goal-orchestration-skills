@@ -6151,6 +6151,20 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     config_debug_compat = config_debug_manifest.get("preflight_compatibility", {}).get("telemetry", {})
     if config_debug_compat.get("policy_transformation") != "none":
         raise SystemExit(f"goal_config raw_text policy transformation should be none: {config_debug_compat!r}")
+    config_debug_worker_policy = config_debug_manifest.get("worker_model_policy", {})
+    expected_current_default_worker = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+    if config_debug_worker_policy.get("default_ladder") != expected_current_default_worker:
+        raise SystemExit(f"goal_config worker default ladder should preserve Opencode preference: {config_debug_worker_policy!r}")
+    if config_debug_worker_policy.get("route_classes", {}).get("normal-code") != expected_current_default_worker:
+        raise SystemExit(f"preflight should preserve explicit normal-code route class: {config_debug_worker_policy!r}")
+    if config_debug_worker_policy.get("route_classes", {}).get("small-edit") != [
+        "worker_opencode",
+        "worker_fallback",
+        "lite_agent",
+    ]:
+        raise SystemExit(f"preflight should preserve explicit small-edit route class: {config_debug_worker_policy!r}")
+    if config_debug_worker_policy.get("route_classes", {}).get("docs") != ["worker_opencode", "lite_agent"]:
+        raise SystemExit(f"preflight should preserve explicit docs route class: {config_debug_worker_policy!r}")
 
     colocated_smoke_debug_check = tmp_path / "goal-config-smoke.json"
     if colocated_smoke_debug_check.exists():
@@ -6240,6 +6254,85 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"byte-identical alias config with verified smoke should pass readiness: {alias_readiness!r}")
     if alias_readiness.get("launch_allowed") is not True:
         raise SystemExit(f"byte-identical alias config with verified smoke should be launch-allowed: {alias_readiness!r}")
+
+    partial_telemetry_check = tmp_path / "goal-config-partial-token-telemetry-smoke.json"
+    write_json(
+        partial_telemetry_check,
+        {
+            "status": "pass",
+            "mode": "smoke",
+            "check_mode": "smoke",
+            "config_validation_mode": "debug",
+            "config_path": config_debug_path.as_posix(),
+            "summary": {
+                "route_verification_status": "routes_verified",
+                "accepted_route_count": 2,
+                "checked_role_count": 2,
+                "harness_count": 2,
+                "failure_count": 0,
+                "token_telemetry": {
+                    "available_routes": 0,
+                    "unavailable_routes": 2,
+                    "by_harness": {
+                        "codex": {"available": 0, "unavailable": 1},
+                        "gemini": {"available": 0, "unavailable": 1},
+                    },
+                },
+            },
+        },
+    )
+    waiver_brief = json.loads(json.dumps(pipeline_brief))
+    waiver_brief["job_id"] = "preflight-brief-degraded-telemetry-waiver"
+    waiver_brief["route_policy_degraded_telemetry_waiver"] = {
+        "accepted": True,
+        "reason": "Fixture accepts route token telemetry gaps because character counts and elapsed time telemetry are sufficient for this run.",
+    }
+    waiver_brief_path = tmp_path / "preflight-brief-degraded-telemetry-waiver.json"
+    waiver_bundle = tmp_path / "preflight-brief-degraded-telemetry-waiver-bundle"
+    write_json(waiver_brief_path, waiver_brief)
+    waiver_brief_lint = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/lint_preflight_brief.py",
+                "--brief",
+                waiver_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    if waiver_brief_lint.get("status") != "pass":
+        raise SystemExit(f"brief-level degraded telemetry waiver should lint cleanly: {waiver_brief_lint!r}")
+    waiver_pipeline_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                waiver_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                waiver_bundle.as_posix(),
+                "--goal-config",
+                config_debug_path.as_posix(),
+                "--goal-config-check",
+                partial_telemetry_check.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    if waiver_pipeline_result.get("status") != "pass" or waiver_pipeline_result.get("launch_allowed") is not True:
+        raise SystemExit(f"brief-level degraded telemetry waiver should make guided preflight launchable: {waiver_pipeline_result!r}")
+    waiver_manifest = read_json(waiver_bundle / "job.manifest.json")
+    waiver = waiver_manifest.get("route_policy_degraded_telemetry_waiver")
+    if not isinstance(waiver, dict) or waiver.get("accepted") is not True or not waiver.get("reason"):
+        raise SystemExit(f"manifest should persist brief-level degraded telemetry waiver: {waiver_manifest!r}")
+    waiver_readiness = read_json(waiver_bundle / "readiness.json")
+    if "route_token_telemetry_degraded_without_waiver" in waiver_readiness.get("launch_blockers", []):
+        raise SystemExit(f"brief-level degraded telemetry waiver should remove launch blocker: {waiver_readiness!r}")
 
     shutil.copyfile(config_debug_path, branch_default_repo / "goal.preflight.config.json")
     shutil.copyfile(config_debug_path, branch_default_repo / "goal.config.json")
