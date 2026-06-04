@@ -5475,6 +5475,45 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if "config_schema_pass_routes_unverified" in colocated_readiness.get("launch_blockers", []):
         raise SystemExit(f"colocated route-verified smoke check should prevent schema_pass_routes_unverified: {colocated_readiness!r}")
 
+    aliased_goal_config_path = tmp_path / "goal-config-debug-alias.json"
+    shutil.copyfile(config_debug_path, aliased_goal_config_path)
+    alias_smoke_bundle = tmp_path / "preflight-colocated-alias-smoke-bundle"
+    alias_smoke_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/prepare_goal_bundle.py",
+                "--brief",
+                pipeline_brief_path.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--out-dir",
+                alias_smoke_bundle.as_posix(),
+                "--goal-config",
+                aliased_goal_config_path.as_posix(),
+                "--goal-config-check",
+                colocated_smoke_debug_check.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    alias_selection = alias_smoke_result.get("config_selection", {})
+    if alias_selection.get("selected_config_path") != aliased_goal_config_path.as_posix():
+        raise SystemExit(
+            f"prepare should retain selected alias config path when reusing verified smoke by hash: {alias_selection.get('selected_config_path')!r}"
+        )
+    if alias_selection.get("selected_check_path") != colocated_smoke_debug_check.as_posix():
+        raise SystemExit(
+            f"prepare should reuse explicit verified smoke check for byte-identical alias config: {alias_selection.get('selected_check_path')!r}"
+        )
+    if alias_selection.get("route_model_availability_verified") is not True:
+        raise SystemExit(f"prepare should expose hash-matched route verification for alias config: {alias_selection!r}")
+    alias_readiness = read_json(alias_smoke_bundle / "readiness.json")
+    if alias_readiness.get("status") != "pass":
+        raise SystemExit(f"byte-identical alias config with verified smoke should pass readiness: {alias_readiness!r}")
+    if alias_readiness.get("launch_allowed") is not True:
+        raise SystemExit(f"byte-identical alias config with verified smoke should be launch-allowed: {alias_readiness!r}")
+
     shutil.copyfile(config_debug_path, branch_default_repo / "goal.preflight.config.json")
     shutil.copyfile(config_debug_path, branch_default_repo / "goal.config.json")
     auto_config_bundle = tmp_path / "preflight-auto-config-first-compatible"

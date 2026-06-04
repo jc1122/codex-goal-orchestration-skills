@@ -70,14 +70,20 @@ def config_path_from_report(report: dict, config: Path) -> Path | None:
         return None
 
 
-def report_matches_config(report: dict, config: Path) -> bool:
+def report_matches_config(report: dict, config: Path, config_sha256: str | None = None) -> bool:
     report_config = config_path_from_report(report, config)
-    if report_config is None:
+    config_sha = config_sha256
+    if config_sha is None:
+        config_sha = sha256_file(config)
+    if report_config is None or config_sha is None:
         return False
     try:
-        return report_config == config.resolve()
+        if report_config.resolve() == config.resolve():
+            return True
     except (OSError, ValueError):
-        return False
+        pass
+    report_hash = sha256_file(report_config)
+    return report_hash is not None and report_hash == config_sha
 
 
 def routes_verified(report: dict) -> bool:
@@ -94,6 +100,7 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
     candidate_paths: list[Path] = []
     if explicit is not None:
         candidate_paths.append(explicit)
+    config_sha256 = sha256_file(config)
 
     preferred = (
         f"{config.name}.smoke.json",
@@ -126,7 +133,7 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
             report = read_json(candidate)
         except Exception:  # noqa: BLE001
             continue
-        if routes_verified(report) and report_matches_config(report, config):
+        if routes_verified(report) and report_matches_config(report, config, config_sha256=config_sha256):
             return candidate
     return None
 
