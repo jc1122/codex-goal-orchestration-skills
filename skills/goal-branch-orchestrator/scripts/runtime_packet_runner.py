@@ -29,6 +29,8 @@ STREAM_DISCONNECT_PATTERN = re.compile(r"stream disconnected", re.IGNORECASE)
 CAPACITY_ERROR_CODES = {"MODEL_CAPACITY_EXHAUSTED", "RESOURCE_EXHAUSTED"}
 LAUNCHER_STATES = ("active", "timeout", "fail-clean", "fail-dirty", "pass", "blocked")
 GENERATED_CLEANUP_NAME = "generated-artifact-cleanup.json"
+OPENCODE_WAL_FAILURE_SIGNATURE = "PRAGMA journal_mode = WAL"
+OPENCODE_SQLITE_WAL_SUBCLASS = "opencode_sqlite_wal_failure"
 CACHE_PATH_PARTS = (
     "__pycache__",
     ".pytest_cache",
@@ -314,11 +316,49 @@ def attempt_elapsed_ms(attempt: dict[str, Any]) -> int | None:
     return None
 
 
-def opencode_db_path() -> Path:
+def opencode_db_path(xdg_data_home: Path | None = None) -> Path:
+    if xdg_data_home is not None:
+        return xdg_data_home / "opencode" / "opencode.db"
     xdg_data = os.environ.get("XDG_DATA_HOME")
     if xdg_data:
         return Path(xdg_data) / "opencode" / "opencode.db"
     return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+def opencode_packet_env(packet_dir: Path) -> tuple[dict[str, str], Path]:
+    root = packet_dir / ".runtime-cache" / "opencode"
+    xdg_data = root / "xdg-data"
+    xdg_state = root / "xdg-state"
+    xdg_cache = root / "xdg-cache"
+    for path in [xdg_data, xdg_state, xdg_cache]:
+        path.mkdir(parents=True, exist_ok=True)
+    return {
+        "XDG_DATA_HOME": xdg_data.as_posix(),
+        "XDG_STATE_HOME": xdg_state.as_posix(),
+        "XDG_CACHE_HOME": xdg_cache.as_posix(),
+    }, opencode_db_path(xdg_data)
+
+
+def opencode_wal_failure_report(execution: dict[str, Any], packet_dir: Path) -> dict[str, Any] | None:
+    stderr_name = execution.get("stderr_path")
+    if not isinstance(stderr_name, str) or not stderr_name:
+        return None
+    stderr_path = packet_dir / stderr_name
+    if not stderr_path.exists():
+        return None
+    stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace")
+    if OPENCODE_WAL_FAILURE_SIGNATURE not in stderr_text:
+        return None
+    return {
+        "status": "harness_failure",
+        "failure_subclass": OPENCODE_SQLITE_WAL_SUBCLASS,
+        "provider_error_code": "OPENCODE_SQLITE_WAL",
+        "messages": [
+            "Opencode failed before model execution while initializing its sqlite session database: "
+            + OPENCODE_WAL_FAILURE_SIGNATURE,
+            f"stderr: {stderr_name}",
+        ],
+    }
 
 
 def parse_session_id(stdout: str) -> str | None:
@@ -514,6 +554,8 @@ def attempt_failure_subclass(
         lowered = message.lower()
         if "outside owned paths" in lowered:
             return "owned_path_violation"
+        if OPENCODE_WAL_FAILURE_SIGNATURE.lower() in lowered:
+            return OPENCODE_SQLITE_WAL_SUBCLASS
     return None
 
 
@@ -592,6 +634,8 @@ def _attempt_stop_reason(attempt: dict[str, Any], attempt_state: str) -> str | N
         return "transport_disconnect"
     if attempt.get("failure_subclass") == "transport_disconnect":
         return "transport_disconnect"
+    if attempt.get("failure_subclass") == OPENCODE_SQLITE_WAL_SUBCLASS:
+        return "harness_unavailable"
     if attempt.get("failure_class") == "schema_or_output_readback":
         return "schema_readback_failure"
     if attempt.get("failure_subclass") in {"marker_protocol", "schema_validation_failure", "parser_failure"}:
@@ -605,7 +649,12 @@ def _attempt_stop_reason(attempt: dict[str, Any], attempt_state: str) -> str | N
 
 def _parse_failure_detected(parse_report: dict[str, Any]) -> bool:
     failure_subclass = parse_report.get("failure_subclass")
-    return failure_subclass in {"marker_protocol", "schema_validation_failure", "parser_failure"}
+    return failure_subclass in {
+        "marker_protocol",
+        "schema_validation_failure",
+        "parser_failure",
+        OPENCODE_SQLITE_WAL_SUBCLASS,
+    }
 
 
 def record_executed_command(attempt: dict[str, Any], command: list[str]) -> None:
@@ -798,6 +847,8 @@ def attempt_failure_class(
     if failure_subclass:
         if failure_subclass == "transport_disconnect":
             return "transport_disconnect"
+        if failure_subclass == OPENCODE_SQLITE_WAL_SUBCLASS:
+            return "harness_unavailable"
         return "schema_or_output_readback"
     message = str(event.get("message", "")).lower()
     if "outside owned paths" in message:
@@ -914,6 +965,7 @@ def run_with_timeout(
     cwd: str,
     stdin_data: bytes | None,
     stdout_path: Path,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     started_at = datetime.now(timezone.utc).isoformat()
     if shutil.which("timeout") is None:
@@ -940,6 +992,8 @@ def run_with_timeout(
     env["TMP"] = tmp_root.as_posix()
     env["TMPDIR"] = tmp_root.as_posix()
     env["XDG_CACHE_HOME"] = xdg_cache.as_posix()
+    if extra_env:
+        env.update(extra_env)
     pytest_addopts = env.get("PYTEST_ADDOPTS", "").strip()
     cache_opt = "-p no:cacheprovider"
     env["PYTEST_ADDOPTS"] = (pytest_addopts + " " + cache_opt).strip() if cache_opt not in pytest_addopts else pytest_addopts
@@ -1871,6 +1925,13 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         args = ["run", "--pure", "--format", "json", "--model", string_value(attempt, "model"), "--dir", worktree, prompt_text]
     command = [resolved, *args]
     record_executed_command(attempt, command)
+    extra_env, db_path = opencode_packet_env(packet_dir)
+    attempt["opencode_state"] = {
+        "xdg_data_home": extra_env["XDG_DATA_HOME"],
+        "xdg_state_home": extra_env["XDG_STATE_HOME"],
+        "xdg_cache_home": extra_env["XDG_CACHE_HOME"],
+        "db_path": db_path.as_posix(),
+    }
     execution = run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
@@ -1879,15 +1940,19 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         cwd=str(packet_dir),
         stdin_data=None,
         stdout_path=event_path,
+        extra_env=extra_env,
     )
     append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
     if execution.get("returncode", 1) != 0:
+        parse_report = opencode_wal_failure_report(execution, packet_dir)
+        if parse_report:
+            attempt["_parse_report"] = parse_report
         return int(execution.get("returncode", 1)), execution, event_path
     session_id = parse_session_id(event_path.read_text(encoding="utf-8", errors="replace") if event_path.exists() else "")
     if not session_id:
         print("opencode attempt did not emit a session id", file=sys.stderr)
         return 1, execution, event_path
-    assistant_text, readback = read_opencode_assistant_text(session_id, opencode_db_path())
+    assistant_text, readback = read_opencode_assistant_text(session_id, db_path)
     (packet_dir / f"events-{label}-assistant.log").write_text(assistant_text, encoding="utf-8")
     (packet_dir / f"events-{label}-opencode-readback.json").write_text(json.dumps(readback, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     parse_report: dict[str, Any] = {}

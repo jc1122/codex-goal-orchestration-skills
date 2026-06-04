@@ -3179,6 +3179,25 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         raise SystemExit("runtime cache fixture should make raw worktree status dirty")
     if module.is_worktree_dirty(cache_repo.as_posix(), ignore_runtime_cache=True):
         raise SystemExit("runtime cache-only dirt should not be actionable dirty")
+    opencode_packet_dir = tmp_path / "opencode-wal-classifier"
+    opencode_packet_dir.mkdir()
+    extra_env, db_path = module.opencode_packet_env(opencode_packet_dir)
+    if not extra_env.get("XDG_DATA_HOME", "").startswith(opencode_packet_dir.as_posix()):
+        raise SystemExit(f"opencode runtime should use packet-local XDG data: {extra_env!r}")
+    if db_path != Path(extra_env["XDG_DATA_HOME"]) / "opencode" / "opencode.db":
+        raise SystemExit(f"opencode readback db should use packet-local XDG data: {db_path!r}")
+    stderr_path = opencode_packet_dir / "events-lite_agent.jsonl.stderr"
+    stderr_path.write_text("Failed to run the query 'PRAGMA journal_mode = WAL'\n", encoding="utf-8")
+    parse_report = module.opencode_wal_failure_report({"stderr_path": stderr_path.name}, opencode_packet_dir)
+    if not isinstance(parse_report, dict) or parse_report.get("failure_subclass") != module.OPENCODE_SQLITE_WAL_SUBCLASS:
+        raise SystemExit(f"opencode WAL failure should be classified as harness infrastructure: {parse_report!r}")
+    failure_class = module.attempt_failure_class(
+        {"state": "fail-clean", "returncode": 1},
+        {"harness_kind": "opencode"},
+        parse_report=parse_report,
+    )
+    if failure_class != "harness_unavailable":
+        raise SystemExit(f"opencode WAL failure should be reported as harness_unavailable: {failure_class!r}")
 
 
 def test_configured_reviewer_route_policy() -> None:
@@ -4208,6 +4227,145 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     research_config = assert_compact_runtime_launcher(packet_root / "B01-W03", "research-worker", 1200)
     assert_research_worker_preserves_user_config(research_config, expected_event_logs=["events-primary.jsonl", "events-fallback.jsonl"])
     return packet_root, task_file
+
+
+def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
+    fallback_root = tmp_path / "opencode-wal-fallback-packets"
+    fallback_root.mkdir()
+    fallback_worktree = tmp_path / "opencode-wal-fallback-worktree"
+    fallback_worktree.mkdir()
+    run(["git", "init", fallback_worktree.as_posix()])
+    fallback_task = tmp_path / "opencode-wal-fallback-task.md"
+    fallback_task.write_text("Synthetic task for opencode WAL fallback fixture.\n", encoding="utf-8")
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W01",
+        branch="opencode-wal-fallback-fixture",
+        out_dir=fallback_root,
+        worktree=fallback_worktree,
+        task_file=fallback_task,
+        worker_route=["codex-mini"],
+        selection_reason="Fixture validates opencode WAL failure is treated as harness_unavailable and fallback to codex route.",
+    )
+    packet_dir = fallback_root / "B01-W01"
+    launch_config = read_json(packet_dir / "launch-config.json")
+    if not isinstance(launch_config, dict):
+        raise SystemExit(f"opencode WAL fixture should create launch-config: {launch_config!r}")
+    attempts = launch_config.get("attempts")
+    if not isinstance(attempts, list) or not attempts:
+        raise SystemExit(f"opencode WAL fixture launch-config should include attempts: {launch_config!r}")
+    codex_attempt = attempts[0]
+    if not isinstance(codex_attempt, dict):
+        raise SystemExit(f"opencode WAL fixture codex attempt should be a mapping: {attempts!r}")
+    opencode_attempt = dict(codex_attempt)
+    opencode_attempt.update(
+        {
+            "alias": "wal_opencode",
+            "provider": "opencode",
+            "provider_id": "deepseek",
+            "harness": "opencode",
+            "harness_kind": "opencode",
+            "command": "opencode run --pure --format json --model deepseek/opencode-wal-fixture --dir <worktree> <prompt>",
+            "command_binary": "opencode",
+            "event_logs": ["events-wal_opencode.jsonl"],
+            "run_args": ["run", "--pure", "--format", "json", "--model", "{model}", "--dir", "{worktree}", "{prompt}"],
+            "run_readback": "opencode_session_db",
+            "probe_logs": [],
+            "telemetry_capability": {
+                "source": "provider_or_harness_output",
+                "token_usage": "best_effort",
+            },
+            "model": "deepseek/unsupported",
+            "event": "attempt",
+            "attempt": codex_attempt.get("alias", "codex-mini"),
+        }
+    )
+    launch_config["attempts"] = [opencode_attempt, codex_attempt]
+    launch_config["selected_commands"] = [
+        opencode_attempt["command"],
+        codex_attempt.get("command", ""),
+    ]
+    write_json(packet_dir / "launch-config.json", launch_config)
+    fake_bin_dir = tmp_path / "fake-opencode-fallback-bins"
+    fake_bin_dir.mkdir()
+    fake_opencode = fake_bin_dir / "opencode"
+    fake_opencode.write_text(
+        "#!/usr/bin/env python3\n"
+        "import sys\n"
+        "sys.stderr.write(\"Failed to run the query \'PRAGMA journal_mode = WAL\\'\\n\")\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake_opencode.chmod(0o755)
+    fake_codex = fake_bin_dir / "codex"
+    fake_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "out = None\n"
+        "for index, item in enumerate(args):\n"
+        "    if item == '-o' and index + 1 < len(args):\n"
+        "        out = pathlib.Path(args[index + 1])\n"
+        "        break\n"
+        "if out is None:\n"
+        "    raise SystemExit('missing -o output path')\n"
+        "cfg = json.loads((pathlib.Path.cwd() / 'launch-config.json').read_text(encoding='utf-8'))\n"
+        "status = {\n"
+        "  'packet_id': cfg['packet_id'],\n"
+        "  'role': cfg['role'],\n"
+        "  'status': 'pass',\n"
+        "  'branch_id': cfg['branch_id'],\n"
+        "  'work_item_id': cfg['work_item_id'],\n"
+        "  'manifest_hash': cfg['manifest_hash'],\n"
+        "  'manifest_epoch': cfg['manifest_epoch'],\n"
+        "  'worktree_path': cfg['worktree_path'],\n"
+        "  'route_id': cfg['route_id'],\n"
+        "  'evidence_summary': 'Fake codex route passed after opencode infrastructure failure',\n"
+        "  'branch': cfg['branch'],\n"
+        "  'worktree': cfg['worktree'],\n"
+        "  'route_class': cfg['route_class'],\n"
+        "  'selected_ladder': cfg['selected_ladder'],\n"
+        "  'selection_reason': cfg['selection_reason'],\n"
+        "  'changed_files': [],\n"
+        "  'commands_run': ['codex pass after fallback'],\n"
+        "  'tests': ['fixture fake codex fallback passed'],\n"
+        "  'blockers': [],\n"
+        "  'handoff': 'fake codex passed after opencode fallback',\n"
+        "}\n"
+        "out.write_text(json.dumps(status) + '\\n', encoding='utf-8')\n"
+        "print(json.dumps({'usage': {'input_tokens': 111, 'cached_input_tokens': 22, 'output_tokens': 9}}))\n",
+        encoding="utf-8",
+    )
+    fake_codex.chmod(0o755)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+            "--packet-dir",
+            packet_dir.as_posix(),
+        ],
+        env={**os.environ, "PATH": fake_bin_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+    )
+    summary = read_json(packet_dir / "packet.summary.json")
+    if summary.get("terminal_state") != "pass":
+        raise SystemExit(f"opencode WAL fallback fixture should pass after codex fallback: {summary!r}")
+    attempts = summary.get("attempts")
+    if not isinstance(attempts, list) or len(attempts) < 2:
+        raise SystemExit(f"opencode WAL fallback fixture should report both attempts: {summary!r}")
+    if attempts[0].get("failure_class") != "harness_unavailable":
+        raise SystemExit(f"opencode WAL failing attempt should be harness_unavailable: {summary!r}")
+    if attempts[1].get("state") != "pass":
+        raise SystemExit(f"fallback codex attempt should pass in opencode WAL fixture: {summary!r}")
+    launcher = read_json(packet_dir / "launcher-state.json")
+    failed_opencode_events = [
+        event for event in launcher.get("events", []) if isinstance(event, dict) and event.get("attempt_index") == 0
+    ]
+    if not any(
+        event.get("failure_class") == "harness_unavailable"
+        or event.get("failure_subclass") == "opencode_sqlite_wal_failure"
+        for event in failed_opencode_events
+    ):
+        raise SystemExit(f"opencode WAL attempt should be classified as harness_unavailable: {launcher!r}")
 
 
 def create_goal_fixture_bundle(tmp_path: Path) -> Path:
@@ -6470,6 +6628,65 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
     ]
     if unrecovered_blocked:
         raise SystemExit(f"recovered non-pass branches must be excluded from remaining blockers: {unrecovered_blocked!r}")
+    pre_dispatch_bundle = tmp_path / "reconcile-pre-branch-dispatch"
+    shutil.copytree(bundle, pre_dispatch_bundle)
+    pre_dispatch_manifest = read_json(pre_dispatch_bundle / "job.manifest.json")
+    for branch in pre_dispatch_manifest.get("branches", []):
+        if isinstance(branch, dict):
+            branch["worktree_path"] = f".worktrees/pre-dispatch-{branch.get('id')}"
+    write_json(pre_dispatch_bundle / "job.manifest.json", pre_dispatch_manifest)
+    for rel_path in [
+        "main.status.json",
+        "branches/B01.status.json",
+        "branches/B01.review.json",
+        "branches/B01.pre_review_gate.json",
+        "telemetry.summary.json",
+    ]:
+        path = pre_dispatch_bundle / rel_path
+        if path.exists():
+            path.unlink()
+    shutil.rmtree(pre_dispatch_bundle / "workers", ignore_errors=True)
+    shutil.rmtree(pre_dispatch_bundle / "research", ignore_errors=True)
+    shutil.rmtree(pre_dispatch_bundle / "reviewers", ignore_errors=True)
+    shutil.rmtree(pre_dispatch_bundle / "lite", ignore_errors=True)
+    shutil.rmtree(pre_dispatch_bundle / "amendments", ignore_errors=True)
+    shutil.rmtree(pre_dispatch_bundle / "schedulers", ignore_errors=True)
+    (pre_dispatch_bundle / "audit").mkdir(parents=True, exist_ok=True)
+    write_json(
+        pre_dispatch_bundle / "audit" / "prompt-audit-phase.json",
+        {"schema_version": 1, "status": "pass", "can_start": True},
+    )
+    pre_dispatch_report = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/reconcile_goal_run.py",
+                "--manifest",
+                (pre_dispatch_bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--write",
+                "--json",
+            ]
+        ).stdout
+    )
+    if pre_dispatch_report.get("execution_phase") != "pre_branch_dispatch":
+        raise SystemExit(f"pre-dispatch reconcile should expose launch-pending phase: {pre_dispatch_report!r}")
+    if pre_dispatch_report.get("status") != "incomplete":
+        raise SystemExit(f"pre-dispatch reconcile should be incomplete, not terminal blocked: {pre_dispatch_report!r}")
+    if pre_dispatch_report.get("final_state_validation", {}).get("status") != "incomplete":
+        raise SystemExit(f"pre-dispatch final validation should be deferred: {pre_dispatch_report!r}")
+    if (pre_dispatch_bundle / "main.status.json").exists():
+        raise SystemExit("pre-dispatch reconcile --write should not materialize a conservative main.status.json")
+    if not any("render_branch_worktree_commands.py" in command for command in pre_dispatch_report.get("next_commands", [])):
+        raise SystemExit(f"pre-dispatch next commands should render branch launch commands: {pre_dispatch_report!r}")
+    blocked_codes = {
+        item.get("code")
+        for item in pre_dispatch_report.get("blocked_work_remaining", [])
+        if isinstance(item, dict)
+    }
+    if {"missing_main_status", "missing_branch_status", "missing_branch_worktree"} & blocked_codes:
+        raise SystemExit(f"pre-dispatch missing launch artifacts should be pending work, not blocked work: {pre_dispatch_report!r}")
     resume_report = json.loads(
         run(
             [
@@ -6597,6 +6814,7 @@ def main() -> int:
         run_lite_advice_packet_fixture(tmp_path, task_file)
 
         run_reviewer_packet_fixtures(tmp_path, bundle, packet_root, task_file)
+        run_opencode_wal_fallback_fixture(tmp_path)
         run_branch_status_negative_fixtures(tmp_path, bundle)
 
     print("status=pass")
