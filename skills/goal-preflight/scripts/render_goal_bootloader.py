@@ -474,13 +474,15 @@ def _launch_blockers(
 def _readiness_warnings(
     manifest: dict,
     *,
+    bundle_dir: Path,
+    repo_root: Path | None,
     goal_config_status: str,
     verified_routes: dict[str, object],
     utilization: dict[str, object],
 ) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
     for warning in manifest.get("preflight_warnings", []):
-        if isinstance(warning, dict):
+        if isinstance(warning, dict) and _manifest_warning_still_applies(warning, bundle_dir=bundle_dir, repo_root=repo_root):
             warnings.append(warning)
     if verified_routes.get("route_model_availability_verified") is not True:
         warnings.append(
@@ -535,6 +537,33 @@ def _readiness_warnings(
             }
         )
     return warnings
+
+
+def _manifest_warning_still_applies(warning: dict[str, object], *, bundle_dir: Path, repo_root: Path | None) -> bool:
+    if warning.get("code") != "bundle_inside_git_worktree_not_ignored":
+        return True
+    if repo_root is None:
+        return True
+    warning_path = warning.get("path")
+    candidate = str(warning_path).strip() if isinstance(warning_path, str) else ""
+    try:
+        relative = Path(candidate) if candidate else bundle_dir.resolve().relative_to(repo_root.resolve())
+    except ValueError:
+        return True
+    if _git_path_is_ignored(repo_root, relative) or _git_path_is_ignored(repo_root, relative / "job.manifest.json"):
+        return False
+    return True
+
+
+def _git_path_is_ignored(repo_root: Path, relative_path: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "check-ignore", "-q", "--", relative_path.as_posix()],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0
 
 
 def _readiness_next_commands(
@@ -676,6 +705,8 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     utilization = _branch_utilization_summary(manifest)
     warnings = _readiness_warnings(
         manifest,
+        bundle_dir=bundle_dir,
+        repo_root=resolved_repo_root,
         goal_config_status=goal_config_status,
         verified_routes=verified_routes,
         utilization=utilization,
@@ -763,6 +794,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     utilization = _branch_utilization_summary(manifest)
     warnings = _readiness_warnings(
         manifest,
+        bundle_dir=bundle_dir,
+        repo_root=resolved_repo_root,
         goal_config_status=goal_config_status,
         verified_routes=verified_routes,
         utilization=utilization,

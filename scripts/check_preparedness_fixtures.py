@@ -3463,6 +3463,65 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
     )
     if failure_class != "harness_unavailable":
         raise SystemExit(f"opencode WAL failure should be reported as harness_unavailable: {failure_class!r}")
+    empty_report = module.opencode_empty_output_report(
+        "",
+        {
+            "status": "pass",
+            "session_id": "empty-output-fixture",
+            "tokens": {
+                "input": 0,
+                "output": 0,
+                "reasoning": 0,
+                "cache_read": 0,
+                "cache_write": 0,
+            },
+        },
+    )
+    if not isinstance(empty_report, dict) or empty_report.get("failure_subclass") != module.OPENCODE_EMPTY_OUTPUT_SUBCLASS:
+        raise SystemExit(f"opencode empty assistant output should be classified directly: {empty_report!r}")
+    failure_class = module.attempt_failure_class(
+        {"state": "fail-clean", "returncode": 1},
+        {"harness_kind": "opencode"},
+        parse_report=empty_report,
+    )
+    if failure_class != "schema_or_output_readback" or not module._parse_failure_detected(empty_report):
+        raise SystemExit(f"opencode empty assistant output should be a schema/readback failure: {failure_class!r} {empty_report!r}")
+    if module.opencode_empty_output_report("assistant text", {"status": "pass", "tokens": {"input": 0}}) is not None:
+        raise SystemExit("opencode empty output classifier must not fire when assistant text is present")
+    fake_gemini = tmp_path / "fake-gemini-probe" / "gemini"
+    fake_gemini.parent.mkdir()
+    fake_gemini.write_text(
+        "#!/usr/bin/env python3\n"
+        "print('GEMINI_MODEL_PROBE_OK')\n",
+        encoding="utf-8",
+    )
+    fake_gemini.chmod(0o755)
+    gemini_packet_dir = tmp_path / "gemini-probe-success"
+    gemini_packet_dir.mkdir()
+    gemini_rc, gemini_execution, gemini_log = module.run_gemini_probe_command(
+        {
+            "alias": "gemini-probe-fixture",
+            "probe_model": "gemini-fixture",
+            "probe_prompt": "Return exactly: GEMINI_MODEL_PROBE_OK",
+            "probe_timeout_seconds": 5,
+            "probe_logs": ["events-gemini-probe-fixture-probe.log"],
+        },
+        label="gemini-probe-fixture",
+        packet_dir=gemini_packet_dir,
+        config={
+            "role": "worker",
+            "gemini_command": fake_gemini.as_posix(),
+            "gemini_approval_mode": "yolo",
+            "gemini_probe_prompt": "Return exactly: GEMINI_MODEL_PROBE_OK",
+            "gemini_probe_timeout_seconds": 5,
+            "timeout_kill_after_seconds": 5,
+        },
+        worktree=tmp_path.as_posix(),
+    )
+    if gemini_rc != 0 or gemini_execution.get("validation_returncode") != 0:
+        raise SystemExit(f"successful Gemini probe must validate as rc=0: rc={gemini_rc} execution={gemini_execution!r}")
+    if "GEMINI_MODEL_PROBE_OK" not in gemini_log.read_text(encoding="utf-8"):
+        raise SystemExit(f"Gemini probe fixture did not write expected token: {gemini_log}")
 
 
 def test_configured_reviewer_route_policy() -> None:
@@ -3632,6 +3691,52 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     ):
         raise SystemExit(f"configured Gemini attempts should carry probe metadata: {configured_gemini_config!r}")
     packet_module.validate_launch_config_adapter(configured_gemini_config)
+    configured_codex_config = packet_module.compact_launch_config(
+        "worker",
+        "B01-W13",
+        "preparedness-configured-codex",
+        ROOT.as_posix(),
+        "status.schema.json",
+        "status.json",
+        owned_files=["README.md"],
+        selected_ladder=["configured_codex"],
+        route_class="normal-code",
+        selection_reason="Fixture validates configured Codex workspace-write launch evidence.",
+        goal_config={
+            "schema_version": 1,
+            "models": {
+                "configured_codex": {
+                    "alias": "configured-codex",
+                    "role": "configured_codex",
+                    "harness": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                }
+            },
+            "harnesses": {
+                "codex": {
+                    "kind": "codex",
+                    "command": "codex",
+                    "run_args": ["exec", "-m", "{model}", "-s", "read-only", "{prompt}"],
+                    "run_readback": "stdout",
+                }
+            },
+        },
+    )
+    configured_codex_attempt = configured_codex_config.get("attempts", [{}])[0]
+    configured_codex_run_args = configured_codex_attempt.get("run_args", [])
+    configured_codex_selected = configured_codex_config.get("selected_commands", [])
+    if (
+        configured_codex_attempt.get("sandbox") != "workspace-write"
+        or "workspace-write" not in configured_codex_run_args
+        or any("read-only" in item for item in configured_codex_selected if isinstance(item, str))
+        or not any("workspace-write" in item for item in configured_codex_selected if isinstance(item, str))
+    ):
+        raise SystemExit(
+            "configured Codex worker launch evidence should use workspace-write, not source read-only templates: "
+            f"{configured_codex_config!r}"
+        )
+    packet_module.validate_launch_config_adapter(configured_codex_config)
     discontinued_route = create_runtime_packet(
         role="worker",
         packet_id="B01-W07",
@@ -5798,6 +5903,39 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     expected_cleanup_command = f"rm -rf {shlex.quote(inside_repo_bundle.as_posix())}"
     if expected_ignore_command not in cleanup_commands or expected_cleanup_command not in cleanup_commands:
         raise SystemExit(f"readiness cleanup commands must shell-quote unsafe paths: {cleanup_commands!r}")
+    inside_repo_relative = inside_repo_bundle.relative_to(branch_default_repo)
+    exclude_path = branch_default_repo / ".git" / "info" / "exclude"
+    exclude_path.write_text(
+        exclude_path.read_text(encoding="utf-8") + f"\n{inside_repo_relative.as_posix()}/\n",
+        encoding="utf-8",
+    )
+    run(
+        [
+            "git",
+            "-C",
+            branch_default_repo.as_posix(),
+            "check-ignore",
+            "-q",
+            "--",
+            (inside_repo_relative / "job.manifest.json").as_posix(),
+        ]
+    )
+    ignored_readiness = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/render_goal_bootloader.py",
+                "--bundle-dir",
+                inside_repo_bundle.as_posix(),
+                "--repo-root",
+                branch_default_repo.as_posix(),
+                "--readiness",
+                "--json",
+            ]
+        ).stdout
+    )
+    if any(item.get("code") == "bundle_inside_git_worktree_not_ignored" for item in ignored_readiness.get("warnings", [])):
+        raise SystemExit(f"readiness should drop stale unignored-bundle warnings after git check-ignore passes: {ignored_readiness!r}")
 
     large_source = branch_default_repo / "large-source.txt"
     large_source.write_text("exact operation list fixture\n" + ("0123456789abcdef\n" * 700), encoding="utf-8")

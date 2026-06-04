@@ -486,6 +486,16 @@ def configured_telemetry_attempts(
         if kind == "codex":
             attempt["ignore_user_config"] = True
             attempt["ignore_rules"] = True
+            attempt["run_args"] = [
+                "exec",
+                "--ephemeral",
+                *CONTRACT.CODEX_LEAN_EXEC_FLAGS,
+                "-m",
+                "{model}",
+                "-s",
+                sandbox,
+                "{prompt}",
+            ]
             attempt["command"] = (
                 "codex exec --ephemeral "
                 + CODEX_LEAN_EXEC_FLAGS_TEXT
@@ -2039,6 +2049,15 @@ def launch_config_base(
     }
 
 
+def selected_commands_from_attempts(attempts: list[dict]) -> list[str]:
+    commands: list[str] = []
+    for attempt in attempts:
+        command = attempt.get("rendered_command") or attempt.get("command")
+        if isinstance(command, str) and command.strip():
+            commands.append(command)
+    return commands
+
+
 def annotate_attempt_metadata(config: dict, retry_ordinal: str | None = None) -> dict:
     attempts = config.get("attempts")
     if not isinstance(attempts, list):
@@ -2149,6 +2168,7 @@ def compact_launch_config(
         else {}
     )
     if role == "worker":
+        worker_attempts = worker_telemetry_attempts(selected_ladder, goal_config)
         return annotate_attempt_metadata({
             **launch_config_base(
                 "worker", packet_id, branch, worktree, schema_name, output_name, "workspace-write", WORKER_ATTEMPT_TIMEOUT_SECONDS
@@ -2163,8 +2183,8 @@ def compact_launch_config(
                 "begin": GEMINI_STATUS_BEGIN,
                 "end": GEMINI_STATUS_END,
             },
-            "attempts": worker_telemetry_attempts(selected_ladder, goal_config),
-            "selected_commands": configured_route_commands(selected_ladder, goal_config) if goal_config else worker_route_commands(selected_ladder),
+            "attempts": worker_attempts,
+            "selected_commands": selected_commands_from_attempts(worker_attempts),
             "model_catalog": model_catalog or {},
             "telemetry_script": telemetry_script,
             "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",

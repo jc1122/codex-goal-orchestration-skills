@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:f429db19d52747a6e7395748b6512440332033ae82328761ddd0bfefd323da53"
+    "source_fingerprint": "sha256:32d3237e3bdf396f60b9380accea848692523fa38d09e659952a3fade35f62ff"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,13 +16,13 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 7910,
-      "approx_tokens": 94308,
+      "lines": 8048,
+      "approx_tokens": 95806,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "5268:run_base_ref_default_fixture:1134l",
-        "3520:run_runtime_packet_fixtures:1117l",
-        "7160:run_branch_status_negative_fixtures:710l",
+        "5373:run_base_ref_default_fixture:1167l",
+        "3579:run_runtime_packet_fixtures:1163l",
+        "7298:run_branch_status_negative_fixtures:710l",
         "1774:run_negative_amendment_fixtures:362l"
       ]
     },
@@ -42,27 +42,27 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2631,
-      "approx_tokens": 28242,
+      "lines": 2651,
+      "approx_tokens": 28386,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2222:main:406l",
-        "972:compact_worker_context:118l",
-        "1187:reviewer_packet_context:99l",
-        "2122:compact_launch_config:98l"
+        "2242:main:406l",
+        "982:compact_worker_context:118l",
+        "1197:reviewer_packet_context:99l",
+        "2141:compact_launch_config:99l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2771,
-      "approx_tokens": 27690,
+      "lines": 2812,
+      "approx_tokens": 28103,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2340:run_packet:391l",
-        "2164:extract_status_json:100l",
-        "727:write_launcher_state:85l",
-        "959:run_with_timeout:85l"
+        "2381:run_packet:391l",
+        "2205:extract_status_json:100l",
+        "756:write_launcher_state:85l",
+        "988:run_with_timeout:85l"
       ]
     },
     {

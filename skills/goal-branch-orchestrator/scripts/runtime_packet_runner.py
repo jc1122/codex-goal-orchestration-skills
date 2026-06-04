@@ -31,6 +31,7 @@ LAUNCHER_STATES = ("active", "timeout", "fail-clean", "fail-dirty", "pass", "blo
 GENERATED_CLEANUP_NAME = "generated-artifact-cleanup.json"
 OPENCODE_WAL_FAILURE_SIGNATURE = "PRAGMA journal_mode = WAL"
 OPENCODE_SQLITE_WAL_SUBCLASS = "opencode_sqlite_wal_failure"
+OPENCODE_EMPTY_OUTPUT_SUBCLASS = "opencode_empty_assistant_output"
 CACHE_PATH_PARTS = (
     "__pycache__",
     ".pytest_cache",
@@ -496,6 +497,33 @@ def read_opencode_assistant_text(session_id: str, db_path: Path) -> tuple[str, d
         con.close()
 
 
+def opencode_empty_output_report(assistant_text: str, readback: dict[str, Any]) -> dict[str, Any] | None:
+    if assistant_text.strip() or readback.get("status") != "pass":
+        return None
+    tokens = readback.get("tokens")
+    if not isinstance(tokens, dict):
+        return None
+    token_values: list[int] = []
+    for key in ("input", "output", "reasoning", "cache_read", "cache_write"):
+        value = tokens.get(key)
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            token_values.append(value)
+        elif value is not None:
+            return None
+    if not token_values or any(value != 0 for value in token_values):
+        return None
+    message = "opencode readback returned empty assistant output with zero token usage"
+    return {
+        "status": "failed",
+        "failure_class": "schema_or_output_readback",
+        "failure_subclass": OPENCODE_EMPTY_OUTPUT_SUBCLASS,
+        "provider_error_code": "OPENCODE_NO_ASSISTANT_OUTPUT",
+        "messages": [message],
+    }
+
+
 def state_artifact_name(config: dict[str, Any]) -> str:
     value = config.get("state_artifact")
     return value if isinstance(value, str) and value.strip() else "launcher-state.json"
@@ -654,6 +682,7 @@ def _parse_failure_detected(parse_report: dict[str, Any]) -> bool:
         "schema_validation_failure",
         "parser_failure",
         OPENCODE_SQLITE_WAL_SUBCLASS,
+        OPENCODE_EMPTY_OUTPUT_SUBCLASS,
     }
 
 
@@ -1617,7 +1646,7 @@ def run_gemini_probe_command(
     execution = rc if isinstance(rc, dict) else {"returncode": rc}
     if execution.get("returncode") != 0:
         return int(execution.get("returncode") or 1), execution, log_path
-    returncode = 1 if not validate_probe_output(log_path, prompt, "Gemini") else 0
+    returncode = validate_probe_output(log_path, prompt, "Gemini")
     execution["validation_returncode"] = returncode
     return returncode, execution, log_path
 
@@ -1953,11 +1982,23 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         print("opencode attempt did not emit a session id", file=sys.stderr)
         return 1, execution, event_path
     assistant_text, readback = read_opencode_assistant_text(session_id, db_path)
-    (packet_dir / f"events-{label}-assistant.log").write_text(assistant_text, encoding="utf-8")
+    assistant_log_path = packet_dir / f"events-{label}-assistant.log"
+    assistant_log_path.write_text(assistant_text, encoding="utf-8")
+    parse_report: dict[str, Any] = opencode_empty_output_report(assistant_text, readback) or {}
+    if parse_report:
+        readback = {
+            **readback,
+            "status": "failed",
+            "failure_class": parse_report.get("failure_class"),
+            "failure_subclass": parse_report.get("failure_subclass"),
+            "provider_error_code": parse_report.get("provider_error_code"),
+            "messages": parse_report.get("messages"),
+        }
     (packet_dir / f"events-{label}-opencode-readback.json").write_text(json.dumps(readback, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
-    if not ensure_status_json(packet_dir, schema_path, output_path, packet_dir / f"events-{label}-assistant.log", config, parse_report=parse_report):
+    if parse_report:
+        return 1, execution, event_path
+    if not ensure_status_json(packet_dir, schema_path, output_path, assistant_log_path, config, parse_report=parse_report):
         return 1, execution, event_path
     return 0, execution, event_path
 
