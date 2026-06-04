@@ -894,6 +894,13 @@ def load_json(path: Path) -> dict:
     return data
 
 
+def read_json_or_none(path: Path) -> tuple[dict | None, str | None]:
+    try:
+        return load_json(path), None
+    except Exception as exc:  # noqa: BLE001
+        return None, str(exc)
+
+
 def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
@@ -1145,6 +1152,38 @@ def bundle_path(bundle_dir: Path, value: object, field: str) -> str | None:
     return (bundle_dir / relative).resolve().as_posix()
 
 
+def reviewer_branch_status_context(bundle_dir: Path, branch_data: dict, gate: dict) -> dict:
+    status_path_value = bundle_path(bundle_dir, branch_data.get("status_path"), "branch status_path")
+    context: dict[str, object] = {
+        "path": status_path_value,
+        "currentness": "unknown",
+        "pre_review_gate_is_authoritative": gate.get("status") == "pass",
+        "stale_missing_gate_blocker_ignored": False,
+    }
+    if not status_path_value:
+        return context
+    status_path = Path(status_path_value)
+    data, _error = read_json_or_none(status_path)
+    if not isinstance(data, dict):
+        return context
+    blockers = [item for item in data.get("blockers", []) if isinstance(item, str)]
+    missing_gate_blocker = any("pre-review gate" in item and "missing" in item for item in blockers)
+    if gate.get("status") == "pass" and missing_gate_blocker:
+        context.update(
+            {
+                "currentness": "pre_gate_status_stale_after_passing_pre_review_gate",
+                "stale_missing_gate_blocker_ignored": True,
+                "instruction": (
+                    "The pre_review_gate artifact is newer/current for reviewer readiness; ignore branch_status "
+                    "blockers that only claim the pre-review gate is missing."
+                ),
+            }
+        )
+    else:
+        context["currentness"] = "current_or_not_known_stale"
+    return context
+
+
 def reviewer_packet_context(
     *,
     packet_id: str,
@@ -1192,6 +1231,7 @@ def reviewer_packet_context(
         )
     base_ref = str(manifest.get("base_ref", "main"))
     changed_paths = _path_classified_changed_paths(branch_data, gate)
+    branch_status_context = reviewer_branch_status_context(bundle_dir, branch_data, gate)
     return {
         "schema_version": 1,
         "kind": "compact_reviewer_context",
@@ -1211,7 +1251,8 @@ def reviewer_packet_context(
         "changed_path_risk_counts": _path_risk_counts(changed_paths),
         "read_first": {
             "pre_review_gate": gate_path.as_posix(),
-            "branch_status": bundle_path(bundle_dir, branch_data.get("status_path"), "branch status_path"),
+            "branch_status": branch_status_context.get("path"),
+            "branch_status_context": branch_status_context,
             "branch_prompt": bundle_path(bundle_dir, branch_data.get("prompt"), "branch prompt"),
             "manifest": manifest_path.as_posix(),
             "worker_artifacts": worker_artifacts,
@@ -1669,7 +1710,7 @@ Review the branch against its prompt, worker status files, bounded diffs, test e
 
 The branch orchestrator must have supplied a passing schema v2 `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `semantic_input_hashes` exactly into the final review JSON as `semantic_input_hashes`, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every semantic input hash matches exactly and both the source review and source telemetry are present; otherwise produce a fresh review.
 
-Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. Use those paths before searching any bundle directory. Do not read memory, broad bundle directories, full event logs, or unrelated repo files unless a named packet artifact is missing, contradictory, or insufficient to substantiate a concrete finding. Prefer `git diff --stat`, `git diff --name-only`, and targeted file hunks for changed paths over full diffs. Keep review reads path-scoped using `path_scoped_changed_paths`, and obey `read_limits` before opening artifacts.
+Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. If `read_first.branch_status_context.stale_missing_gate_blocker_ignored` is true, treat the passing `pre_review_gate` as the current reviewer-readiness artifact and do not report the stale branch-status missing-gate blocker as a current finding. Use named paths before searching any bundle directory. Do not read memory, broad bundle directories, full event logs, or unrelated repo files unless a named packet artifact is missing, contradictory, or insufficient to substantiate a concrete finding. Prefer `git diff --stat`, `git diff --name-only`, and targeted file hunks for changed paths over full diffs. Keep review reads path-scoped using `path_scoped_changed_paths`, and obey `read_limits` before opening artifacts.
 
 Determine the branch base ref from `compact_reviewer_context`. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 

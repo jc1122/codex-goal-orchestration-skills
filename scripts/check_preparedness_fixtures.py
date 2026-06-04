@@ -6733,6 +6733,11 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
     assert_contains(stale_gate.stdout, "launcher-state terminal_state", "stale packet terminal pre-review fixture")
     write_pre_review_gate(bundle)
     gate = read_json(bundle / "branches" / "B01.pre_review_gate.json")
+    stale_branch_status = read_json(bundle / "branches" / "B01.status.json")
+    stale_branch_status["blockers"] = [
+        "pre-review gate is missing for B01; run create_pre_review_gate.py before reviewer launch."
+    ]
+    write_json(bundle / "branches" / "B01.status.json", stale_branch_status)
     semantic_hashes = gate.get("semantic_input_hashes") if isinstance(gate.get("semantic_input_hashes"), dict) else {}
     for rel_path in [
         "research/B01-W01/launcher-state.json",
@@ -6776,6 +6781,14 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
     if not reviewer_packet_context.exists():
         raise SystemExit("reviewer packet-context.json was not created")
     reviewer_context_text = reviewer_packet_context.read_text(encoding="utf-8")
+    reviewer_context = read_json(reviewer_packet_context)
+    branch_status_context = reviewer_context.get("read_first", {}).get("branch_status_context", {})
+    if branch_status_context.get("currentness") != "pre_gate_status_stale_after_passing_pre_review_gate":
+        raise SystemExit(f"reviewer context should mark stale pre-gate branch status: {branch_status_context!r}")
+    if branch_status_context.get("stale_missing_gate_blocker_ignored") is not True:
+        raise SystemExit(f"reviewer context should suppress stale missing-gate blocker: {branch_status_context!r}")
+    if "stale_missing_gate_blocker_ignored" not in reviewer_prompt:
+        raise SystemExit("reviewer prompt should explain stale branch-status missing-gate suppression")
     if "compact_reviewer_context" not in reviewer_context_text:
         raise SystemExit(f"reviewer packet context should be compact: {reviewer_context_text!r}")
     if f"Packet context to read first:\n- {reviewer_packet_context.as_posix()}" not in reviewer_prompt:
@@ -7173,6 +7186,164 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(f"main validator should distinguish valid artifact from non-pass runtime outcome: {main_validation!r}")
     if main_validation.get("dod_complete") is not False or main_validation.get("review_complete") is not False:
         raise SystemExit(f"main validator should expose incomplete DoD/review lanes: {main_validation!r}")
+
+    dependency_failed_bundle = tmp_path / "reconcile-dependency-failed-terminal"
+    shutil.copytree(bundle, dependency_failed_bundle)
+    dependency_failed_manifest = read_json(dependency_failed_bundle / "job.manifest.json")
+    dependency_failed_branches = dependency_failed_manifest.get("branches")
+    if not isinstance(dependency_failed_branches, list) or not isinstance(dependency_failed_branches[0], dict):
+        raise SystemExit("dependency-failed fixture manifest must contain a B01 branch")
+    dependency_failed_branches[0]["worktree_path"] = "skills"
+    dependency_failed_b02 = json.loads(json.dumps(dependency_failed_branches[0]))
+    dependency_failed_b02["id"] = "B02"
+    dependency_failed_b02["title"] = "Dependency Failed Terminal Fixture"
+    dependency_failed_b02["objective"] = "Remain unlaunched when B01 closes non-pass."
+    dependency_failed_b02["branch_name"] = "preparedness-dependent-fixture"
+    dependency_failed_b02["worktree_path"] = ".worktrees/preparedness-dependent-fixture"
+    dependency_failed_b02["depends_on"] = ["B01"]
+    dependency_failed_b02["prompt"] = "branches/B02.prompt.md"
+    dependency_failed_b02["status_path"] = "branches/B02.status.json"
+    dependency_failed_b02["review_path"] = "branches/B02.review.json"
+    dependency_failed_b02["pre_review_gate_path"] = "branches/B02.pre_review_gate.json"
+    worker_parallelism = dependency_failed_b02.get("worker_parallelism")
+    if isinstance(worker_parallelism, dict):
+        worker_parallelism["scheduler_path"] = "schedulers/B02.worker.scheduler.json"
+    work_items = dependency_failed_b02.get("work_items")
+    if isinstance(work_items, list):
+        for item in work_items:
+            if isinstance(item, dict):
+                item["packet_id"] = "B02-W01"
+    dependency_failed_manifest["branches"] = [dependency_failed_branches[0], dependency_failed_b02]
+    dependency_failed_manifest["max_active_branch_agents"] = 1
+    write_json(dependency_failed_bundle / "job.manifest.json", dependency_failed_manifest)
+    (dependency_failed_bundle / "branches" / "B02.prompt.md").write_text(
+        "# B02\n\nThis branch is dependency-blocked when B01 closes non-pass.\n",
+        encoding="utf-8",
+    )
+    b01_worker_scheduler_path = dependency_failed_bundle / "schedulers" / "B01.worker.scheduler.json"
+    b01_worker_scheduler = read_json(b01_worker_scheduler_path)
+    b01_worker_scheduler["manifest_sha256"] = sha256_file(dependency_failed_bundle / "job.manifest.json")
+    write_json(b01_worker_scheduler_path, b01_worker_scheduler)
+    assemble_branch_status(dependency_failed_bundle)
+    for rel_path in [
+        "main.status.json",
+        "branches/B02.status.json",
+        "branches/B02.review.json",
+        "branches/B02.pre_review_gate.json",
+        "schedulers/B02.worker.scheduler.json",
+    ]:
+        path = dependency_failed_bundle / rel_path
+        if path.exists():
+            path.unlink()
+    shutil.rmtree(dependency_failed_bundle / "research" / "B02-W01", ignore_errors=True)
+    shutil.rmtree(dependency_failed_bundle / "workers" / "B02-W01", ignore_errors=True)
+    shutil.rmtree(dependency_failed_bundle / "reviewers" / "B02-R01", ignore_errors=True)
+    shutil.rmtree(dependency_failed_bundle / "amendments", ignore_errors=True)
+    write_json(
+        dependency_failed_bundle / "schedulers" / "main.scheduler.json",
+        {
+            "schema_version": 2,
+            "scheduler_kind": "main-branch-pool",
+            "scheduler_path": "schedulers/main.scheduler.json",
+            "manifest_sha256": sha256_file(dependency_failed_bundle / "job.manifest.json"),
+            "capacity": 1,
+            "item_ids": ["B01", "B02"],
+            "events": [
+                scheduler_event(1, "ready", id="B01"),
+                scheduler_event(2, "launch", id="B01"),
+                scheduler_event(3, "finish", id="B01", status="partial"),
+                scheduler_event(4, "close", id="B01"),
+                scheduler_event(
+                    5,
+                    "blocked",
+                    id="B02",
+                    reason_code="dependency_failed",
+                    reason="B02 depends on B01, which closed with status partial.",
+                ),
+            ],
+        },
+    )
+    write_prompt_audit_fixture(dependency_failed_bundle)
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
+            "--bundle-dir",
+            dependency_failed_bundle.as_posix(),
+        ]
+    )
+    dependency_main_status = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/assemble_main_status.py",
+                "--manifest",
+                (dependency_failed_bundle / "job.manifest.json").as_posix(),
+                "--replace",
+                "--json",
+            ]
+        ).stdout
+    )
+    if dependency_main_status.get("artifact_valid") is not True or dependency_main_status.get("runtime_success") is not False:
+        raise SystemExit(f"dependency-failed main status should be valid partial artifact: {dependency_main_status!r}")
+    dependency_main_validation = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/validate_main_status.py",
+                "--manifest",
+                (dependency_failed_bundle / "job.manifest.json").as_posix(),
+                "--status",
+                (dependency_failed_bundle / "main.status.json").as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    if dependency_main_validation.get("artifact_valid") is not True or dependency_main_validation.get("runtime_success") is not False:
+        raise SystemExit(f"dependency-failed main validator should accept terminal partial artifact: {dependency_main_validation!r}")
+    dependency_reconcile = json.loads(
+        run(
+            [
+                "python3",
+                "skills/_goal_shared/scripts/reconcile_goal_run.py",
+                "--manifest",
+                (dependency_failed_bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--write",
+                "--json",
+            ]
+        ).stdout
+    )
+    if dependency_reconcile.get("status") != "partial":
+        raise SystemExit(f"dependency-failed reconcile should report terminal partial, not blocked: {dependency_reconcile!r}")
+    if dependency_reconcile.get("final_state_validation", {}).get("status") != "pass":
+        raise SystemExit(f"dependency-failed reconcile final validation should pass: {dependency_reconcile!r}")
+    blocked_codes = {
+        item.get("code")
+        for item in dependency_reconcile.get("blocked_work_remaining", [])
+        if isinstance(item, dict)
+    }
+    if {"missing_branch_status", "missing_branch_worktree", "unreconciled_worker_scheduler"} & blocked_codes:
+        raise SystemExit(f"dependency-failed unlaunched branch should not be missing blocked work: {dependency_reconcile!r}")
+    if any(
+        isinstance(command, str) and "render_branch_worktree_commands.py" in command and "--branch B02" in command
+        for command in dependency_reconcile.get("next_commands", [])
+    ):
+        raise SystemExit(f"dependency-failed branch should not receive launch command: {dependency_reconcile!r}")
+    dependency_b02_report = next(
+        (
+            item
+            for item in dependency_reconcile.get("branches", [])
+            if isinstance(item, dict) and item.get("branch_id") == "B02"
+        ),
+        None,
+    )
+    if not dependency_b02_report or dependency_b02_report.get("dependency_failed_terminal") is not True:
+        raise SystemExit(f"dependency-failed branch report should expose terminal dependency evidence: {dependency_reconcile!r}")
+    if dependency_b02_report.get("worker_scheduler", {}).get("validation_status") != "pass":
+        raise SystemExit(f"dependency-failed missing worker scheduler should be accepted as terminal: {dependency_b02_report!r}")
+
     main_assembler = load_script_module("preparedness_assemble_main_status", "skills/goal-main-orchestrator/scripts/assemble_main_status.py")
     main_validator = load_script_module("preparedness_validate_main_status", "skills/goal-main-orchestrator/scripts/validate_main_status.py")
     main_reconciler = load_script_module("preparedness_reconcile_goal_run", "skills/_goal_shared/scripts/reconcile_goal_run.py")

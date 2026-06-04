@@ -371,6 +371,25 @@ def validate_scheduler(
     }
 
 
+def scheduler_dependency_failed_events(scheduler_path: Path) -> dict[str, dict[str, Any]]:
+    data, _error = read_json_or_none(scheduler_path)
+    if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+        return {}
+    result: dict[str, dict[str, Any]] = {}
+    for event in data["events"]:
+        if not isinstance(event, dict):
+            continue
+        branch_id = event.get("id")
+        if (
+            event.get("event") == "blocked"
+            and event.get("reason_code") == "dependency_failed"
+            and isinstance(branch_id, str)
+            and branch_id.strip()
+        ):
+            result[branch_id] = dict(event)
+    return result
+
+
 def discover_telemetry_files(bundle_dir: Path, *, debug: bool = False) -> list[Path]:
     filename = "telemetry.debug.json" if debug else "telemetry.json"
     files: list[Path] = []
@@ -505,8 +524,11 @@ def branch_summary(
     missing_artifacts: list[dict[str, Any]],
     stale_or_unreconciled: list[dict[str, Any]],
     next_commands: list[str],
+    dependency_failed_events: dict[str, dict[str, Any]],
 ) -> dict[str, Any]:
     branch_id = str(branch.get("id", ""))
+    dependency_failed_event = dependency_failed_events.get(branch_id)
+    dependency_failed_terminal = dependency_failed_event is not None
     status_path = bundle_path(bundle_dir, branch.get("status_path"), f"branches/{branch_id}.status.json")
     review_path = bundle_path(bundle_dir, branch.get("review_path"), f"branches/{branch_id}.review.json")
     prompt_path = bundle_path(bundle_dir, branch.get("prompt"), f"branches/{branch_id}.prompt.md")
@@ -515,15 +537,19 @@ def branch_summary(
     status_data, status_error = read_json_or_none(status_path) if status_path.exists() else (None, None)
     status_value = status_data.get("status") if isinstance(status_data, dict) else None
     review_status = status_data.get("review_status") if isinstance(status_data, dict) else None
+    if status_value is None and dependency_failed_terminal:
+        status_value = "blocked"
+        review_status = "missing"
     if not status_path.exists():
-        add_issue(
-            missing_artifacts,
-            code="missing_branch_status",
-            path=rel_path(bundle_dir, status_path),
-            kind="branch_status",
-            owner=branch_id,
-            message=f"manifest branch {branch_id} has no status artifact",
-        )
+        if not dependency_failed_terminal:
+            add_issue(
+                missing_artifacts,
+                code="missing_branch_status",
+                path=rel_path(bundle_dir, status_path),
+                kind="branch_status",
+                owner=branch_id,
+                message=f"manifest branch {branch_id} has no status artifact",
+            )
     if not prompt_path.exists():
         add_issue(
             missing_artifacts,
@@ -533,7 +559,7 @@ def branch_summary(
             owner=branch_id,
             message=f"manifest branch {branch_id} prompt is missing",
         )
-    if worktree_path is not None and not worktree_path.exists():
+    if worktree_path is not None and not worktree_path.exists() and not dependency_failed_terminal:
         add_issue(
             missing_artifacts,
             code="missing_branch_worktree",
@@ -605,19 +631,37 @@ def branch_summary(
     if isinstance(worker_parallelism.get("scheduler_path"), str):
         scheduler_rel = worker_parallelism["scheduler_path"]
     scheduler_defects: list[str] = []
-    scheduler = validate_scheduler(
-        defects=scheduler_defects,
-        scheduler_path=bundle_dir / scheduler_rel,
-        expected_path=scheduler_rel,
-        scheduler_kind="branch-worker-pool",
-        expected_ids=worker_ids,
-        dependencies=worker_deps,
-        capacity=int(branch.get("max_active_worker_packets", CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH))
-        if isinstance(branch.get("max_active_worker_packets"), int)
-        else CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH,
-        manifest_path=manifest_path,
-        require_all_launched=status_value == "pass",
-    )
+    if dependency_failed_terminal and not (bundle_dir / scheduler_rel).exists():
+        scheduler = {
+            "path": scheduler_rel,
+            "exists": False,
+            "validation_status": "pass",
+            "validation_defects": [],
+            "launched": [],
+            "finished": [],
+            "closed_or_deferred": [branch_id],
+            "active": [],
+            "blocked": [branch_id],
+            "deferred": [],
+            "finished_status": {branch_id: "blocked"},
+            "max_observed_active": 0,
+            "terminal_reason_code": "dependency_failed",
+            "terminal_reason": dependency_failed_event.get("reason") if isinstance(dependency_failed_event, dict) else None,
+        }
+    else:
+        scheduler = validate_scheduler(
+            defects=scheduler_defects,
+            scheduler_path=bundle_dir / scheduler_rel,
+            expected_path=scheduler_rel,
+            scheduler_kind="branch-worker-pool",
+            expected_ids=worker_ids,
+            dependencies=worker_deps,
+            capacity=int(branch.get("max_active_worker_packets", CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH))
+            if isinstance(branch.get("max_active_worker_packets"), int)
+            else CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH,
+            manifest_path=manifest_path,
+            require_all_launched=status_value == "pass",
+        )
     if scheduler_defects:
         add_issue(
             stale_or_unreconciled,
@@ -638,7 +682,7 @@ def branch_summary(
             f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'validate_branch_status.py'} "
             f"--manifest {manifest_path.as_posix()} --status {status_path.as_posix()}"
         )
-    elif branch_id:
+    elif branch_id and not dependency_failed_terminal:
         canonical_audit_path = bundle_dir / "audit" / "prompt-audit.json"
         if canonical_audit_path.exists():
             repo_root_arg = repo_root.as_posix() if repo_root is not None else "<repo-root>"
@@ -677,6 +721,8 @@ def branch_summary(
         "worktree_path": worktree_path.as_posix() if worktree_path else None,
         "worktree_exists": worktree_path.exists() if worktree_path else None,
         "reviewer_outputs": outputs,
+        "dependency_failed_terminal": dependency_failed_terminal,
+        "dependency_failed_event": dependency_failed_event,
         "worker_scheduler": scheduler,
         "workers": workers,
         "validation": {
@@ -878,6 +924,12 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         manifest,
         stale_or_unreconciled,
     )
+    branch_ids = [str(branch.get("id")) for branch in branches if isinstance(branch.get("id"), str)]
+    main_scheduler_rel = CONTRACT.MAIN_SCHEDULER_PATH
+    parallelization = manifest.get("parallelization") if isinstance(manifest.get("parallelization"), dict) else {}
+    if isinstance(parallelization.get("scheduler_path"), str):
+        main_scheduler_rel = parallelization["scheduler_path"]
+    dependency_failed_events = scheduler_dependency_failed_events(bundle_dir / main_scheduler_rel)
     branch_reports = [
         branch_summary(
             bundle_dir=bundle_dir,
@@ -888,6 +940,7 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             missing_artifacts=missing_artifacts,
             stale_or_unreconciled=stale_or_unreconciled,
             next_commands=next_commands,
+            dependency_failed_events=dependency_failed_events,
         )
         for branch in branches
     ]
@@ -924,11 +977,6 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
                 message=f"main status validator failed with {len(main_validation_defects)} defect(s)",
             )
 
-    branch_ids = [str(branch.get("id")) for branch in branches if isinstance(branch.get("id"), str)]
-    main_scheduler_rel = CONTRACT.MAIN_SCHEDULER_PATH
-    parallelization = manifest.get("parallelization") if isinstance(manifest.get("parallelization"), dict) else {}
-    if isinstance(parallelization.get("scheduler_path"), str):
-        main_scheduler_rel = parallelization["scheduler_path"]
     main_scheduler_defects: list[str] = []
     main_scheduler = validate_scheduler(
         defects=main_scheduler_defects,
