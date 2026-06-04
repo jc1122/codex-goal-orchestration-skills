@@ -631,17 +631,19 @@ def branch_summary(
             f"--manifest {manifest_path.as_posix()} --status {status_path.as_posix()}"
         )
     elif branch_id:
-        audit_phase_path = bundle_dir / "audit" / "prompt-audit-phase.json"
-        if audit_phase_path.exists():
+        canonical_audit_path = bundle_dir / "audit" / "prompt-audit.json"
+        if canonical_audit_path.exists():
             repo_root_arg = repo_root.as_posix() if repo_root is not None else "<repo-root>"
             next_commands.append(
                 f"python3 {SKILLS_ROOT / 'goal-main-orchestrator' / 'scripts' / 'render_branch_worktree_commands.py'} "
-                f"--manifest {manifest_path.as_posix()} --repo-root {repo_root_arg} --audit {audit_phase_path.as_posix()} --branch {branch_id}"
+                f"--manifest {manifest_path.as_posix()} --repo-root {repo_root_arg} --audit {canonical_audit_path.as_posix()} --branch {branch_id}"
             )
         else:
             next_commands.append(
-                f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'assemble_branch_status.py'} "
-                f"--manifest {manifest_path.as_posix()} --branch-id {branch_id} --worktree <branch-worktree> --replace"
+                f"python3 {SKILLS_ROOT / 'goal-main-orchestrator' / 'scripts' / 'run_prompt_audit_phase.py'} "
+                f"--manifest {manifest_path.as_posix()} --repo-root "
+                f"{repo_root.as_posix() if repo_root is not None else '<repo-root>'} "
+                f"--audit-dir {(bundle_dir / 'audit').as_posix()} --deterministic --require-pass"
             )
 
     workers = []

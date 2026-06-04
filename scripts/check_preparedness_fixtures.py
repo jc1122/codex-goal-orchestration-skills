@@ -79,6 +79,7 @@ def write_pre_review_gate(bundle: Path) -> None:
             ROOT.as_posix(),
             "--review-packet-id",
             "B01-R01",
+            "--replace",
             "--skip-tests",
             "--test-skip-reason",
             "Static preparedness fixture does not run branch tests.",
@@ -582,6 +583,59 @@ def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None 
     path = bundle / "branches" / f"B01.{packet_id}.pre_review_gate.json"
     write_json(path, gate)
     return path
+
+
+def write_mergeable_reviewer_packet(bundle: Path, packet_id: str, semantic_hashes: dict) -> None:
+    packet_dir = bundle / "reviewers" / packet_id
+    route = read_json(packet_dir / "route.json")
+    aliases = [
+        item
+        for item in route.get("selected_ladder", [])
+        if isinstance(item, str) and item.strip()
+    ] or ["gpt-5.4"]
+    attempts = []
+    for index, alias in enumerate(aliases):
+        attempts.append(
+            {
+                "alias": alias,
+                "provider": "codex",
+                "model": alias,
+                "effort": "high",
+                "command": f"codex exec -m {alias} --json",
+                "timeout_seconds": 1800,
+                "called": index == 0,
+                "accepted": index == 0,
+                "event_logs": [],
+                "probe_logs": [],
+                "usage": None,
+            }
+        )
+    write_json(
+        packet_dir / "review.json",
+        {
+            "packet_id": packet_id,
+            "role": "reviewer",
+            "verdict": "mergeable",
+            "findings": [],
+            "finding_classes": ["no_issue"],
+            "commands_run": ["git diff --check main...HEAD"],
+            "verification_gaps": [],
+            "residual_risks": [],
+            "semantic_input_hashes": semantic_hashes,
+            "reuse_policy": {
+                "mode": "new",
+                "accepted": False,
+                "semantic_hashes_match": False,
+                "source_review_path": None,
+                "source_telemetry_path": None,
+            },
+            "summary": "Deterministic mergeable reviewer fixture.",
+        },
+    )
+    write_json(
+        packet_dir / "telemetry.json",
+        telemetry(packet_id, "reviewer", "review.json", accepted_alias=aliases[0], attempts=attempts),
+    )
 
 
 def assert_reviewer_route(packet_root: Path, packet_id: str, expected: list[str]) -> None:
@@ -6455,6 +6509,7 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
             ROOT.as_posix(),
             "--review-packet-id",
             "B01-R01",
+            "--replace",
             "--skip-tests",
             "--test-skip-reason",
             "Static preparedness fixture does not run branch tests.",
@@ -6569,7 +6624,7 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
     assert_contains(failed_gate_result.stdout, "pre-review gate failed", "failed pre-review gate fixture")
 
 
-def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
+def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file: Path) -> None:
     mergeable_gaps_bundle = tmp_path / "branch-status-mergeable-gaps"
     shutil.copytree(bundle, mergeable_gaps_bundle)
     write_json(
@@ -6613,6 +6668,124 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
     write_json(missing_waiver_bundle / "branches" / "B01.status.json", missing_waiver_status)
     missing_waiver_result = validate_branch(missing_waiver_bundle, expect=1)
     assert_contains(missing_waiver_result.stdout, "$.review_waiver_path", "missing review waiver fixture")
+
+    dirty_worktree = tmp_path / "pre-review-dirty-worker-worktree"
+    dirty_worktree.mkdir()
+    run(["git", "init", "-b", "main", dirty_worktree.as_posix()])
+    run(["git", "-C", dirty_worktree.as_posix(), "config", "user.email", "fixture@example.com"])
+    run(["git", "-C", dirty_worktree.as_posix(), "config", "user.name", "Fixture"])
+    (dirty_worktree / "README.md").write_text("initial fixture content\n", encoding="utf-8")
+    run(["git", "-C", dirty_worktree.as_posix(), "add", "README.md"])
+    run(["git", "-C", dirty_worktree.as_posix(), "commit", "-m", "initial fixture"])
+    (dirty_worktree / "README.md").write_text("accepted worker edit left dirty\n", encoding="utf-8")
+    dirty_gate_bundle = tmp_path / "pre-review-dirty-worker-gate"
+    shutil.copytree(bundle, dirty_gate_bundle)
+    write_valid_research_fixture(dirty_gate_bundle)
+    write_worker_scheduler(dirty_gate_bundle)
+    assemble_branch_status(dirty_gate_bundle)
+    dirty_status = read_json(dirty_gate_bundle / "branches" / "B01.status.json")
+    dirty_status["worktree"] = dirty_worktree.as_posix()
+    dirty_status["changed_files"] = ["README.md"]
+    dirty_status["worker_statuses"][0]["changed_files"] = ["README.md"]
+    write_json(dirty_gate_bundle / "branches" / "B01.status.json", dirty_status)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (dirty_gate_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            dirty_worktree.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--replace",
+            "--skip-tests",
+            "--test-skip-reason",
+            "Static dirty-worker fixture does not run branch tests.",
+            "--dod-item",
+            "dirty worker changes must be integrated before review",
+            "--json",
+        ],
+        expect=1,
+    )
+    dirty_gate_artifact = read_json(dirty_gate_bundle / "branches" / "B01.pre_review_gate.json")
+    integration = dirty_gate_artifact.get("checks", {}).get("worktree_integration", {})
+    if integration.get("status") != "failed" or integration.get("dirty_worker_changed_files") != ["README.md"]:
+        raise SystemExit(f"dirty worker pre-review gate should fail with README.md integration defect: {integration!r}")
+
+    stale_canonical_bundle = tmp_path / "branch-status-stale-canonical-review"
+    shutil.copytree(bundle, stale_canonical_bundle)
+    write_valid_research_fixture(stale_canonical_bundle)
+    write_worker_scheduler(stale_canonical_bundle)
+    assemble_branch_status(stale_canonical_bundle)
+    write_pre_review_gate(stale_canonical_bundle)
+    gate = read_json(stale_canonical_bundle / "branches" / "B01.pre_review_gate.json")
+    gate["review_packet_id"] = "B01-R02"
+    write_json(stale_canonical_bundle / "branches" / "B01.pre_review_gate.json", gate)
+    create_runtime_packet(
+        role="reviewer",
+        packet_id="B01-R02",
+        branch="preparedness-research-fixture",
+        out_dir=stale_canonical_bundle / "reviewers",
+        manifest=stale_canonical_bundle / "job.manifest.json",
+        pre_review_gate=stale_canonical_bundle / "branches" / "B01.pre_review_gate.json",
+        context_files=[stale_canonical_bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+    )
+    semantic_hashes = gate.get("semantic_input_hashes") if isinstance(gate.get("semantic_input_hashes"), dict) else {}
+    write_mergeable_reviewer_packet(stale_canonical_bundle, "B01-R02", semantic_hashes)
+    write_json(
+        stale_canonical_bundle / "branches" / "B01.review.json",
+        {
+            "packet_id": "B01-R01",
+            "role": "reviewer",
+            "verdict": "blocked",
+            "findings": ["stale canonical review fixture"],
+            "finding_classes": ["orchestration_bug"],
+            "commands_run": ["git diff --check main...HEAD"],
+            "verification_gaps": ["stale canonical artifact"],
+            "residual_risks": [],
+            "semantic_input_hashes": {"branches/B01.prompt.md": "sha256:" + "3" * 64},
+            "reuse_policy": {
+                "mode": "new",
+                "accepted": False,
+                "semantic_hashes_match": False,
+                "source_review_path": None,
+                "source_telemetry_path": None,
+            },
+            "summary": "Stale canonical review fixture.",
+        },
+    )
+    promoted_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+                "--manifest",
+                (stale_canonical_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                "B01",
+                "--worktree",
+                ROOT.as_posix(),
+                "--allow-pass",
+                "--replace",
+                "--test-evidence",
+                "stale canonical review promotion fixture tests pass",
+                "--dod-item",
+                "stale canonical review promotion fixture DoD evidence",
+                "--json",
+            ]
+        ).stdout
+    )
+    if promoted_result.get("branch_status") != "pass" or promoted_result.get("review_status") != "mergeable":
+        raise SystemExit(f"stale canonical review should be replaced by current reviewer output: {promoted_result!r}")
+    promoted_review = read_json(stale_canonical_bundle / "branches" / "B01.review.json")
+    if promoted_review.get("packet_id") != "B01-R02":
+        raise SystemExit(f"canonical review should promote current B01-R02 artifact: {promoted_review!r}")
+    validate_branch(stale_canonical_bundle)
+
     write_json(
         bundle / "schedulers" / "main.scheduler.json",
         {
@@ -6741,6 +6914,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
     shutil.rmtree(pre_dispatch_bundle / "amendments", ignore_errors=True)
     shutil.rmtree(pre_dispatch_bundle / "schedulers", ignore_errors=True)
     (pre_dispatch_bundle / "audit").mkdir(parents=True, exist_ok=True)
+    write_prompt_audit_fixture(pre_dispatch_bundle)
     write_json(
         pre_dispatch_bundle / "audit" / "prompt-audit-phase.json",
         {"schema_version": 1, "status": "pass", "can_start": True},
@@ -6769,6 +6943,14 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
         raise SystemExit("pre-dispatch reconcile --write should not materialize a conservative main.status.json")
     if not any("render_branch_worktree_commands.py" in command for command in pre_dispatch_report.get("next_commands", [])):
         raise SystemExit(f"pre-dispatch next commands should render branch launch commands: {pre_dispatch_report!r}")
+    render_commands = [
+        command
+        for command in pre_dispatch_report.get("next_commands", [])
+        if isinstance(command, str) and "render_branch_worktree_commands.py" in command
+    ]
+    if not render_commands or "audit/prompt-audit.json" not in render_commands[0] or "prompt-audit-phase.json" in render_commands[0]:
+        raise SystemExit(f"pre-dispatch branch render command should use canonical prompt-audit.json: {render_commands!r}")
+    run(shlex.split(render_commands[0]))
     blocked_codes = {
         item.get("code")
         for item in pre_dispatch_report.get("blocked_work_remaining", [])
@@ -6904,7 +7086,7 @@ def main() -> int:
 
         run_reviewer_packet_fixtures(tmp_path, bundle, packet_root, task_file)
         run_opencode_wal_fallback_fixture(tmp_path)
-        run_branch_status_negative_fixtures(tmp_path, bundle)
+        run_branch_status_negative_fixtures(tmp_path, bundle, task_file)
 
     print("status=pass")
     return 0

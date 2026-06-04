@@ -371,6 +371,84 @@ def is_runtime_cache_path(path: str) -> bool:
     return path == ".runtime-cache" or path.startswith(".runtime-cache/")
 
 
+def declared_worker_changed_files(branch_status: dict) -> list[str]:
+    changed_files: list[str] = []
+    status_changed = branch_status.get("changed_files")
+    if isinstance(status_changed, list):
+        for rel_path in status_changed:
+            if isinstance(rel_path, str) and rel_path.strip() and rel_path not in changed_files:
+                changed_files.append(rel_path)
+    statuses = branch_status.get("worker_statuses")
+    if isinstance(statuses, list):
+        for status in statuses:
+            if not isinstance(status, dict):
+                continue
+            worker_changed = status.get("changed_files")
+            if not isinstance(worker_changed, list):
+                continue
+            for rel_path in worker_changed:
+                if isinstance(rel_path, str) and rel_path.strip() and rel_path not in changed_files:
+                    changed_files.append(rel_path)
+    return [
+        rel_path
+        for rel_path in changed_files
+        if is_repo_relative_path(rel_path, reject_porcelain=True) and not is_runtime_cache_path(rel_path)
+    ]
+
+
+def dirty_paths(worktree: Path) -> tuple[dict[str, list[str]], list[str]]:
+    defects: list[str] = []
+    commands = {
+        "unstaged": ["git", "diff", "--name-only", "HEAD"],
+        "staged": ["git", "diff", "--cached", "--name-only", "HEAD"],
+        "untracked": ["git", "ls-files", "--others", "--exclude-standard"],
+    }
+    paths: dict[str, list[str]] = {}
+    for key, command in commands.items():
+        values = git_lines(command, cwd=worktree, defects=defects, label=" ".join(command))
+        paths[key] = [
+            value
+            for value in values
+            if is_repo_relative_path(value, reject_porcelain=True) and not is_runtime_cache_path(value)
+        ]
+    return paths, defects
+
+
+def worktree_integration_check(worktree: Path, branch_status: dict) -> tuple[dict, list[str]]:
+    dirty_by_kind, defects = dirty_paths(worktree)
+    declared_changed = declared_worker_changed_files(branch_status)
+    dirty_worker_paths = sorted(
+        {
+            path
+            for path in [*dirty_by_kind.get("unstaged", []), *dirty_by_kind.get("staged", []), *dirty_by_kind.get("untracked", [])]
+            if path in declared_changed
+        }
+    )
+    check = {
+        "status": "pass" if not defects and not dirty_worker_paths else "failed",
+        "commands": [
+            "git diff --name-only HEAD",
+            "git diff --cached --name-only HEAD",
+            "git ls-files --others --exclude-standard",
+        ],
+        "declared_worker_changed_files": declared_changed,
+        "unstaged_paths": dirty_by_kind.get("unstaged", []),
+        "staged_paths": dirty_by_kind.get("staged", []),
+        "untracked_paths": dirty_by_kind.get("untracked", []),
+        "dirty_worker_changed_files": dirty_worker_paths,
+        "runtime_cache_paths_ignored": True,
+    }
+    if dirty_worker_paths:
+        defects.append(
+            "worker changed files are still uncommitted before reviewer launch: "
+            + ", ".join(dirty_worker_paths)
+            + "; commit or otherwise integrate accepted worker edits into branch history before pre-review"
+        )
+    if defects:
+        check["defects"] = list(defects)
+    return check, defects
+
+
 def untracked_whitespace_defects(worktree: Path) -> list[str]:
     result = run_command(["git", "ls-files", "--others", "--exclude-standard"], cwd=worktree)
     if result.returncode != 0:
@@ -834,6 +912,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     route_policy_rel_path = BRANCH_VALIDATOR.review_route_policy_path(branch_id)
     write_json(bundle_dir / route_policy_rel_path, review_route_policy(branch, branch_id, manifest))
     worker_defects = worker_pass_defects(bundle_dir, branch, branch_status, branch_id)
+    integration, integration_defects = worktree_integration_check(worktree, branch_status)
     ownership = ownership_check(branch, branch_status)
     semantic_probes, semantic_probe_defects = semantic_probe_check(branch, tests)
     dod_items = [item for item in args.dod_item if item.strip()]
@@ -901,6 +980,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             "status": "pass" if not worker_defects else "failed",
             "expected_packet_ids": expected_worker_packet_ids(branch, branch_id),
         },
+        "worktree_integration": integration,
         "ownership": ownership,
         "semantic_probes": semantic_probes,
         "dod_evidence": {
@@ -930,6 +1010,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     defects.extend(diagnostic_hash_defects)
     defects.extend(freshness_defects)
     defects.extend(worker_defects)
+    defects.extend(integration_defects)
     defects.extend(ownership.get("defects", []))
     defects.extend(semantic_probe_defects)
     defects.extend(reuse_defects)

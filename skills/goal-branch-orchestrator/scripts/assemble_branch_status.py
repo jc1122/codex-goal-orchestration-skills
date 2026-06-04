@@ -323,24 +323,51 @@ def collect_manifest_dod(branch: dict) -> list[str]:
     return items
 
 
-def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str) -> list[str]:
-    reviewers_dir = bundle_dir / "reviewers"
-    if not reviewers_dir.is_dir():
-        return [f"review artifact is missing: {review_path}"]
+def current_pre_review_gate(bundle_dir: Path, branch_id: str) -> tuple[dict | None, dict[str, str], str | None, list[str]]:
     gate_path = bundle_dir / CONTRACT.pre_review_gate_path(branch_id)
     if not gate_path.exists():
-        return [f"review artifact is missing and current pre-review gate is missing: {gate_path}"]
+        return None, {}, None, [f"current pre-review gate is missing: {gate_path}"]
     gate = read_json(gate_path)
     if gate.get("status") != "pass":
-        return [f"review artifact is missing and current pre-review gate is not pass: {gate_path}"]
+        return gate, {}, None, [f"current pre-review gate is not pass: {gate_path}"]
     gate_hashes = gate.get("semantic_input_hashes")
     if not isinstance(gate_hashes, dict):
-        return [f"review artifact is missing and current pre-review gate lacks semantic_input_hashes: {gate_path}"]
+        return gate, {}, None, [f"current pre-review gate lacks semantic_input_hashes: {gate_path}"]
     expected_hashes = {
         key: value
         for key, value in gate_hashes.items()
         if isinstance(key, str) and isinstance(value, str)
     }
+    expected_packet_id = gate.get("review_packet_id") if isinstance(gate.get("review_packet_id"), str) else None
+    return gate, expected_hashes, expected_packet_id, []
+
+
+def review_matches_gate(data: dict, branch_id: str, expected_hashes: dict[str, str], expected_packet_id: str | None) -> bool:
+    packet_id = data.get("packet_id")
+    if not isinstance(packet_id, str) or not packet_id.startswith(f"{branch_id}-R"):
+        return False
+    if expected_packet_id is not None and packet_id != expected_packet_id:
+        return False
+    if data.get("role") != "reviewer":
+        return False
+    candidate_hashes = data.get("semantic_input_hashes")
+    current_hashes = {
+        key: value
+        for key, value in candidate_hashes.items()
+        if isinstance(key, str) and isinstance(value, str)
+    } if isinstance(candidate_hashes, dict) else {}
+    return current_hashes == expected_hashes
+
+
+def current_reviewer_candidates(
+    bundle_dir: Path,
+    branch_id: str,
+    expected_hashes: dict[str, str],
+    expected_packet_id: str | None,
+) -> tuple[list[Path], list[str]]:
+    reviewers_dir = bundle_dir / "reviewers"
+    if not reviewers_dir.is_dir():
+        return [], ["reviewers directory is missing"]
     candidates: list[Path] = []
     defects: list[str] = []
     for candidate in sorted(reviewers_dir.glob(f"{branch_id}-R*/review.json")):
@@ -351,16 +378,18 @@ def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str)
             continue
         packet_id = data.get("packet_id")
         if isinstance(packet_id, str) and packet_id.startswith(f"{branch_id}-R") and data.get("role") == "reviewer":
-            candidate_hashes = data.get("semantic_input_hashes")
-            current_hashes = {
-                key: value
-                for key, value in candidate_hashes.items()
-                if isinstance(key, str) and isinstance(value, str)
-            } if isinstance(candidate_hashes, dict) else {}
-            if current_hashes != expected_hashes:
+            if not review_matches_gate(data, branch_id, expected_hashes, expected_packet_id):
                 defects.append(f"candidate reviewer artifact is stale for current pre-review gate: {candidate}")
                 continue
             candidates.append(candidate)
+    return candidates, defects
+
+
+def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str) -> list[str]:
+    _gate, expected_hashes, expected_packet_id, gate_defects = current_pre_review_gate(bundle_dir, branch_id)
+    if gate_defects:
+        return [f"review artifact is not current and {defect}" for defect in gate_defects]
+    candidates, defects = current_reviewer_candidates(bundle_dir, branch_id, expected_hashes, expected_packet_id)
     if len(candidates) != 1:
         if candidates:
             defects.append("review artifact is missing and reviewer promotion is ambiguous: " + ", ".join(path.as_posix() for path in candidates))
@@ -379,6 +408,14 @@ def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, 
         if promotion_defects:
             return "missing", promotion_defects
     review = read_json(review_path)
+    _gate, expected_hashes, expected_packet_id, gate_defects = current_pre_review_gate(bundle_dir, branch_id)
+    if gate_defects:
+        return "missing", gate_defects
+    if not review_matches_gate(review, branch_id, expected_hashes, expected_packet_id):
+        promotion_defects = promote_reviewer_output(bundle_dir, review_path, branch_id)
+        if promotion_defects:
+            return "missing", promotion_defects
+        review = read_json(review_path)
     verdict = review.get("verdict")
     verification_gaps = review.get("verification_gaps")
     if verdict not in CONTRACT.REVIEW_STATUSES:

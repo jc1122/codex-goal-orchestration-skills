@@ -1070,7 +1070,7 @@ def compact_worker_context(
             "Worker rules:",
             "- Edit only owned paths unless returning `blocked` explains why broader ownership is required.",
             "- Run the listed verification commands or record the concrete blocker.",
-            "- Use `git diff --check <base-ref>...HEAD` before claiming readiness when the base ref is available.",
+            "- Use `git diff --check HEAD` and `git diff --check <base-ref>...HEAD` before claiming readiness when the base ref is available.",
             "- Do not read skill Python source unless a script or validator fails and source-level debugging is required.",
         ]
     )
