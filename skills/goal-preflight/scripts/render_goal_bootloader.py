@@ -543,6 +543,7 @@ def _readiness_next_commands(
     lint_bundle_status: str,
     repair_gate_status: str,
     runtime_gate: dict[str, object],
+    launch_blockers: list[str],
 ) -> list[str]:
     commands: list[str] = []
     if lint_bundle_status != "pass":
@@ -556,6 +557,15 @@ def _readiness_next_commands(
     if runtime_gate.get("status") != "pass":
         commands.append(
             "Correct runtime gate: use an existing git work tree for --repo-root, run git init before preflight/runtime, or wait for an explicit supported no-git runtime mode; do not launch /goal from this bundle while readiness is blocked."
+        )
+        commands.append(
+            f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --readiness --json'
+        )
+        return commands
+    if launch_blockers:
+        blockers = ", ".join(sorted(set(launch_blockers)))
+        commands.append(
+            f"Launch blockers remain: {blockers}. Do not launch /goal until launch blockers are cleared."
         )
         commands.append(
             f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --readiness --json'
@@ -675,6 +685,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         lint_bundle_status=str(lint_bundle["status"]),
         repair_gate_status=str(repair_gate["status"]),
         runtime_gate=runtime_gate,
+        launch_blockers=launch_blockers,
     )
 
     lines = [
@@ -787,6 +798,7 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
             lint_bundle_status=str(lint_bundle["status"]),
             repair_gate_status=str(repair_gate["status"]),
             runtime_gate=runtime_gate,
+            launch_blockers=launch_blockers,
         ),
         "repository_root": str(resolved_repo_root) if resolved_repo_root else None,
     }
@@ -840,6 +852,9 @@ def _write_json_object(path: Path, payload: dict) -> None:
 def _readiness_result_kind(readiness: dict) -> tuple[str, str, str | None]:
     if readiness.get("status") == "pass" and readiness.get("launch_allowed") is True:
         return "pass", "pass", None
+    blockers = readiness.get("launch_blockers") if isinstance(readiness.get("launch_blockers"), list) else []
+    if blockers:
+        return "blocked", "blocked_readiness_usable_bundle", "; ".join(str(item) for item in blockers)
     lint_status = readiness.get("lint_status") if isinstance(readiness.get("lint_status"), dict) else {}
     bundle_lint = lint_status.get("bundle_lint") if isinstance(lint_status.get("bundle_lint"), dict) else {}
     repair_gate = readiness.get("repair_gate") if isinstance(readiness.get("repair_gate"), dict) else {}
@@ -848,6 +863,50 @@ def _readiness_result_kind(readiness: dict) -> tuple[str, str, str | None]:
     runtime_gate = readiness.get("runtime_gate") if isinstance(readiness.get("runtime_gate"), dict) else {}
     blocked_reason = runtime_gate.get("reason") if isinstance(runtime_gate.get("reason"), str) else "readiness status is not pass"
     return "blocked", "blocked_readiness_usable_bundle", blocked_reason
+
+
+_BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS = {"bundle lint missing", "repair gate missing"}
+
+
+def _bootloader_launch_blockers(launch_blockers: list[str]) -> list[str]:
+    return [
+        item
+        for item in launch_blockers
+        if isinstance(item, str) and item not in _BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS
+    ]
+
+
+def _compute_bootloader_launch_readiness(bundle_dir: Path, repo_root: Path | None, bootloader_text: str) -> tuple[str, list[str]]:
+    manifest = _load_manifest(bundle_dir)
+    goal_config_status = _config_compatibility(manifest)
+    lint_brief = _lint_status(bundle_dir, "brief")
+    lint_bundle = _lint_status(bundle_dir, "bundle")
+    repair_gate = _repair_gate_status(bundle_dir)
+    runtime_gate = _repo_runtime_gate(manifest)
+    status = "pass"
+    if _config_status_blocks_launch(goal_config_status):
+        status = "blocked"
+    if runtime_gate.get("status") != "pass":
+        status = "blocked"
+    launch_blockers = _bootloader_launch_blockers(
+        _launch_blockers(
+            goal_config_status=goal_config_status,
+            manifest=manifest,
+            verified_routes=_verified_routes_summary(manifest),
+            lint_brief=lint_brief,
+            lint_bundle=lint_bundle,
+            repair_gate=repair_gate,
+            runtime_gate=runtime_gate,
+        )
+    )
+    if launch_blockers:
+        status = "blocked"
+    resolved_repo_root = _resolve_repo_root(bundle_dir, repo_root, bootloader_text)
+    if not resolved_repo_root:
+        status = "blocked"
+        if "runtime gate blocked" not in launch_blockers:
+            launch_blockers = [*launch_blockers, "repository root not discoverable"]
+    return status, launch_blockers
 
 
 def refresh_preflight_summary_artifacts(bundle_dir: Path, readiness: dict) -> None:
@@ -949,17 +1008,19 @@ def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
     main_prompt = bundle_dir / "main.prompt.md"
     model_catalog = bundle_dir / "model-catalog.json"
     if manifest.exists():
-        runtime_gate = _repo_runtime_gate(_load_manifest(bundle_dir))
-        if runtime_gate.get("status") != "pass":
+        bootloader_text = _read_bootloader(bundle_dir)
+        readiness_status, launch_blockers = _compute_bootloader_launch_readiness(bundle_dir, repo_root, bootloader_text)
+        if readiness_status != "pass":
+            blocker_reason = "; ".join(sorted(set(launch_blockers))) if launch_blockers else "bundle readiness is blocked"
             return f"""# BLOCKED READINESS: do not launch /goal yet
 
-Bundle is usable for inspection and lint repair, but runtime branch/worktree orchestration is blocked.
+Bundle is usable for inspection and lint repair, but launch is blocked.
 Bundle root: {bundle_dir}
 Repository root: {repo_root}
-Reason: {runtime_gate.get("reason")}
+Reason: {blocker_reason}
 
-Fix the runtime gate:
-- Use an existing git work tree for the repository root, initialize this directory as a git work tree before preflight/runtime, or use an explicit supported no-git runtime mode once one exists.
+Fix readiness blockers:
+- Resolve all launch blockers and recheck readiness before launch.
 - Recheck readiness before launch:
 
 ```bash

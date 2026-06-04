@@ -46,6 +46,27 @@ def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = Non
     return run_command(command, root=ROOT, expect=expect, env=env)
 
 
+def fake_pytest_env(bundle: Path) -> dict[str, str]:
+    fake_root = bundle / "fake-pytest"
+    package_root = fake_root / "py"
+    bin_dir = fake_root / "bin"
+    package = package_root / "pytest"
+    package.mkdir(parents=True, exist_ok=True)
+    bin_dir.mkdir(parents=True, exist_ok=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__main__.py").write_text("print('fake pytest full suite passed')\n", encoding="utf-8")
+    shim = bin_dir / "pytest"
+    shim.write_text("#!/usr/bin/env sh\npython3 -m pytest \"$@\"\n", encoding="utf-8")
+    shim.chmod(0o755)
+    python_shim = bin_dir / "python"
+    python_shim.write_text("#!/usr/bin/env sh\nexec python3 \"$@\"\n", encoding="utf-8")
+    python_shim.chmod(0o755)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = f"{package_root.as_posix()}{os.pathsep}{env.get('PYTHONPATH', '')}"
+    env["PATH"] = f"{bin_dir.as_posix()}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
 def write_worker_scheduler(bundle: Path) -> None:
     write_json(
         bundle / "schedulers" / "B01.worker.scheduler.json",
@@ -263,6 +284,153 @@ def run_pre_review_manifest_command_fixture(tmp_path: Path, bundle: Path) -> Non
     target_semantic_probes = target_gate.get("checks", {}).get("semantic_probes", {})
     if target_semantic_probes.get("status") != "pass" or target_semantic_probes.get("targets") != ["goal_fixture_api"]:
         raise SystemExit(f"targeted semantic probe fixture should pass with declared target: {target_semantic_probes!r}")
+
+    all_probe_bundle = tmp_path / "pre-review-all-semantic-probe"
+    shutil.copytree(bundle, all_probe_bundle)
+    write_valid_research_fixture(all_probe_bundle)
+    manifest = read_json(all_probe_bundle / "job.manifest.json")
+    branches = manifest.get("branches")
+    if not isinstance(branches, list) or not isinstance(branches[0], dict):
+        raise SystemExit("fixture manifest must contain at least one branch")
+    branches[0]["tests"] = ["python3 -m pytest -q"]
+    branches[0]["dod"] = ["Branch-level API compatibility with all is verified before reviewer launch."]
+    write_json(all_probe_bundle / "job.manifest.json", manifest)
+    write_worker_scheduler(all_probe_bundle)
+    assemble_branch_status(all_probe_bundle)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (all_probe_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--test-command",
+            "python3 -m pytest -q",
+            "--dod-item",
+            "all-suite command should satisfy semantic target: all",
+            "--json",
+        ],
+        env=fake_pytest_env(all_probe_bundle),
+    )
+    all_gate = read_json(all_probe_bundle / "branches" / "B01.pre_review_gate.json")
+    all_semantic_probes = all_gate.get("checks", {}).get("semantic_probes", {})
+    if all_semantic_probes.get("status") != "pass" or all_semantic_probes.get("targets") != ["all"]:
+        raise SystemExit(f"all-suite semantic probe fixture should pass with target all: {all_semantic_probes!r}")
+
+    all_py_probe_bundle = tmp_path / "pre-review-all-semantics-nonliteral-py-command"
+    shutil.copytree(bundle, all_py_probe_bundle)
+    write_valid_research_fixture(all_py_probe_bundle)
+    manifest = read_json(all_py_probe_bundle / "job.manifest.json")
+    branches = manifest.get("branches")
+    if not isinstance(branches, list) or not isinstance(branches[0], dict):
+        raise SystemExit("fixture manifest must contain at least one branch")
+    branches[0]["tests"] = ["python -m pytest -q"]
+    branches[0]["dod"] = ["Branch-level API compatibility with all is verified before reviewer launch."]
+    write_json(all_py_probe_bundle / "job.manifest.json", manifest)
+    python_env = fake_pytest_env(all_py_probe_bundle)
+    write_worker_scheduler(all_py_probe_bundle)
+    assemble_branch_status(all_py_probe_bundle)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (all_py_probe_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--test-command",
+            "python -m pytest -q",
+            "--dod-item",
+            "nonliteral python all-suite semantic probe should satisfy target all",
+            "--json",
+        ],
+        env=python_env,
+    )
+    all_py_gate = read_json(all_py_probe_bundle / "branches" / "B01.pre_review_gate.json")
+    all_py_semantic_probes = all_py_gate.get("checks", {}).get("semantic_probes", {})
+    if all_py_semantic_probes.get("status") != "pass" or all_py_semantic_probes.get("targets") != ["all"]:
+        raise SystemExit(f"python -m pytest command should satisfy target all: {all_py_semantic_probes!r}")
+
+    all_pytest_probe_bundle = tmp_path / "pre-review-all-semantics-naked-pytest"
+    shutil.copytree(bundle, all_pytest_probe_bundle)
+    write_valid_research_fixture(all_pytest_probe_bundle)
+    manifest = read_json(all_pytest_probe_bundle / "job.manifest.json")
+    branches = manifest.get("branches")
+    if not isinstance(branches, list) or not isinstance(branches[0], dict):
+        raise SystemExit("fixture manifest must contain at least one branch")
+    branches[0]["tests"] = ["pytest -q"]
+    branches[0]["dod"] = ["Branch-level API compatibility with all is verified before reviewer launch."]
+    write_json(all_pytest_probe_bundle / "job.manifest.json", manifest)
+    write_worker_scheduler(all_pytest_probe_bundle)
+    assemble_branch_status(all_pytest_probe_bundle)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (all_pytest_probe_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--test-command",
+            "pytest -q",
+            "--dod-item",
+            "naked pytest all-suite semantic probe should satisfy target all",
+            "--json",
+        ],
+        env=fake_pytest_env(all_pytest_probe_bundle),
+    )
+    all_pytest_gate = read_json(all_pytest_probe_bundle / "branches" / "B01.pre_review_gate.json")
+    all_pytest_semantic_probes = all_pytest_gate.get("checks", {}).get("semantic_probes", {})
+    if all_pytest_semantic_probes.get("status") != "pass" or all_pytest_semantic_probes.get("targets") != ["all"]:
+        raise SystemExit(f"pytest command should satisfy target all: {all_pytest_semantic_probes!r}")
+
+    help_probe_bundle = tmp_path / "pre-review-all-semantics-help-is-not-full-suite"
+    shutil.copytree(bundle, help_probe_bundle)
+    write_valid_research_fixture(help_probe_bundle)
+    manifest = read_json(help_probe_bundle / "job.manifest.json")
+    branches = manifest.get("branches")
+    if not isinstance(branches, list) or not isinstance(branches[0], dict):
+        raise SystemExit("fixture manifest must contain at least one branch")
+    branches[0]["tests"] = ["pytest --help"]
+    branches[0]["dod"] = ["Branch-level API compatibility with all is verified before reviewer launch."]
+    write_json(help_probe_bundle / "job.manifest.json", manifest)
+    write_worker_scheduler(help_probe_bundle)
+    assemble_branch_status(help_probe_bundle)
+    help_probe = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (help_probe_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--review-packet-id",
+            "B01-R01",
+            "--test-command",
+            "pytest --help",
+            "--dod-item",
+            "help command must not satisfy semantic target all",
+            "--json",
+        ],
+        env=fake_pytest_env(help_probe_bundle),
+        expect=1,
+    )
+    assert_contains(help_probe.stdout, "declared target: all", "pytest help semantic probe fixture")
 
     capitalization_bundle = tmp_path / "pre-review-capitalization-not-api"
     shutil.copytree(bundle, capitalization_bundle)
@@ -5328,6 +5496,63 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         "refreshed degraded telemetry preflight report",
     )
     assert_not_contains(refreshed_report, "route_token_telemetry_degraded_without_waiver", "refreshed preflight report stale blocker")
+
+    degraded_blocked_bundle = tmp_path / "preflight-degraded-token-telemetry-blocked-bundle"
+    shutil.copytree(pipeline_bundle, degraded_blocked_bundle)
+    blocked_manifest = read_json(degraded_blocked_bundle / "job.manifest.json")
+    blocked_manifest["goal_config_summary"] = {"profile": "fixture"}
+    blocked_manifest["goal_config_check_summary"] = {
+        "status": "pass",
+        "accepted_route_count": 2,
+        "route_verification_status": "routes_verified",
+        "token_telemetry": {
+            "available_routes": 1,
+            "unavailable_routes": 1,
+            "by_harness": {"codex": {"available": 1, "unavailable": 1}},
+        },
+    }
+    blocked_manifest["route_policy_degraded_telemetry_waiver"] = {"accepted": False}
+    write_json(degraded_blocked_bundle / "job.manifest.json", blocked_manifest)
+    blocked_readiness = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-preflight/scripts/render_goal_bootloader.py",
+                "--bundle-dir",
+                degraded_blocked_bundle.as_posix(),
+                "--readiness",
+                "--json",
+                "--output",
+                (degraded_blocked_bundle / "readiness.json").as_posix(),
+            ]
+        ).stdout
+    )
+    if blocked_readiness.get("status") != "blocked" or blocked_readiness.get("launch_allowed") is not False:
+        raise SystemExit(f"degraded telemetry blocked manifest should remain blocked: {blocked_readiness!r}")
+    if "route_token_telemetry_degraded_without_waiver" not in blocked_readiness.get("launch_blockers", []):
+        raise SystemExit(f"degraded telemetry without waiver should record launch blocker: {blocked_readiness!r}")
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/render_goal_bootloader.py",
+            "--bundle-dir",
+            degraded_blocked_bundle.as_posix(),
+            "--repo-root",
+            branch_default_repo.as_posix(),
+            "--write",
+        ]
+    )
+    degraded_bootloader = (degraded_blocked_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
+    assert_contains(degraded_bootloader, "BLOCKED READINESS", "degraded telemetry blocked bundle bootloader")
+    assert_not_contains(degraded_bootloader, "Use $goal-main-orchestrator", "degraded telemetry bootloader should not handoff")
+    assert_not_contains(degraded_bootloader, "run_prompt_audit_phase.py", "degraded telemetry blocked bootloader should not include main prompt-audit")
+    blocked_pipeline = read_json(degraded_blocked_bundle / "preflight.pipeline.json")
+    if blocked_pipeline.get("blocked_reason") != "route_token_telemetry_degraded_without_waiver":
+        raise SystemExit(f"degraded telemetry blocked pipeline should explain launch blocker: {blocked_pipeline!r}")
+    if blocked_pipeline.get("result_kind") != "blocked_readiness_usable_bundle":
+        raise SystemExit(f"degraded telemetry blocked pipeline should report readiness-blocked usability: {blocked_pipeline!r}")
+    if blocked_pipeline.get("readiness_status") != "blocked":
+        raise SystemExit(f"degraded telemetry blocked pipeline should keep readiness blocked: {blocked_pipeline!r}")
     commands = pipeline_result.get("commands", [])
     expected_phases = ["brief_lint", "runtime_gate", "config_selection", "create_bundle", "bundle_lint", "repair_gate", "readiness"]
     if [item.get("phase") for item in commands] != expected_phases:

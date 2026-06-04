@@ -783,6 +783,92 @@ def branch_semantic_probe_targets(branch: dict) -> list[str]:
     return targets
 
 
+PYTHON_COMMAND_RE = re.compile(r"^python\d*(?:\.\d+)?$")
+_FULL_SUITE_PYTEST_OPTIONS_REQUIRING_VALUE = {
+    "-n",
+    "--numprocesses",
+    "--dist",
+    "--maxfail",
+    "--confcutdir",
+    "--rootdir",
+    "--junitxml",
+    "--junitprefix",
+    "--durations",
+    "--color",
+    "--randomly-seed",
+}
+_PYTEST_OPTIONS_NOT_RUNNING_TESTS = {
+    "-h",
+    "--help",
+    "--version",
+    "--fixtures",
+    "--fixtures-per-test",
+    "--markers",
+    "--collect-only",
+    "--co",
+    "--trace-config",
+}
+
+
+def _pytest_full_suite_command(command: str) -> bool:
+    if "||" in command or ";" in command:
+        return False
+    segments = re.split(r"\s*&&\s*", command.strip())
+    return any(_pytest_full_suite_segment(segment.strip()) for segment in segments if segment.strip())
+
+
+def _pytest_full_suite_segment(segment: str) -> bool:
+    try:
+        tokens = shlex.split(segment)
+    except ValueError:
+        return False
+    if not tokens:
+        return False
+    index = 0
+    while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+        index += 1
+    if index >= len(tokens):
+        return False
+    if tokens[index] == "env":
+        index += 1
+        while index < len(tokens) and "=" in tokens[index] and not tokens[index].startswith("-"):
+            index += 1
+    if index >= len(tokens):
+        return False
+
+    if tokens[index] == "pytest" or tokens[index] == "pytest.exe":
+        return _segment_tail_has_no_positional_args(tokens[index + 1 :])
+    if PYTHON_COMMAND_RE.fullmatch(tokens[index]) and index + 2 < len(tokens) and tokens[index + 1] == "-m" and tokens[index + 2] in {"pytest", "pytest.exe"}:
+        return _segment_tail_has_no_positional_args(tokens[index + 3 :])
+    return False
+
+
+def _segment_tail_has_no_positional_args(tokens: list[str]) -> bool:
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if token == "--":
+            return False
+        if token in _PYTEST_OPTIONS_NOT_RUNNING_TESTS:
+            return False
+        if not token.startswith("-"):
+            return False
+        if token in _FULL_SUITE_PYTEST_OPTIONS_REQUIRING_VALUE:
+            skip_next = True
+            continue
+        if token.startswith("--") and "=" in token:
+            continue
+    return True
+
+
+def _semantic_target_matches(command_text: str, target: str) -> bool:
+    if target == "all":
+        return _pytest_full_suite_command(command_text)
+    return target in command_text
+
+
 def semantic_probe_check(branch: dict, tests: dict) -> tuple[dict, list[str]]:
     requirements = branch_semantic_probe_requirements(branch)
     targets = branch_semantic_probe_targets(branch)
@@ -790,8 +876,12 @@ def semantic_probe_check(branch: dict, tests: dict) -> tuple[dict, list[str]]:
     command_values = [item for item in commands if isinstance(item, str) and item.strip()]
     missing_targets: list[str] = []
     if requirements and targets and command_values:
-        command_text = "\n".join(command_values).lower()
-        missing_targets = [target for target in targets if target not in command_text]
+        lowered_commands = [command.lower() for command in command_values]
+        missing_targets = [
+            target
+            for target in targets
+            if not any(_semantic_target_matches(command, target) for command in lowered_commands)
+        ]
     status = "pass" if not requirements or (command_values and not missing_targets) else "failed"
     check = {
         "status": status,
