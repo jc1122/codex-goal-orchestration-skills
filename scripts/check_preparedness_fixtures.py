@@ -3495,6 +3495,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     stale_entries = stale_index.get("entries", [])
     if not stale_entries or not all(item.get("excluded_from_current_evidence") is True for item in stale_entries if isinstance(item, dict)):
         raise SystemExit(f"packet replacement should write stale-artifact exclusion index: {stale_index!r}")
+    if any(
+        not item.get("superseding_artifact") and not item.get("terminal_reason")
+        for item in stale_entries
+        if isinstance(item, dict)
+    ):
+        raise SystemExit(f"packet replacement stale entries should carry lineage: {stale_index!r}")
     fake_codex_dir = tmp_path / "fake-codex-worker"
     fake_codex_dir.mkdir()
     fake_codex = fake_codex_dir / "codex"
@@ -6061,13 +6067,24 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
     for rel_path in [
         "research/B01-W01/launcher-state.json",
         "research/B01-W01/packet.summary.json",
+    ]:
+        if rel_path not in semantic_hashes:
+            raise SystemExit(f"pre-review gate omitted packet terminal freshness hash for {rel_path}: {semantic_hashes!r}")
+    diagnostic_hashes = (
+        gate.get("volatile_input_hashes", {}).get("diagnostic_artifacts", {})
+        if isinstance(gate.get("volatile_input_hashes"), dict)
+        else {}
+    )
+    for rel_path in [
         "research/B01-W01/attempts/attempt-001/launcher-state.json",
         "research/B01-W01/attempts/attempt-001/packet.summary.json",
         "research/B01-W01/attempts/attempt-001/research.json",
         "research/B01-W01/attempts/attempt-001/telemetry.json",
     ]:
-        if rel_path not in semantic_hashes:
-            raise SystemExit(f"pre-review gate omitted packet terminal freshness hash for {rel_path}: {semantic_hashes!r}")
+        if rel_path in semantic_hashes:
+            raise SystemExit(f"pre-review gate included diagnostic attempt snapshot in semantic hashes for {rel_path}: {semantic_hashes!r}")
+        if rel_path not in diagnostic_hashes:
+            raise SystemExit(f"pre-review gate omitted diagnostic attempt hash for {rel_path}: {diagnostic_hashes!r}")
     create_runtime_packet(
         role="reviewer",
         packet_id="B01-R01",
@@ -6317,6 +6334,12 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
         raise SystemExit(f"stale artifact index entries should be excluded from current evidence: {stale_index!r}")
     if any(item.get("original_hash") is None or not item.get("stale_reason") for item in stale_entries if isinstance(item, dict)):
         raise SystemExit(f"stale artifact index entries should carry hash and reason: {stale_index!r}")
+    if any(
+        not item.get("superseding_artifact") and not item.get("terminal_reason")
+        for item in stale_entries
+        if isinstance(item, dict)
+    ):
+        raise SystemExit(f"stale artifact index entries should carry superseding lineage or terminal reason: {stale_index!r}")
     if any(item.get("code") == "missing_stale_artifact_index" for item in stale_after.get("stale_or_unreconciled", [])):
         raise SystemExit(f"reconcile --write should materialize stale artifact index before reporting: {stale_after!r}")
 

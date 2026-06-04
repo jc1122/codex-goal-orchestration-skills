@@ -645,6 +645,28 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             return cheap[-2:]
         return values[-1:]
 
+    def cheaper_review_ladder(*candidate_ladders: list[str]) -> list[str]:
+        premium_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
+        candidates = unique([alias for ladder in candidate_ladders for alias in ladder])
+        cheap = [
+            alias
+            for alias in candidates
+            if not any(marker in str(alias).lower() for marker in premium_markers)
+        ]
+        if cheap:
+            return cheap[-2:]
+        return candidates[-1:] if candidates else reviewer[-1:]
+
+    def reviewer_routes() -> dict[str, list[str]]:
+        light = cheaper_review_ladder(lite, worker, reviewer)
+        standard = unique(reviewer)
+        heavy = unique(reviewer)
+        return {
+            "light": light,
+            "standard": standard,
+            "heavy": heavy,
+        }
+
     worker_allowed = unique(worker)
     cheaper_ladder = cheaper_worker_ladder(worker)
     worker_route_classes = {
@@ -670,11 +692,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             "source": "goal_config",
             "router": "goal-config-v1",
             "default_tier": "standard",
-            "routes": {
-                "light": reviewer,
-                "standard": reviewer,
-                "heavy": reviewer,
-            },
+            "routes": reviewer_routes(),
             "heavy_triggers": list(contract.REVIEW_MODEL_POLICY.get("heavy_triggers", [])),
         },
         "amender_model_policy": {

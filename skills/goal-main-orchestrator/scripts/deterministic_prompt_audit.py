@@ -70,9 +70,82 @@ def normalize_severity(value: object) -> str:
     return "major"
 
 
+def normalize_display_severity(value: object) -> str:
+    severity = str(value or "").strip().lower()
+    if severity in {"critical", "major", "minor", "warning", "warn", "info", "review"}:
+        return severity
+    return "info"
+
+
 def add_defect(defects: list[dict[str, str]], file: str, severity: object, message: str) -> None:
-    severity = normalize_severity(severity)
-    defects.append({"file": file, "severity": severity, "message": message})
+    normalized = normalize_severity(severity)
+    display = normalize_display_severity(severity)
+    entry: dict[str, str] = {"file": file, "severity": normalized, "message": message}
+    if display != normalized:
+        entry["display_severity"] = display
+    defects.append(entry)
+
+
+def parse_git_status(raw: str) -> dict[str, list[str]]:
+    tracked: list[str] = []
+    untracked: list[str] = []
+    for line in raw.splitlines():
+        status_line = line.rstrip()
+        if len(status_line) < 3:
+            continue
+        status = status_line[:2]
+        if status == "##":
+            continue
+        if status == "!!":
+            continue
+        path = status_line[3:].strip()
+        if not path:
+            continue
+        if "->" in path:
+            path = path.split("->", 1)[0].strip()
+        if status == "??":
+            untracked.append(path)
+        else:
+            tracked.append(path)
+    return {"tracked": tracked, "untracked": untracked}
+
+
+def root_worktree_state_from_manifest(manifest: dict[str, Any], status_result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+    repo_status = manifest.get("repo_status")
+    if isinstance(repo_status, dict):
+        state = repo_status.get("root_worktree_state")
+        if isinstance(state, dict):
+            return dict(state)
+
+    parsed = parse_git_status(status_result.stdout)
+    branch_paths = []
+    for branch in manifest.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        worktree_path = branch.get("worktree_path")
+        if isinstance(worktree_path, str) and worktree_path.strip():
+            branch_paths.append(worktree_path.strip())
+
+    used_for_runtime = True
+    if branch_paths:
+        used_for_runtime = any(path in {"", ".", "./"} for path in branch_paths)
+
+    dirty = bool(parsed["tracked"] or parsed["untracked"])
+    if dirty:
+        if used_for_runtime:
+            decision = "warning"
+        else:
+            decision = "ignored_because_isolated_worktrees"
+    else:
+        decision = "clean"
+
+    return {
+        "dirty": dirty,
+        "tracked_changes": parsed["tracked"],
+        "untracked_changes": parsed["untracked"],
+        "used_for_runtime": used_for_runtime,
+        "decision": decision,
+    }
 
 
 def one_char_bullet_run(text: str) -> bool:
@@ -169,8 +242,10 @@ def main() -> int:
     audit_dir.mkdir(parents=True, exist_ok=True)
     bundle_dir = manifest_path.parent
     manifest = read_json(manifest_path)
+    status_result = run(["git", "-C", repo_root.as_posix(), "status", "--short", "--branch"])
     output_path = audit_dir / args.output_name
     command = " ".join(sys.argv)
+    root_state = root_worktree_state_from_manifest(manifest, status_result)
 
     defects: list[dict[str, str]] = []
     commands_run = [
@@ -191,7 +266,6 @@ def main() -> int:
             str(item.get("message", "bundle lint defect")),
         )
 
-    status_result = run(["git", "-C", repo_root.as_posix(), "status", "--short", "--branch"])
     diff_result = run(["git", "-C", repo_root.as_posix(), "diff", "--check", "HEAD"])
     if status_result.returncode != 0:
         add_defect(defects, "repository", "critical", "git status failed during deterministic prompt audit")
@@ -220,6 +294,7 @@ def main() -> int:
     audit = {
         "manifest": manifest_path.as_posix(),
         "repo_root": repo_root.as_posix(),
+        "root_worktree_state": root_state,
         "status": audit_status,
         "can_start": audit_status == "pass",
         "checked_files": checked_files,
@@ -234,6 +309,8 @@ def main() -> int:
         audit_dir / "deterministic-audit.log",
         {
             "lint": lint,
+            "defects": defects,
+            "root_worktree_state": root_state,
             "git_status": {
                 "returncode": status_result.returncode,
                 "output": status_result.stdout,

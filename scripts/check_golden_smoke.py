@@ -828,6 +828,7 @@ def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
         "role": "reviewer",
         "verdict": "mergeable",
         "findings": ["Golden offline smoke review artifact is synthetically mergeable."],
+        "finding_classes": ["no_issue"],
         "commands_run": ["git diff --check main...HEAD"],
         "verification_gaps": [],
         "residual_risks": ["Synthetic smoke does not exercise live model CLIs."],

@@ -657,6 +657,12 @@ def validate_review_artifact(
     if expected_verdict != "missing" and verdict != expected_verdict:
         defect(defects, f"{path}.verdict", "must match branch summary review_status")
     require_string_list(defects, review.get("findings"), f"{path}.findings")
+    if "finding_classes" in review:
+        finding_classes = require_string_list(defects, review.get("finding_classes"), f"{path}.finding_classes")
+        allowed_finding_classes = {"project_bug", "orchestration_bug", "verification_gap", "no_issue"}
+        for index, item in enumerate(finding_classes):
+            if item not in allowed_finding_classes:
+                defect(defects, f"{path}.finding_classes[{index}]", f"must be one of {sorted(allowed_finding_classes)}")
     validate_base_range_diff_check(defects, review.get("commands_run"), f"{path}.commands_run", manifest)
     verification_gaps = require_string_list(defects, review.get("verification_gaps"), f"{path}.verification_gaps")
     if verdict == "mergeable" and verification_gaps:

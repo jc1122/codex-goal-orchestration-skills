@@ -51,6 +51,46 @@ REASON_CODES = {
 SCHEDULER_EVENT_SCHEMA_VERSION = 2
 
 
+def scheduler_max_ready_width(item_ids: list[str], dependencies: dict[str, list[str]]) -> int:
+    remaining: dict[str, list[str]] = {item_id: list(dependencies.get(item_id, [])) for item_id in item_ids}
+    levels: dict[str, int] = {}
+    while remaining:
+        progressed = False
+        for item_id, deps in list(remaining.items()):
+            if any(dep in remaining for dep in deps):
+                continue
+            dep_levels = [levels.get(dep, 0) for dep in deps if dep in levels]
+            levels[item_id] = 1 + (max(dep_levels) if dep_levels else 0)
+            remaining.pop(item_id)
+            progressed = True
+        if not progressed:
+            for item_id in list(remaining):
+                levels[item_id] = 1
+                remaining.pop(item_id)
+    widths: dict[int, int] = {}
+    for level in levels.values():
+        widths[level] = widths.get(level, 0) + 1
+    return max(widths.values(), default=0)
+
+
+def scheduler_ready_width_reason(
+    item_count: int,
+    ready_width: int,
+    capacity: int,
+    *,
+    scope: str,
+    identifier: str | None = None,
+) -> str | None:
+    usable_capacity = min(max(capacity, 1), item_count) if item_count else 0
+    if usable_capacity <= 1 or ready_width >= usable_capacity:
+        return None
+    scope_name = f"{scope} {identifier}" if identifier else scope
+    return (
+        f"{scope_name} exposes {ready_width} ready item(s) against usable capacity {usable_capacity};"
+        " this limits parallel fill under current dependencies"
+    )
+
+
 def read_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -808,10 +848,26 @@ def main() -> int:
         raise SystemExit("--limit must be a positive integer")
     ready = state["launchable"][: args.limit] if args.limit is not None else state["launchable"]
 
-    if appended or args.init:
+    ready_width = scheduler_max_ready_width(spec["item_ids"], spec["dependencies"])
+    scope_label = "branch" if args.scope == "main" else f"worker {args.branch_id}" if args.branch_id else "worker"
+    underutilization_reason = scheduler_ready_width_reason(
+        len(spec["item_ids"]),
+        ready_width,
+        spec["capacity"],
+        scope=scope_label,
+    )
+    validation_defects = validate_final(ledger_path, ledger, spec, manifest_path)
+    validation_status = "pass" if not validation_defects else "failed"
+    ledger["status"] = validation_status
+    ledger["validation_status"] = validation_status
+    ledger["max_observed_active"] = state["max_observed_active"]
+    ledger["ready_width"] = ready_width
+    ledger["underutilization_reason"] = underutilization_reason
+
+    if args.init or appended or args.validate_final:
         write_json_atomic(ledger_path, ledger)
 
-    defects = validate_final(ledger_path, ledger, spec, manifest_path) if args.validate_final else []
+    defects = validation_defects if args.validate_final else []
     result = {
         "status": "pass" if not defects else "failed",
         "ledger_path": ledger_path.as_posix(),

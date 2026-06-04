@@ -133,6 +133,44 @@ def infer_stale_reason(root_name: str) -> str:
     return "stale_runtime_archive"
 
 
+def _drop_old_suffix(name: str) -> str:
+    for marker in (".old.", ".stale."):
+        if marker in name:
+            return name.replace(marker, ".", 1)
+    return name
+
+
+def _superseding_parts_from_stale_path(root: Path, path: Path) -> Path | None:
+    tail = path.relative_to(root)
+    parts = list(tail.parts)
+    if not parts:
+        return None
+    if root.name == "stale" and len(parts) > 1:
+        parts = parts[1:]
+    parts[-1] = _drop_old_suffix(parts[-1])
+    return Path(*parts)
+
+
+def infer_superseding_artifact(bundle_dir: Path, root_name: str, path: Path) -> str | None:
+    root = bundle_dir / root_name
+    if root_name.startswith("branches"):
+        base_name = "branches"
+    elif root_name.startswith("reviewers"):
+        base_name = "reviewers"
+    else:
+        return None
+    try:
+        relative_parts = _superseding_parts_from_stale_path(root, path)
+    except ValueError:
+        return None
+    if relative_parts is None:
+        return None
+    candidate = bundle_dir / base_name / relative_parts
+    if candidate.is_file():
+        return rel_path(bundle_dir, candidate)
+    return None
+
+
 def build_stale_artifact_index(bundle_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     retention_epoch = str(manifest.get("manifest_epoch") or manifest.get("epoch") or "current")
     entries: list[dict[str, Any]] = []
@@ -143,6 +181,7 @@ def build_stale_artifact_index(bundle_dir: Path, manifest: dict[str, Any]) -> di
         for path in sorted(item for item in root.rglob("*") if item.is_file()):
             if path.name == "stale-artifacts.index.json":
                 continue
+            superseding_artifact = infer_superseding_artifact(bundle_dir, root_name, path)
             entries.append(
                 {
                     "artifact_path": rel_path(bundle_dir, path),
@@ -150,7 +189,8 @@ def build_stale_artifact_index(bundle_dir: Path, manifest: dict[str, Any]) -> di
                     "original_hash": sha256_file(path),
                     "size_bytes": path.stat().st_size,
                     "stale_reason": infer_stale_reason(root_name),
-                    "superseding_artifact": None,
+                    "superseding_artifact": superseding_artifact,
+                    "terminal_reason": None if superseding_artifact else f"{infer_stale_reason(root_name)}: no replacement artifact path resolved",
                     "excluded_from_current_evidence": True,
                     "retention_epoch": retention_epoch,
                 }

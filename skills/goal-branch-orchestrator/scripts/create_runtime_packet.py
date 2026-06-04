@@ -48,6 +48,8 @@ REVIEWER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.REVIEWER_ATTEMPT_TIMEOUT_SECONDS
 TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
 GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
 GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
+REVIEW_STATUS_BEGIN = "BEGIN_REVIEW_JSON"
+REVIEW_STATUS_END = "END_REVIEW_JSON"
 MAX_CONTEXT_PACK_CHARS = CONTEXT_PACK.DEFAULT_TOTAL_CHARS
 MAX_CONTEXT_FILE_CHARS = CONTEXT_PACK.DEFAULT_PER_FILE_CHARS
 MAX_PACKET_PROMPT_CHARS = 40000
@@ -756,6 +758,13 @@ def review_schema(packet_id: str, semantic_hashes: dict[str, str] | None = None,
             "role": exact_string_schema("reviewer"),
             "verdict": {"type": "string", "enum": [item for item in CONTRACT.REVIEW_STATUSES if item != "missing"]},
             "findings": {"type": "array", "items": nonempty_string},
+            "finding_classes": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": ["project_bug", "orchestration_bug", "verification_gap", "no_issue"],
+                },
+            },
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "verification_gaps": {"type": "array", "items": nonempty_string},
             "residual_risks": {"type": "array", "items": nonempty_string},
@@ -1073,11 +1082,11 @@ def compact_worker_context(
     return "\n".join(task_lines).rstrip() + "\n", filtered_context_files, artifact
 
 
-def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
+def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> str | None:
     if not packet_dir.exists():
-        return
+        return None
     if packet_dir.is_dir() and not any(packet_dir.iterdir()):
-        return
+        return None
     if not replace:
         raise SystemExit(f"runtime packet already exists; pass --replace to archive and recreate: {packet_dir}")
     attempts_dir = packet_dir / "attempts"
@@ -1101,7 +1110,9 @@ def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
                 "archived_path": archived_path.relative_to(packet_dir).as_posix(),
                 "original_sha256": CONTEXT_PACK.sha256_file(child) if child.is_file() else None,
                 "stale_reason": "packet_replaced",
+                "superseding_artifact": child.relative_to(packet_dir).as_posix(),
                 "superseding_packet": packet_dir.name,
+                "terminal_reason": None,
                 "excluded_from_current_evidence": True,
                 "retention_epoch": archive_dir.name,
             }
@@ -1116,6 +1127,7 @@ def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:
             "entries": index_entries,
         },
     )
+    return archive_dir.name
 
 
 def branch_entry(manifest: dict, branch_id: str) -> dict:
@@ -1175,9 +1187,11 @@ def reviewer_packet_context(
                 "status_path": status_path.resolve().as_posix(),
                 "telemetry_path": (packet_dir / "telemetry.json").resolve().as_posix(),
                 "route_path": (packet_dir / "route.json").resolve().as_posix(),
+                "status_summary": _summarize_reviewer_artifact(status_path),
             }
         )
     base_ref = str(manifest.get("base_ref", "main"))
+    changed_paths = _path_classified_changed_paths(branch_data, gate)
     return {
         "schema_version": 1,
         "kind": "compact_reviewer_context",
@@ -1187,6 +1201,14 @@ def reviewer_packet_context(
         "branch_name": branch_data.get("branch_name"),
         "worktree": worktree.as_posix(),
         "base_ref": base_ref,
+        "read_limits": {
+            "max_prompt_chars": MAX_PACKET_PROMPT_CHARS,
+            "max_context_pack_chars": MAX_CONTEXT_PACK_CHARS,
+            "max_context_file_chars": MAX_CONTEXT_FILE_CHARS,
+            "max_path_scoped_reads": 200,
+        },
+        "path_scoped_changed_paths": _path_scoped_changed_paths(changed_paths, source="review_gate"),
+        "changed_path_risk_counts": _path_risk_counts(changed_paths),
         "read_first": {
             "pre_review_gate": gate_path.as_posix(),
             "branch_status": bundle_path(bundle_dir, branch_data.get("status_path"), "branch status_path"),
@@ -1194,15 +1216,28 @@ def reviewer_packet_context(
             "manifest": manifest_path.as_posix(),
             "worker_artifacts": worker_artifacts,
             "review_schema": review_schema_path.as_posix(),
+            "review_output": review_output_path.as_posix(),
+            "commands_to_run": [
+                "git status --short --branch",
+                f"git diff --check {base_ref}...HEAD",
+                f"git diff --stat {base_ref}...HEAD",
+                f"git diff --name-only {base_ref}...HEAD",
+            ],
+            "bounded_context_guidance": {
+                "path_scoped_changed_paths": "Use this as the primary evidence source; prefer file hunks over broad logs.",
+                "worker_artifact_summaries": [
+                    {
+                        "packet_id": item["packet_id"],
+                        "role": item.get("role"),
+                        "selected_state": item.get("status_summary"),
+                    }
+                    for item in worker_artifacts
+                ],
+            },
         },
         "write_only": {
             "review_output": review_output_path.as_posix(),
         },
-        "commands_to_run": [
-            "pwd",
-            "git status --short --branch",
-            f"git diff --check {base_ref}...HEAD",
-        ],
         "route": review_route,
         "semantic_input_hashes": gate.get("semantic_input_hashes", {}),
         "reuse_policy": gate.get("reuse_policy", {}),
@@ -1271,6 +1306,257 @@ def production_paths(paths: list[str]) -> list[str]:
     return [path for path in paths if not docs_path(path) and not test_path(path)]
 
 
+def _review_route_markers_for_role(role: str) -> dict[str, str]:
+    if role == "reviewer":
+        return {"begin": REVIEW_STATUS_BEGIN, "end": REVIEW_STATUS_END}
+    return {"begin": GEMINI_STATUS_BEGIN, "end": GEMINI_STATUS_END}
+
+
+def _normalize_review_routes(routes: object) -> dict[str, list[str]]:
+    if not isinstance(routes, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for tier in CONTRACT.REVIEW_ROUTE_TIERS:
+        value = routes.get(tier)
+        if not isinstance(value, list):
+            continue
+        candidate = [item for item in value if isinstance(item, str) and item.strip()]
+        if candidate:
+            normalized[tier] = candidate
+    return normalized
+
+
+def _manifest_reviewer_route_aliases(
+    manifest: dict | None,
+    manifest_path: Path | None = None,
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    contract_aliases: list[str] = []
+    for tier in CONTRACT.REVIEW_ROUTE_TIERS:
+        for alias in CONTRACT.review_route_for_tier(tier):
+            if alias not in contract_aliases:
+                contract_aliases.append(alias)
+    alias_map: dict[str, list[str]] = {alias: [] for alias in contract_aliases}
+    role_alias_map: dict[str, list[str]] = {"lite_agent": [], "demanding_agent": []}
+    if not isinstance(manifest, dict):
+        return alias_map, role_alias_map
+
+    raw_models = manifest.get("models")
+    items = []
+    if isinstance(raw_models, dict):
+        items = raw_models.items()
+    elif isinstance(raw_models, list):
+        for item in raw_models:
+            if isinstance(item, dict) and isinstance(item.get("alias"), str):
+                items.append((item.get("alias"), item))
+    goal_config = goal_config_from_manifest(manifest, manifest_path)
+    if isinstance(goal_config, dict):
+        raw_goal_models = goal_config.get("models")
+        if isinstance(raw_goal_models, dict):
+            for alias, spec in raw_goal_models.items():
+                if isinstance(alias, str) and isinstance(spec, dict):
+                    items.append((alias, spec))
+    if not items:
+        return alias_map, role_alias_map
+
+    seen: dict[str, set[str]] = {alias: set() for alias in contract_aliases}
+    role_seen: dict[str, set[str]] = {alias: set() for alias in role_alias_map}
+    for alias, spec in items:
+        if not isinstance(alias, str):
+            continue
+        if not isinstance(spec, dict):
+            continue
+        model_value = spec.get("model")
+        if not isinstance(model_value, str):
+            continue
+        model = model_value.strip().lower()
+        role = spec.get("role")
+        if isinstance(role, str):
+            role_key = role.strip().lower()
+            if role_key in role_alias_map and alias not in role_seen[role_key]:
+                role_seen[role_key].add(alias)
+                role_alias_map[role_key].append(alias)
+        for route_alias, route_model in CONTRACT.CODEX_ROUTE_MODELS.items():
+            if route_alias not in alias_map:
+                continue
+            if route_model == model:
+                if alias not in seen[route_alias]:
+                    seen[route_alias].add(alias)
+                    alias_map[route_alias].append(alias)
+                break
+    return alias_map, role_alias_map
+
+
+def _resolve_goal_config_review_routes(manifest: dict | None, manifest_path: Path | None = None) -> dict[str, list[str]]:
+    if not isinstance(manifest, dict):
+        return {}
+    goal_config = goal_config_from_manifest(manifest, manifest_path)
+    if not isinstance(goal_config, dict):
+        return {}
+    model_policies = goal_config.get("model_policies")
+    if not isinstance(model_policies, dict):
+        return {}
+    review_policy = model_policies.get("review_model_policy")
+    if not isinstance(review_policy, dict):
+        return {}
+    return _normalize_review_routes(review_policy.get("routes"))
+
+
+def _resolve_review_alias(alias: str, manifest_aliases: dict[str, list[str]]) -> list[str]:
+    if not alias:
+        return []
+    alias = alias.strip()
+    if not alias:
+        return []
+    if alias in manifest_aliases:
+        return list(manifest_aliases[alias])
+    for aliases in manifest_aliases.values():
+        if alias in aliases:
+            return list(aliases)
+    normalized = alias.lower().replace("_", "-")
+    for canonical_alias, aliases in manifest_aliases.items():
+        if canonical_alias.replace("-", "") in normalized.replace("-", "") and aliases:
+            return list(aliases)
+    return [alias]
+
+
+def _resolve_review_route_list(raw_routes: list[str], manifest_aliases: dict[str, list[str]]) -> list[str]:
+    if not raw_routes:
+        return []
+    resolved: list[str] = []
+    seen: set[str] = set()
+    for alias in raw_routes:
+        for item in _resolve_review_alias(alias, manifest_aliases):
+            if item and item not in seen:
+                seen.add(item)
+                resolved.append(item)
+    return resolved
+
+
+def _default_route_variants(manifest_aliases: dict[str, list[str]], role_aliases: dict[str, list[str]]) -> dict[str, list[str]]:
+    variants: dict[str, list[str]] = {}
+    for tier in CONTRACT.REVIEW_ROUTE_TIERS:
+        variants[tier] = []
+        for canonical_alias in CONTRACT.review_route_for_tier(tier):
+            if canonical_alias in manifest_aliases and manifest_aliases[canonical_alias]:
+                for value in manifest_aliases[canonical_alias]:
+                    if value not in variants[tier]:
+                        variants[tier].append(value)
+        if not variants[tier]:
+            if tier == "light" and role_aliases.get("lite_agent"):
+                for value in role_aliases["lite_agent"]:
+                    if value not in variants[tier]:
+                        variants[tier].append(value)
+            elif tier in {"standard", "heavy"} and role_aliases.get("demanding_agent"):
+                for value in role_aliases["demanding_agent"]:
+                    if value not in variants[tier]:
+                        variants[tier].append(value)
+            else:
+                for canonical_alias in CONTRACT.review_route_for_tier(tier):
+                    if canonical_alias not in variants[tier]:
+                        variants[tier].append(canonical_alias)
+    return variants
+
+
+def _route_variants_from_manifest(policy: dict, manifest: dict | None, manifest_path: Path | None = None) -> dict[str, list[str]]:
+    policy_routes = _normalize_review_routes(policy.get("routes") if isinstance(policy, dict) else None)
+    goal_config_routes = _resolve_goal_config_review_routes(manifest, manifest_path=manifest_path)
+    if not policy_routes and goal_config_routes:
+        policy_routes = goal_config_routes
+    manifest_aliases, role_aliases = _manifest_reviewer_route_aliases(manifest, manifest_path=manifest_path)
+    defaults = _default_route_variants(manifest_aliases, role_aliases)
+    has_manifest_mapping = any(manifest_aliases.values()) or any(role_aliases.values())
+    resolved: dict[str, list[str]] = {}
+    configured = False
+    for tier in CONTRACT.REVIEW_ROUTE_TIERS:
+        selected = policy_routes.get(tier, [])
+        if selected:
+            configured = True
+            resolved[tier] = _resolve_review_route_list(selected, manifest_aliases)
+        else:
+            resolved[tier] = []
+    # Fill missing tiers using local defaults.
+    for tier in CONTRACT.REVIEW_ROUTE_TIERS:
+        if not resolved[tier]:
+            resolved[tier] = list(defaults[tier])
+    # If routes are explicitly collapsed across tiers and manifest has at least two
+    # distinct review variants, expand to manifest-aware defaults to preserve
+    # the intended cheap-vs-heavy ladder shape.
+    has_variants = len({tuple(value) for value in resolved.values()}) > 1
+    default_variants_distinct = len({tuple(value) for value in defaults.values()}) > 1
+    if configured and not has_variants and default_variants_distinct and has_manifest_mapping:
+        return defaults
+    return resolved
+
+
+def _classify_path_risk(path: str) -> str:
+    if docs_path(path):
+        return "docs"
+    if test_path(path):
+        return "test"
+    return "production"
+
+
+def _path_risk_counts(paths: list[str]) -> dict[str, int]:
+    counts = {"production": 0, "docs": 0, "test": 0}
+    for path in paths:
+        category = _classify_path_risk(path)
+        counts[category] = counts.get(category, 0) + 1
+    return counts
+
+
+def _path_scoped_changed_paths(paths: list[str], *, source: str = "review_gate") -> list[dict[str, str]]:
+    return [
+        {
+            "path": path,
+            "risk": _classify_path_risk(path),
+            "source": source,
+        }
+        for path in paths
+    ]
+
+
+def _summarize_reviewer_artifact(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {"exists": False}
+    if not path.is_file():
+        return {"exists": False, "reason": "not a file"}
+    try:
+        data = load_json(path)
+    except Exception:
+        return {"exists": False, "reason": "invalid json"}
+    return {
+        "exists": True,
+        "status": data.get("status") if isinstance(data, dict) else None,
+        "verdict": data.get("verdict") if isinstance(data, dict) else None,
+        "route_class": data.get("route_class") if isinstance(data, dict) else None,
+        "selected_ladder": data.get("selected_ladder") if isinstance(data, dict) else None,
+    }
+
+
+def _work_item_owned_paths(branch: dict) -> list[str]:
+    if not isinstance(branch, dict):
+        return []
+    collected: list[str] = []
+    for item in branch.get("work_items", []):
+        if isinstance(item, dict):
+            collected.extend([value for value in compact_list(item.get("owned_paths")) if value])
+    return collected
+
+
+def _path_classified_changed_paths(branch: dict, gate: dict) -> list[str]:
+    paths = review_changed_paths(gate, branch)
+    if paths:
+        return paths
+    collected: list[str] = []
+    for value in _work_item_owned_paths(branch):
+        if value and value not in collected:
+            collected.append(value)
+    for value in branch.get("owned_paths", []):
+        if isinstance(value, str) and value.strip() and value not in collected:
+            collected.append(value)
+    return collected
+
+
 def explicit_review_tier(value: object) -> str:
     if isinstance(value, str) and value in CONTRACT.REVIEW_ROUTE_TIERS:
         return value
@@ -1319,12 +1605,13 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
     return str(default_tier), ["default deterministic review tier"]
 
 
-def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id: str) -> dict:
+def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id: str, manifest_path: Path | None = None) -> dict:
     branch = branch_entry(manifest, branch_id)
     tier, reasons = infer_review_tier(manifest, gate, branch)
     policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
-    routes = policy.get("routes") if isinstance(policy.get("routes"), dict) else {}
-    route = routes.get(tier) if isinstance(routes.get(tier), list) else CONTRACT.review_route_for_tier(tier)
+    policy_routes = policy.get("routes") if isinstance(policy.get("routes"), dict) else {}
+    route_variants = _route_variants_from_manifest(policy, manifest, manifest_path=manifest_path)
+    route = route_variants.get(tier, CONTRACT.review_route_for_tier(tier))
     return {
         "schema_version": 1,
         "packet_id": packet_id,
@@ -1335,10 +1622,15 @@ def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id
         "policy_router": policy.get("router", CONTRACT.REVIEW_MODEL_POLICY["router"]),
         "policy_version": policy.get("version", ROUTE_POLICY_VERSION),
         "route_policy_version": ROUTE_POLICY_VERSION,
-        "policy_routes": routes or CONTRACT.REVIEW_MODEL_POLICY["routes"],
+        "policy_routes": policy_routes or CONTRACT.REVIEW_MODEL_POLICY["routes"],
+        "route_variants": route_variants,
         "heavy_triggers": reasons if tier == "heavy" else [],
         "route_classes": branch_route_classes(branch),
         "changed_paths": review_changed_paths(gate, branch),
+        "selection_context": {
+            "tier": tier,
+            "reasons": reasons,
+        },
     }
 
 
@@ -1373,11 +1665,11 @@ git status --short --branch
 git diff --check HEAD
 ```
 
-Review the branch against its prompt, worker status files, bounded diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible.
+Review the branch against its prompt, worker status files, bounded diffs, test evidence, and claim-boundary rules. Lead with findings ordered by severity. Ground findings in file/line references or command evidence where possible. When a finding is a concrete application/project bug, classify it separately from orchestration/tooling defects by adding `finding_classes` entries such as `project_bug` or `orchestration_bug`; reuse unchanged project-bug findings until touched files or test evidence change.
 
 The branch orchestrator must have supplied a passing schema v2 `pre_review_gate.json` before this packet was generated. Read it from the provided context, copy its `semantic_input_hashes` exactly into the final review JSON as `semantic_input_hashes`, and record a `reuse_policy` object. Set reviewer reuse to accepted only when every semantic input hash matches exactly and both the source review and source telemetry are present; otherwise produce a fresh review.
 
-Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. Use those paths before searching any bundle directory. Do not read memory, broad bundle directories, full event logs, or unrelated repo files unless a named packet artifact is missing, contradictory, or insufficient to substantiate a concrete finding. Prefer `git diff --stat`, `git diff --name-only`, and targeted file hunks for changed paths over full diffs.
+Read the packet-local `compact_reviewer_context` first. It lists the exact branch prompt, branch status, pre-review gate, worker status, worker telemetry, schema, and output paths. Use those paths before searching any bundle directory. Do not read memory, broad bundle directories, full event logs, or unrelated repo files unless a named packet artifact is missing, contradictory, or insufficient to substantiate a concrete finding. Prefer `git diff --stat`, `git diff --name-only`, and targeted file hunks for changed paths over full diffs. Keep review reads path-scoped using `path_scoped_changed_paths`, and obey `read_limits` before opening artifacts.
 
 Determine the branch base ref from `compact_reviewer_context`. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
@@ -1385,9 +1677,9 @@ Do not emit placeholder, draft, or example final-shaped JSON before inspection i
 
 If your CLI harness does not write `{schema_name}` directly, print the final review object between these exact marker lines and do not print any other JSON object between them:
 
-{GEMINI_STATUS_BEGIN}
-{{"packet_id":"{packet_id}","role":"reviewer","verdict":"blocked","findings":["replace with concrete finding"],"commands_run":["pwd","git status --short --branch"],"verification_gaps":["replace with concrete gap"],"residual_risks":[],"semantic_input_hashes":{{}},"reuse_policy":{{}},"summary":"replace with concise summary"}}
-{GEMINI_STATUS_END}
+{REVIEW_STATUS_BEGIN}
+{{"packet_id":"{packet_id}","role":"reviewer","verdict":"blocked","findings":["replace with concrete finding"],"finding_classes":["project_bug"],"commands_run":["pwd","git status --short --branch"],"verification_gaps":["replace with concrete gap"],"residual_risks":[],"semantic_input_hashes":{{}},"reuse_policy":{{}},"summary":"replace with concise summary"}}
+{REVIEW_STATUS_END}
 """
 
 
@@ -1706,7 +1998,7 @@ def launch_config_base(
     }
 
 
-def annotate_attempt_metadata(config: dict) -> dict:
+def annotate_attempt_metadata(config: dict, retry_ordinal: str | None = None) -> dict:
     attempts = config.get("attempts")
     if not isinstance(attempts, list):
         return config
@@ -1717,6 +2009,8 @@ def annotate_attempt_metadata(config: dict) -> dict:
         if isinstance(command, str) and command.strip():
             attempt.setdefault("rendered_command", command)
         attempt.setdefault("route_policy_version", ROUTE_POLICY_VERSION)
+        if retry_ordinal:
+            attempt.setdefault("retry_ordinal", retry_ordinal)
         attempt.setdefault(
             "telemetry_capability",
             {
@@ -1801,6 +2095,7 @@ def compact_launch_config(
     review_reuse_policy: dict | None = None,
     telemetry_debug: bool = False,
     goal_config: dict | None = None,
+    retry_ordinal: str | None = None,
 ) -> dict | None:
     telemetry_script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
     selected_ladder = selected_ladder or list(DEFAULT_WORKER_LADDER)
@@ -1836,19 +2131,24 @@ def compact_launch_config(
             "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
             "gemini_approval_mode": GEMINI_APPROVAL_MODE,
             "gemini_command": GEMINI_COMMAND,
-        })
+            "retry_ordinal": retry_ordinal,
+        }, retry_ordinal=retry_ordinal)
     if role == "research-worker":
         return annotate_attempt_metadata({
             **launch_config_base(
                 "research-worker", packet_id, branch, worktree, schema_name, output_name, "read-only", RESEARCH_ATTEMPT_TIMEOUT_SECONDS
             ),
             **debug_config,
+            "retry_ordinal": retry_ordinal,
             "attempts": research_telemetry_attempts(),
             "telemetry_script": telemetry_script,
             "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
-        })
+        }, retry_ordinal=retry_ordinal)
     if role == "reviewer":
         reviewer_ladder = reviewer_ladder_from_route(review_route)
+        selected_route = review_route or {}
+        selection_tier = selected_route.get("tier")
+        selection_context = selected_route.get("selection_context")
         terminal_commands = [
             configured_route_commands([alias], goal_config)[0] if goal_config else CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
             for alias in reviewer_ladder
@@ -1860,6 +2160,9 @@ def compact_launch_config(
             **debug_config,
             "attempts": reviewer_telemetry_attempts(reviewer_ladder, goal_config),
             "telemetry_script": telemetry_script,
+            "status_markers": _review_route_markers_for_role("reviewer"),
+            "review_route": selected_route,
+            "selection_context": selection_context or {"tier": selection_tier, "reasons": selected_route.get("selection_reason")},
             "semantic_input_hashes": review_semantic_hashes or {},
             "reuse_policy": review_reuse_policy or {
                 "mode": "new",
@@ -1870,7 +2173,8 @@ def compact_launch_config(
             },
             "terminal_commands": terminal_commands,
             "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
-        })
+            "retry_ordinal": retry_ordinal,
+        }, retry_ordinal=retry_ordinal)
     return None
 
 
@@ -1880,7 +2184,12 @@ def main() -> int:
     parser.add_argument("--packet-id", required=True)
     parser.add_argument("--branch", required=True)
     parser.add_argument("--worktree", required=True)
-    parser.add_argument("--out-dir", required=True)
+    parser.add_argument(
+        "--out-dir",
+        required=True,
+        metavar="PARENT_DIR",
+        help="Parent directory for packet directories, such as bundle/workers or bundle/reviewers; the packet id is appended automatically.",
+    )
     parser.add_argument(
         "--manifest",
         help="Absolute path to job.manifest.json. Required for reviewer packets; optional for compact worker packets.",
@@ -1993,7 +2302,13 @@ def main() -> int:
         if gate_reuse_policy.get("accepted") is True and gate_reuse_policy.get("source_telemetry_path"):
             print("pre-review gate accepted reviewer reuse with telemetry; no reviewer model packet generated")
             return 0
-        review_route = select_review_route(manifest, gate, branch_id=branch_id, packet_id=packet_id)
+        review_route = select_review_route(
+            manifest,
+            gate,
+            branch_id=branch_id,
+            packet_id=packet_id,
+            manifest_path=manifest_path,
+        )
         review_semantic_hashes = {
             key: value
             for key, value in gate.get("semantic_input_hashes", {}).items()
@@ -2112,6 +2427,8 @@ def main() -> int:
     validate_openai_strict_schema(schema, schema_name)
     task_text = load_task(task_file)
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
+    if out_dir.name == packet_id:
+        raise SystemExit("--out-dir must be the parent packet directory; this script appends --packet-id automatically")
     packet_dir = out_dir / packet_id
     packet_context: dict | None = None
     packet_context_path = ""
@@ -2204,6 +2521,7 @@ def main() -> int:
         }
     elif args.role == "reviewer" and review_route is not None:
         route = review_route
+    retry_ordinal = archive_existing_packet_dir(packet_dir, replace=args.replace)
     launch_config = compact_launch_config(
         args.role,
         packet_id,
@@ -2221,6 +2539,7 @@ def main() -> int:
         review_reuse_policy=review_reuse_policy,
         telemetry_debug=telemetry_debug,
         goal_config=goal_config_from_manifest(manifest, manifest_path),
+        retry_ordinal=retry_ordinal,
     )
     if launch_config is not None:
         launch_config["context_budget"] = context_budget
@@ -2235,8 +2554,6 @@ def main() -> int:
                 if isinstance(attempt, dict) and isinstance(attempt.get("alias"), str)
             ],
         }
-
-    archive_existing_packet_dir(packet_dir, replace=args.replace)
     packet_dir.mkdir(parents=True, exist_ok=True)
 
     write_json(packet_dir / schema_name, schema)

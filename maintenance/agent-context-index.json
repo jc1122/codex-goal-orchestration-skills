@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:48786c05e5efdc5138ba4633c653f1ebf61bbd8024fbc277ff489e11bb1fe3f7"
+    "source_fingerprint": "sha256:1539341f4eb5793d666b3f8916c65270f2ad048efd37b9bff6a00018f717a4b0"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,27 +16,40 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 6391,
-      "approx_tokens": 75619,
+      "lines": 6414,
+      "approx_tokens": 75901,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3099:run_runtime_packet_fixtures:965l",
-        "4556:run_base_ref_default_fixture:862l",
+        "3099:run_runtime_packet_fixtures:971l",
+        "4562:run_base_ref_default_fixture:862l",
         "1488:run_negative_amendment_fixtures:362l",
-        "5464:run_telemetry_summary_fixture:313l"
+        "5470:run_telemetry_summary_fixture:313l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2696,
-      "approx_tokens": 32662,
+      "lines": 3015,
+      "approx_tokens": 35809,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1224:normalize_brief:180l",
-        "2207:manifest_from_normalized_brief:127l",
-        "2490:create_bundle:126l",
-        "1843:build_runtime_index:96l"
+        "1487:normalize_brief:229l",
+        "2802:create_bundle:133l",
+        "2519:manifest_from_normalized_brief:127l",
+        "2155:build_runtime_index:96l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 2590,
+      "approx_tokens": 27742,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "2181:main:406l",
+        "965:compact_worker_context:118l",
+        "2081:compact_launch_config:98l",
+        "1148:reviewer_packet_context:97l"
       ]
     },
     {
@@ -53,29 +66,16 @@
       ]
     },
     {
-      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2273,
-      "approx_tokens": 24245,
+      "lines": 2651,
+      "approx_tokens": 26354,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1877:main:393l",
-        "956:compact_worker_context:118l",
-        "1787:compact_launch_config:88l",
-        "1475:worker_prompt:82l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 1985,
-      "approx_tokens": 23918,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "672:validate_worker_artifacts:156l",
-        "1776:validate_branch_status:153l",
-        "1582:validate_review_artifact_for_branch:148l",
-        "425:validate_launch_config_artifact:102l"
+        "2247:run_packet:364l",
+        "2071:extract_status_json:100l",
+        "678:write_launcher_state:85l",
+        "908:run_with_timeout:81l"
       ]
     }
   ],

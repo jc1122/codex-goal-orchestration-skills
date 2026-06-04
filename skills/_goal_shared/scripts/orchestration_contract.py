@@ -422,6 +422,7 @@ REVIEW_REQUIRED = (
     "role",
     "verdict",
     "findings",
+    "finding_classes",
     "commands_run",
     "verification_gaps",
     "residual_risks",

@@ -40,6 +40,9 @@ is_repo_relative_path = PATH_RULES.is_repo_relative_path
 require_safe_label = PATH_RULES.require_safe_packet_label
 
 
+ATTEMPT_DIR_RE = re.compile(r"attempt-\d{3,}")
+
+
 def read_json(path: Path) -> dict:
     with path.open("r", encoding="utf-8") as handle:
         data = json.load(handle)
@@ -115,6 +118,39 @@ def allowed_status_bootstrap_defects(output: str) -> list[str]:
     return []
 
 
+def is_retry_attempt_artifact(path: str) -> bool:
+    if not isinstance(path, str):
+        return False
+    parts = Path(path).parts
+    for index, part in enumerate(parts[:-2]):
+        if part == "attempts" and index + 1 < len(parts) and ATTEMPT_DIR_RE.fullmatch(parts[index + 1]):
+            return True
+    return False
+
+
+def pre_review_input_artifact_paths(
+    bundle_dir: Path,
+    branch: dict,
+    branch_id: str,
+) -> tuple[list[str], list[str]]:
+    rel_paths = BRANCH_VALIDATOR.required_pre_review_input_paths(branch, branch_id, bundle_dir=bundle_dir)
+    diagnostic_paths = (
+        BRANCH_VALIDATOR.diagnostic_pre_review_input_paths(branch, branch_id, bundle_dir=bundle_dir)
+        if hasattr(BRANCH_VALIDATOR, "diagnostic_pre_review_input_paths")
+        else []
+    )
+    current_artifacts: list[str] = []
+    diagnostic_artifacts: list[str] = []
+    for rel_path in [*rel_paths, *diagnostic_paths]:
+        if not isinstance(rel_path, str) or not rel_path.strip():
+            continue
+        if is_retry_attempt_artifact(rel_path):
+            diagnostic_artifacts.append(rel_path)
+        elif rel_path not in current_artifacts:
+            current_artifacts.append(rel_path)
+    return current_artifacts, sorted(dict.fromkeys(diagnostic_artifacts))
+
+
 def branch_entry(manifest: dict, branch_id: str) -> dict:
     branches = manifest.get("branches")
     if not isinstance(branches, list):
@@ -161,20 +197,33 @@ def ownership_check(branch: dict, branch_status: dict) -> dict:
     return result
 
 
-def required_input_hashes(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[dict[str, str], list[str]]:
-    rel_paths = BRANCH_VALIDATOR.required_pre_review_input_paths(branch, branch_id, bundle_dir=bundle_dir)
+def required_input_hashes(
+    bundle_dir: Path,
+    rel_paths: list[str],
+    *,
+    strict: bool,
+) -> tuple[dict[str, str], list[str], list[str]]:
     hashes: dict[str, str] = {}
-    defects = []
+    defects: list[str] = []
+    missing: list[str] = []
     for rel_path in rel_paths:
         if not is_repo_relative_path(rel_path):
             defects.append(f"unsafe required input path: {rel_path!r}")
             continue
         path = bundle_dir / rel_path
         if not path.exists():
-            defects.append(f"required input does not exist: {rel_path}")
+            if strict:
+                defects.append(f"required input does not exist: {rel_path}")
+            else:
+                missing.append(rel_path)
             continue
         hashes[rel_path] = sha256_file(path)
-    return hashes, defects
+    return hashes, defects, missing
+
+
+def is_final_base_reuse_source(review_path: Path) -> bool:
+    review_path_text = review_path.as_posix()
+    return "final-base" in review_path_text or "final_base" in review_path_text
 
 
 def expected_worker_packet_ids(branch: dict, branch_id: str) -> list[str]:
@@ -485,6 +534,7 @@ def reuse_policy(
     args: argparse.Namespace,
     bundle_dir: Path,
     semantic_hashes: dict[str, str],
+    semantic_input_paths: list[str],
     *,
     route_policy_path: str,
 ) -> tuple[dict, dict, list[str]]:
@@ -512,11 +562,25 @@ def reuse_policy(
     review = read_json(review_path)
     source_hashes = {
         key: value
-        for key, value in review.get("semantic_input_hashes", {}).items()
-        if isinstance(key, str) and isinstance(value, str)
-    } if isinstance(review.get("semantic_input_hashes"), dict) else {}
+        for key, value in (
+            review.get("semantic_input_hashes", {})
+            if isinstance(review.get("semantic_input_hashes"), dict)
+            else {}
+        ).items()
+        if isinstance(key, str)
+        and key in semantic_input_paths
+        and isinstance(value, str)
+    }
     if source_hashes != semantic_hashes:
-        defects.append("source review semantic_input_hashes do not match current pre-review inputs")
+        missing_paths = [
+            rel_path
+            for rel_path in sorted(semantic_input_paths)
+            if source_hashes.get(rel_path) != semantic_hashes.get(rel_path)
+        ]
+        defects.append(
+            "source review semantic_input_hashes do not match current canonical pre-review inputs: "
+            + ", ".join(missing_paths)
+        )
     telemetry_defects: list[str] = []
     STATUS_VALIDATION.validate_telemetry_artifact(
         telemetry_defects,
@@ -528,10 +592,22 @@ def reuse_policy(
     )
     defects.extend(telemetry_defects)
     accepted = not defects
+    final_base_reuse = is_final_base_reuse_source(review_path)
+    no_op_reason = (
+        "deterministic final-base no-op reuse path accepted" if final_base_reuse else "deterministic reviewer reuse/no-op path accepted"
+    )
+    acceptance_reason = (
+        no_op_reason
+        if final_base_reuse
+        else "source review and telemetry match current canonical pre-review evidence; deterministic reuse accepted"
+    )
+    if not accepted:
+        acceptance_reason = "; ".join(defects)
     policy = {
         "mode": "reuse" if accepted else "new",
         "accepted": accepted,
         "semantic_hashes_match": accepted,
+        "no_op_reuse_reason": no_op_reason if accepted else "",
         "source_review_path": source_review_display,
         "source_telemetry_path": source_telemetry_display,
     }
@@ -539,9 +615,7 @@ def reuse_policy(
     eligibility.update(
         {
             "eligible": accepted,
-            "reason": "semantic hashes, route policy, worktree freshness, test evidence, and source telemetry match"
-            if accepted
-            else "; ".join(defects),
+            "reason": acceptance_reason,
             "source_review_path": source_review_display,
             "source_telemetry_path": source_telemetry_display,
         }
@@ -778,11 +852,26 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             declared_dod_items=declared_dod_items,
         ),
     )
-    semantic_hashes, hash_defects = required_input_hashes(bundle_dir, branch, branch_id)
+    current_artifact_paths, diagnostic_artifact_paths = pre_review_input_artifact_paths(
+        bundle_dir,
+        branch,
+        branch_id,
+    )
+    semantic_hashes, hash_defects, missing_current_artifact_paths = required_input_hashes(
+        bundle_dir,
+        current_artifact_paths,
+        strict=True,
+    )
+    diagnostic_hashes, diagnostic_hash_defects, missing_diagnostic_hashes = required_input_hashes(
+        bundle_dir,
+        diagnostic_artifact_paths,
+        strict=False,
+    )
     reuse, reuse_eligibility, reuse_defects = reuse_policy(
         args,
         bundle_dir,
         semantic_hashes,
+        current_artifact_paths,
         route_policy_path=route_policy_rel_path,
     )
 
@@ -801,9 +890,12 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             "commands": [diff_command, unstaged_diff_command, staged_diff_command, untracked_check_command],
         },
         "artifacts_fresh": {
-            "status": "pass" if not hash_defects and not freshness_defects else "failed",
+            "status": "pass" if not hash_defects and not freshness_defects and not diagnostic_hash_defects else "failed",
             "artifacts": sorted(semantic_hashes),
+            "current_artifacts": dict(sorted(semantic_hashes.items())),
+            "diagnostic_artifacts": dict(sorted(diagnostic_hashes.items())),
             "worktree_freshness_path": freshness_rel_path,
+            "missing_diagnostic_artifacts": sorted(missing_diagnostic_hashes),
         },
         "worker_evidence": {
             "status": "pass" if not worker_defects else "failed",
@@ -835,6 +927,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     defects.extend(untracked_defects)
     defects.extend(test_defects)
     defects.extend(hash_defects)
+    defects.extend(diagnostic_hash_defects)
     defects.extend(freshness_defects)
     defects.extend(worker_defects)
     defects.extend(ownership.get("defects", []))
@@ -858,7 +951,12 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         ],
         "checks": checks,
         "semantic_input_hashes": semantic_hashes,
-        "volatile_input_hashes": {},
+        "volatile_input_hashes": {
+            "diagnostic_artifacts": diagnostic_hashes,
+            "missing_diagnostic_artifacts": sorted(missing_diagnostic_hashes),
+            "missing_current_artifacts": sorted(missing_current_artifact_paths),
+            "non_canonical_inputs": dict(sorted(diagnostic_hashes.items())),
+        },
         "reuse_eligibility": reuse_eligibility,
         "reuse_policy": reuse,
     }
@@ -875,11 +973,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             manifest_path=manifest_path,
             branch_id=branch_id,
             review_packet_id=review_packet_id,
-            required_input_paths=BRANCH_VALIDATOR.required_pre_review_input_paths(
-                branch,
-                branch_id,
-                bundle_dir=bundle_dir,
-            ),
+            required_input_paths=current_artifact_paths,
         )
         if validation_defects:
             gate["status"] = "failed"

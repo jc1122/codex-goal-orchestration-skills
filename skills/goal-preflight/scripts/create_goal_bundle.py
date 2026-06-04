@@ -337,7 +337,46 @@ def _git_ref_exists(repo_root: Path, ref: str) -> bool:
     return False
 
 
-def git_repo_status(repo_root: Path, *, base_ref: str | None = None) -> dict:
+def _parse_git_status_lines(raw: str) -> tuple[list[str], list[str]]:
+    tracked: list[str] = []
+    untracked: list[str] = []
+    for line in raw.splitlines():
+        status_line = line.rstrip()
+        if len(status_line) < 3:
+            continue
+        status = status_line[:2]
+        if status == "##":
+            continue
+        if status == "!!":
+            continue
+        path = status_line[3:].strip()
+        if not path:
+            continue
+        if "->" in path:
+            path = path.split("->", 1)[0].strip()
+        if status == "??":
+            untracked.append(path)
+        else:
+            tracked.append(path)
+    return tracked, untracked
+
+
+def _is_root_required_for_runtime(branch_paths: list[str] | None) -> bool:
+    if not branch_paths:
+        return True
+    for branch_path in branch_paths:
+        normalized = branch_path.strip()
+        normalized = normalized.strip("/")
+        if not normalized or normalized in {".", "./"}:
+            return True
+        normalized = normalized.replace("\\", "/")
+        if normalized.startswith(".worktrees/"):
+            continue
+        return True
+    return False
+
+
+def git_repo_status(repo_root: Path, *, base_ref: str | None = None, branch_paths: list[str] | None = None) -> dict:
     if not _is_git_repo(repo_root):
         return {
             "repo_root": repo_root.resolve().as_posix(),
@@ -346,12 +385,36 @@ def git_repo_status(repo_root: Path, *, base_ref: str | None = None) -> dict:
             "base_ref_status": "not_checked",
             "reason": "repo root is not a git work tree",
         }
+    status_result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "status", "--short", "--branch"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    tracked_changes, untracked_changes = _parse_git_status_lines(status_result.stdout)
+    used_for_runtime = _is_root_required_for_runtime(branch_paths or [])
+    dirty = bool(tracked_changes or untracked_changes)
+    if dirty:
+        if used_for_runtime:
+            decision = "warning"
+        else:
+            decision = "ignored_because_isolated_worktrees"
+    else:
+        decision = "clean"
     status = {
         "repo_root": repo_root.resolve().as_posix(),
         "repo_is_git": True,
         "current_branch": current_git_branch(repo_root),
         "base_ref": base_ref,
         "base_ref_status": "not_requested",
+        "root_worktree_state": {
+            "dirty": dirty,
+            "tracked_changes": tracked_changes,
+            "untracked_changes": untracked_changes,
+            "used_for_runtime": used_for_runtime,
+            "decision": decision,
+        },
     }
     if base_ref:
         exists = _git_ref_exists(repo_root, base_ref)
@@ -1115,6 +1178,206 @@ def ready_width(items: list[dict]) -> int:
     return len([item for item in items if not item.get("depends_on")])
 
 
+def max_ready_width(items: list[dict], *, id_field: str = "id", depends_on_field: str = "depends_on") -> int:
+    remaining: dict[str, dict] = {
+        str(item.get(id_field)): item
+        for item in items
+        if isinstance(item, dict) and str(item.get(id_field))
+    }
+    levels: dict[str, int] = {}
+    while remaining:
+        progressed = False
+        for item_id, item in list(remaining.items()):
+            deps = [str(dep) for dep in item.get(depends_on_field, []) if isinstance(dep, str)]
+            if any(dep in remaining for dep in deps):
+                continue
+            dep_levels = [levels.get(dep, 0) for dep in deps]
+            levels[item_id] = 1 + (max(dep_levels) if dep_levels else 0)
+            remaining.pop(item_id)
+            progressed = True
+        if not progressed:
+            for item_id in list(remaining):
+                levels[item_id] = 1
+                remaining.pop(item_id)
+    widths: dict[int, int] = {}
+    for level in levels.values():
+        widths[level] = widths.get(level, 0) + 1
+    return max(widths.values(), default=0)
+
+
+def branch_ready_width(branches: list[dict]) -> int:
+    return len([branch for branch in branches if not branch.get("depends_on")])
+
+
+def ready_width_metadata(item_count: int, current_ready_width: int, capacity: int, *, scope: str, identifier: str | None = None) -> dict[str, object]:
+    usable_capacity = min(max(capacity, 1), item_count) if item_count else 0
+    if identifier and scope in {"branch", "worker"}:
+        scope_name = f"{scope} {identifier}"
+    elif identifier:
+        scope_name = f"{scope} {identifier}"
+    else:
+        scope_name = scope
+    reason = None
+    if usable_capacity > 1 and current_ready_width < usable_capacity:
+        reason = (
+            f"{scope_name} exposes {current_ready_width} ready item(s) against usable capacity {usable_capacity};"
+            " this limits parallel fill under current dependencies"
+        )
+    return {
+        "ready_width": current_ready_width,
+        "usable_capacity": usable_capacity,
+        "underutilization_reason": reason,
+    }
+
+
+def _path_value_set(values: object) -> set[str]:
+    return {str(value) for value in values if isinstance(value, str) and value.strip()}
+
+
+def _path_sets_overlap(a: set[str], b: set[str]) -> bool:
+    for left in a:
+        for right in b:
+            if path_is_covered(left, right) or path_is_covered(right, left):
+                return True
+    return False
+
+
+def item_dependency_profile(item: dict, repo_root: Path | None) -> dict[str, set[str]]:
+    owned = _path_value_set(item.get("owned_paths", []))
+    context = _path_value_set(item.get("context_files", []))
+    required: set[str] = set()
+    for command in item.get("verification", []):
+        if not isinstance(command, str) or not command.strip():
+            continue
+        command_paths, _modules = command_required_paths(command, repo_root)
+        required.update(command_paths)
+    return {
+        "owned_paths": owned,
+        "context_files": context,
+        "required_paths": required,
+    }
+
+
+def _has_concrete_path_dependency(dep_profile: dict[str, set[str]], item_profile: dict[str, set[str]]) -> bool:
+    if _path_sets_overlap(dep_profile["owned_paths"], item_profile["owned_paths"]):
+        return True
+    if _path_sets_overlap(dep_profile["owned_paths"], item_profile["context_files"]):
+        return True
+    if _path_sets_overlap(dep_profile["owned_paths"], item_profile["required_paths"]):
+        return True
+    if _path_sets_overlap(dep_profile["required_paths"], item_profile["owned_paths"]):
+        return True
+    return False
+
+
+def optimize_worker_dependencies(branch: dict, *, repo_root: Path | None, branch_worker_reasons: list[str]) -> None:
+    work_items = branch.get("work_items")
+    if not isinstance(work_items, list) or len(work_items) <= 1:
+        return
+
+    profiles = {item["id"]: item_dependency_profile(item, repo_root) for item in work_items if isinstance(item, dict)}
+    removed_edges: list[tuple[str, str]] = []
+
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        depends_on = list(item.get("depends_on", []))
+        if not depends_on:
+            continue
+        item_id = item.get("id")
+        if not isinstance(item_id, str):
+            continue
+        kept: list[str] = []
+        for dependency in depends_on:
+            if not isinstance(dependency, str):
+                continue
+            dep_profile = profiles.get(dependency)
+            if dep_profile is None:
+                kept.append(dependency)
+                continue
+            if _has_concrete_path_dependency(dep_profile, profiles[item_id]):
+                kept.append(dependency)
+                continue
+            removed_edges.append((dependency, item_id))
+        if len(kept) != len(depends_on):
+            item["depends_on"] = kept
+
+    for dependency, dependent in removed_edges:
+        append_reason_once(
+            branch_worker_reasons,
+            f"Removed worker dependency {dependency}->{dependent} in branch {branch.get('id')} after path/verification dependency check found no direct data coupling.",
+        )
+
+
+def optimize_branch_dependencies(
+    branches: list[dict],
+    *,
+    repo_root: Path | None,
+    serial_reasons: list[str],
+    branch_dependency_reasons: dict[str, list[str]],
+) -> None:
+    if len(branches) <= 1:
+        return
+    branch_profiles = {}
+    for branch in branches:
+        owned = _path_value_set(branch.get("owned_paths", []))
+        context: set[str] = set()
+        required: set[str] = set()
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            context.update(_path_value_set(item.get("context_files", [])))
+            for command in item.get("verification", []):
+                if not isinstance(command, str) or not command.strip():
+                    continue
+                required.update(command_required_paths(command, repo_root)[0])
+        branch_profiles[branch["id"]] = {
+            "owned_paths": owned,
+            "context_files": context,
+            "required_paths": required,
+        }
+
+    removed_edges: list[tuple[str, str]] = []
+    for branch in branches:
+        deps = list(branch.get("depends_on", []))
+        if not deps:
+            continue
+        bid = branch.get("id")
+        if not isinstance(bid, str):
+            continue
+        profile = branch_profiles.get(bid)
+        if profile is None:
+            continue
+        kept: list[str] = []
+        for dependency in deps:
+            dep_profile = branch_profiles.get(str(dependency))
+            if dep_profile is None:
+                kept.append(dependency)
+                continue
+            if _path_sets_overlap(dep_profile["owned_paths"], profile["owned_paths"]):
+                kept.append(dependency)
+                continue
+            if _path_sets_overlap(dep_profile["owned_paths"], profile["context_files"]):
+                kept.append(dependency)
+                continue
+            if _path_sets_overlap(dep_profile["owned_paths"], profile["required_paths"]):
+                kept.append(dependency)
+                continue
+            removed_edges.append((str(dependency), bid))
+        if len(kept) != len(deps):
+            branch["depends_on"] = kept
+
+    for dependency, branch_id in removed_edges:
+        append_reason_once(
+            branch_dependency_reasons.setdefault(branch_id, []),
+            f"Removed branch dependency {dependency}->{branch_id} after path/verification evidence indicated no direct data dependency.",
+        )
+        append_reason_once(
+            serial_reasons,
+            "Dependency optimizer removed non-data branch dependency edges to improve ready-width where local contracts permit it.",
+        )
+
+
 def longest_work_item_chain(items: list[dict]) -> int:
     lengths: dict[str, int] = {}
     for item in items:
@@ -1236,6 +1499,7 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
     serial_reasons = normalize_reason_list(brief.get("serial_reasons"), serial_reason)
     parallelization_rationale = nonempty_text(brief.get("parallelization_rationale"))
     branches = []
+    branch_dependency_reasons: dict[str, list[str]] = {}
     for idx, original in enumerate(brief["branches"], start=1):
         bid = original.get("id") or branch_id(idx)
         bid = require_safe_id(str(bid).upper(), "branch id")
@@ -1270,12 +1534,6 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
                 worker_serial_reasons,
                 f"Branch {bid} caps worker concurrency at {max_workers}, below the package maximum of {MAX_WORKER_PACKETS_PER_BRANCH}.",
             )
-        if len(work_items) == 1 and max_workers > 1:
-            append_reason_once(worker_serial_reasons, f"Branch {bid} declares one worker item, so no additional independent worker packet exists to fill capacity.")
-        if ready_width(work_items) < min(max_workers, len(work_items)):
-            append_reason_once(worker_serial_reasons, f"Branch {bid} worker depends_on topology leaves fewer initially ready workers than capacity.")
-        if len(work_items) > 2 and longest_work_item_chain(work_items) >= len(work_items) - 1:
-            append_reason_once(worker_serial_reasons, f"Branch {bid} worker dependency chain serializes most work by explicit depends_on topology.")
         branch = {
             **original,
             "work_items": work_items,
@@ -1302,9 +1560,51 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
                 "slot_refill": "After a worker launcher exits, collect and integrate its status/diff, remove it from the active set, then launch the next eligible worker immediately if capacity is available.",
             },
         }
+        branch_dependency_reasons[bid] = []
         branches.append(branch)
 
     ensure_unique_branch_values(branches)
+    for branch in branches:
+        optimize_worker_dependencies(
+            branch,
+            repo_root=repo_root,
+            branch_worker_reasons=branch["worker_parallelism"]["serial_reasons"],
+        )
+    for branch in branches:
+        worker_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
+        worker_max_ready_width = max_ready_width(worker_items)
+        worker_parallelism = branch["worker_parallelism"]
+        worker_serial_reasons = worker_parallelism["serial_reasons"]
+        worker_capacity = branch.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH)
+        if len(worker_items) == 1 and worker_capacity > 1:
+            append_reason_once(
+                worker_serial_reasons,
+                f"Branch {branch['id']} declares one worker item, so no additional independent worker packet exists to fill capacity.",
+            )
+        elif worker_max_ready_width < min(worker_capacity, len(worker_items)):
+            append_reason_once(
+                worker_serial_reasons,
+                f"Branch {branch['id']} worker DAG limits initial and maximal ready parallelism below worker capacity."
+            )
+        if len(worker_items) > 2 and longest_work_item_chain(worker_items) >= len(worker_items) - 1:
+            append_reason_once(
+                worker_serial_reasons,
+                f"Branch {branch['id']} worker dependency chain serializes most work by explicit depends_on topology.",
+            )
+        ready_meta = ready_width_metadata(
+            len(worker_items),
+            worker_max_ready_width,
+            worker_capacity,
+            scope="worker",
+            identifier=branch["id"],
+        )
+        worker_parallelism["ready_width_metadata"] = ready_meta
+        underutilization_reason = ready_meta["underutilization_reason"]
+        if isinstance(underutilization_reason, str):
+            append_reason_once(worker_serial_reasons, underutilization_reason)
+        if branch_dependency_reasons.get(branch["id"]):
+            for reason in branch_dependency_reasons[branch["id"]]:
+                append_reason_once(serial_reasons, reason)
 
     if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
         raise SystemExit(f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}")
@@ -1363,8 +1663,18 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
             )
 
     initial_ready = len([branch for branch in branches if not branch.get("depends_on")])
+    branch_max_ready_width = max_ready_width(branches)
+    parallelization_meta = ready_width_metadata(len(branches), branch_max_ready_width, max_active, scope="branch")
     if initial_ready < min(max_active, len(branches)):
         append_reason_once(serial_reasons, "Initial ready branch count underfills max_active_branch_agents because of explicit branch depends_on topology.")
+    if branch_max_ready_width < min(max_active, len(branches)) and initial_ready <= 1:
+        append_reason_once(
+            serial_reasons,
+            f"Branch DAG max ready width remains {branch_max_ready_width} against usable branch capacity {min(max_active, len(branches))}; this limits parallel fill by design."
+        )
+    underutilization_reason = parallelization_meta["underutilization_reason"]
+    if isinstance(underutilization_reason, str):
+        append_reason_once(serial_reasons, underutilization_reason)
     branch_chain_lengths: dict[str, int] = {}
     for branch in branches:
         dep_lengths = [branch_chain_lengths.get(dep, 1) for dep in branch.get("depends_on", [])]
@@ -1388,6 +1698,8 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
             "max_waves": MAX_WAVES,
             "scheduling_mode": "rolling",
             "scheduler_path": CONTRACT.MAIN_SCHEDULER_PATH,
+            "ready_width": branch_max_ready_width,
+            "ready_width_metadata": parallelization_meta,
             "serial_reasons": serial_reasons,
             "parallelization_rationale": parallelization_rationale
             or f"Keep up to {max_active} branch orchestrators active; defer only branches whose depends_on branch ids are not complete.",
@@ -1397,10 +1709,10 @@ def normalize_brief(brief: dict, *, default_base_ref: str = "main", validate_bas
         "branches": branches,
         "waves": waves,
         "preflight_lite_advice": preflight_lite_advice,
-	        "telemetry_policy": telemetry_policy,
-	        "source_attachments": normalize_source_attachments(brief.get("source_attachments"), repo_root=repo_root),
-	        "runtime_cap": normalize_runtime_cap(brief.get("runtime_cap")),
-	    }
+        "telemetry_policy": telemetry_policy,
+        "source_attachments": normalize_source_attachments(brief.get("source_attachments"), repo_root=repo_root),
+        "runtime_cap": normalize_runtime_cap(brief.get("runtime_cap")),
+    }
 
 
 BILLING_FORBIDDEN_RE = re.compile(r"usd|dollar|pricing|price", re.IGNORECASE)
@@ -2512,7 +2824,14 @@ def create_bundle(
         repo_root=repo_root,
     )
     brief = promote_repeated_context_attachments(brief, repo_root=repo_root)
-    brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"])
+    branch_paths = []
+    for branch in brief.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        path = branch.get("worktree_path")
+        if isinstance(path, str):
+            branch_paths.append(path)
+    brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"], branch_paths=branch_paths)
     brief["preflight_compatibility"] = compatibility
     brief["preflight_input_precedence"] = preflight_input_precedence(original_brief, brief, goal_config)
     runtime_goal_config = sanitized_runtime_goal_config(goal_config) if goal_config is not None else None

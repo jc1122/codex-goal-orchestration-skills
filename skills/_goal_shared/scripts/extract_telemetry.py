@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 from datetime import datetime
@@ -18,6 +19,47 @@ TOKEN_KEYS = {
     "cached_input_tokens": {"cached_input_tokens", "cachedInputTokens", "cachedInputTokenCount"},
     "total_tokens": {"total_tokens", "totalTokens", "totalTokenCount"},
 }
+RETRY_ORDINAL_RE = re.compile(r"attempt-(\d+)")
+
+
+def _normalize_path_value(path: Path) -> str:
+    return path.as_posix().replace("/./", "/").replace("//", "/")
+
+
+def _infer_retry_ordinal(packet_dir: Path, provided: object) -> str:
+    value = str(provided).strip() if isinstance(provided, str) and provided.strip() else ""
+    if value:
+        return value
+    match = RETRY_ORDINAL_RE.search(_normalize_path_value(packet_dir))
+    return match.group(0) if match else ""
+
+
+def _normalize_execution(spec: dict[str, Any] | Any) -> dict[str, Any] | None:
+    if not isinstance(spec, dict):
+        return None
+    return {
+        key: value
+        for key in (
+            "returncode",
+            "elapsed_ms",
+            "timed_out",
+            "stdout_bytes",
+            "stderr_bytes",
+            "command",
+            "command_parts",
+            "stderr_path",
+            "started_at",
+            "completed_at",
+        )
+        if (value := spec.get(key)) is not None
+    }
+
+
+def _coerce_str_none(value: Any) -> Any:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
 
 
 def file_stats(path: Path) -> dict[str, Any]:
@@ -309,9 +351,19 @@ def _packet_debug_timing(packet_dir: Path) -> dict[str, Any] | None:
     }
 
 
-def _stable_attempt_id(packet_id: str, role: str, alias: str, provider: str, model: str, command: str, index: int) -> str:
+def _stable_attempt_id(
+    packet_id: str,
+    role: str,
+    alias: str,
+    provider: str,
+    model: str,
+    command: str,
+    index: int,
+    retry_ordinal: str = "",
+) -> str:
     key = "|".join([
         packet_id or "-",
+        retry_ordinal or "current",
         role or "-",
         str(index),
         alias or "-",
@@ -320,7 +372,8 @@ def _stable_attempt_id(packet_id: str, role: str, alias: str, provider: str, mod
         command or "-",
     ])
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
-    return f"{packet_id}:{role}:{index + 1:03d}:{digest}"
+    retry_segment = f":{retry_ordinal}" if retry_ordinal else ""
+    return f"{packet_id}{retry_segment}:{role}:{index + 1:03d}:{digest}"
 
 
 def _normalize_not_executed_reason(
@@ -380,6 +433,7 @@ def build_telemetry(
     for index, spec in enumerate(attempt_specs):
         event_logs = [file_stats(packet_dir / str(path)) for path in spec.get("event_logs", [])]
         probe_logs = [file_stats(packet_dir / str(path)) for path in spec.get("probe_logs", [])]
+        retry_ordinal = _infer_retry_ordinal(packet_dir, spec.get("retry_ordinal"))
         called = any(item["exists"] for item in event_logs + probe_logs)
         not_executed_reason = _normalize_not_executed_reason(
             index=index,
@@ -388,6 +442,7 @@ def build_telemetry(
             output_json=output_json,
             spec=spec,
         )
+        execution = _normalize_execution(spec.get("execution"))
         attempt_id = _stable_attempt_id(
             packet_id=packet_id,
             role=role,
@@ -396,6 +451,7 @@ def build_telemetry(
             model=str(spec.get("model", "")),
             command=str(spec.get("command", "")),
             index=index,
+            retry_ordinal=retry_ordinal,
         )
         logs = event_logs + probe_logs
         timeout_seconds = spec.get("timeout_seconds")
@@ -410,11 +466,17 @@ def build_telemetry(
                 "command": spec.get("command", ""),
                 "timeout_seconds": timeout_seconds,
                 "attempt_id": attempt_id,
+                "retry_ordinal": _coerce_str_none(retry_ordinal),
                 "candidate_attempts_index": index + 1,
                 "not_executed_reason": not_executed_reason,
                 "called": called,
                 "event_logs": event_logs,
                 "probe_logs": probe_logs,
+                "execution": execution,
+                "status_parse": spec.get("status_parse"),
+                "route_health": spec.get("route_health") if isinstance(spec.get("route_health"), dict) else None,
+                "stop_reason": spec.get("stop_reason"),
+                "provenance_level": _coerce_str_none(spec.get("provenance_level")),
                 "usage": sum_usage(logs),
             }
         )
@@ -477,11 +539,13 @@ def build_debug_telemetry(
         event_logs = [file_stats(path) for path in event_log_paths]
         probe_logs = [file_stats(path) for path in probe_log_paths]
         called = any(item["exists"] for item in event_logs + probe_logs)
+        retry_ordinal = _infer_retry_ordinal(packet_dir, spec.get("retry_ordinal"))
         timeout_seconds = spec.get("timeout_seconds")
         if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
             timeout_seconds = None
         timed_out = _attempt_timeout_detected(event_log_paths + probe_log_paths)
         timed_out = bool(timed_out) if isinstance(timed_out, bool) else None
+        execution = _normalize_execution(spec.get("execution"))
         attempt_timing = None
         timing_unsupported_reason = None
         for path in event_log_paths + probe_log_paths:
@@ -533,6 +597,7 @@ def build_debug_telemetry(
             model=str(spec.get("model", "")),
             command=str(spec.get("command", "")),
             index=index,
+            retry_ordinal=retry_ordinal,
         )
         attempts.append(
             {
@@ -543,10 +608,16 @@ def build_debug_telemetry(
                 "command": spec.get("command", ""),
                 "timeout_seconds": timeout_seconds,
                 "attempt_id": attempt_id,
+                "retry_ordinal": _coerce_str_none(retry_ordinal),
                 "candidate_attempts_index": index + 1,
                 "not_executed_reason": not_executed_reason,
                 "called": called,
                 "accepted": accepted,
+                "execution": execution,
+                "status_parse": spec.get("status_parse"),
+                "route_health": spec.get("route_health") if isinstance(spec.get("route_health"), dict) else None,
+                "stop_reason": spec.get("stop_reason"),
+                "provenance_level": _coerce_str_none(spec.get("provenance_level")),
                 "usage": usage,
                 "timing_unsupported_reason": timing_unsupported_reason,
                 "timing": {

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,33 @@ DEBUG_TELEMETRY_FILENAME = "telemetry.debug.json"
 DEBUG_EVENTS_FILENAME = "debug.events.jsonl"
 RUN_TRACE_FILENAME = "run.trace.jsonl"
 PREFLIGHT_PIPELINE_FILENAME = "preflight.pipeline.json"
+STALE_ARTIFACTS_INDEX = "stale-artifacts.index.json"
+KNOWN_CACHE_ROOTS = (".runtime-cache/", ".pytest_cache/", "xdg-cache/", ".cache/")
+KNOWN_CACHE_FILES = (
+    "tmp/codex-bwrap-synthetic-mount-targets-1000/lock",
+    "unleash-repo-schema-v1-codeium-language-server.json",
+)
+KNOWN_CACHE_EXTENSIONS = (".lock",)
+SCOPE_NAMES = ("current", "attempt_history", "stale_archive")
+TRACE_SCOPE_ALL = "all"
+OUTCOME_BUCKETS = (
+    "pass",
+    "timeout",
+    "transport_disconnect",
+    "schema_readback_failure",
+    "dirty_stop",
+    "manual_or_kill",
+    "not_called_dirty_stop",
+    "unknown",
+)
+OUTCOME_KEY_TIMEOUT = "timeout"
+OUTCOME_KEY_TRANSPORT = "transport_disconnect"
+OUTCOME_KEY_SCHEMA = "schema_readback_failure"
+OUTCOME_KEY_DIRTY = "dirty_stop"
+OUTCOME_KEY_MANUAL = "manual_or_kill"
+OUTCOME_KEY_NOT_CALLED = "not_called_dirty_stop"
+OUTCOME_KEY_PASS = "pass"
+OUTCOME_KEY_UNKNOWN = "unknown"
 
 
 def zero_usage() -> dict[str, int]:
@@ -51,6 +79,306 @@ def add_usage(target: dict[str, int], usage: object) -> None:
 def add_number(target: dict[str, Any], key: str, value: object) -> None:
     if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
         target[key] = target.get(key, 0) + value
+
+
+def read_attempt_launch_events(launcher_state_path: Path) -> dict[int, dict[str, Any]]:
+    data = read_json_object(launcher_state_path)
+    if data is None:
+        return {}
+    events = data.get("events")
+    if not isinstance(events, list):
+        return {}
+    by_attempt_index: dict[int, dict[str, Any]] = {}
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        attempt_index = event.get("attempt_index")
+        if not isinstance(attempt_index, int):
+            continue
+        seq = event.get("seq")
+        if not isinstance(seq, int) or isinstance(seq, bool):
+            seq = -1
+        existing = by_attempt_index.get(attempt_index)
+        if existing is None:
+            by_attempt_index[attempt_index] = event
+            continue
+        existing_seq = existing.get("seq")
+        if not isinstance(existing_seq, int) or isinstance(existing_seq, bool):
+            existing_seq = -1
+        if seq >= existing_seq:
+            by_attempt_index[attempt_index] = event
+    return by_attempt_index
+
+
+def attempt_index_from_attempt(attempt: dict[str, Any]) -> int:
+    candidate_index = attempt.get("candidate_attempts_index")
+    if isinstance(candidate_index, int) and not isinstance(candidate_index, bool):
+        return max(0, candidate_index - 1)
+    fallback = attempt.get("attempt_index")
+    if isinstance(fallback, int) and not isinstance(fallback, bool):
+        return fallback
+    return -1
+
+
+def read_packet_debug_end_event(path: Path) -> tuple[float | None, int | None, str | None]:
+    debug_events = path / "debug.events.jsonl"
+    if not debug_events.exists():
+        return None, None, None
+    elapsed_seconds: float | None = None
+    exit_status: int | None = None
+    status: str | None = None
+    try:
+        for line in debug_events.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(event, dict):
+                continue
+            if event.get("event") != "end":
+                continue
+            value = event.get("elapsed_ms")
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                elapsed_seconds = value / 1000
+            elif isinstance(value, float) and value >= 0.0:
+                elapsed_seconds = value / 1000
+            if isinstance(event.get("exit_status"), int) and not isinstance(event.get("exit_status"), bool):
+                exit_status = event.get("exit_status")
+            if isinstance(event.get("status"), str):
+                status = event.get("status")
+        return elapsed_seconds, exit_status, status
+    except Exception:
+        return None, None, None
+
+
+def read_debug_event_timing(path: Path) -> tuple[dict[int, float], dict[int, int | None], dict[int, str | None]]:
+    debug_events = path / "debug.events.jsonl"
+    if not debug_events.exists():
+        return {}, {}, {}
+    attempt_elapsed: dict[int, float] = {}
+    attempt_exit_status: dict[int, int | None] = {}
+    attempt_status: dict[int, str | None] = {}
+    try:
+        for line in debug_events.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if not isinstance(event, dict):
+                continue
+            attempt_index = event.get("attempt_index")
+            if attempt_index is None:
+                attempt_index = -1
+            if not isinstance(attempt_index, int) or isinstance(attempt_index, bool):
+                continue
+            if event.get("event") != "end":
+                continue
+            value = event.get("elapsed_ms")
+            elapsed_seconds: float | None = None
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                elapsed_seconds = value / 1000
+            elif isinstance(value, float) and value >= 0.0:
+                elapsed_seconds = value / 1000
+            if elapsed_seconds is not None:
+                attempt_elapsed[attempt_index] = elapsed_seconds
+            exit_status = event.get("exit_status")
+            if isinstance(exit_status, int) and not isinstance(exit_status, bool):
+                attempt_exit_status[attempt_index] = exit_status
+            status = event.get("status")
+            if isinstance(status, str) and status.strip():
+                attempt_status[attempt_index] = status
+    except Exception:
+        return {}, {}, {}
+    return attempt_elapsed, attempt_exit_status, attempt_status
+
+
+def is_number(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) or isinstance(value, float)
+
+
+def normalize_text_reason(value: object) -> str:
+    return str(value).strip().lower() if isinstance(value, str) else ""
+
+
+def attempt_elapsed_seconds(
+    attempt: dict[str, Any],
+    packet_elapse: float | None,
+    called_attempt_count: int,
+    *,
+    called: bool = False,
+    attempt_index: int | None = None,
+    launch_event: dict[str, Any] | None = None,
+    debug_event_elapsed: dict[int, float] | None = None,
+) -> tuple[float | None, str | None]:
+    timing = attempt.get("timing") if isinstance(attempt.get("timing"), dict) else {}
+    if timing is None:
+        timing = {}
+    elapsed = timing.get("elapsed_seconds")
+    if isinstance(elapsed, int) and not isinstance(elapsed, bool) and elapsed >= 0:
+        return float(elapsed), "attempt"
+    if isinstance(elapsed, float) and elapsed >= 0.0:
+        return elapsed, "attempt"
+    if called and isinstance(launch_event, dict):
+        launch_elapsed = launch_event.get("elapsed")
+        if isinstance(launch_elapsed, int) and not isinstance(launch_elapsed, bool) and launch_elapsed >= 0:
+            return float(launch_elapsed), "launcher_state"
+        if isinstance(launch_elapsed, float) and launch_elapsed >= 0.0:
+            return float(launch_elapsed), "launcher_state"
+        launch_elapsed_ms = launch_event.get("elapsed_ms")
+        if isinstance(launch_elapsed_ms, int) and not isinstance(launch_elapsed_ms, bool) and launch_elapsed_ms >= 0:
+            return launch_elapsed_ms / 1000, "launcher_state"
+        if isinstance(launch_elapsed_ms, float) and launch_elapsed_ms >= 0.0:
+            return launch_elapsed_ms / 1000, "launcher_state"
+
+    if called and debug_event_elapsed is not None and isinstance(attempt_index, int):
+        debug_elapsed = debug_event_elapsed.get(attempt_index)
+        if isinstance(debug_elapsed, (int, float)) and debug_elapsed >= 0:
+            return float(debug_elapsed), "debug_event"
+    timing_source = normalize_text_reason(timing.get("timing_source"))
+    if (
+        called
+        and timing_source in {"packet_debug_events", "debug.events", "debug_events", "debug"}
+        and called_attempt_count == 1
+    ):
+        if packet_elapse is not None and packet_elapse >= 0:
+            return float(packet_elapse), timing_source
+    if (
+        called
+        and timing_source == "packet_debug_events"
+        and called_attempt_count == 1
+        and isinstance(packet_elapse, (int, float))
+        and packet_elapse >= 0
+    ):
+        return float(packet_elapse), "packet_debug_events"
+    if called and called_attempt_count == 1 and isinstance(packet_elapse, (int, float)) and packet_elapse >= 0:
+        return float(packet_elapse), "packet"
+    return None, None
+
+
+def attempt_is_called(attempt: dict[str, Any]) -> bool:
+    return attempt.get("called") is True
+
+
+def attempt_provenance_level(attempt: dict[str, Any], launch_event: dict[str, Any] | None) -> str:
+    usage = attempt.get("usage")
+    if isinstance(usage, dict):
+        has_known_usage = any(
+            isinstance(usage.get(key), int) and not isinstance(usage.get(key), bool) for key in USAGE_KEYS
+        )
+    else:
+        has_known_usage = False
+    if has_known_usage:
+        return "high"
+    if launch_event is not None and isinstance(launch_event, dict):
+        return "low"
+    return "low"
+
+
+def attempt_exit_code(launch_event: dict[str, Any] | None, attempt: dict[str, Any]) -> int | None:
+    if launch_event is None:
+        return None
+    returncode = launch_event.get("returncode")
+    if isinstance(returncode, int) and not isinstance(returncode, bool):
+        return returncode
+    # Fall back to structured fields if present in debug telemetry for older artifacts.
+    if isinstance(attempt.get("return_code"), int) and not isinstance(attempt.get("return_code"), bool):
+        return attempt.get("return_code")
+    return None
+
+
+def attempt_timed_out(attempt: dict[str, Any], launch_event: dict[str, Any] | None, packet_status: str | None = None) -> bool | None:
+    if attempt.get("called") is not True:
+        return None
+    timing = attempt.get("timing") if isinstance(attempt.get("timing"), dict) else {}
+    timing_timed_out = timing.get("timed_out") if isinstance(timing, dict) else None
+    if timing_timed_out is True:
+        return True
+    if timing_timed_out is False:
+        return False
+    if launch_event is not None:
+        state = normalize_text_reason(launch_event.get("state"))
+        if state == "timeout":
+            return True
+    if packet_status == "timeout":
+        return True
+    return None
+
+
+def classify_attempt_outcome(
+    attempt: dict[str, Any],
+    launch_event: dict[str, Any] | None,
+) -> str:
+    called = attempt.get("called") is True
+    not_executed_reason = normalize_text_reason(attempt.get("not_executed_reason"))
+    state = normalize_text_reason(launch_event.get("state")) if isinstance(launch_event, dict) else ""
+    route_health = launch_event.get("route_health") if isinstance(launch_event, dict) else {}
+    dirty = False
+    if isinstance(route_health, dict):
+        dirty = route_health.get("dirty") is True
+    if attempt.get("accepted") is True:
+        return OUTCOME_KEY_PASS
+    if state in {"pass", "partial"}:
+        return OUTCOME_KEY_PASS
+
+    if not called:
+        if "manual" in not_executed_reason or "kill" in not_executed_reason:
+            return OUTCOME_KEY_MANUAL
+        if "dirty" in not_executed_reason or "fallback" in not_executed_reason:
+            return OUTCOME_KEY_NOT_CALLED
+        return OUTCOME_KEY_UNKNOWN
+
+    if launch_event is None or not isinstance(launch_event, dict):
+        timed_out = attempt_timed_out(attempt, None)
+        if timed_out is True:
+            return OUTCOME_KEY_TIMEOUT
+        return OUTCOME_KEY_UNKNOWN
+
+    failure_class = normalize_text_reason(launch_event.get("failure_class"))
+    failure_subclass = normalize_text_reason(launch_event.get("failure_subclass"))
+    stop_text = " ".join(part for part in (not_executed_reason, failure_class, failure_subclass) if part)
+    timed_out = attempt_timed_out(attempt, launch_event)
+    manual_or_kill = "manual" in stop_text or "kill" in stop_text
+    route_health = launch_event.get("route_health")
+    route_transport_disconnect = False
+    if isinstance(route_health, dict):
+        route_disconnect_count = route_health.get("transport_disconnect_count")
+        route_transport_disconnect = (
+            isinstance(route_disconnect_count, int)
+            and route_disconnect_count > 0
+    )
+
+    if failure_class in {"manual", "kill", "manual_interrupt", "manual_abort"}:
+        return OUTCOME_KEY_MANUAL
+    if timed_out is True or failure_class == "timeout":
+        return OUTCOME_KEY_TIMEOUT
+    if failure_class in {"manual", "kill", "manual_interrupt", "manual_abort"}:
+        return OUTCOME_KEY_MANUAL
+    if manual_or_kill:
+        return OUTCOME_KEY_MANUAL
+    if failure_subclass == OUTCOME_KEY_TRANSPORT or route_transport_disconnect:
+        return OUTCOME_KEY_TRANSPORT
+    if failure_class in {"schema_or_output_readback", "schema", "readback"} or (
+        "schema" in failure_class
+        or "schema" in failure_subclass
+        or "readback" in failure_subclass
+    ):
+        return OUTCOME_KEY_SCHEMA
+    if state in {"fail-dirty", "blocked"} and (dirty or launch_event.get("dirty") is True):
+        return OUTCOME_KEY_DIRTY
+    if state in {"fail-dirty", "fail-clean", "blocked", "partial", "pass"} and "dirty" in stop_text:
+        return OUTCOME_KEY_DIRTY
+    if timed_out is True or failure_class == "timeout":
+        return OUTCOME_KEY_TIMEOUT
+
+    if state == "timeout" or timed_out is True:
+        return OUTCOME_KEY_TIMEOUT
+    if state in {"blocked", "fail-clean", "fail-dirty"}:
+        return OUTCOME_KEY_UNKNOWN
+    return OUTCOME_KEY_UNKNOWN
 
 
 def discover_telemetry_files(bundle_dir: Path, *, debug: bool = False) -> list[Path]:
@@ -92,6 +420,105 @@ def read_json_object(path: Path) -> dict[str, Any] | None:
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def iso_timestamp(value: object) -> float | None:
+    if not isinstance(value, str) or not value:
+        return None
+    raw = value
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw).timestamp()
+    except Exception:
+        return None
+
+
+def iso_timestamp_str(value: object) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    raw = value
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        return datetime.fromisoformat(raw).isoformat()
+    except Exception:
+        return None
+
+
+def now_utc_iso() -> str:
+    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
+
+
+def is_synthetic_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    return value.startswith("2000-01-01T00:00:")
+
+
+def load_stale_artifact_paths(bundle_dir: Path) -> set[str]:
+    path = bundle_dir / STALE_ARTIFACTS_INDEX
+    data = read_json_object(path)
+    if not isinstance(data, dict):
+        return set()
+    entries = data.get("entries")
+    if not isinstance(entries, list):
+        return set()
+    result: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        artifact_path = entry.get("artifact_path")
+        if isinstance(artifact_path, str):
+            result.add(artifact_path)
+    return result
+
+
+def classify_telemetry_scope(relative_path: str, stale_artifact_paths: set[str]) -> str:
+    if relative_path in stale_artifact_paths:
+        return "stale_archive"
+    if "/attempts/" in relative_path:
+        return "attempt_history"
+    return "current"
+
+
+def is_cache_or_temp_artifact(path: Path) -> bool:
+    as_posix = path.as_posix()
+    if any(root in as_posix for root in KNOWN_CACHE_ROOTS):
+        if any(cache_file in as_posix for cache_file in KNOWN_CACHE_FILES):
+            return True
+        if any(as_posix.endswith(ext) for ext in KNOWN_CACHE_EXTENSIONS):
+            return True
+    return False
+
+
+def summarize_runtime_cache_artifacts(bundle_dir: Path) -> dict[str, Any]:
+    artifact_entries: list[dict[str, Any]] = []
+    total_bytes = 0
+    total_count = 0
+    for path in sorted(bundle_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        if not is_cache_or_temp_artifact(path):
+            continue
+        sha = file_sha256(path)
+        size = file_size(path)
+        if size is not None:
+            total_bytes += size
+        total_count += 1
+        artifact_entries.append(
+            {
+                "path": path.relative_to(bundle_dir).as_posix(),
+                "size_bytes": size,
+                "sha256": sha,
+            }
+        )
+    return {
+        "cache_artifact_count": total_count,
+        "cache_artifact_bytes": total_bytes,
+        "artifacts": artifact_entries,
+        "summary_note": "Runtime cache and temp artifacts are summarized by checksum/size and excluded from retained evidence counts.",
+    }
 
 
 def compact_artifact_ref(bundle_dir: Path, path: Path) -> dict[str, Any]:
@@ -249,6 +676,7 @@ def iter_launcher_state_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
 
 def iter_debug_telemetry_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
+    stale_artifact_paths = load_stale_artifact_paths(bundle_dir)
     for path in discover_telemetry_files(bundle_dir, debug=True):
         data = read_json_object(path)
         if data is None:
@@ -263,11 +691,13 @@ def iter_debug_telemetry_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
             continue
         packet_id = data.get("packet_id")
         role = data.get("role")
+        scope = classify_telemetry_scope(path.relative_to(bundle_dir).as_posix(), stale_artifact_paths)
         packet_event = {
             "event_type": "packet_telemetry",
             "source": rel_path(bundle_dir, path),
             "packet_id": packet_id,
             "role": role,
+            "scope": scope,
             "route_class": data.get("route_class"),
             "prompt_artifact": data.get("prompt_artifact"),
             "output_artifact": data.get("output_artifact"),
@@ -277,16 +707,57 @@ def iter_debug_telemetry_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
         append_trace_event(events, {key: value for key, value in packet_event.items() if value is not None})
         model_usage = data.get("model_usage") if isinstance(data.get("model_usage"), dict) else {}
         attempts = model_usage.get("attempts") if isinstance(model_usage.get("attempts"), list) else []
-        for index, attempt in enumerate(attempts):
+        launch_events = read_attempt_launch_events(path.parent / "launcher-state.json")
+        debug_event_elapsed, debug_event_exit_status, debug_event_status = read_debug_event_timing(path.parent)
+        packet_elapsed_seconds, packet_exit_status, packet_status = read_packet_debug_end_event(path.parent)
+        if packet_exit_status is None:
+            packet_exit_status = debug_event_exit_status.get(-1)
+        if packet_status is None:
+            packet_status = debug_event_status.get(-1)
+        called_attempt_count = len([item for item in attempts if isinstance(item, dict) and item.get("called") is True])
+        for attempt in attempts:
             if not isinstance(attempt, dict):
                 continue
-            timing = attempt.get("timing") if isinstance(attempt.get("timing"), dict) else {}
+            attempt_index = attempt_index_from_attempt(attempt)
+            launch_event = launch_events.get(attempt_index)
+            outcome = classify_attempt_outcome(attempt, launch_event)
+            provenance = attempt_provenance_level(attempt, launch_event)
+            exit_code = attempt_exit_code(launch_event, attempt)
+            if exit_code is None and packet_exit_status is not None:
+                exit_code = packet_exit_status
+            elapsed_seconds, elapsed_source = attempt_elapsed_seconds(
+                attempt,
+                packet_elapsed_seconds,
+                called_attempt_count,
+                called=attempt.get("called") is True,
+                attempt_index=attempt_index,
+                launch_event=launch_event,
+                debug_event_elapsed=debug_event_elapsed,
+            )
+            timed_out = attempt_timed_out(attempt, launch_event, packet_status)
+            raw_timed_out = timed_out
+            if outcome == OUTCOME_KEY_PASS and timed_out is True:
+                timed_out = False
+            stop_reason = normalize_text_reason(attempt.get("not_executed_reason"))
+            if not stop_reason and isinstance(launch_event, dict):
+                stop_reason = normalize_text_reason(launch_event.get("failure_subclass"))
+            if not stop_reason:
+                if timed_out is True:
+                    stop_reason = OUTCOME_KEY_TIMEOUT
+                elif launch_event is not None and normalize_text_reason(launch_event.get("state")):
+                    stop_reason = normalize_text_reason(launch_event.get("state"))
+                else:
+                    stop_reason = None
+            if timed_out is None and isinstance(launch_event, dict) and launch_event.get("state") == "timeout":
+                timed_out = True
+            if elapsed_source is None:
+                elapsed_source = "model_usage"
             trace = {
                 "event_type": "model_attempt",
                 "source": rel_path(bundle_dir, path),
                 "packet_id": packet_id,
                 "role": role,
-                "attempt_index": index,
+                "attempt_index": attempt_index,
                 "alias": attempt.get("alias"),
                 "provider": attempt.get("provider"),
                 "model": attempt.get("model"),
@@ -294,9 +765,18 @@ def iter_debug_telemetry_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
                 "timeout_seconds": attempt.get("timeout_seconds"),
                 "called": attempt.get("called"),
                 "accepted": attempt.get("accepted"),
+                "outcome": outcome,
+                "stop_reason": stop_reason or None,
+                "provenance_level": provenance,
+                "exit_code": exit_code,
+                "stdout_bytes": attempt.get("stdout_bytes"),
+                "stderr_bytes": attempt.get("stderr_bytes"),
                 "usage": attempt.get("usage") if isinstance(attempt.get("usage"), dict) else None,
-                "timed_out": timing.get("timed_out"),
-                "elapsed_seconds": timing.get("elapsed_seconds"),
+                "timed_out": timed_out,
+                "raw_timed_out": raw_timed_out,
+                "elapsed_seconds": elapsed_seconds,
+                "elapsed_seconds_source": elapsed_source,
+                "scope": scope,
             }
             append_trace_event(events, {key: value for key, value in trace.items() if value is not None})
     return events
@@ -577,18 +1057,65 @@ def preflight_pipeline_summary(bundle_dir: Path) -> dict[str, Any]:
 
 def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
     events: list[dict[str, Any]] = []
-    for producer in (
+    for logical_seq, producer in enumerate(
+        (
         iter_preflight_pipeline_trace_events,
         iter_scheduler_trace_events,
         iter_debug_event_trace_events,
         iter_launcher_state_trace_events,
         iter_debug_telemetry_trace_events,
         iter_terminal_artifact_trace_events,
+        ),
+        start=1,
     ):
-        events.extend(producer(bundle_dir))
+        producer_events = producer(bundle_dir)
+        for event in producer_events:
+            event["logical_seq"] = logical_seq * 1_000_000 + event.get("logical_seq", 0)
+            events.append(event)
 
-    def sort_key(event: dict[str, Any]) -> tuple[str, str, int, int]:
-        timestamp = event.get("timestamp") if isinstance(event.get("timestamp"), str) else ""
+    recorded_at = now_utc_iso()
+
+    def assign_wall_clock(event: dict[str, Any]) -> str | None:
+        if isinstance(event.get("event_wall_clock"), str):
+            return event.get("event_wall_clock")
+        timestamp = event.get("timestamp")
+        wall_clock = event.get("wall_clock_timestamp")
+        source = event.get("source")
+        if not isinstance(source, str):
+            source = None
+        source_wall_clock = None
+        if source:
+            try:
+                file_path = bundle_dir / source
+                if file_path.exists():
+                    source_wall_clock = datetime.fromtimestamp(file_path.stat().st_mtime, tz=UTC).isoformat().replace("+00:00", "Z")
+            except Exception:
+                source_wall_clock = None
+        event_wall_clock = iso_timestamp_str(timestamp) or iso_timestamp_str(wall_clock) or source_wall_clock
+        if event_wall_clock is not None:
+            event["event_wall_clock"] = event_wall_clock
+        if event.get("backfilled") is None:
+            has_timestamp = isinstance(timestamp, str) or isinstance(wall_clock, str)
+            if has_timestamp:
+                event["backfilled"] = is_synthetic_timestamp(timestamp)
+            else:
+                event["backfilled"] = source_wall_clock is not None
+        event["recorded_at"] = recorded_at
+        event["event_wall_clock"] = event_wall_clock
+        return event_wall_clock
+
+    for event in events:
+        if event.get("event_wall_clock") is not None:
+            continue
+        assign_wall_clock(event)
+
+    def sort_key(event: dict[str, Any]) -> tuple[float, int, str, int]:
+        event_wall_clock = event.get("event_wall_clock")
+        if isinstance(event_wall_clock, str):
+            wall_clock_sort = iso_timestamp(event_wall_clock) or 0.0
+        else:
+            wall_clock_sort = 0.0
+        backfilled = 1 if event.get("backfilled") is True else 0
         source = event.get("source") if isinstance(event.get("source"), str) else ""
         source_seq = event.get("scheduler_seq") or event.get("state_seq") or event.get("line") or event.get("attempt_index") or 0
         if not isinstance(source_seq, int) or isinstance(source_seq, bool):
@@ -604,7 +1131,7 @@ def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
             "state_change": 70,
             "trace_defect": 90,
         }.get(str(event.get("event_type")), 80)
-        return (timestamp, source, type_order, source_seq)
+        return (wall_clock_sort, backfilled, type_order, source_seq, source)
 
     ordered = sorted(events, key=sort_key)
     for seq, event in enumerate(ordered, start=1):
@@ -645,6 +1172,25 @@ def ensure_bucket(groups: dict[str, dict[str, Any]], key: str) -> dict[str, Any]
     return groups[key]
 
 
+def zero_scope_totals() -> dict[str, Any]:
+    return {
+        "packet_count": 0,
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "accepted_attempts": 0,
+        "prompt_chars": 0,
+        "prompt_bytes": 0,
+        "output_chars": 0,
+        "output_bytes": 0,
+        "event_log_chars": 0,
+        "event_log_bytes": 0,
+        "model_prompt_chars_estimate": 0,
+        "model_prompt_bytes_estimate": 0,
+        "attempts_with_known_tokens": 0,
+        "known_usage": zero_usage(),
+    }
+
+
 def zero_premium_bucket() -> dict[str, Any]:
     return {
         "attempts_declared": 0,
@@ -682,7 +1228,8 @@ def compact_model_bucket(bucket: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def attempt_group_key(role: str, attempt: dict[str, Any]) -> str:
+def attempt_group_key(role: str, attempt: dict[str, Any], scope: str = TRACE_SCOPE_ALL) -> str:
+    normalized_scope = scope or TRACE_SCOPE_ALL
     return "\u001f".join(
         [
             role,
@@ -690,18 +1237,23 @@ def attempt_group_key(role: str, attempt: dict[str, Any]) -> str:
             str(attempt.get("model") or ""),
             str(attempt.get("effort") or ""),
             str(attempt.get("alias") or ""),
+            normalized_scope,
         ]
     )
 
 
 def attempt_group_row(key: str, bucket: dict[str, Any]) -> dict[str, Any]:
-    role, provider, model, effort, alias = key.split("\u001f")
+    parts = key.split("\u001f")
+    if len(parts) < 6:
+        parts.extend([TRACE_SCOPE_ALL] * (6 - len(parts)))
+    role, provider, model, effort, alias, scope = parts[:6]
     row = {
         "role": role,
         "provider": provider,
         "model": model,
         "effort": effort or None,
         "alias": alias,
+        "scope": scope,
     }
     row.update(compact_bucket(bucket))
     return row
@@ -745,6 +1297,7 @@ def token_pressure_warning(
 
 def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
     files = discover_telemetry_files(bundle_dir)
+    stale_artifact_paths = load_stale_artifact_paths(bundle_dir)
     totals = {
         "packet_count": 0,
         "attempts_declared": 0,
@@ -781,9 +1334,26 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
     packets = []
     defects = []
     token_pressure_warnings = []
+    generic_cli = {
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "accepted_attempts": 0,
+        "provenance_levels": {"high": 0, "low": 0},
+        "exit_code_counts": {},
+        "stdout_bytes_total": 0,
+        "stderr_bytes_total": 0,
+        "attempts_with_stdout_bytes": 0,
+        "attempts_with_stderr_bytes": 0,
+        "attempts_with_exit_code": 0,
+    }
+    scope_totals: dict[str, dict[str, Any]] = {
+        "all": zero_scope_totals(),
+        **{scope: zero_scope_totals() for scope in SCOPE_NAMES},
+    }
 
     for path in files:
         rel = path.relative_to(bundle_dir).as_posix()
+        scope = classify_telemetry_scope(rel, stale_artifact_paths)
         try:
             data = load_json(path)
         except Exception as exc:  # noqa: BLE001
@@ -792,6 +1362,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
         role = data.get("role") if isinstance(data.get("role"), str) else "unknown"
         packet_id = data.get("packet_id") if isinstance(data.get("packet_id"), str) else path.parent.name
         attempts = data.get("attempts") if isinstance(data.get("attempts"), list) else []
+        launch_events = read_attempt_launch_events(path.parent / "launcher-state.json")
         called_attempts = [item for item in attempts if isinstance(item, dict) and item.get("called") is True]
         accepted_attempts = [item for item in attempts if isinstance(item, dict) and item.get("accepted") is True]
         fallback_count += max(0, len(called_attempts) - 1)
@@ -799,7 +1370,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
         packet_prompt_bytes = data.get("prompt_bytes") if isinstance(data.get("prompt_bytes"), int) else 0
         route_class = data.get("route_class") if isinstance(data.get("route_class"), str) else None
 
-        for bucket in (totals, ensure_bucket(by_role, role)):
+        for bucket in (totals, ensure_bucket(by_role, role), scope_totals["all"], scope_totals[scope]):
             bucket["packet_count"] += 1
             bucket["attempts_declared"] += len(attempts)
             bucket["attempts_called"] += len(called_attempts)
@@ -823,7 +1394,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
             declared_aliases[alias] = declared_aliases.get(alias, 0) + 1
             if alias in PREMIUM_ALIASES:
                 premium_aliases_declared[alias] = premium_aliases_declared.get(alias, 0) + 1
-            key = attempt_group_key(role, attempt)
+            key = attempt_group_key(role, attempt, scope)
             bucket = ensure_bucket(by_attempt, key)
             bucket["packet_count"] += 1
             bucket["attempts_declared"] += 1
@@ -842,21 +1413,48 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
                     for key in USAGE_KEYS
                 ):
                     totals["attempts_with_known_tokens"] += 1
+                    scope_totals["all"]["attempts_with_known_tokens"] += 1
+                    scope_totals[scope]["attempts_with_known_tokens"] += 1
             if attempt.get("accepted") is True:
                 accepted_aliases[alias] = accepted_aliases.get(alias, 0) + 1
                 if alias in PREMIUM_ALIASES:
                     premium_aliases_accepted[alias] = premium_aliases_accepted.get(alias, 0) + 1
                 bucket["accepted_attempts"] += 1
+            called = attempt.get("called") is True
+            attempt_index = attempt_index_from_attempt(attempt)
+            launch_event = launch_events.get(attempt_index)
+            provenance = attempt_provenance_level(attempt, launch_event)
             if alias in MINI_SPARK_ALIASES:
                 alias_bucket = mini_spark_usage[alias]
                 alias_bucket["attempts_declared"] += 1
-                if attempt.get("called") is True:
+                if called:
                     alias_bucket["attempts_called"] += 1
                 if attempt.get("accepted") is True:
                     alias_bucket["accepted_attempts"] += 1
                 add_usage(alias_bucket["known_usage"], attempt.get("usage"))
-            if alias in PREMIUM_ALIASES and attempt.get("called") is not True:
+            if alias in PREMIUM_ALIASES and called is not True:
                 premium_aliases_avoided[alias] = premium_aliases_avoided.get(alias, 0) + 1
+            if attempt.get("provider") == "generic-cli":
+                generic_cli["attempts_declared"] += 1
+                if called:
+                    generic_cli["attempts_called"] += 1
+                if attempt.get("accepted") is True:
+                    generic_cli["accepted_attempts"] += 1
+                if called:
+                    stdout_bytes = attempt.get("stdout_bytes")
+                    if isinstance(stdout_bytes, int) and not isinstance(stdout_bytes, bool):
+                        generic_cli["stdout_bytes_total"] += stdout_bytes
+                        generic_cli["attempts_with_stdout_bytes"] += 1
+                    stderr_bytes = attempt.get("stderr_bytes")
+                    if isinstance(stderr_bytes, int) and not isinstance(stderr_bytes, bool):
+                        generic_cli["stderr_bytes_total"] += stderr_bytes
+                        generic_cli["attempts_with_stderr_bytes"] += 1
+                    exit_code = attempt_exit_code(launch_event, attempt)
+                    if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                        key = str(exit_code)
+                        generic_cli["exit_code_counts"][key] = generic_cli["exit_code_counts"].get(key, 0) + 1
+                        generic_cli["attempts_with_exit_code"] += 1
+                generic_cli["provenance_levels"][provenance] = generic_cli["provenance_levels"].get(provenance, 0) + 1
             for log_group in ("event_logs", "probe_logs"):
                 logs = attempt.get(log_group)
                 if isinstance(logs, list):
@@ -900,6 +1498,11 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
                     "not_executed_reason": attempt.get("not_executed_reason"),
                     "called": attempt.get("called") is True,
                     "accepted": attempt.get("accepted") is True,
+                    "scope": scope,
+                    "provenance_level": provenance,
+                    "stdout_bytes": attempt.get("stdout_bytes"),
+                    "stderr_bytes": attempt.get("stderr_bytes"),
+                    "exit_code": attempt_exit_code(launch_event, attempt),
                     "known_usage": attempt.get("usage") if isinstance(attempt.get("usage"), dict) else None,
                 }
             )
@@ -907,6 +1510,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
         packets.append(
             {
                 "path": rel,
+                "scope": scope,
                 "packet_id": packet_id,
                 "role": role,
                 "route_class": route_class,
@@ -978,8 +1582,13 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
         "bundle_dir": bundle_dir.as_posix(),
         "telemetry_files": [path.relative_to(bundle_dir).as_posix() for path in files],
         "telemetry_count": len(files),
+        "telemetry_files_scoped": [
+            {"path": path.relative_to(bundle_dir).as_posix(), "scope": classify_telemetry_scope(path.relative_to(bundle_dir).as_posix(), stale_artifact_paths)}
+            for path in files
+        ],
         "defects": defects,
         "totals": compact_bucket(totals),
+        "scopes": {key: compact_bucket(scope_totals[key]) for key in sorted(scope_totals)},
         "by_role": {key: compact_bucket(by_role[key]) for key in sorted(by_role)},
         "by_provider_model_alias": [
             attempt_group_row(key, by_attempt[key])
@@ -993,6 +1602,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
             for key, bucket in premium_usage.items()
         },
         "cost_summary": cost_summary,
+        "runtime_cache_artifacts": summarize_runtime_cache_artifacts(bundle_dir),
         "token_pressure": {
             "approx_chars_per_token": APPROX_CHARS_PER_TOKEN,
             "input_warn_min": TOKEN_PRESSURE_INPUT_WARN_MIN,
@@ -1002,6 +1612,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
                 key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]), str(item["alias"])),
             ),
         },
+        "generic_cli": generic_cli,
         "packets": sorted(packets, key=lambda item: (str(item["role"]), str(item["packet_id"]), str(item["path"]))),
     }
 
@@ -1010,6 +1621,7 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
     files = discover_telemetry_files(bundle_dir, debug=True)
     trace_events = build_run_trace(bundle_dir)
     preflight = preflight_pipeline_summary(bundle_dir)
+    stale_artifact_paths = load_stale_artifact_paths(bundle_dir)
     text_totals = {
         "packet_count": 0,
         "prompt_chars": 0,
@@ -1055,9 +1667,24 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
     drift_packet_ids: list[str] = []
     defects = []
     packet_attempts: list[dict[str, Any]] = []
+    outcome_counts: dict[str, int] = {key: 0 for key in OUTCOME_BUCKETS}
+    provenance_counts: dict[str, int] = {}
+    generic_cli = {
+        "attempts_declared": 0,
+        "attempts_called": 0,
+        "accepted_attempts": 0,
+        "provenance_levels": {"high": 0, "low": 0},
+        "exit_code_counts": {},
+        "stdout_bytes_total": 0,
+        "stderr_bytes_total": 0,
+        "attempts_with_stdout_bytes": 0,
+        "attempts_with_stderr_bytes": 0,
+        "attempts_with_exit_code": 0,
+    }
 
     for path in files:
         rel = path.relative_to(bundle_dir).as_posix()
+        scope = classify_telemetry_scope(rel, stale_artifact_paths)
         try:
             data = load_json(path)
         except Exception as exc:  # noqa: BLE001
@@ -1080,10 +1707,7 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
                 if not isinstance(event, dict):
                     continue
                 time_totals["debug_events"] += 1
-                elapsed_ms = event.get("elapsed_ms")
-                if isinstance(elapsed_ms, int) and not isinstance(elapsed_ms, bool) and elapsed_ms >= 0:
-                    time_totals["elapsed_seconds_sum"] += elapsed_ms / 1000
-                    time_totals["elapsed_seconds_count"] += 1
+        debug_event_elapsed, debug_event_exit_status, debug_event_status = read_debug_event_timing(path.parent)
         role = data.get("role") if isinstance(data.get("role"), str) else "unknown"
         packet_id = data.get("packet_id") if isinstance(data.get("packet_id"), str) else path.parent.name
 
@@ -1092,6 +1716,13 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
         success_metrics = data.get("success_metrics") if isinstance(data.get("success_metrics"), dict) else {}
         determinism_payload = data.get("determinism") if isinstance(data.get("determinism"), dict) else {}
         attempts = model_usage.get("attempts") if isinstance(model_usage.get("attempts"), list) else []
+        launch_events = read_attempt_launch_events(path.parent / "launcher-state.json")
+        packet_elapsed_seconds, packet_exit_status, packet_status = read_packet_debug_end_event(path.parent)
+        if packet_exit_status is None:
+            packet_exit_status = debug_event_exit_status.get(-1)
+        if packet_status is None:
+            packet_status = debug_event_status.get(-1)
+        called_attempt_count = sum(1 for item in attempts if isinstance(item, dict) and item.get("called") is True)
 
         prompt_chars = text_metrics.get("prompt_chars")
         prompt_bytes = text_metrics.get("prompt_bytes")
@@ -1168,8 +1799,6 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             if called:
                 role_bucket["attempts_called"] += 1
                 alias_bucket["attempts_called"] += 1
-            else:
-                time_totals["attempts_missing_timing"] += 1
             if item.get("accepted") is True:
                 role_bucket["accepted_attempts"] += 1
                 alias_bucket["accepted_attempts"] += 1
@@ -1180,25 +1809,57 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
                 for key in USAGE_KEYS
             ):
                 success["attempts_with_known_tokens"] += 1
-
-            timing = item.get("timing") if isinstance(item.get("timing"), dict) else None
-            if called and isinstance(timing, dict):
-                elapsed = timing.get("elapsed_seconds")
-                if isinstance(elapsed, int) and elapsed >= 0 and not isinstance(elapsed, bool):
-                    time_totals["elapsed_seconds_sum"] += elapsed
-                    time_totals["elapsed_seconds_count"] += 1
-                elif isinstance(elapsed, float) and elapsed >= 0.0:
-                    time_totals["elapsed_seconds_sum"] += elapsed
-                    time_totals["elapsed_seconds_count"] += 1
-                else:
+            attempt_index = attempt_index_from_attempt(item)
+            launch_event = launch_events.get(attempt_index)
+            outcome = classify_attempt_outcome(item, launch_event)
+            outcome_counts[outcome] = outcome_counts.get(outcome, 0) + 1
+            provenance = attempt_provenance_level(item, launch_event)
+            provenance_counts[provenance] = provenance_counts.get(provenance, 0) + 1
+            if called:
+                elapsed, _elapsed_source = attempt_elapsed_seconds(
+                    item,
+                    packet_elapsed_seconds,
+                    called_attempt_count,
+                    called=called,
+                    attempt_index=attempt_index,
+                    launch_event=launch_event,
+                    debug_event_elapsed=debug_event_elapsed,
+                )
+                if elapsed is None:
                     time_totals["attempts_missing_timing"] += 1
-                if isinstance(elapsed, int) or isinstance(elapsed, float):
+                else:
+                    time_totals["elapsed_seconds_sum"] += elapsed
+                    time_totals["elapsed_seconds_count"] += 1
                     time_totals["attempts_with_timing"] += 1
-                timed_out = timing.get("timed_out")
+                timed_out = attempt_timed_out(item, launch_event, packet_status)
+                if outcome == OUTCOME_KEY_PASS and timed_out is True:
+                    timed_out = False
                 if isinstance(timed_out, bool):
                     time_totals["timed_out_known"] += 1
                     if timed_out:
                         time_totals["timed_out_attempts"] += 1
+            if item.get("provider") == "generic-cli":
+                generic_cli["attempts_declared"] += 1
+                if called:
+                    generic_cli["attempts_called"] += 1
+                if item.get("accepted") is True:
+                    generic_cli["accepted_attempts"] += 1
+                generic_cli["provenance_levels"][provenance] = generic_cli["provenance_levels"].get(provenance, 0) + 1
+                exit_code = attempt_exit_code(launch_event, item)
+                if exit_code is None:
+                    exit_code = packet_exit_status if attempt_index == -1 else None
+                if isinstance(exit_code, int) and not isinstance(exit_code, bool):
+                    exit_code_key = str(exit_code)
+                    generic_cli["exit_code_counts"][exit_code_key] = generic_cli["exit_code_counts"].get(exit_code_key, 0) + 1
+                    generic_cli["attempts_with_exit_code"] += 1
+                stdout_bytes = item.get("stdout_bytes")
+                if isinstance(stdout_bytes, int) and not isinstance(stdout_bytes, bool) and stdout_bytes >= 0:
+                    generic_cli["stdout_bytes_total"] += stdout_bytes
+                    generic_cli["attempts_with_stdout_bytes"] += 1
+                stderr_bytes = item.get("stderr_bytes")
+                if isinstance(stderr_bytes, int) and not isinstance(stderr_bytes, bool) and stderr_bytes >= 0:
+                    generic_cli["stderr_bytes_total"] += stderr_bytes
+                    generic_cli["attempts_with_stderr_bytes"] += 1
 
         packet_artifact_hashes: dict[str, set[str]] = {}
         artifacts = determinism_payload.get("artifacts") if isinstance(determinism_payload.get("artifacts"), list) else []
@@ -1225,6 +1886,7 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             {
                 "path": rel,
                 "packet_id": packet_id,
+                "scope": scope,
                 "role": role,
                 "accepted_alias": success_metrics.get("accepted_alias"),
                 "attempts_declared": attempts_declared,
@@ -1260,6 +1922,13 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
         "bundle_dir": bundle_dir.as_posix(),
         "telemetry_files": [path.relative_to(bundle_dir).as_posix() for path in files],
         "telemetry_count": len(files),
+        "telemetry_files_scoped": [
+            {
+                "path": path.relative_to(bundle_dir).as_posix(),
+                "scope": classify_telemetry_scope(path.relative_to(bundle_dir).as_posix(), stale_artifact_paths),
+            }
+            for path in files
+        ],
         "defects": defects,
         "model_usage": {
             "totals": compact_usage(model_totals),
@@ -1301,6 +1970,13 @@ def summarize_debug(bundle_dir: Path) -> dict[str, Any]:
             "preflight_elapsed_ms": time_totals["preflight_elapsed_ms"],
             "preflight_failed_phase_count": time_totals["preflight_failed_phase_count"],
         },
+        "outcome_metrics": {
+            "attempt_outcomes": dict(sorted(outcome_counts.items())),
+            "provenance_levels": dict(sorted(provenance_counts.items())),
+            "called_attempts_excluded_from_timeout_when_false": True,
+        },
+        "generic_cli": generic_cli,
+        "runtime_cache_artifacts": summarize_runtime_cache_artifacts(bundle_dir),
         "preflight_pipeline": preflight,
         "determinism": {
             "packet_count": text_totals["packet_count"],

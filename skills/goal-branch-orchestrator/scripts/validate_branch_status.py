@@ -156,6 +156,56 @@ def expected_review_model_policy(defects: list[str], manifest: object, manifest_
     return CONTRACT.REVIEW_MODEL_POLICY
 
 
+def validate_reviewer_policy_tiers(defects: list[str], policy: dict, path: str, manifest: object) -> None:
+    routes = policy.get("routes")
+    if not isinstance(routes, dict):
+        defect(defects, f"{path}.routes", "must be an object")
+        return
+    normalized: dict[str, tuple[str, ...]] = {}
+    for tier in CONTRACT.REVIEW_ROUTE_TIERS:
+        value = routes.get(tier)
+        if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
+            defect(defects, f"{path}.routes.{tier}", "must be a non-empty string array")
+            continue
+        normalized[tier] = tuple(value)
+    if set(normalized) != set(CONTRACT.REVIEW_ROUTE_TIERS):
+        return
+    model_roles: list[str] = []
+    manifest_root = manifest if isinstance(manifest, dict) else {}
+    models = manifest_root.get("models")
+    if isinstance(models, dict):
+        model_roles = [key for key in models if isinstance(key, str)]
+    for policy_key, route_key in (
+        ("worker_model_policy", "allowed_routes"),
+        ("lite_model_policy", "default_ladder"),
+        ("amender_model_policy", "allowed_routes"),
+    ):
+        policy_value = manifest_root.get(policy_key)
+        if not isinstance(policy_value, dict):
+            continue
+        values = policy_value.get(route_key)
+        if isinstance(values, list):
+            model_roles.extend(item for item in values if isinstance(item, str) and item.strip())
+    for route in normalized.values():
+        model_roles.extend(route)
+    distinct_roles = set(model_roles)
+    if len(distinct_roles) > 1 and normalized["light"] == normalized["standard"] == normalized["heavy"]:
+        defect(
+            defects,
+            f"{path}.routes",
+            "light, standard, and heavy reviewer routes must not all be identical when multiple model roles are configured",
+        )
+    heavy_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5")
+    cheap_available = any(
+        not any(marker in alias.lower() for marker in heavy_markers)
+        for alias in distinct_roles
+    )
+    if len(distinct_roles) > 1 and cheap_available and normalized["light"]:
+        light = normalized["light"]
+        if all(any(marker in alias.lower() for marker in heavy_markers) for alias in light):
+            defect(defects, f"{path}.routes.light", "must use a cheaper reviewer route when a non-heavy configured model role exists")
+
+
 def path_is_owned(path: str, owned_paths: list[str]) -> bool:
     for owned in owned_paths:
         if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
@@ -403,6 +453,7 @@ def validate_reviewer_route_artifact(
         defect(defects, f"{path}.tier", f"must be one of {list(CONTRACT.REVIEW_ROUTE_TIERS)}")
     selected = require_string_list(defects, route.get("selected_ladder"), f"{path}.selected_ladder", min_items=1)
     policy = expected_review_model_policy(defects, manifest, manifest_path)
+    validate_reviewer_policy_tiers(defects, policy, "manifest.review_model_policy", manifest)
     routes = policy.get("routes") if isinstance(policy.get("routes"), dict) else {}
     expected = routes.get(str(tier)) if tier in CONTRACT.REVIEW_ROUTE_TIERS and isinstance(routes.get(str(tier)), list) else []
     if route.get("policy_routes") != routes:
@@ -1011,6 +1062,27 @@ def discovered_attempt_terminal_paths(bundle_dir: Path | None, packet_root: str)
     return paths
 
 
+def diagnostic_pre_review_input_paths(branch_entry: dict, branch_id: str, *, bundle_dir: Path | None = None) -> list[str]:
+    paths: list[str] = []
+    work_items = branch_entry.get("work_items")
+    if not isinstance(work_items, list):
+        return paths
+    for item in work_items:
+        if not isinstance(item, dict):
+            continue
+        packet_id = item.get("packet_id")
+        if not isinstance(packet_id, str) or not packet_id.strip():
+            item_id = item.get("id")
+            packet_id = f"{branch_id}-{item_id}" if isinstance(item_id, str) and item_id.strip() else ""
+        if not packet_id:
+            continue
+        worker_type = item.get("worker_type", "worker")
+        role = worker_type if isinstance(worker_type, str) else "worker"
+        packet_root = packet_artifact_root(role, packet_id)
+        paths.extend(discovered_attempt_terminal_paths(bundle_dir, packet_root))
+    return paths
+
+
 def required_pre_review_input_paths(branch_entry: dict, branch_id: str, *, bundle_dir: Path | None = None) -> list[str]:
     paths = [
         "job.manifest.json",
@@ -1044,7 +1116,6 @@ def required_pre_review_input_paths(branch_entry: dict, branch_id: str, *, bundl
                 paths.append(f"workers/{packet_id}/route.json")
                 paths.append(f"workers/{packet_id}/telemetry.json")
             paths.extend(f"{packet_root}/{name}" for name in PACKET_TERMINAL_INPUT_NAMES)
-            paths.extend(discovered_attempt_terminal_paths(bundle_dir, packet_root))
     return [path for path in paths if isinstance(path, str) and path.strip()]
 
 
@@ -1493,6 +1564,12 @@ def validate_review_artifact(
     if expected_verdict != "missing" and verdict != expected_verdict:
         defect(defects, f"{path}.verdict", "must match branch review_status")
     require_string_list(defects, data.get("findings"), f"{path}.findings")
+    if "finding_classes" in data:
+        finding_classes = require_string_list(defects, data.get("finding_classes"), f"{path}.finding_classes")
+        allowed_finding_classes = {"project_bug", "orchestration_bug", "verification_gap", "no_issue"}
+        for index, item in enumerate(finding_classes):
+            if item not in allowed_finding_classes:
+                defect(defects, f"{path}.finding_classes[{index}]", f"must be one of {sorted(allowed_finding_classes)}")
     validate_base_range_diff_check(defects, data.get("commands_run"), f"{path}.commands_run", manifest)
     verification_gaps = require_string_list(defects, data.get("verification_gaps"), f"{path}.verification_gaps")
     if verdict == "mergeable" and verification_gaps:

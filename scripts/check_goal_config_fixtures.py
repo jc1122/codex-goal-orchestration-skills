@@ -315,6 +315,10 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
         manifest["review_model_policy"]["routes"]["standard"] == ["demanding_agent"],
         "manifest reviewer policy should come from goal config",
     )
+    require(
+        manifest["review_model_policy"]["routes"]["light"] == ["lite_agent"],
+        "manifest light reviewer policy should use the configured lite route",
+    )
     route_catalog = json.loads(
         run(
             [

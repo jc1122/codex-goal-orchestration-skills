@@ -39,6 +39,27 @@ CACHE_PATH_SUFFIXES = (
     ".pyo",
     ".egg-info",
 )
+PACKET_CACHE_PATH_PARTS = (
+    ".runtime-cache",
+    ".cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "xdg-cache",
+)
+KNOWN_PACKET_CACHE_FILES = (
+    "unleash-repo-schema-v1-codeium-language-server.json",
+)
+KNOWN_PACKET_CACHE_ROOT_NAMES = (
+    ".runtime-cache",
+    ".cache",
+    "xdg-cache",
+    ".pytest_cache",
+    ".ruff_cache",
+)
+KNOWN_PACKET_CACHE_RELATIVE = (
+    "tmp",
+    "lock",
+)
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -133,7 +154,110 @@ def clear_invalid_output_for_fallback(output_path: Path) -> None:
     remove_if_exists(output_path)
 
 
-def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, Any]]) -> None:
+def packet_cache_retention_requested(config: dict[str, Any]) -> bool:
+    return (
+        isinstance(config.get("debug_events_name"), str)
+        and bool(config.get("debug_events_name").strip())
+        and isinstance(config.get("telemetry_debug_name"), str)
+        and bool(config.get("telemetry_debug_name").strip())
+    )
+
+
+def _is_packet_cache_candidate(path: Path) -> bool:
+    if not path.exists():
+        return False
+    parts = set(path.parts)
+    if parts.intersection(PACKET_CACHE_PATH_PARTS):
+        return True
+    if path.name in KNOWN_PACKET_CACHE_FILES:
+        return True
+    parent = path.parent.name if len(path.parts) > 1 else ""
+    return parent in {"tmp", "lock"} and path.suffix == ".json" and path.name in KNOWN_PACKET_CACHE_FILES
+
+
+def packet_runtime_cache_candidates(packet_dir: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for candidate in sorted(packet_dir.rglob("*")):
+        if candidate == packet_dir:
+            continue
+        if not candidate.is_file() and not candidate.is_dir():
+            continue
+        if _is_packet_cache_candidate(candidate):
+            candidates.append(candidate)
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        root = candidate
+        rel_candidate = candidate.relative_to(packet_dir)
+        for index, part in enumerate(rel_candidate.parts):
+            if part in KNOWN_PACKET_CACHE_ROOT_NAMES:
+                root = packet_dir / Path(*rel_candidate.parts[: index + 1])
+                break
+        if root == candidate and rel_candidate.parts:
+            for index in range(len(rel_candidate.parts) - 1, 0, -1):
+                part = rel_candidate.parts[index]
+                parent = rel_candidate.parts[index - 1]
+                if part in KNOWN_PACKET_CACHE_RELATIVE and parent in KNOWN_PACKET_CACHE_ROOT_NAMES:
+                    root = packet_dir / Path(*rel_candidate.parts[:index + 1])
+                    break
+        if root.is_relative_to(packet_dir):
+            if root in seen:
+                continue
+            seen.add(root)
+            deduped.append(root)
+    return sorted(deduped)
+
+
+def cleanup_packet_runtime_cache(packet_dir: Path, *, keep: bool = False) -> dict[str, Any]:
+    candidates = [path.relative_to(packet_dir).as_posix() for path in packet_runtime_cache_candidates(packet_dir)]
+    if not candidates:
+        return {
+            "status": "skipped",
+            "retention_requested": keep,
+            "candidates": [],
+            "removed": [],
+            "failed": [],
+            "candidates_count": 0,
+            "removed_count": 0,
+            "failed_count": 0,
+        }
+    if keep:
+        return {
+            "status": "kept_for_debug",
+            "retention_requested": True,
+            "candidates": candidates,
+            "removed": [],
+            "failed": [],
+            "candidates_count": len(candidates),
+            "removed_count": 0,
+            "failed_count": 0,
+        }
+    removed: list[str] = []
+    failed: list[str] = []
+    for value in candidates:
+        path = packet_dir / value
+        try:
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        except Exception as exc:  # noqa: BLE001
+            failed.append(f"{value}: {exc}")
+        else:
+            removed.append(value)
+    return {
+        "status": _cleanup_status(len(candidates), len(failed), len(removed)),
+        "retention_requested": False,
+        "candidates": candidates,
+        "removed": removed,
+        "failed": failed,
+        "candidates_count": len(candidates),
+        "removed_count": len(removed),
+        "failed_count": len(failed),
+    }
+
+
+def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, Any]], config: dict[str, Any] | None = None) -> None:
     remove_if_exists(packet_dir / output_name)
     remove_if_exists(packet_dir / "telemetry.json")
     remove_if_exists(packet_dir / "packet.summary.json")
@@ -156,6 +280,38 @@ def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, A
         remove_if_exists(Path(path))
     for path in glob.glob((packet_dir / "events-*-opencode-readback.json").as_posix()):
         remove_if_exists(Path(path))
+    if config is not None:
+        cache_summary = cleanup_packet_runtime_cache(
+            packet_dir,
+            keep=packet_cache_retention_requested(config),
+        )
+        if cache_summary["status"] != "skipped" or (packet_dir / GENERATED_CLEANUP_NAME).exists():
+            path = packet_dir / GENERATED_CLEANUP_NAME
+            data = read_optional_json(path)
+            data["packet_runtime_cache"] = cache_summary
+            write_json(path, data)
+
+
+def cleanup_runtime_cache_evidence(packet_dir: Path, config: dict[str, Any]) -> dict[str, Any]:
+    summary = cleanup_packet_runtime_cache(
+        packet_dir,
+        keep=packet_cache_retention_requested(config),
+    )
+    if summary["status"] != "skipped":
+        path = packet_dir / GENERATED_CLEANUP_NAME
+        data = read_optional_json(path)
+        data["packet_runtime_cache"] = summary
+        write_json(path, data)
+    return summary
+
+
+def attempt_elapsed_ms(attempt: dict[str, Any]) -> int | None:
+    execution = attempt.get("execution")
+    if isinstance(execution, dict):
+        value = execution.get("elapsed_ms")
+        if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+            return value
+    return None
 
 
 def opencode_db_path() -> Path:
@@ -222,6 +378,10 @@ def detect_provider_error_code(lines: list[str]) -> str | None:
             if code in upper:
                 return code
     return None
+
+
+def _command_from_parts(parts: list[str] | tuple[str, ...]) -> str:
+    return shlex.join(str(item) for item in parts)
 
 
 def summarize_route_health(lines: list[str]) -> dict[str, Any]:
@@ -336,6 +496,8 @@ def attempt_failure_subclass(
     attempt_state: str,
     message: str | None = None,
 ) -> str | None:
+    if attempt_state == "pass":
+        return None
     if parse_report.get("failure_subclass"):
         value = str(parse_report["failure_subclass"])
         return value
@@ -375,16 +537,20 @@ def _finalize_attempt_observation(
 ) -> None:
     lines = _extract_attempt_evidence_lines(output_path, event_path)
     route_health = summarize_route_health(lines)
-    provider_error_code = parse_report.get("provider_error_code")
-    if not provider_error_code:
-        provider_error_code = detect_provider_error_code(lines)
-    provider_error_code = str(provider_error_code) if isinstance(provider_error_code, str) and provider_error_code else None
-    parse_report["provider_error_code"] = provider_error_code
-    if provider_error_code:
-        attempt["provider_error_code"] = provider_error_code
     attempt["route_health"] = route_health
+    if attempt_state != "pass":
+        provider_error_code = parse_report.get("provider_error_code")
+        if not provider_error_code:
+            provider_error_code = detect_provider_error_code(lines)
+        provider_error_code = str(provider_error_code) if isinstance(provider_error_code, str) and provider_error_code else None
+        parse_report["provider_error_code"] = provider_error_code
+        if provider_error_code:
+            attempt["provider_error_code"] = provider_error_code
+    else:
+        parse_report["provider_error_code"] = None
+        attempt.pop("provider_error_code", None)
     failure_subclass = attempt_failure_subclass(parse_report, route_health, attempt_state, message=message or None)
-    if failure_subclass is not None:
+    if attempt_state != "pass" and failure_subclass is not None:
         parse_report["failure_subclass"] = parse_report.get("failure_subclass") or failure_subclass
         attempt["failure_subclass"] = parse_report["failure_subclass"]
     else:
@@ -400,6 +566,41 @@ def _finalize_attempt_observation(
         attempt,
         parse_report=parse_report,
     )
+    status_parse_messages = parse_report.get("messages")
+    status_parse = {
+        "status": parse_report.get("status"),
+        "failure_subclass": parse_report.get("failure_subclass"),
+        "provider_error_code": parse_report.get("provider_error_code"),
+        "messages": status_parse_messages[:3] if isinstance(status_parse_messages, list) else [],
+        "message_count": len(status_parse_messages) if isinstance(status_parse_messages, list) else 0,
+    }
+    if message:
+        status_parse["final_message"] = message
+    attempt["status_parse"] = status_parse
+
+
+def _attempt_stop_reason(attempt: dict[str, Any], attempt_state: str) -> str | None:
+    if attempt_state == "pass":
+        return None
+    execution = attempt.get("execution", {})
+    if isinstance(execution, dict):
+        timed_out = execution.get("timed_out")
+        if timed_out is True:
+            return "timeout"
+    route_health = attempt.get("route_health")
+    if isinstance(route_health, dict) and int(route_health.get("transport_disconnect_count", 0) or 0) > 0:
+        return "transport_disconnect"
+    if attempt.get("failure_subclass") == "transport_disconnect":
+        return "transport_disconnect"
+    if attempt.get("failure_class") == "schema_or_output_readback":
+        return "schema_readback_failure"
+    if attempt.get("failure_subclass") in {"marker_protocol", "schema_validation_failure", "parser_failure"}:
+        return "schema_readback_failure"
+    if attempt_state == "timeout":
+        return "timeout"
+    if attempt.get("failure_subclass") == "owned_path_violation":
+        return "owned_path_violation"
+    return None
 
 
 def _parse_failure_detected(parse_report: dict[str, Any]) -> bool:
@@ -408,7 +609,70 @@ def _parse_failure_detected(parse_report: dict[str, Any]) -> bool:
 
 
 def record_executed_command(attempt: dict[str, Any], command: list[str]) -> None:
-    attempt["executed_command"] = shlex.join(str(item) for item in command)
+    command_text = _command_from_parts(command)
+    attempt["executed_command"] = command_text
+    executed_commands = attempt.get("executed_commands")
+    if not isinstance(executed_commands, list):
+        executed_commands = []
+        attempt["executed_commands"] = executed_commands
+    if command_text and command_text not in executed_commands:
+        executed_commands.append(command_text)
+
+
+def append_attempt_execution(attempt: dict[str, Any], execution: dict[str, Any], *, phase: str = "runtime") -> None:
+    attempt["called"] = True
+    attempt["execution"] = {
+        "phase": phase,
+        **{
+            key: execution.get(key)
+            for key in (
+                "returncode",
+                "elapsed_ms",
+                "timed_out",
+                "stdout_bytes",
+                "stderr_bytes",
+                "command",
+                "command_parts",
+                "stderr_path",
+                "started_at",
+                "completed_at",
+            )
+        },
+    }
+    execution_history = attempt.get("execution_history")
+    if not isinstance(execution_history, list):
+        execution_history = []
+        attempt["execution_history"] = execution_history
+    execution_history.append(attempt["execution"].copy())
+
+
+def command_lines_from_attempts(attempts: list[dict[str, Any]]) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    for attempt in attempts:
+        if attempt.get("called") is not True:
+            continue
+        value = attempt.get("executed_commands")
+        if isinstance(value, list):
+            for item in value:
+                if isinstance(item, str) and item and item not in seen:
+                    seen.add(item)
+                    commands.append(item)
+        elif isinstance(attempt.get("executed_command"), str) and attempt.get("executed_command").strip():
+            item = attempt.get("executed_command").strip()
+            if item not in seen:
+                seen.add(item)
+                commands.append(item)
+    return commands
+
+
+def terminal_command_lines(config: dict[str, Any], commands_run: list[str] | None = None) -> list[str]:
+    if commands_run:
+        return [item for item in commands_run if isinstance(item, str) and item.strip()]
+    derived = command_lines_from_attempts(list_value(config, "attempts"))
+    if derived:
+        return derived
+    return []
 
 
 def write_launcher_state(
@@ -421,6 +685,9 @@ def write_launcher_state(
     returncode: int | None = None,
     dirty: bool | None = None,
     output_nonempty: bool | None = None,
+    elapsed_ms: int | None = None,
+    stop_reason: str | None = None,
+    salvage_context: dict[str, Any] | None = None,
     message: str = "",
 ) -> None:
     if state not in LAUNCHER_STATES:
@@ -462,6 +729,11 @@ def write_launcher_state(
             "owned_path_violation",
             "generated_artifact_cleanup",
             "generated_artifact_cleanup_path",
+            "execution",
+            "execution_history",
+            "provenance_level",
+            "status_parse",
+            "stop_reason",
         ):
             if key in attempt:
                 event[key] = attempt.get(key)
@@ -474,6 +746,12 @@ def write_launcher_state(
         event["dirty"] = dirty
     if output_nonempty is not None:
         event["output_nonempty"] = output_nonempty
+    if elapsed_ms is not None:
+        event["elapsed_ms"] = elapsed_ms
+    if stop_reason:
+        event["stop_reason"] = stop_reason
+    if salvage_context:
+        event["dirty_salvage_context"] = salvage_context
     if message:
         event["message"] = message
     events.append(event)
@@ -518,6 +796,8 @@ def attempt_failure_class(
         return "timeout"
     failure_subclass = parse_report.get("failure_subclass")
     if failure_subclass:
+        if failure_subclass == "transport_disconnect":
+            return "transport_disconnect"
         return "schema_or_output_readback"
     message = str(event.get("message", "")).lower()
     if "outside owned paths" in message:
@@ -634,10 +914,21 @@ def run_with_timeout(
     cwd: str,
     stdin_data: bytes | None,
     stdout_path: Path,
-) -> int:
+) -> dict[str, Any]:
+    started_at = datetime.now(timezone.utc).isoformat()
     if shutil.which("timeout") is None:
         stdout_path.write_text(TIMEOUT_NOT_FOUND.format(role=role), encoding="utf-8")
-        return 127
+        return {
+            "returncode": 127,
+            "elapsed_ms": 0,
+            "timed_out": False,
+            "stdout_bytes": len(TIMEOUT_NOT_FOUND.format(role=role).encode("utf-8")),
+            "stderr_bytes": 0,
+            "command": _command_from_parts(command),
+            "command_parts": command,
+            "started_at": started_at,
+            "completed_at": started_at,
+        }
     cache_root = stdout_path.parent / ".runtime-cache"
     tmp_root = cache_root / "tmp"
     xdg_cache = cache_root / "xdg-cache"
@@ -645,6 +936,8 @@ def run_with_timeout(
     xdg_cache.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["TEMP"] = tmp_root.as_posix()
+    env["TMP"] = tmp_root.as_posix()
     env["TMPDIR"] = tmp_root.as_posix()
     env["XDG_CACHE_HOME"] = xdg_cache.as_posix()
     pytest_addopts = env.get("PYTEST_ADDOPTS", "").strip()
@@ -656,17 +949,43 @@ def run_with_timeout(
         f"--kill-after={kill_after_seconds}s",
         f"{timeout_seconds}s",
     ] + command
-    with stdout_path.open("wb") as stdout:
-        result = subprocess.run(
+    start = time.perf_counter()
+    proc: subprocess.Popen[bytes] | None = None
+    stdout_data = b""
+    stderr_data = b""
+    try:
+        proc = subprocess.Popen(
             full_command,
             cwd=cwd,
-            input=stdin_data,
-            stdout=stdout,
-            stderr=subprocess.STDOUT,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             env=env,
-            check=False,
         )
-    return result.returncode
+        stdout_data, stderr_data = proc.communicate(input=stdin_data)
+    finally:
+        elapsed_ms = int(round((time.perf_counter() - start) * 1000))
+        completed_at = datetime.now(timezone.utc).isoformat()
+    stdout_data = stdout_data or b""
+    stderr_data = stderr_data or b""
+    stdout_path.write_bytes(stdout_data)
+    stderr_path = stdout_path.with_suffix(stdout_path.suffix + ".stderr")
+    stderr_path.write_bytes(stderr_data)
+    if proc is None:
+        raise SystemExit("subprocess launch failed; no process object created")
+    returncode = proc.returncode if proc.returncode is not None else -1
+    timed_out = returncode in TIMEOUT_RETURN_CODES
+    return {
+        "returncode": returncode,
+        "elapsed_ms": elapsed_ms,
+        "timed_out": timed_out,
+        "stdout_bytes": len(stdout_data),
+        "stderr_bytes": len(stderr_data),
+        "command": _command_from_parts(full_command),
+        "command_parts": full_command,
+        "started_at": started_at,
+        "completed_at": completed_at,
+        "stderr_path": stderr_path.name,
+    }
 
 
 def first_log_path(packet_dir: Path, attempt: dict[str, Any], key: str, fallback: str) -> Path:
@@ -960,8 +1279,108 @@ def extract_changed_files(worktree: str) -> list[str]:
     return changed_files
 
 
-def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str, *, changed_files: list[str] | None = None) -> None:
+def worktree_status_map(worktree: str) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in worktree_status_lines(worktree, untracked_files_all=True):
+        if not line.strip():
+            continue
+        status = line[:2]
+        path = porcelain_status_path(line)
+        if path:
+            result[path] = status.strip()
+    return result
+
+
+def summarize_dirty_stop_salvage(
+    packet_dir: Path,
+    config: dict[str, Any],
+    worktree: str,
+    packet_changed_files: list[str],
+    *,
+    attempt: dict[str, Any],
+    attempt_index: int | None = None,
+    message: str,
+) -> dict[str, Any]:
+    if not packet_changed_files:
+        return {}
+    status_map = worktree_status_map(worktree)
+    owned_files = [
+        item
+        for item in config.get("owned_files", [])
+        if isinstance(item, str) and item.strip()
+    ] if isinstance(config.get("owned_files"), list) else []
+    owned_changes = [item for item in packet_changed_files if path_is_owned(item, owned_files)] if owned_files else []
+    external_changes = [item for item in packet_changed_files if item not in owned_changes]
+    tracked_changes: list[str] = []
+    untracked_changes: list[str] = []
+    for item in packet_changed_files:
+        code = status_map.get(item, "")
+        if code.startswith("?"):
+            untracked_changes.append(item)
+        elif code:
+            tracked_changes.append(item)
+    patch_path = packet_dir / "dirty-stop.patch"
+    diff_paths = sorted(set(tracked_changes))
+    diff_text = ""
+    if diff_paths:
+        completed = subprocess.run(
+            ["git", "-C", worktree, "diff", "--no-color", "--", *diff_paths],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        diff_text = completed.stdout
+    patch_path.write_text(diff_text, encoding="utf-8")
+    salvage_context: dict[str, Any] = {
+        "schema_version": 1,
+        "kind": "dirty_stop_salvage",
+        "packet_id": string_value(config, "packet_id"),
+        "attempt_index": attempt_index,
+        "attempt_alias": attempt.get("alias"),
+        "attempt_provider": attempt.get("provider"),
+        "sandbox": string_value(config, "sandbox"),
+        "status_message": message,
+        "changed_files": packet_changed_files,
+        "tracked_changes": tracked_changes,
+        "untracked_changes": untracked_changes,
+        "ownership": {
+            "owned_changes": owned_changes,
+            "external_changes": external_changes,
+            "has_owned_policy": bool(owned_files),
+            "all_owned": bool(owned_files) and not external_changes,
+            "external_count": len(external_changes),
+            "owned_count": len(owned_changes),
+        },
+        "patch": {
+            "path": patch_path.name,
+            "has_content": bool(diff_text),
+            "patched_files": sorted(set(diff_paths)),
+        },
+        "relaunch_recommendation": (
+            "apply patch in a fresh worktree and retry the worker packet"
+            if (not external_changes or not owned_files)
+            else "repair manually; dirty changes include files outside owned paths"
+        ),
+    }
+    context_path = packet_dir / "dirty-stop-context.json"
+    context_path.write_text(json.dumps(salvage_context, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return salvage_context
+
+
+def write_terminal_worker(
+    packet_dir: Path,
+    config: dict[str, Any],
+    message: str,
+    *,
+    changed_files: list[str] | None = None,
+    commands_run: list[str] | None = None,
+    salvage_context: dict[str, Any] | None = None,
+) -> None:
     output_path = packet_dir / string_value(config, "output_name")
+    effective_commands = commands_run
+    if effective_commands is None:
+        effective_commands = terminal_command_lines(config)
     data = {
         "packet_id": string_value(config, "packet_id"),
         "role": "worker",
@@ -979,7 +1398,7 @@ def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str
         "selected_ladder": config.get("selected_ladder", []),
         "selection_reason": config.get("selection_reason", ""),
         "changed_files": changed_files if changed_files is not None else extract_changed_files(string_value(config, "worktree")),
-        "commands_run": config.get("selected_commands", [item.get("command", "") for item in list_value(config, "attempts")]),
+        "commands_run": effective_commands,
         "tests": [],
         "blockers": [
             message,
@@ -988,19 +1407,20 @@ def write_terminal_worker(packet_dir: Path, config: dict[str, Any], message: str
         "handoff": message
         + " Inspect worker event logs in this packet directory for the underlying CLI, schema, quota, auth, or model error.",
     }
+    if salvage_context:
+        data["dirty_salvage_context"] = salvage_context
     output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def write_terminal_research(packet_dir: Path, config: dict[str, Any], message: str) -> None:
+def write_terminal_research(
+    packet_dir: Path,
+    config: dict[str, Any],
+    message: str,
+    *,
+    commands_run: list[str] | None = None,
+) -> None:
     output_path = packet_dir / string_value(config, "output_name")
-    output_name = string_value(config, "output_name")
-    commands = [
-        (
-            f"codex --search exec --ephemeral -m {attempt.get('model', '')} "
-            f"-s read-only --json --output-schema {string_value(config, 'schema_name')} -o {output_name}"
-        )
-        for attempt in list_value(config, "attempts")
-    ]
+    commands = terminal_command_lines(config, commands_run)
     data = {
         "packet_id": string_value(config, "packet_id"),
         "role": "research-worker",
@@ -1022,14 +1442,21 @@ def write_terminal_research(packet_dir: Path, config: dict[str, Any], message: s
     write_json(output_path, data)
 
 
-def write_terminal_review(packet_dir: Path, config: dict[str, Any], message: str) -> None:
+def write_terminal_review(
+    packet_dir: Path,
+    config: dict[str, Any],
+    message: str,
+    *,
+    commands_run: list[str] | None = None,
+) -> None:
     output_path = packet_dir / string_value(config, "output_name")
     data = {
         "packet_id": string_value(config, "packet_id"),
         "role": "reviewer",
         "verdict": "blocked",
         "findings": [message],
-        "commands_run": config.get("terminal_commands", []),
+        "finding_classes": ["orchestration_bug"],
+        "commands_run": terminal_command_lines(config, commands_run),
         "verification_gaps": [
             message,
             "Inspect reviewer event logs in this packet directory for the underlying CLI or schema error.",
@@ -1042,14 +1469,29 @@ def write_terminal_review(packet_dir: Path, config: dict[str, Any], message: str
     write_json(output_path, data)
 
 
-def write_terminal(packet_dir: Path, config: dict[str, Any], message: str, *, changed_files: list[str] | None = None) -> None:
+def write_terminal(
+    packet_dir: Path,
+    config: dict[str, Any],
+    message: str,
+    *,
+    changed_files: list[str] | None = None,
+    commands_run: list[str] | None = None,
+    salvage_context: dict[str, Any] | None = None,
+) -> None:
     role = string_value(config, "role")
     if role == "research-worker":
-        write_terminal_research(packet_dir, config, message)
+        write_terminal_research(packet_dir, config, message, commands_run=commands_run)
     elif role == "reviewer":
-        write_terminal_review(packet_dir, config, message)
+        write_terminal_review(packet_dir, config, message, commands_run=commands_run)
     elif role == "worker":
-        write_terminal_worker(packet_dir, config, message, changed_files=changed_files)
+        write_terminal_worker(
+            packet_dir,
+            config,
+            message,
+            changed_files=changed_files,
+            commands_run=commands_run,
+            salvage_context=salvage_context,
+        )
     else:
         raise SystemExit(f"unsupported compact runner role: {role}")
 
@@ -1080,7 +1522,14 @@ def write_telemetry(packet_dir: Path, config: dict[str, Any]) -> None:
     write_packet_summary(packet_dir, config)
 
 
-def run_gemini_probe_command(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], worktree: str) -> int:
+def run_gemini_probe_command(
+    attempt: dict[str, Any],
+    *,
+    label: str,
+    packet_dir: Path,
+    config: dict[str, Any],
+    worktree: str,
+) -> tuple[int, dict[str, Any], Path]:
     model = attempt.get("probe_model")
     if not isinstance(model, str) or not model:
         raise SystemExit(f"{CONFIG_NAME} missing probe model for {label}")
@@ -1109,12 +1558,24 @@ def run_gemini_probe_command(attempt: dict[str, Any], *, label: str, packet_dir:
         stdin_data=None,
         stdout_path=log_path,
     )
-    if rc != 0:
-        return rc
-    return validate_probe_output(log_path, prompt, "Gemini")
+    append_attempt_execution(attempt, rc if isinstance(rc, dict) else {"returncode": rc}, phase=f"probe-{label}")
+    execution = rc if isinstance(rc, dict) else {"returncode": rc}
+    if execution.get("returncode") != 0:
+        return int(execution.get("returncode") or 1), execution, log_path
+    returncode = 1 if not validate_probe_output(log_path, prompt, "Gemini") else 0
+    execution["validation_returncode"] = returncode
+    return returncode, execution, log_path
 
 
-def run_gemini_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], schema_path: Path, worktree: str) -> int:
+def run_gemini_attempt(
+    attempt: dict[str, Any],
+    *,
+    label: str,
+    packet_dir: Path,
+    config: dict[str, Any],
+    schema_path: Path,
+    worktree: str,
+) -> tuple[int, dict[str, Any], Path]:
     model = attempt.get("model")
     if not isinstance(model, str) or not model:
         raise SystemExit(f"{CONFIG_NAME} missing model for {label}")
@@ -1144,14 +1605,18 @@ def run_gemini_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path,
         stdin_data=prompt_path.read_bytes(),
         stdout_path=output_path,
     )
-    if rc != 0:
-        return rc
+    if not isinstance(rc, dict):
+        rc = {"returncode": rc}
+    append_attempt_execution(attempt, rc, phase=f"attempt-{label}")
+    if rc.get("returncode") != 0:
+        return int(rc.get("returncode") or 1), rc, output_path
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
-    return 0 if extract_status_json(packet_dir, schema_path, output_path, config, parse_report=parse_report) else 1
+    result = 0 if extract_status_json(packet_dir, schema_path, output_path, config, parse_report=parse_report) else 1
+    return result, rc, output_path
 
 
-def run_copilot_probe_command(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], worktree: str) -> int:
+def run_copilot_probe_command(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], worktree: str) -> tuple[int, dict[str, Any], Path]:
     model = attempt.get("probe_model")
     if not isinstance(model, str) or not model:
         model = string_value(attempt, "model")
@@ -1202,7 +1667,7 @@ def run_copilot_probe_command(attempt: dict[str, Any], *, label: str, packet_dir
 
     version_command = [string_value(config, "copilot_command"), "copilot", "--", "--version"]
     record_executed_command(attempt, version_command)
-    version_rc = run_with_timeout(
+    version_execution = run_with_timeout(
         command=version_command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -1211,10 +1676,11 @@ def run_copilot_probe_command(attempt: dict[str, Any], *, label: str, packet_dir
         stdin_data=None,
         stdout_path=version_probe,
     )
-    if version_rc != 0:
-        return version_rc
+    append_attempt_execution(attempt, version_execution, phase=f"probe-{label}-version")
+    if version_execution.get("returncode", 0) != 0:
+        return version_execution.get("returncode", 1), version_execution, version_probe
     record_executed_command(attempt, command_probe)
-    rc = run_with_timeout(
+    execution = run_with_timeout(
         command=command_probe,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -1223,12 +1689,15 @@ def run_copilot_probe_command(attempt: dict[str, Any], *, label: str, packet_dir
         stdin_data=None,
         stdout_path=probe_path,
     )
-    if rc != 0:
-        return rc
-    return validate_probe_output(probe_path, prompt, "Copilot")
+    append_attempt_execution(attempt, execution, phase=f"probe-{label}")
+    validation_returncode = 1
+    if execution.get("returncode", 1) == 0:
+        validation_returncode = validate_probe_output(probe_path, prompt, "Copilot")
+    execution["validation_returncode"] = validation_returncode
+    return validation_returncode, execution, probe_path
 
 
-def run_copilot_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], schema_path: Path, worktree: str) -> int:
+def run_copilot_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], schema_path: Path, worktree: str) -> tuple[int, dict[str, Any], Path]:
     model = attempt.get("model")
     if not isinstance(model, str) or not model:
         raise SystemExit(f"{CONFIG_NAME} missing model for {label}")
@@ -1267,7 +1736,7 @@ def run_copilot_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path
         prompt_path.read_text(encoding="utf-8"),
     ]
     record_executed_command(attempt, command)
-    rc = run_with_timeout(
+    execution = run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -1276,14 +1745,15 @@ def run_copilot_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path
         stdin_data=None,
         stdout_path=output_path,
     )
-    if rc != 0:
-        return rc
+    append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
+    if execution.get("returncode", 1) != 0:
+        return int(execution.get("returncode", 1)), execution, output_path
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
-    return 0 if extract_status_json(packet_dir, schema_path, output_path, config, parse_report=parse_report) else 1
+    return 0 if extract_status_json(packet_dir, schema_path, output_path, config, parse_report=parse_report) else 1, execution, output_path
 
 
-def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> int:
+def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
     role = string_value(config, "role")
     schema_path = packet_dir / schema_name
     output_path = packet_dir / output_name
@@ -1321,7 +1791,7 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
     if role == "research-worker":
         command = ["codex", "--search", "exec", "--ephemeral", "-m", model, "-C", worktree, "-s", string_value(config, "sandbox"), "--json", "--output-schema", schema_path.as_posix(), "-o", output_path.as_posix(), "-"]
     record_executed_command(attempt, command)
-    rc = run_with_timeout(
+    execution = run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -1330,13 +1800,14 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
         stdin_data=prompt_path.read_bytes(),
         stdout_path=event_path,
     )
-    if rc != 0:
-        return rc
+    append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
+    if execution.get("returncode", 1) != 0:
+        return int(execution.get("returncode", 1)), execution, event_path
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
     if role == "worker" and not ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report):
-        return 1
-    return 0
+        return 1, execution, event_path
+    return 0, execution, event_path
 
 
 def render_runtime_args(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], prompt_text: str, worktree: str, schema_path: Path, output_path: Path) -> list[str]:
@@ -1363,18 +1834,28 @@ def render_runtime_args(attempt: dict[str, Any], *, packet_dir: Path, config: di
     return rendered
 
 
-def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> int:
+def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
     schema_path = packet_dir / schema_name
     output_path = packet_dir / output_name
     prompt_path = packet_dir / "prompt.md"
     prompt_text = prompt_path.read_text(encoding="utf-8")
+    event_path = packet_dir / f"events-{label}-readback-error.log"
     timeout_seconds = int_value(attempt, "timeout_seconds")
     kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
     binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else "opencode"
     resolved = shutil.which(binary) if not os.path.isabs(binary) else binary
     if not resolved:
         print(f"opencode binary not found: {binary}", file=sys.stderr)
-        return 127
+        event_path.write_text(f"opencode binary not found: {binary}\n", encoding="utf-8")
+        return 127, {
+            "returncode": 127,
+            "elapsed_ms": 0,
+            "timed_out": False,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "command": str(binary),
+            "command_parts": [binary],
+        }, event_path
     event_path = packet_dir / f"events-{label}.jsonl"
     args = render_runtime_args(
         attempt,
@@ -1389,7 +1870,7 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         args = ["run", "--pure", "--format", "json", "--model", string_value(attempt, "model"), "--dir", worktree, prompt_text]
     command = [resolved, *args]
     record_executed_command(attempt, command)
-    rc = run_with_timeout(
+    execution = run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -1398,38 +1879,49 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         stdin_data=None,
         stdout_path=event_path,
     )
-    if rc != 0:
-        return rc
+    append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
+    if execution.get("returncode", 1) != 0:
+        return int(execution.get("returncode", 1)), execution, event_path
     session_id = parse_session_id(event_path.read_text(encoding="utf-8", errors="replace") if event_path.exists() else "")
     if not session_id:
         print("opencode attempt did not emit a session id", file=sys.stderr)
-        return 1
+        return 1, execution, event_path
     assistant_text, readback = read_opencode_assistant_text(session_id, opencode_db_path())
     (packet_dir / f"events-{label}-assistant.log").write_text(assistant_text, encoding="utf-8")
     (packet_dir / f"events-{label}-opencode-readback.json").write_text(json.dumps(readback, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
     if not ensure_status_json(packet_dir, schema_path, output_path, packet_dir / f"events-{label}-assistant.log", config, parse_report=parse_report):
-        return 1
-    return 0
+        return 1, execution, event_path
+    return 0, execution, event_path
 
 
-def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> int:
+def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
     schema_path = packet_dir / schema_name
     output_path = packet_dir / output_name
     prompt_path = packet_dir / "prompt.md"
     prompt_text = prompt_path.read_text(encoding="utf-8")
     timeout_seconds = int_value(attempt, "timeout_seconds")
     kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
+    event_path = packet_dir / f"events-{label}.log"
     binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else ""
     if not binary:
         print("generic CLI attempt missing command_binary", file=sys.stderr)
-        return 127
+        event_path.write_text("generic CLI attempt missing command_binary\n", encoding="utf-8")
+        return (
+            127,
+            {"returncode": 127, "elapsed_ms": 0, "timed_out": False, "stdout_bytes": 0, "stderr_bytes": 0, "command": "", "command_parts": []},
+            event_path,
+        )
     resolved = shutil.which(binary) if not os.path.isabs(binary) else binary
     if not resolved:
         print(f"generic CLI binary not found: {binary}", file=sys.stderr)
-        return 127
-    event_path = packet_dir / f"events-{label}.log"
+        event_path.write_text(f"generic CLI binary not found: {binary}\n", encoding="utf-8")
+        return (
+            127,
+            {"returncode": 127, "elapsed_ms": 0, "timed_out": False, "stdout_bytes": 0, "stderr_bytes": 0, "command": binary, "command_parts": [binary]},
+            event_path,
+        )
     args = render_runtime_args(
         attempt,
         packet_dir=packet_dir,
@@ -1441,7 +1933,7 @@ def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: 
     )
     command = [resolved, *args]
     record_executed_command(attempt, command)
-    rc = run_with_timeout(
+    execution = run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
@@ -1450,13 +1942,17 @@ def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: 
         stdin_data=prompt_path.read_bytes(),
         stdout_path=event_path,
     )
-    if rc != 0:
-        return rc
+    append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
+    if execution.get("returncode", 1) != 0:
+        attempt["provenance_level"] = "low"
+        return int(execution.get("returncode", 1)), execution, event_path
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
     if not ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report):
-        return 1
-    return 0
+        attempt["provenance_level"] = "low"
+        return 1, execution, event_path
+    attempt["provenance_level"] = "low"
+    return 0, execution, event_path
 
 
 def collect_strings(value: Any):
@@ -1687,29 +2183,33 @@ def run_worker_attempt(
     label = event_label(attempt, f"attempt-{attempt_index + 1}")
     provider = attempt.get("harness_kind") or attempt.get("provider")
     if provider == "gemini":
-        if run_gemini_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree) != 0:
-            return 1, packet_dir / f"events-{label}.jsonl"
-        return run_gemini_attempt(
+        rc, _, probe_event_path = run_gemini_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree)
+        if rc != 0:
+            return rc, probe_event_path
+        attempt_rc, _, attempt_event_path = run_gemini_attempt(
             attempt,
             label=label,
             packet_dir=packet_dir,
             config=config,
             schema_path=packet_dir / schema_name,
             worktree=worktree,
-        ), packet_dir / f"events-{label}.jsonl"
+        )
+        return attempt_rc, attempt_event_path
     if provider == "copilot":
-        if run_copilot_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree) != 0:
-            return 1, packet_dir / f"events-{label}.jsonl"
-        return run_copilot_attempt(
+        rc, _, probe_event_path = run_copilot_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree)
+        if rc != 0:
+            return rc, probe_event_path
+        attempt_rc, _, attempt_event_path = run_copilot_attempt(
             attempt,
             label=label,
             packet_dir=packet_dir,
             config=config,
             schema_path=packet_dir / schema_name,
             worktree=worktree,
-        ), packet_dir / f"events-{label}.jsonl"
+        )
+        return attempt_rc, attempt_event_path
     if provider == "codex":
-        return run_codex_model(
+        attempt_rc, _, attempt_event_path = run_codex_model(
             attempt,
             packet_dir=packet_dir,
             config=config,
@@ -1717,9 +2217,10 @@ def run_worker_attempt(
             output_name=output_name,
             worktree=worktree,
             label=label,
-        ), packet_dir / f"events-{label}.jsonl"
+        )
+        return attempt_rc, attempt_event_path
     if provider == "opencode":
-        return run_opencode_model(
+        attempt_rc, _, attempt_event_path = run_opencode_model(
             attempt,
             packet_dir=packet_dir,
             config=config,
@@ -1727,9 +2228,10 @@ def run_worker_attempt(
             output_name=output_name,
             worktree=worktree,
             label=label,
-        ), packet_dir / f"events-{label}.jsonl"
+        )
+        return attempt_rc, attempt_event_path
     if provider == "generic-cli":
-        return run_generic_cli_model(
+        attempt_rc, _, attempt_event_path = run_generic_cli_model(
             attempt,
             packet_dir=packet_dir,
             config=config,
@@ -1737,7 +2239,8 @@ def run_worker_attempt(
             output_name=output_name,
             worktree=worktree,
             label=label,
-        ), packet_dir / f"events-{label}.log"
+        )
+        return attempt_rc, attempt_event_path
     raise SystemExit(f"{CONFIG_NAME} unsupported worker provider: {provider}")
 
 
@@ -1757,11 +2260,12 @@ def run_packet(packet_dir: Path) -> int:
     debug_name = config.get("telemetry_debug_name")
     if isinstance(debug_name, str) and debug_name.strip():
         remove_if_exists(packet_dir / debug_name)
-    clean_outputs(packet_dir, output_name, attempts)
+    clean_outputs(packet_dir, output_name, attempts, config)
 
     if role == "worker":
         baseline_changed_files = changed_file_fingerprints(worktree)
         for index, attempt in enumerate(attempts):
+            command_lines = command_lines_from_attempts(attempts)
             write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
             rc, event_path = run_worker_attempt(
                 packet_dir=packet_dir,
@@ -1784,6 +2288,7 @@ def run_packet(packet_dir: Path) -> int:
                 attempt["_parse_report"] = parse_report
             parse_messages = _event_parse_messages(parse_report)
             failure_message = "; ".join(parse_messages[:2]) if parse_messages else ""
+            stop_reason = _attempt_stop_reason(attempt, state)
             _finalize_attempt_observation(
                 attempt,
                 parse_report=parse_report,
@@ -1795,6 +2300,7 @@ def run_packet(packet_dir: Path) -> int:
                 output_nonempty=output_nonempty,
                 message=failure_message,
             )
+            command_lines = command_lines_from_attempts(attempts)
             write_launcher_state(
                 packet_dir,
                 config,
@@ -1804,6 +2310,8 @@ def run_packet(packet_dir: Path) -> int:
                 returncode=rc,
                 dirty=dirty,
                 output_nonempty=output_nonempty,
+                elapsed_ms=attempt_elapsed_ms(attempt),
+                stop_reason=stop_reason,
             )
             if rc == 0:
                 ownership_violations = worker_ownership_violations(config, packet_changed_files)
@@ -1814,7 +2322,7 @@ def run_packet(packet_dir: Path) -> int:
                     attempt["owned_path_violation"] = ownership_violations
                     parse_report["failure_subclass"] = "owned_path_violation"
                     (packet_dir / "ownership.blocked.txt").write_text(message + "\n", encoding="utf-8")
-                    write_terminal(packet_dir, config, message, changed_files=packet_changed_files)
+                    write_terminal(packet_dir, config, message, changed_files=packet_changed_files, commands_run=command_lines)
                     write_launcher_state(
                         packet_dir,
                         config,
@@ -1825,9 +2333,13 @@ def run_packet(packet_dir: Path) -> int:
                         dirty=True,
                         output_nonempty=output_nonempty,
                         message=message,
+                        elapsed_ms=attempt_elapsed_ms(attempt),
+                        stop_reason=stop_reason,
                     )
+                    cleanup_runtime_cache_evidence(packet_dir, config)
                     write_telemetry(packet_dir, config)
                     return 2
+                cleanup_runtime_cache_evidence(packet_dir, config)
                 write_telemetry(packet_dir, config)
                 return 0
             if dirty:
@@ -1837,7 +2349,23 @@ def run_packet(packet_dir: Path) -> int:
                 if failure_message:
                     message = f"{message} details: {failure_message}"
                 (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
-                write_terminal(packet_dir, config, message, changed_files=packet_changed_files)
+                salvage_context = summarize_dirty_stop_salvage(
+                    packet_dir=packet_dir,
+                    config=config,
+                    worktree=worktree,
+                    packet_changed_files=packet_changed_files,
+                    attempt=attempt,
+                    attempt_index=index,
+                    message=message,
+                )
+                write_terminal(
+                    packet_dir,
+                    config,
+                    message,
+                    changed_files=packet_changed_files,
+                    commands_run=command_lines,
+                    salvage_context=salvage_context,
+                )
                 write_launcher_state(
                     packet_dir,
                     config,
@@ -1848,7 +2376,11 @@ def run_packet(packet_dir: Path) -> int:
                     dirty=True,
                     output_nonempty=output_nonempty,
                     message=message,
+                    elapsed_ms=attempt_elapsed_ms(attempt),
+                    stop_reason=stop_reason,
+                    salvage_context=salvage_context,
                 )
+                cleanup_runtime_cache_evidence(packet_dir, config)
                 write_telemetry(packet_dir, config)
                 return 2
             if _parse_failure_detected(parse_report):
@@ -1859,7 +2391,8 @@ def run_packet(packet_dir: Path) -> int:
                 message = string_value(config, "terminal_message")
                 if failure_message:
                     message = f"{message}: {failure_message}"
-                write_terminal(packet_dir, config, message)
+                command_lines = command_lines_from_attempts(attempts)
+                write_terminal(packet_dir, config, message, commands_run=command_lines)
                 write_launcher_state(
                     packet_dir,
                     config,
@@ -1870,15 +2403,47 @@ def run_packet(packet_dir: Path) -> int:
                     dirty=False,
                     output_nonempty=output_nonempty,
                     message=message,
+                    elapsed_ms=attempt_elapsed_ms(attempt),
+                    stop_reason=stop_reason,
                 )
+                cleanup_runtime_cache_evidence(packet_dir, config)
                 write_telemetry(packet_dir, config)
                 return 1
         packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
         if packet_changed_files:
             message = "worker failed after leaving dirty worktree; no fallback remains."
             (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
-            write_terminal(packet_dir, config, message, changed_files=packet_changed_files)
-            write_launcher_state(packet_dir, config, state="blocked", dirty=True, message=message)
+            command_lines = command_lines_from_attempts(attempts)
+            salvage_context = summarize_dirty_stop_salvage(
+                packet_dir=packet_dir,
+                config=config,
+                worktree=worktree,
+                packet_changed_files=packet_changed_files,
+                attempt=attempts[-1] if attempts else {},
+                attempt_index=len(attempts) - 1 if attempts else None,
+                message=message,
+            )
+            write_terminal(
+                packet_dir,
+                config,
+                message,
+                changed_files=packet_changed_files,
+                commands_run=command_lines,
+                salvage_context=salvage_context,
+            )
+            write_launcher_state(
+                packet_dir,
+                config,
+                state="blocked",
+                attempt=attempts[-1] if attempts else None,
+                attempt_index=len(attempts) - 1 if attempts else None,
+                returncode=rc,
+                dirty=True,
+                message=message,
+                stop_reason="dirty_stop",
+                salvage_context=salvage_context,
+            )
+            cleanup_runtime_cache_evidence(packet_dir, config)
             write_telemetry(packet_dir, config)
             return 2
         message = string_value(config, "terminal_message")
@@ -1887,8 +2452,23 @@ def run_packet(packet_dir: Path) -> int:
             parse_messages = _event_parse_messages(parse_report)
             if parse_messages:
                 message = f"{message}: {'; '.join(parse_messages[:2])}"
-        write_terminal(packet_dir, config, message)
-        write_launcher_state(packet_dir, config, state="blocked", dirty=False, message=message)
+        final_attempt = attempts[-1] if attempts else {}
+        command_lines = command_lines_from_attempts(attempts)
+        final_state = "fail-clean" if attempts else None
+        final_stop_reason = _attempt_stop_reason(final_attempt, final_state) if final_state else None
+        write_terminal(packet_dir, config, message, commands_run=command_lines)
+        write_launcher_state(
+            packet_dir,
+            config,
+            state="blocked",
+            attempt=attempts[-1] if attempts else None,
+            attempt_index=len(attempts) - 1 if attempts else None,
+            dirty=False,
+            message=message,
+            elapsed_ms=attempt_elapsed_ms(final_attempt) if attempts else None,
+            stop_reason=final_stop_reason,
+        )
+        cleanup_runtime_cache_evidence(packet_dir, config)
         write_telemetry(packet_dir, config)
         return 1
 
@@ -1898,7 +2478,7 @@ def run_packet(packet_dir: Path) -> int:
         write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
         event_path: Path | None = None
         if provider == "codex":
-            rc = run_codex_model(
+            rc, _, event_path = run_codex_model(
                 attempt,
                 packet_dir=packet_dir,
                 config=config,
@@ -1907,9 +2487,8 @@ def run_packet(packet_dir: Path) -> int:
                 worktree=worktree,
                 label=_label,
             )
-            event_path = packet_dir / f"events-{_label}.jsonl"
         elif provider == "opencode":
-            rc = run_opencode_model(
+            rc, _, event_path = run_opencode_model(
                 attempt,
                 packet_dir=packet_dir,
                 config=config,
@@ -1918,9 +2497,8 @@ def run_packet(packet_dir: Path) -> int:
                 worktree=worktree,
                 label=_label,
             )
-            event_path = packet_dir / f"events-{_label}.jsonl"
         elif provider == "generic-cli":
-            rc = run_generic_cli_model(
+            rc, _, event_path = run_generic_cli_model(
                 attempt,
                 packet_dir=packet_dir,
                 config=config,
@@ -1929,9 +2507,8 @@ def run_packet(packet_dir: Path) -> int:
                 worktree=worktree,
                 label=_label,
             )
-            event_path = packet_dir / f"events-{_label}.log"
         elif provider == "gemini":
-            rc = run_gemini_attempt(
+            rc, _, event_path = run_gemini_attempt(
                 attempt,
                 label=_label,
                 packet_dir=packet_dir,
@@ -1939,7 +2516,6 @@ def run_packet(packet_dir: Path) -> int:
                 schema_path=packet_dir / schema_name,
                 worktree=worktree,
             )
-            event_path = packet_dir / f"events-{_label}.jsonl"
         else:
             raise SystemExit(f"{CONFIG_NAME} unsupported {role} provider: {provider}")
         output_nonempty = output_path.exists() and output_path.stat().st_size > 0
@@ -1961,6 +2537,7 @@ def run_packet(packet_dir: Path) -> int:
             output_nonempty=output_nonempty,
             message=failure_message,
         )
+        stop_reason = _attempt_stop_reason(attempt, state)
         write_launcher_state(
             packet_dir,
             config,
@@ -1970,8 +2547,11 @@ def run_packet(packet_dir: Path) -> int:
             returncode=rc,
             dirty=False,
             output_nonempty=output_nonempty,
+            elapsed_ms=attempt_elapsed_ms(attempt),
+            stop_reason=stop_reason,
         )
         if rc == 0:
+            cleanup_runtime_cache_evidence(packet_dir, config)
             write_telemetry(packet_dir, config)
             return 0
         if output_nonempty:
@@ -1981,7 +2561,8 @@ def run_packet(packet_dir: Path) -> int:
             message = string_value(config, "terminal_message")
             if failure_message:
                 message = f"{message}: {failure_message}"
-            write_terminal(packet_dir, config, message)
+            command_lines = command_lines_from_attempts(attempts)
+            write_terminal(packet_dir, config, message, commands_run=command_lines)
             write_launcher_state(
                 packet_dir,
                 config,
@@ -1992,7 +2573,10 @@ def run_packet(packet_dir: Path) -> int:
                 dirty=False,
                 output_nonempty=output_nonempty,
                 message=message,
+                elapsed_ms=attempt_elapsed_ms(attempt),
+                stop_reason=stop_reason,
             )
+            cleanup_runtime_cache_evidence(packet_dir, config)
             write_telemetry(packet_dir, config)
             return 1
         if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
@@ -2003,10 +2587,25 @@ def run_packet(packet_dir: Path) -> int:
     parse_report = attempts[-1].get("_parse_report") if attempts else {}
     if isinstance(parse_report, dict):
         parse_messages = _event_parse_messages(parse_report)
-        if parse_messages:
-            message = f"{message}: {parse_messages[-1]}"
-    write_terminal(packet_dir, config, message)
-    write_launcher_state(packet_dir, config, state="blocked", dirty=False, message=message)
+    if parse_messages:
+        message = f"{message}: {parse_messages[-1]}"
+    final_attempt = attempts[-1] if attempts else {}
+    final_state = "fail-clean" if attempts else None
+    final_stop_reason = _attempt_stop_reason(final_attempt, final_state) if final_state else None
+    command_lines = command_lines_from_attempts(attempts)
+    write_terminal(packet_dir, config, message, commands_run=command_lines)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempts[-1] if attempts else None,
+        attempt_index=len(attempts) - 1 if attempts else None,
+        dirty=False,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(final_attempt) if attempts else None,
+        stop_reason=final_stop_reason,
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
     write_telemetry(packet_dir, config)
     return 1
 
