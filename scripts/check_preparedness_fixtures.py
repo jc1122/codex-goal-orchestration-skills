@@ -3988,6 +3988,117 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         if (cache_fallback_worktree / relative_path).exists():
             raise SystemExit(f"generated artifact survived runner cleanup: {relative_path}")
 
+    reviewer_cache_worktree = tmp_path / "reviewer-cache-cleanup-worktree"
+    reviewer_cache_worktree.mkdir()
+    run(["git", "init", "-b", "main", reviewer_cache_worktree.as_posix()])
+    run(["git", "-C", reviewer_cache_worktree.as_posix(), "config", "user.email", "fixture@example.com"])
+    run(["git", "-C", reviewer_cache_worktree.as_posix(), "config", "user.name", "Fixture"])
+    (reviewer_cache_worktree / "README.md").write_text("reviewer cache cleanup fixture\n", encoding="utf-8")
+    run(["git", "-C", reviewer_cache_worktree.as_posix(), "add", "README.md"])
+    run(["git", "-C", reviewer_cache_worktree.as_posix(), "commit", "-m", "initial fixture"])
+    reviewer_cache_bundle = tmp_path / "reviewer-cache-cleanup-bundle"
+    shutil.copytree(bundle, reviewer_cache_bundle)
+    write_valid_research_fixture(reviewer_cache_bundle)
+    write_worker_scheduler(reviewer_cache_bundle)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+            "--manifest",
+            (reviewer_cache_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            reviewer_cache_worktree.as_posix(),
+            "--allow-pass",
+            "--replace",
+            "--test-evidence",
+            "reviewer cache cleanup fixture tests pass",
+            "--dod-item",
+            "reviewer cache cleanup fixture validates",
+            "--json",
+        ]
+    )
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
+            "--manifest",
+            (reviewer_cache_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            reviewer_cache_worktree.as_posix(),
+            "--review-packet-id",
+            "B01-R09",
+            "--replace",
+            "--skip-tests",
+            "--test-skip-reason",
+            "Reviewer cache cleanup fixture does not need branch tests.",
+            "--dod-item",
+            "reviewer cache cleanup fixture validates",
+        ]
+    )
+    create_runtime_packet(
+        role="reviewer",
+        packet_id="B01-R09",
+        branch="preparedness-reviewer-cache-cleanup",
+        out_dir=reviewer_cache_bundle / "reviewers",
+        worktree=reviewer_cache_worktree,
+        manifest=reviewer_cache_bundle / "job.manifest.json",
+        pre_review_gate=reviewer_cache_bundle / "branches" / "B01.pre_review_gate.json",
+        context_files=[reviewer_cache_bundle / "branches" / "B01.prompt.md"],
+        task_file=bundle / "branches" / "B01.prompt.md",
+    )
+    reviewer_cache_packet = reviewer_cache_bundle / "reviewers" / "B01-R09"
+    reviewer_cache_fake_dir = tmp_path / "fake-codex-reviewer-cache-cleanup"
+    reviewer_cache_fake_dir.mkdir()
+    reviewer_cache_fake = reviewer_cache_fake_dir / "codex"
+    reviewer_semantic_hashes = read_json(reviewer_cache_bundle / "branches" / "B01.pre_review_gate.json").get("semantic_input_hashes", {})
+    reviewer_cache_fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "worktree = pathlib.Path(args[args.index('-C') + 1])\n"
+        "out = pathlib.Path(args[args.index('-o') + 1])\n"
+        "for rel in ['src/ft10_solver/__pycache__', 'tests/__pycache__']:\n"
+        "    cache = worktree / rel\n"
+        "    cache.mkdir(parents=True, exist_ok=True)\n"
+        "    (cache / 'module.cpython-312.pyc').write_bytes(b'generated pyc')\n"
+        "review = {\n"
+        "  'packet_id': 'B01-R09',\n"
+        "  'role': 'reviewer',\n"
+        "  'verdict': 'mergeable',\n"
+        "  'findings': [],\n"
+        "  'finding_classes': ['no_issue'],\n"
+        "  'commands_run': ['python3 -m unittest fixture'],\n"
+        "  'verification_gaps': [],\n"
+        "  'residual_risks': [],\n"
+        f"  'semantic_input_hashes': {json.dumps(reviewer_semantic_hashes)},\n"
+        "  'reuse_policy': {'mode': 'new', 'accepted': False, 'semantic_hashes_match': False, 'source_review_path': None, 'source_telemetry_path': None},\n"
+        "  'summary': 'Reviewer cache cleanup fixture.'\n"
+        "}\n"
+        "out.write_text(json.dumps(review), encoding='utf-8')\n"
+        "print(json.dumps({'usage': {'input_tokens': 222, 'cached_input_tokens': 0, 'output_tokens': 33}}))\n",
+        encoding="utf-8",
+    )
+    reviewer_cache_fake.chmod(0o755)
+    run(
+        [(reviewer_cache_packet / "launch.sh").as_posix()],
+        env={**os.environ, "PATH": reviewer_cache_fake_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+    )
+    reviewer_launcher = read_json(reviewer_cache_packet / "launcher-state.json")
+    if reviewer_launcher.get("terminal_state") != "pass":
+        raise SystemExit(f"reviewer cache-only cleanup should pass: {reviewer_launcher!r}")
+    if any(event.get("dirty") for event in reviewer_launcher.get("events", []) if isinstance(event, dict) and event.get("state") == "pass"):
+        raise SystemExit(f"reviewer cache cleanup should not leave dirty=true pass event: {reviewer_launcher!r}")
+    reviewer_cleanup = read_json(reviewer_cache_packet / "generated-artifact-cleanup.json")
+    if reviewer_cleanup.get("removed_count", 0) < 2 or reviewer_cleanup.get("failed_count") != 0:
+        raise SystemExit(f"reviewer cache cleanup should remove generated cache dirs: {reviewer_cleanup!r}")
+    for rel in ["src/ft10_solver/__pycache__", "tests/__pycache__"]:
+        if (reviewer_cache_worktree / rel).exists():
+            raise SystemExit(f"reviewer-generated cache survived cleanup: {rel}")
+
     stale_output_worktree = tmp_path / "stale-output-fallback-worktree"
     stale_output_worktree.mkdir()
     run(["git", "init", stale_output_worktree.as_posix()])
@@ -5131,6 +5242,31 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         "reason": "Fixture explicitly accepts partial token telemetry for launch readiness.",
     }
     write_json(degraded_manifest_path, degraded_manifest)
+    stale_degraded_pipeline = read_json(degraded_telemetry_bundle / "preflight.pipeline.json")
+    stale_degraded_pipeline["status"] = "blocked"
+    stale_degraded_pipeline["result_kind"] = "blocked_readiness_usable_bundle"
+    stale_degraded_pipeline["readiness_status"] = "blocked"
+    stale_degraded_pipeline["launch_allowed"] = False
+    stale_degraded_pipeline["readiness"] = {
+        "status": "blocked",
+        "launch_allowed": False,
+        "launch_blockers": ["route_token_telemetry_degraded_without_waiver"],
+    }
+    write_json(degraded_telemetry_bundle / "preflight.pipeline.json", stale_degraded_pipeline)
+    stale_report = (degraded_telemetry_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
+    if "\nFinal pipeline state:\n" in stale_report:
+        stale_report = stale_report.split("\nFinal pipeline state:\n", 1)[0].rstrip()
+    (degraded_telemetry_bundle / "PREFLIGHT_REPORT.md").write_text(
+        stale_report
+        + "\nFinal pipeline state:\n"
+        + "- Bundle lint: pass\n"
+        + "- Repair gate: pass\n"
+        + "- Readiness: blocked\n"
+        + "- Result kind: blocked_readiness_usable_bundle\n"
+        + "- Launch allowed: false\n"
+        + "- Launch blockers: route_token_telemetry_degraded_without_waiver\n",
+        encoding="utf-8",
+    )
     waived_readiness = json.loads(
         run(
             [
@@ -5140,11 +5276,27 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
                 degraded_telemetry_bundle.as_posix(),
                 "--readiness",
                 "--json",
+                "--output",
+                (degraded_telemetry_bundle / "readiness.json").as_posix(),
             ]
         ).stdout
     )
     if "route_token_telemetry_degraded_without_waiver" in waived_readiness.get("launch_blockers", []):
         raise SystemExit(f"explicit degraded telemetry waiver should remove launch blocker: {waived_readiness!r}")
+    refreshed_degraded_pipeline = read_json(degraded_telemetry_bundle / "preflight.pipeline.json")
+    if (
+        refreshed_degraded_pipeline.get("status") != "pass"
+        or refreshed_degraded_pipeline.get("readiness_status") != "pass"
+        or refreshed_degraded_pipeline.get("launch_allowed") is not True
+    ):
+        raise SystemExit(f"canonical readiness rerun should refresh stale preflight pipeline: {refreshed_degraded_pipeline!r}")
+    refreshed_report = (degraded_telemetry_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
+    assert_all_contains(
+        refreshed_report,
+        ["Final pipeline state:", "- Readiness: pass", "- Launch allowed: true"],
+        "refreshed degraded telemetry preflight report",
+    )
+    assert_not_contains(refreshed_report, "route_token_telemetry_degraded_without_waiver", "refreshed preflight report stale blocker")
     commands = pipeline_result.get("commands", [])
     expected_phases = ["brief_lint", "runtime_gate", "config_selection", "create_bundle", "bundle_lint", "repair_gate", "readiness"]
     if [item.get("phase") for item in commands] != expected_phases:
@@ -6813,6 +6965,129 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     if promoted_review.get("packet_id") != "B01-R02":
         raise SystemExit(f"canonical review should promote current B01-R02 artifact: {promoted_review!r}")
     validate_branch(stale_canonical_bundle)
+
+    same_hash_stale_bundle = tmp_path / "same-hash-stale-canonical-review"
+    shutil.copytree(bundle, same_hash_stale_bundle)
+    write_valid_research_fixture(same_hash_stale_bundle)
+    write_worker_scheduler(same_hash_stale_bundle)
+    assemble_branch_status(same_hash_stale_bundle)
+    write_pre_review_gate(same_hash_stale_bundle)
+    same_hash_gate = read_json(same_hash_stale_bundle / "branches" / "B01.pre_review_gate.json")
+    same_hashes = same_hash_gate.get("semantic_input_hashes") if isinstance(same_hash_gate.get("semantic_input_hashes"), dict) else {}
+    create_runtime_packet(
+        role="reviewer",
+        packet_id="B01-R01",
+        branch="preparedness-research-fixture",
+        out_dir=same_hash_stale_bundle / "reviewers",
+        manifest=same_hash_stale_bundle / "job.manifest.json",
+        pre_review_gate=same_hash_stale_bundle / "branches" / "B01.pre_review_gate.json",
+        context_files=[same_hash_stale_bundle / "branches" / "B01.prompt.md"],
+        task_file=task_file,
+    )
+    current_review = {
+        "packet_id": "B01-R01",
+        "role": "reviewer",
+        "verdict": "mergeable_after_fixes",
+        "findings": ["current reviewer output fixture"],
+        "finding_classes": ["orchestration_bug"],
+        "commands_run": ["git diff --check main...HEAD"],
+        "verification_gaps": ["fixture intentionally non-mergeable"],
+        "residual_risks": [],
+        "semantic_input_hashes": same_hashes,
+        "reuse_policy": {
+            "mode": "new",
+            "accepted": False,
+            "semantic_hashes_match": False,
+            "source_review_path": None,
+            "source_telemetry_path": None,
+        },
+        "summary": "Current same-hash reviewer fixture.",
+    }
+    stale_same_hash_review = {
+        **current_review,
+        "findings": ["stale canonical same-hash fixture"],
+        "summary": "Stale same-hash canonical review fixture.",
+    }
+    write_json(same_hash_stale_bundle / "reviewers" / "B01-R01" / "review.json", current_review)
+    same_hash_route = read_json(same_hash_stale_bundle / "reviewers" / "B01-R01" / "route.json")
+    same_hash_aliases = [
+        item
+        for item in same_hash_route.get("selected_ladder", [])
+        if isinstance(item, str) and item.strip()
+    ] or ["gpt-5.4"]
+    write_json(
+        same_hash_stale_bundle / "reviewers" / "B01-R01" / "telemetry.json",
+        telemetry(
+            "B01-R01",
+            "reviewer",
+            "review.json",
+            accepted_alias=same_hash_aliases[0],
+            attempts=[
+                {
+                    "alias": alias,
+                    "provider": "codex",
+                    "model": alias,
+                    "effort": "high",
+                    "command": f"codex exec -m {alias} --json",
+                    "timeout_seconds": 1800,
+                    "called": index == 0,
+                    "accepted": index == 0,
+                    "event_logs": [],
+                    "probe_logs": [],
+                    "usage": None,
+                }
+                for index, alias in enumerate(same_hash_aliases)
+            ],
+        ),
+    )
+    write_json(same_hash_stale_bundle / "branches" / "B01.review.json", stale_same_hash_review)
+    same_hash_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+                "--manifest",
+                (same_hash_stale_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                "B01",
+                "--worktree",
+                ROOT.as_posix(),
+                "--allow-pass",
+                "--replace",
+                "--test-evidence",
+                "same-hash stale review promotion fixture tests pass",
+                "--dod-item",
+                "same-hash stale review promotion fixture DoD evidence",
+                "--json",
+            ]
+        ).stdout
+    )
+    if same_hash_result.get("branch_status") != "partial" or same_hash_result.get("review_status") != "mergeable_after_fixes":
+        raise SystemExit(f"same-hash stale canonical review should remain partial with current verdict: {same_hash_result!r}")
+    promoted_same_hash_review = read_json(same_hash_stale_bundle / "branches" / "B01.review.json")
+    if promoted_same_hash_review.get("summary") != "Current same-hash reviewer fixture.":
+        raise SystemExit(f"canonical review should promote newer same-hash reviewer output: {promoted_same_hash_review!r}")
+    reconcile_same_hash = json.loads(
+        run(
+            [
+                "python3",
+                "skills/_goal_shared/scripts/reconcile_goal_run.py",
+                "--manifest",
+                (same_hash_stale_bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--write",
+                "--json",
+            ]
+        ).stdout
+    )
+    mismatch_codes = {
+        item.get("code")
+        for item in reconcile_same_hash.get("stale_or_unreconciled", [])
+        if isinstance(item, dict)
+    }
+    if "review_path_not_matching_reviewer_output" in mismatch_codes:
+        raise SystemExit(f"reconcile should not report review mismatch after promotion: {reconcile_same_hash!r}")
 
     write_json(
         bundle / "schedulers" / "main.scheduler.json",

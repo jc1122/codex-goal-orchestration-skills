@@ -543,6 +543,7 @@ def branch_summary(
             message=f"manifest branch {branch_id} worktree is missing",
         )
     outputs = reviewer_outputs(bundle_dir, branch_id)
+    branch_needs_reassemble = False
     if outputs and not review_path.exists():
         add_issue(
             stale_or_unreconciled,
@@ -552,6 +553,7 @@ def branch_summary(
             owner=branch_id,
             message=f"reviewer packet output exists for {branch_id} but branch review path is missing",
         )
+        branch_needs_reassemble = True
     if review_path.exists() and outputs:
         review_sha = sha256_file(review_path)
         if review_sha not in {item.get("sha256") for item in outputs}:
@@ -563,6 +565,7 @@ def branch_summary(
                 owner=branch_id,
                 message=f"branch review path for {branch_id} does not match any reviewer packet output",
             )
+            branch_needs_reassemble = True
     if status_value == "pass" and not review_path.exists():
         add_issue(
             missing_artifacts,
@@ -625,6 +628,11 @@ def branch_summary(
             message=f"worker scheduler has {len(scheduler_defects)} validation defect(s)",
         )
 
+    if branch_needs_reassemble and status_path.exists() and worktree_path is not None:
+        next_commands.append(
+            f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'assemble_branch_status.py'} "
+            f"--manifest {manifest_path.as_posix()} --branch-id {branch_id} --worktree {worktree_path.as_posix()} --allow-pass --replace --json"
+        )
     if status_path.exists():
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'validate_branch_status.py'} "
@@ -982,6 +990,15 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
     branch_reuse = {
         branch["branch_id"]: branch["validation"]["status"] == "pass" and branch["status_path"]["exists"]
         for branch in branch_reports
+    }
+    stale_branch_owners = {
+        str(item.get("owner"))
+        for item in effective_stale_or_unreconciled
+        if isinstance(item.get("owner"), str) and str(item.get("owner")).startswith("B")
+    }
+    branch_reuse = {
+        branch_id: reusable and branch_id not in stale_branch_owners
+        for branch_id, reusable in branch_reuse.items()
     }
     resume_action = choose_resume_action(
         overall_safe_to_reuse=False,

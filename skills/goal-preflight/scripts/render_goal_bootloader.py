@@ -793,6 +793,117 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     return json.dumps(payload, sort_keys=True, indent=2) + "\n"
 
 
+def _compact_readiness(readiness: dict) -> dict:
+    prompt_size = readiness.get("prompt_size_report") if isinstance(readiness.get("prompt_size_report"), dict) else {}
+    artifact_size = readiness.get("artifact_size_report") if isinstance(readiness.get("artifact_size_report"), dict) else {}
+    return {
+        "status": readiness.get("status"),
+        "launch_allowed": readiness.get("launch_allowed"),
+        "launch_blockers": readiness.get("launch_blockers", []),
+        "runtime_gate": readiness.get("runtime_gate", {}),
+        "repair_gate": readiness.get("repair_gate", {}),
+        "lint_status": readiness.get("lint_status", {}),
+        "verified_routes": readiness.get("verified_routes", {}),
+        "warnings": readiness.get("warnings", []),
+        "cleanup_plan": readiness.get("cleanup_plan", {}),
+        "branch_utilization": readiness.get("branch_utilization", {}),
+        "prompt_size_summary": {
+            "total_chars": prompt_size.get("total_prompt_chars", prompt_size.get("total_chars")),
+            "approx_total_tokens": prompt_size.get("approx_total_tokens"),
+            "max_single_prompt_chars": prompt_size.get("max_single_prompt_chars"),
+            "max_prompt_chars_per_file": prompt_size.get("max_prompt_chars_per_file"),
+            "per_file_min_prompt_char_margin": prompt_size.get("per_file_min_prompt_char_margin"),
+        },
+        "artifact_size_summary": {
+            "bundle_surface_chars": artifact_size.get("bundle_surface_chars"),
+            "bundle_surface_approx_tokens": artifact_size.get("bundle_surface_approx_tokens"),
+            "machine_artifact_chars": artifact_size.get("machine_artifact_chars"),
+            "machine_artifact_approx_tokens": artifact_size.get("machine_artifact_approx_tokens"),
+            "runtime_contract_chars": artifact_size.get("runtime_contract_chars"),
+            "runtime_contract_approx_tokens": artifact_size.get("runtime_contract_approx_tokens"),
+        },
+    }
+
+
+def _read_json_object(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_json_object(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _readiness_result_kind(readiness: dict) -> tuple[str, str, str | None]:
+    if readiness.get("status") == "pass" and readiness.get("launch_allowed") is True:
+        return "pass", "pass", None
+    lint_status = readiness.get("lint_status") if isinstance(readiness.get("lint_status"), dict) else {}
+    bundle_lint = lint_status.get("bundle_lint") if isinstance(lint_status.get("bundle_lint"), dict) else {}
+    repair_gate = readiness.get("repair_gate") if isinstance(readiness.get("repair_gate"), dict) else {}
+    if bundle_lint.get("status") != "pass" or repair_gate.get("status") != "pass":
+        return "blocked", "blocked_artifact_gate", "artifact lint or repair gate is not pass"
+    runtime_gate = readiness.get("runtime_gate") if isinstance(readiness.get("runtime_gate"), dict) else {}
+    blocked_reason = runtime_gate.get("reason") if isinstance(runtime_gate.get("reason"), str) else "readiness status is not pass"
+    return "blocked", "blocked_readiness_usable_bundle", blocked_reason
+
+
+def refresh_preflight_summary_artifacts(bundle_dir: Path, readiness: dict) -> None:
+    pipeline_path = bundle_dir / "preflight.pipeline.json"
+    report_path = bundle_dir / "PREFLIGHT_REPORT.md"
+    status, result_kind, blocked_reason = _readiness_result_kind(readiness)
+    if pipeline_path.exists():
+        pipeline = _read_json_object(pipeline_path)
+        if pipeline:
+            pipeline["status"] = status
+            pipeline["result_kind"] = result_kind
+            pipeline["usable_bundle"] = status == "pass" or result_kind == "blocked_readiness_usable_bundle"
+            pipeline["blocked_reason"] = blocked_reason
+            pipeline["readiness_status"] = readiness.get("status")
+            pipeline["launch_allowed"] = readiness.get("launch_allowed")
+            pipeline["readiness"] = _compact_readiness(readiness)
+            pipeline["next_commands"] = readiness.get("next_commands", [])
+            pipeline["readiness_path"] = (bundle_dir / "readiness.json").as_posix()
+            _write_json_object(pipeline_path, pipeline)
+    if report_path.exists():
+        text = report_path.read_text(encoding="utf-8").rstrip()
+        marker = "\nFinal pipeline state:\n"
+        if marker in text:
+            text = text.split(marker, 1)[0].rstrip()
+        lint_status = readiness.get("lint_status") if isinstance(readiness.get("lint_status"), dict) else {}
+        bundle_lint = lint_status.get("bundle_lint") if isinstance(lint_status.get("bundle_lint"), dict) else {}
+        repair_gate = readiness.get("repair_gate") if isinstance(readiness.get("repair_gate"), dict) else {}
+        blockers = readiness.get("launch_blockers") if isinstance(readiness.get("launch_blockers"), list) else []
+        final_lines = [
+            "",
+            "Final pipeline state:",
+            f"- Bundle lint: {bundle_lint.get('reported_status') or bundle_lint.get('status') or 'missing'}",
+            f"- Repair gate: {repair_gate.get('status') or 'missing'}",
+            f"- Readiness: {readiness.get('status')}",
+            f"- Result kind: {result_kind}",
+            f"- Launch allowed: {str(bool(readiness.get('launch_allowed'))).lower()}",
+        ]
+        if blockers:
+            final_lines.append(f"- Launch blockers: {'; '.join(str(item) for item in blockers)}")
+        report_path.write_text(text + "\n".join(final_lines) + "\n", encoding="utf-8")
+
+
+def render_and_refresh_canonical_readiness_json(bundle_dir: Path, output: Path, repo_root: Path | None = None) -> str:
+    text = ""
+    previous = None
+    for _ in range(8):
+        text = render_readiness_json(bundle_dir, repo_root=repo_root)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(text, encoding="utf-8")
+        refresh_preflight_summary_artifacts(bundle_dir, json.loads(text))
+        if text == previous:
+            break
+        previous = text
+    return text
+
+
 def emit_output(text: str, output: Path | None = None, *, stdout: bool = False, json_mode: bool = False) -> None:
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -925,6 +1036,10 @@ def main() -> int:
         if args.repo_root:
             repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
         if args.json:
+            if args.output is not None and args.output.resolve() == (bundle_dir / "readiness.json").resolve():
+                text = render_and_refresh_canonical_readiness_json(bundle_dir, args.output.resolve(), repo_root=repo_root)
+                print(text, end="" if text.endswith("\n") else "\n")
+                return 0
             emit_output(render_readiness_json(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout, json_mode=True)
             return 0
         emit_output(render_readiness(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout)

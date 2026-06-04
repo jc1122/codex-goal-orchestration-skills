@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import shlex
@@ -48,6 +49,14 @@ def read_json(path: Path) -> dict:
 def write_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return "sha256:" + digest.hexdigest()
 
 
 def annotate_status_lanes(branch_status: dict, validation_defects: list[str]) -> None:
@@ -401,16 +410,34 @@ def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str)
     return []
 
 
+def promote_current_reviewer_if_newer(bundle_dir: Path, review_path: Path, branch_id: str) -> list[str]:
+    _gate, expected_hashes, expected_packet_id, gate_defects = current_pre_review_gate(bundle_dir, branch_id)
+    if gate_defects:
+        return [f"review artifact is not current and {defect}" for defect in gate_defects]
+    candidates, defects = current_reviewer_candidates(bundle_dir, branch_id, expected_hashes, expected_packet_id)
+    if len(candidates) != 1:
+        return defects if candidates else []
+    candidate = candidates[0]
+    if review_path.exists() and sha256_file(review_path) == sha256_file(candidate):
+        return []
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(candidate, review_path)
+    return []
+
+
 def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, list[str]]:
     review_path = safe_bundle_path(bundle_dir, branch.get("review_path"), "manifest branch review_path")
     if not review_path.exists():
         promotion_defects = promote_reviewer_output(bundle_dir, review_path, branch_id)
         if promotion_defects:
             return "missing", promotion_defects
-    review = read_json(review_path)
     _gate, expected_hashes, expected_packet_id, gate_defects = current_pre_review_gate(bundle_dir, branch_id)
     if gate_defects:
         return "missing", gate_defects
+    promotion_defects = promote_current_reviewer_if_newer(bundle_dir, review_path, branch_id)
+    if promotion_defects and not review_path.exists():
+        return "missing", promotion_defects
+    review = read_json(review_path)
     if not review_matches_gate(review, branch_id, expected_hashes, expected_packet_id):
         promotion_defects = promote_reviewer_output(bundle_dir, review_path, branch_id)
         if promotion_defects:

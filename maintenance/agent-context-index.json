@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:dddea84a8aed6f5b5cda2f0d8aa1dbc2894a83e9000f61ea4b55db3b1900a186"
+    "source_fingerprint": "sha256:b7e2a27414a4127a7b971707cdb47ae101a1b5c03ece92639564e162eb212ce8"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,13 +16,13 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 7124,
-      "approx_tokens": 84514,
+      "lines": 7399,
+      "approx_tokens": 87826,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3352:run_runtime_packet_fixtures:975l",
-        "4958:run_base_ref_default_fixture:952l",
-        "6655:run_branch_status_negative_fixtures:429l",
+        "3352:run_runtime_packet_fixtures:1086l",
+        "5069:run_base_ref_default_fixture:993l",
+        "6807:run_branch_status_negative_fixtures:552l",
         "1606:run_negative_amendment_fixtures:362l"
       ]
     },
@@ -53,6 +53,19 @@
       ]
     },
     {
+      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 2771,
+      "approx_tokens": 27690,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "2340:run_packet:391l",
+        "2164:extract_status_json:100l",
+        "727:write_launcher_state:85l",
+        "959:run_with_timeout:85l"
+      ]
+    },
+    {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
       "lines": 2077,
@@ -63,19 +76,6 @@
         "745:validate_preflight_lite_records:152l",
         "1046:validate_runtime_metadata:107l",
         "959:validate_goal_config_manifest:85l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 2744,
-      "approx_tokens": 27343,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "2340:run_packet:364l",
-        "2164:extract_status_json:100l",
-        "727:write_launcher_state:85l",
-        "959:run_with_timeout:85l"
       ]
     }
   ],

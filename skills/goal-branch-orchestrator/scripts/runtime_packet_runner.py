@@ -2565,6 +2565,7 @@ def run_packet(packet_dir: Path) -> int:
         write_telemetry(packet_dir, config)
         return 1
 
+    baseline_changed_files = changed_file_fingerprints(worktree)
     for index, attempt in enumerate(attempts):
         _label = event_label(attempt, f"attempt-{index + 1}")
         provider = attempt.get("harness_kind") or attempt.get("provider")
@@ -2612,7 +2613,11 @@ def run_packet(packet_dir: Path) -> int:
         else:
             raise SystemExit(f"{CONFIG_NAME} unsupported {role} provider: {provider}")
         output_nonempty = output_path.exists() and output_path.stat().st_size > 0
-        state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=False)
+        cleanup = cleanup_generated_artifacts(worktree, attempt_index=index, attempt=attempt)
+        record_generated_artifact_cleanup(packet_dir, attempt, cleanup)
+        packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
+        dirty = bool(packet_changed_files)
+        state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
         parse_report = attempt.get("_parse_report")
         if not isinstance(parse_report, dict):
             parse_report = {}
@@ -2626,7 +2631,7 @@ def run_packet(packet_dir: Path) -> int:
             event_path=event_path,
             attempt_state=state,
             returncode=rc,
-            dirty=False,
+            dirty=dirty,
             output_nonempty=output_nonempty,
             message=failure_message,
         )
@@ -2638,11 +2643,33 @@ def run_packet(packet_dir: Path) -> int:
             attempt=attempt,
             attempt_index=index,
             returncode=rc,
-            dirty=False,
+            dirty=dirty,
             output_nonempty=output_nonempty,
             elapsed_ms=attempt_elapsed_ms(attempt),
             stop_reason=stop_reason,
         )
+        if rc == 0 and dirty:
+            message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(packet_changed_files)
+            attempt["failure_class"] = "dirty_worktree"
+            attempt["failure_subclass"] = "read_only_attempt_left_dirty_worktree"
+            (packet_dir / "dirty-worktree.blocked.txt").write_text(message + "\n", encoding="utf-8")
+            write_launcher_state(
+                packet_dir,
+                config,
+                state="blocked",
+                attempt=attempt,
+                attempt_index=index,
+                returncode=rc,
+                dirty=True,
+                output_nonempty=output_nonempty,
+                message=message,
+                elapsed_ms=attempt_elapsed_ms(attempt),
+                stop_reason="dirty_stop",
+            )
+            cleanup_runtime_cache_evidence(packet_dir, config)
+            write_telemetry(packet_dir, config)
+            write_packet_summary(packet_dir, config)
+            return 2
         if rc == 0:
             cleanup_runtime_cache_evidence(packet_dir, config)
             write_telemetry(packet_dir, config)
