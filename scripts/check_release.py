@@ -28,7 +28,7 @@ EXPECTED_SKILLS = [
     "goal-preflight",
 ]
 EXPECTED_SUPPORT_DIRS = ["_goal_shared"]
-EXPECTED_METADATA_FILES = ["AGENTS.md", "maintenance/agent-context-index.json"]
+EXPECTED_METADATA_FILES = ["AGENTS.md", "README.md", "maintenance/agent-context-index.json"]
 SEMVER_RE = re.compile(
     r"^(0|[1-9]\d*)\."
     r"(0|[1-9]\d*)\."

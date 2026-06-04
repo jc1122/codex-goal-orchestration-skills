@@ -328,7 +328,7 @@ def apply_validation_mode(config: dict[str, Any], mode: str) -> None:
     telemetry = config.setdefault("telemetry", {})
     if mode == "debug":
         telemetry["mode"] = "debug"
-        telemetry["raw_text"] = True
+        telemetry["raw_text"] = False
         config["preflight_intent"] = {"telemetry_mode": "debug"}
     else:
         telemetry.setdefault("mode", "standard")

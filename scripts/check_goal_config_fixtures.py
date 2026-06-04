@@ -695,7 +695,7 @@ def main() -> int:
         require(thorough_debug["effort"]["demanding_timeout_seconds"] == 2400, "thorough demanding timeout mismatch")
         require(thorough_debug["validation"]["mode"] == "debug", "debug validation mode should be recorded")
         require(thorough_debug["telemetry"]["mode"] == "debug", "debug validation should set telemetry mode")
-        require(thorough_debug["telemetry"]["raw_text"] is True, "debug validation should request raw text")
+        require(thorough_debug["telemetry"]["raw_text"] is False, "debug validation should keep raw_text disabled")
         require(
             thorough_debug.get("preflight_intent", {}).get("telemetry_mode") == "debug",
             "debug validation should set preflight telemetry intent",

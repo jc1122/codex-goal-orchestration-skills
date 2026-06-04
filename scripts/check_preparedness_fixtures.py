@@ -6149,8 +6149,8 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if config_debug_policy.get("mode") != "debug" or config_debug_policy.get("raw_text") is not False:
         raise SystemExit(f"goal_config preflight_intent telemetry_mode=debug should produce safe debug policy: {config_debug_policy!r}")
     config_debug_compat = config_debug_manifest.get("preflight_compatibility", {}).get("telemetry", {})
-    if config_debug_compat.get("policy_transformation") != "raw_text_true_is_sanitized_to_manifest_raw_text_false":
-        raise SystemExit(f"goal_config raw_text policy transformation should be recorded: {config_debug_compat!r}")
+    if config_debug_compat.get("policy_transformation") != "none":
+        raise SystemExit(f"goal_config raw_text policy transformation should be none: {config_debug_compat!r}")
 
     colocated_smoke_debug_check = tmp_path / "goal-config-smoke.json"
     if colocated_smoke_debug_check.exists():

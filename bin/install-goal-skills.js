@@ -9,7 +9,7 @@ const packageRoot = path.resolve(__dirname, "..");
 const packageJson = require(path.join(packageRoot, "package.json"));
 const skillsRoot = path.join(packageRoot, "skills");
 const supportDirNames = ["_goal_shared"];
-const metadataFiles = ["AGENTS.md", "maintenance/agent-context-index.json"];
+const metadataFiles = ["AGENTS.md", "README.md", "maintenance/agent-context-index.json"];
 
 function usage() {
   return `Install Codex goal orchestration skills.
