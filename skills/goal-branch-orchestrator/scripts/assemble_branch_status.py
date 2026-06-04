@@ -380,8 +380,11 @@ def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, 
             return "missing", promotion_defects
     review = read_json(review_path)
     verdict = review.get("verdict")
+    verification_gaps = review.get("verification_gaps")
     if verdict not in CONTRACT.REVIEW_STATUSES:
         return "missing", [f"review artifact has invalid verdict: {verdict!r}"]
+    if verdict == "mergeable" and verification_gaps:
+        return "missing", ["review artifact has non-empty verification_gaps with mergeable verdict"]
     if verdict != "mergeable":
         return str(verdict), [f"review verdict is {verdict!r}, not mergeable"]
     return "mergeable", []
@@ -401,6 +404,12 @@ def write_review_waiver(
     if not isinstance(rel_path, str) or not rel_path.strip():
         return
     review_path = branch.get("review_path")
+    review_artifact_exists = False
+    if isinstance(review_path, str) and review_path.strip():
+        try:
+            review_artifact_exists = safe_bundle_path(bundle_dir, review_path, "manifest branch review_path").exists()
+        except ValueError:
+            review_artifact_exists = False
     waiver = {
         "schema_version": 1,
         "kind": "review-waiver",
@@ -408,9 +417,14 @@ def write_review_waiver(
         "branch_status": branch_status.get("status"),
         "review_status": branch_status.get("review_status"),
         "review_path": review_path if isinstance(review_path, str) else "",
-        "reviewer_launch_skipped": True,
-        "reason_code": "branch_non_pass_terminal_blocker",
-        "reason": "Branch is non-pass with terminal blocker evidence; launch a reviewer only after repair produces pass-ready evidence.",
+        "reviewer_launch_skipped": not review_artifact_exists,
+        "review_artifact_rejected": review_artifact_exists,
+        "reason_code": "review_artifact_not_accepted" if review_artifact_exists else "branch_non_pass_terminal_blocker",
+        "reason": (
+            "Reviewer artifact exists but was not accepted as mergeable evidence; repair or rerun review after the blockers are cleared."
+            if review_artifact_exists
+            else "Branch is non-pass with terminal blocker evidence; launch a reviewer only after repair produces pass-ready evidence."
+        ),
         "validated_by": "assemble_branch_status.py",
         "blockers": branch_status.get("blockers", []),
         "branch_status_path": branch.get("status_path"),

@@ -2088,6 +2088,10 @@ def validate_instance(instance: Any, schema: dict[str, Any]) -> None:
 
 def validate_packet_post_constraints(data: dict[str, Any], config: dict[str, Any]) -> None:
     if config.get("role") != "worker":
+        if config.get("role") == "reviewer":
+            verification_gaps = data.get("verification_gaps")
+            if data.get("verdict") == "mergeable" and verification_gaps:
+                raise ValueError("verification_gaps must be empty when verdict is mergeable")
         return
     expected_ladder = config.get("selected_ladder")
     if isinstance(expected_ladder, list) and data.get("selected_ladder") != expected_ladder:

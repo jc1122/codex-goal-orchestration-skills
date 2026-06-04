@@ -3112,6 +3112,21 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
             raise SystemExit(
                 f"launcher state classifier mismatch for rc={returncode}, output={output_nonempty}, dirty={dirty}: {actual!r}"
             )
+    try:
+        module.validate_packet_post_constraints(
+            {
+                "packet_id": "B01-R01",
+                "role": "reviewer",
+                "verdict": "mergeable",
+                "verification_gaps": ["direct rerun failed in this fixture"],
+            },
+            {"role": "reviewer"},
+        )
+    except ValueError as exc:
+        if "verification_gaps" not in str(exc):
+            raise SystemExit(f"reviewer post-constraint should explain verification gap rejection: {exc}") from exc
+    else:
+        raise SystemExit("reviewer post-constraint should reject mergeable verdicts with verification gaps")
     cleanup_repo = tmp_path / "generated-cleanup-tracked-repo"
     cleanup_repo.mkdir()
     run(["git", "init", cleanup_repo.as_posix()])
@@ -6555,6 +6570,41 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
 
 
 def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path) -> None:
+    mergeable_gaps_bundle = tmp_path / "branch-status-mergeable-gaps"
+    shutil.copytree(bundle, mergeable_gaps_bundle)
+    write_json(
+        mergeable_gaps_bundle / "branches" / "B01.review.json",
+        {
+            "packet_id": "B01-R01",
+            "role": "reviewer",
+            "verdict": "mergeable",
+            "findings": [],
+            "finding_classes": ["verification_gap"],
+            "commands_run": ["pytest -q"],
+            "verification_gaps": ["direct rerun failed in this fixture"],
+            "residual_risks": [],
+            "semantic_input_hashes": {},
+            "reuse_policy": {
+                "mode": "new",
+                "accepted": False,
+                "semantic_hashes_match": False,
+                "source_review_path": None,
+                "source_telemetry_path": None,
+            },
+            "summary": "Mergeable review with verification gaps fixture",
+        },
+    )
+    assemble_branch_status(mergeable_gaps_bundle)
+    mergeable_gaps_branch_status = read_json(mergeable_gaps_bundle / "branches" / "B01.status.json")
+    if mergeable_gaps_branch_status.get("review_status") != "missing":
+        raise SystemExit("mergeable-with-gaps review should be downgraded to missing review status")
+    waiver = read_json(mergeable_gaps_bundle / "branches" / "B01.review-waiver.json")
+    if waiver.get("review_artifact_rejected") is not True:
+        raise SystemExit("mergeable-with-gaps review waiver should record rejected review artifact")
+    mergeable_gaps_status = json.loads(validate_branch(mergeable_gaps_bundle).stdout)
+    if mergeable_gaps_status.get("artifact_valid") is not True:
+        raise SystemExit("mergeable-with-gaps review should normalize to non-validator-failing branch status")
+
     assemble_branch_status(bundle)
     missing_waiver_bundle = tmp_path / "branch-status-missing-review-waiver"
     shutil.copytree(bundle, missing_waiver_bundle)

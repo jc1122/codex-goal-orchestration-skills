@@ -1676,6 +1676,8 @@ def validate_review_artifact_for_branch(
         if require_existing:
             defect(defects, "$.review_status", f"review artifact does not exist: {review_artifact}")
         return
+    if not require_existing:
+        return
     review_data = load_json_artifact(defects, review_artifact, "$.review_status")
     packet_id = review_data.get("packet_id") if isinstance(review_data, dict) else None
     branch_id = branch_entry.get("id") if isinstance(branch_entry.get("id"), str) else None
@@ -1839,8 +1841,18 @@ def validate_review_waiver_artifact(
         defect(defects, "$.review_waiver_path.branch_status", "must match branch status")
     if waiver.get("review_status") != review_status:
         defect(defects, "$.review_waiver_path.review_status", "must match branch review_status")
-    if waiver.get("reviewer_launch_skipped") is not True:
-        defect(defects, "$.review_waiver_path.reviewer_launch_skipped", "must be true")
+    reviewer_launch_skipped = waiver.get("reviewer_launch_skipped")
+    if not isinstance(reviewer_launch_skipped, bool):
+        defect(defects, "$.review_waiver_path.reviewer_launch_skipped", "must be a boolean")
+    review_artifact_rejected = waiver.get("review_artifact_rejected")
+    if review_artifact_rejected is not None and not isinstance(review_artifact_rejected, bool):
+        defect(defects, "$.review_waiver_path.review_artifact_rejected", "must be a boolean when present")
+    if reviewer_launch_skipped is not True and review_artifact_rejected is not True:
+        defect(
+            defects,
+            "$.review_waiver_path",
+            "must record either reviewer_launch_skipped=true or review_artifact_rejected=true",
+        )
     require_string(defects, waiver.get("reason_code"), "$.review_waiver_path.reason_code")
     require_string(defects, waiver.get("reason"), "$.review_waiver_path.reason")
     require_string(defects, waiver.get("validated_by"), "$.review_waiver_path.validated_by")
