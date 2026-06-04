@@ -2086,6 +2086,25 @@ def validate_instance(instance: Any, schema: dict[str, Any]) -> None:
                         raise ValueError(f"{field} contains item that does not match required pattern")
 
 
+def commands_include_diff_check_head(commands_run: object) -> bool:
+    if not isinstance(commands_run, list):
+        return False
+    for command in commands_run:
+        if not isinstance(command, str) or not command.strip():
+            continue
+        try:
+            tokens = shlex.split(command)
+        except ValueError:
+            continue
+        for index, token in enumerate(tokens):
+            if token != "git":
+                continue
+            args = tokens[index + 1 :]
+            if args and args[0] == "diff" and "--check" in args and "HEAD" in args:
+                return True
+    return False
+
+
 def validate_packet_post_constraints(data: dict[str, Any], config: dict[str, Any]) -> None:
     if config.get("role") != "worker":
         if config.get("role") == "reviewer":
@@ -2096,6 +2115,10 @@ def validate_packet_post_constraints(data: dict[str, Any], config: dict[str, Any
     expected_ladder = config.get("selected_ladder")
     if isinstance(expected_ladder, list) and data.get("selected_ladder") != expected_ladder:
         raise ValueError("selected_ladder must match launch-config selected_ladder exactly")
+    changed_files = data.get("changed_files")
+    has_changed_files = isinstance(changed_files, list) and any(isinstance(item, str) and item.strip() for item in changed_files)
+    if data.get("status") == "pass" and has_changed_files and not commands_include_diff_check_head(data.get("commands_run")):
+        raise ValueError("passing worker status commands_run must include git diff --check HEAD")
 
 
 def output_matches_schema(schema_path: Path, output_path: Path, config: dict[str, Any]) -> bool:

@@ -3181,6 +3181,34 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
             raise SystemExit(f"reviewer post-constraint should explain verification gap rejection: {exc}") from exc
     else:
         raise SystemExit("reviewer post-constraint should reject mergeable verdicts with verification gaps")
+    module.validate_packet_post_constraints(
+        {
+            "packet_id": "B01-W01",
+            "role": "worker",
+            "status": "pass",
+            "selected_ladder": ["codex-mini"],
+            "changed_files": ["README.md"],
+            "commands_run": ["python3 -m pytest -q", "git diff --check HEAD", "git diff --check main...HEAD"],
+        },
+        {"role": "worker", "selected_ladder": ["codex-mini"]},
+    )
+    try:
+        module.validate_packet_post_constraints(
+            {
+                "packet_id": "B01-W01",
+                "role": "worker",
+                "status": "pass",
+                "selected_ladder": ["codex-mini"],
+                "changed_files": ["README.md"],
+                "commands_run": ["python3 -m pytest -q", "git diff --check main...HEAD"],
+            },
+            {"role": "worker", "selected_ladder": ["codex-mini"]},
+        )
+    except ValueError as exc:
+        if "git diff --check HEAD" not in str(exc):
+            raise SystemExit(f"worker post-constraint should explain missing HEAD diff check: {exc}") from exc
+    else:
+        raise SystemExit("worker post-constraint should reject pass without git diff --check HEAD")
     cleanup_repo = tmp_path / "generated-cleanup-tracked-repo"
     cleanup_repo.mkdir()
     run(["git", "init", cleanup_repo.as_posix()])
@@ -3901,7 +3929,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         "  'selected_ladder': ['codex-spark', 'codex-mini'],\n"
         "  'selection_reason': 'Fixture verifies runtime cache-only dirt does not block fallback.',\n"
         "  'changed_files': [],\n"
-        "  'commands_run': ['git status --short'],\n"
+        "  'commands_run': ['git status --short', 'git diff --check HEAD'],\n"
         "  'tests': ['fixture fake codex fallback'],\n"
         "  'blockers': [],\n"
         "  'handoff': 'fallback passed after cache-only failed attempt'\n"
@@ -4095,7 +4123,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         "  'selected_ladder': ['codex-mini'],\n"
         "  'selection_reason': 'Fixture verifies shared branch dirt does not block later workers.',\n"
         "  'changed_files': ['owned.txt'],\n"
-        "  'commands_run': ['git status --short'],\n"
+        "  'commands_run': ['git status --short', 'git diff --check HEAD'],\n"
         "  'tests': ['fixture fake codex shared dirty'],\n"
         "  'blockers': [],\n"
         "  'handoff': 'later worker passed with preexisting branch dirt'\n"
@@ -4199,7 +4227,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         "  'selected_ladder': ['codex-mini'],\n"
         "  'selection_reason': 'Fixture intentionally writes outside owned paths.',\n"
         "  'changed_files': ['outside.txt'],\n"
-        "  'commands_run': ['git status --short'],\n"
+        "  'commands_run': ['git status --short', 'git diff --check HEAD'],\n"
         "  'tests': ['fixture fake codex ownership blocked'],\n"
         "  'blockers': [],\n"
         "  'handoff': 'fake pass should be converted to ownership blocked'\n"

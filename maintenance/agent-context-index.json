@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:a69af37d5b19517e3f6dbd292141f46a56cd5451a63e15c29ceb0ad520a1437a"
+    "source_fingerprint": "sha256:dddea84a8aed6f5b5cda2f0d8aa1dbc2894a83e9000f61ea4b55db3b1900a186"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,13 +16,13 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 7096,
-      "approx_tokens": 84196,
+      "lines": 7124,
+      "approx_tokens": 84514,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3324:run_runtime_packet_fixtures:975l",
-        "4930:run_base_ref_default_fixture:952l",
-        "6627:run_branch_status_negative_fixtures:429l",
+        "3352:run_runtime_packet_fixtures:975l",
+        "4958:run_base_ref_default_fixture:952l",
+        "6655:run_branch_status_negative_fixtures:429l",
         "1606:run_negative_amendment_fixtures:362l"
       ]
     },
@@ -68,12 +68,12 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2721,
-      "approx_tokens": 27086,
+      "lines": 2744,
+      "approx_tokens": 27343,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2317:run_packet:364l",
-        "2141:extract_status_json:100l",
+        "2340:run_packet:364l",
+        "2164:extract_status_json:100l",
         "727:write_launcher_state:85l",
         "959:run_with_timeout:85l"
       ]
