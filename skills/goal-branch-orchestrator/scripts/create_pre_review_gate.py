@@ -489,6 +489,16 @@ def file_state(worktree: Path, rel_path: str) -> str:
     return sha256_file(target)
 
 
+def freshness_paths(paths: list[str]) -> list[str]:
+    result: list[str] = []
+    for path in paths:
+        if not is_repo_relative_path(path, reject_porcelain=True) or is_runtime_cache_path(path):
+            continue
+        if path not in result:
+            result.append(path)
+    return result
+
+
 def worktree_snapshot(worktree: Path, base_ref: str, branch_id: str, branch_status: dict) -> tuple[dict, list[str]]:
     defects = []
     head_result = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
@@ -507,12 +517,10 @@ def worktree_snapshot(worktree: Path, base_ref: str, branch_id: str, branch_stat
     status_paths = [
         path
         for path in branch_status.get("changed_files", [])
-        if isinstance(path, str) and path.strip() and is_repo_relative_path(path, reject_porcelain=True)
+        if isinstance(path, str) and path.strip()
     ] if isinstance(branch_status.get("changed_files"), list) else []
-    current_paths = []
-    for path in [*status_paths, *base_paths, *unstaged_paths, *staged_paths, *untracked_paths]:
-        if path not in current_paths:
-            current_paths.append(path)
+    base_paths = freshness_paths(base_paths)
+    current_paths = freshness_paths([*status_paths, *base_paths, *unstaged_paths, *staged_paths, *untracked_paths])
     snapshot = {
         "schema_version": 1,
         "branch_id": branch_id,

@@ -1,6 +1,6 @@
 ---
 name: goal-config
-version: 0.2.85
+version: 0.2.86
 description: "Configure and verify goal orchestration model/provider profiles. Use when the user wants lean agent UX for model ladders, harness providers, branch/worker aggressiveness, token/character/time effort settings, or a fail-closed smoke test before goal-preflight or runtime orchestration."
 ---
 

@@ -4019,6 +4019,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
             "--json",
         ]
     )
+    for rel in ["src/ft10_solver/__pycache__", "tests/__pycache__"]:
+        cache = reviewer_cache_worktree / rel
+        cache.mkdir(parents=True, exist_ok=True)
+        (cache / "module.cpython-312.pyc").write_bytes(b"generated pyc before pre-review")
     run(
         [
             "python3",
@@ -4039,6 +4043,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
             "reviewer cache cleanup fixture validates",
         ]
     )
+    reviewer_freshness = read_json(reviewer_cache_bundle / "branches" / "B01.worktree_freshness.json")
+    freshness_changed = reviewer_freshness.get("current_changed_files", [])
+    freshness_hashes = reviewer_freshness.get("current_file_hashes", {})
+    for rel in ["src/ft10_solver/__pycache__", "tests/__pycache__"]:
+        if rel in freshness_changed or any(str(path).startswith(rel + "/") for path in freshness_hashes):
+            raise SystemExit(f"pre-review freshness should ignore generated cache artifacts: {reviewer_freshness!r}")
     create_runtime_packet(
         role="reviewer",
         packet_id="B01-R09",
@@ -4071,7 +4081,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         "  'verdict': 'mergeable',\n"
         "  'findings': [],\n"
         "  'finding_classes': ['no_issue'],\n"
-        "  'commands_run': ['python3 -m unittest fixture'],\n"
+        "  'commands_run': ['python3 -m unittest fixture', 'git diff --check main...HEAD'],\n"
         "  'verification_gaps': [],\n"
         "  'residual_risks': [],\n"
         f"  'semantic_input_hashes': {json.dumps(reviewer_semantic_hashes)},\n"
@@ -4098,6 +4108,27 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     for rel in ["src/ft10_solver/__pycache__", "tests/__pycache__"]:
         if (reviewer_cache_worktree / rel).exists():
             raise SystemExit(f"reviewer-generated cache survived cleanup: {rel}")
+    reviewer_cache_assemble = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+            "--manifest",
+            (reviewer_cache_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            reviewer_cache_worktree.as_posix(),
+            "--allow-pass",
+            "--replace",
+            "--json",
+        ]
+    )
+    reviewer_cache_assemble_result = json.loads(reviewer_cache_assemble.stdout)
+    if reviewer_cache_assemble_result.get("status") != "pass":
+        raise SystemExit(f"reviewer cleanup should not stale pre-review freshness: {reviewer_cache_assemble_result!r}")
+    reviewer_cache_status = read_json(reviewer_cache_bundle / "branches" / "B01.status.json")
+    if reviewer_cache_status.get("status") != "pass" or reviewer_cache_status.get("artifact_valid") is not True:
+        raise SystemExit(f"reviewer cleanup should assemble valid pass branch status: {reviewer_cache_status!r}")
 
     stale_output_worktree = tmp_path / "stale-output-fallback-worktree"
     stale_output_worktree.mkdir()

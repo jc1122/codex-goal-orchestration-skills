@@ -1193,6 +1193,16 @@ def current_file_state(worktree: Path, rel_path: str) -> str:
     return sha256_file(target)
 
 
+def freshness_paths(paths: list[str]) -> list[str]:
+    result: list[str] = []
+    for rel_path in paths:
+        if not is_repo_relative_path(rel_path) or is_runtime_cache_path(rel_path):
+            continue
+        if rel_path not in result:
+            result.append(rel_path)
+    return result
+
+
 def expected_worktree_freshness(
     defects: list[str],
     *,
@@ -1218,12 +1228,10 @@ def expected_worktree_freshness(
     status_paths = [
         item
         for item in branch_status.get("changed_files", [])
-        if isinstance(item, str) and item.strip() and is_repo_relative_path(item)
+        if isinstance(item, str) and item.strip()
     ] if isinstance(branch_status.get("changed_files"), list) else []
-    current_paths: list[str] = []
-    for rel_path in [*status_paths, *base_paths, *unstaged_paths, *staged_paths, *untracked_paths]:
-        if rel_path not in current_paths:
-            current_paths.append(rel_path)
+    base_paths = freshness_paths(base_paths)
+    current_paths = freshness_paths([*status_paths, *base_paths, *unstaged_paths, *staged_paths, *untracked_paths])
     return {
         "schema_version": 1,
         "branch_id": branch_id,
