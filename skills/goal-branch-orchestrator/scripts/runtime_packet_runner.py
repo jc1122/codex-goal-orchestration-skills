@@ -1348,11 +1348,7 @@ def worker_ownership_violations(config: dict[str, Any], changed_files: list[str]
 
 def extract_changed_files(worktree: str) -> list[str]:
     try:
-        output = subprocess.check_output(
-            ["git", "-C", worktree, "status", "--short"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
+        output = "\n".join(worktree_status_lines(worktree, untracked_files_all=True))
     except Exception:  # noqa: BLE001
         return []
     changed_files = []
@@ -1885,10 +1881,15 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
         stdout_path=event_path,
     )
     append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
-    if execution.get("returncode", 1) != 0:
-        return int(execution.get("returncode", 1)), execution, event_path
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
+    if execution.get("returncode", 1) != 0:
+        output_nonempty = output_path.exists() and output_path.stat().st_size > 0
+        if role == "worker" and output_nonempty and ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report):
+            parse_report["status"] = "schema_success_nonzero_exit"
+            parse_report["nonzero_returncode"] = int(execution.get("returncode", 1))
+            return 0, execution, event_path
+        return int(execution.get("returncode", 1)), execution, event_path
     if role == "worker" and not ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report):
         return 1, execution, event_path
     return 0, execution, event_path

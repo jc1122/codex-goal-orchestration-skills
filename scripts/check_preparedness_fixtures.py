@@ -3296,13 +3296,16 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
                 "B02",
                 "--delegation-mode",
                 "cli",
-            ]
+            ],
+            expect=1,
         )
     finally:
         subprocess.run(["git", "branch", "-D", existing_branch_name], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-    existing_branch_command = existing_branch_result.stdout.strip()
-    if not existing_branch_command.startswith("git worktree add ") or " -b " in existing_branch_command:
-        raise SystemExit(f"existing branch without attached worktree should render non-creating add command: {existing_branch_result.stdout!r}")
+    assert_contains(
+        existing_branch_result.stdout,
+        "target branch already exists and will not be reused",
+        "existing stale branch worktree fixture",
+    )
 
 
 def load_script_module(name: str, relative_path: str):
@@ -3444,6 +3447,22 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         raise SystemExit("runtime cache fixture should make raw worktree status dirty")
     if module.is_worktree_dirty(cache_repo.as_posix(), ignore_runtime_cache=True):
         raise SystemExit("runtime cache-only dirt should not be actionable dirty")
+    untracked_owned_repo = tmp_path / "runtime-untracked-owned-repo"
+    untracked_owned_repo.mkdir()
+    run(["git", "init", untracked_owned_repo.as_posix()])
+    (untracked_owned_repo / "src" / "fixture_pkg").mkdir(parents=True)
+    (untracked_owned_repo / "src" / "fixture_pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (untracked_owned_repo / "src" / "fixture_pkg" / "model.py").write_text("VALUE = 1\n", encoding="utf-8")
+    untracked_changed = module.extract_changed_files(untracked_owned_repo.as_posix())
+    expected_untracked = ["src/fixture_pkg/__init__.py", "src/fixture_pkg/model.py"]
+    if untracked_changed != expected_untracked:
+        raise SystemExit(f"runtime changed-file extraction must expand untracked dirs: {untracked_changed!r}")
+    ownership_violations = module.worker_ownership_violations(
+        {"owned_files": expected_untracked},
+        untracked_changed,
+    )
+    if ownership_violations:
+        raise SystemExit(f"runtime ownership should accept concrete owned untracked files: {ownership_violations!r}")
     opencode_packet_dir = tmp_path / "opencode-wal-classifier"
     opencode_packet_dir.mkdir()
     extra_env, db_path = module.opencode_packet_env(opencode_packet_dir)
@@ -4095,6 +4114,83 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         or manifest_worker_summary.get("attempts", [{}])[0].get("failure_class") != "none"
     ):
         raise SystemExit(f"worker packet summary omitted route attempt metadata: {manifest_worker_summary!r}")
+
+    direct_schema_root = tmp_path / "direct-schema-packets"
+    direct_schema_worktree = tmp_path / "direct-schema-worktree"
+    direct_schema_worktree.mkdir()
+    run(["git", "init", direct_schema_worktree.as_posix()])
+    direct_owned_files = ["src/fixture_pkg/__init__.py", "src/fixture_pkg/model.py"]
+    create_runtime_packet(
+        role="worker",
+        packet_id="B99-W02",
+        branch="direct-schema-fixture",
+        out_dir=direct_schema_root,
+        worktree=direct_schema_worktree,
+        task_file=task_file,
+        owned_files=direct_owned_files,
+        worker_route=["codex-mini"],
+        selection_reason="Fixture exercises direct Codex output-schema recovery on nonzero exit.",
+    )
+    direct_schema_packet = direct_schema_root / "B99-W02"
+    fake_direct_codex_dir = tmp_path / "fake-codex-direct-schema"
+    fake_direct_codex_dir.mkdir()
+    fake_direct_codex = fake_direct_codex_dir / "codex"
+    fake_direct_codex.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, pathlib, sys\n"
+        "prompt = sys.stdin.read()\n"
+        "if not prompt.strip():\n"
+        "    print('No prompt provided via stdin.', file=sys.stderr)\n"
+        "    sys.exit(2)\n"
+        "args = sys.argv[1:]\n"
+        "worktree = pathlib.Path(args[args.index('-C') + 1])\n"
+        "out = pathlib.Path(args[args.index('-o') + 1])\n"
+        "cfg = json.loads((out.parent / 'launch-config.json').read_text(encoding='utf-8'))\n"
+        "(worktree / 'src' / 'fixture_pkg').mkdir(parents=True, exist_ok=True)\n"
+        "(worktree / 'src' / 'fixture_pkg' / '__init__.py').write_text('', encoding='utf-8')\n"
+        "(worktree / 'src' / 'fixture_pkg' / 'model.py').write_text('VALUE = 1\\n', encoding='utf-8')\n"
+        "status = {\n"
+        "  'packet_id': cfg['packet_id'],\n"
+        "  'role': 'worker',\n"
+        "  'status': 'pass',\n"
+        "  'branch_id': cfg['branch_id'],\n"
+        "  'work_item_id': cfg['work_item_id'],\n"
+        "  'manifest_hash': cfg['manifest_hash'],\n"
+        "  'manifest_epoch': cfg['manifest_epoch'],\n"
+        "  'worktree_path': cfg['worktree_path'],\n"
+        "  'route_id': cfg['route_id'],\n"
+        "  'evidence_summary': 'fake direct schema pass despite nonzero process exit',\n"
+        "  'branch': cfg['branch'],\n"
+        "  'worktree': cfg['worktree'],\n"
+        "  'route_class': cfg['route_class'],\n"
+        "  'selected_ladder': cfg['selected_ladder'],\n"
+        "  'selection_reason': cfg['selection_reason'],\n"
+        f"  'changed_files': {direct_owned_files!r},\n"
+        "  'commands_run': ['git diff --check HEAD'],\n"
+        "  'tests': ['fixture direct schema'],\n"
+        "  'blockers': [],\n"
+        "  'handoff': 'fake direct schema pass'\n"
+        "}\n"
+        "out.write_text(json.dumps(status), encoding='utf-8')\n"
+        "print(json.dumps({'usage': {'input_tokens': 111, 'output_tokens': 22}}))\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    fake_direct_codex.chmod(0o755)
+    run(
+        [(direct_schema_packet / "launch.sh").as_posix()],
+        env={**os.environ, "PATH": fake_direct_codex_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+    )
+    direct_schema_status = read_json(direct_schema_packet / "status.json")
+    if direct_schema_status.get("status") != "pass" or direct_schema_status.get("changed_files") != direct_owned_files:
+        raise SystemExit(f"worker runtime should accept direct schema output despite nonzero exit: {direct_schema_status!r}")
+    direct_schema_summary = read_json(direct_schema_packet / "packet.summary.json")
+    if (
+        direct_schema_summary.get("output_status") != "pass"
+        or direct_schema_summary.get("terminal_state") != "pass"
+        or direct_schema_summary.get("attempts", [{}])[0].get("returncode") != 0
+    ):
+        raise SystemExit(f"direct schema recovery should finish as a pass attempt: {direct_schema_summary!r}")
 
     standalone_blocked_root = tmp_path / "standalone-blocked-packets"
     standalone_worktree = tmp_path / "standalone-blocked-worktree"

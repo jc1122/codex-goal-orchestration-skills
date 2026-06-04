@@ -448,8 +448,6 @@ def worktree_command(branch: dict, repo_root: Path, base_ref: str) -> str:
     name = str(branch["branch_name"])
     worktree_rel = require_relative_path(str(branch["worktree_path"]), "worktree_path")
     worktree_path = resolve(repo_root, worktree_rel)
-    if branch_exists(repo_root, name):
-        return f"git worktree add {shell_quote(worktree_path.as_posix())} {shell_quote(name)}"
     return f"git worktree add -b {shell_quote(name)} {shell_quote(worktree_path.as_posix())} {shell_quote(base_ref)}"
 
 
@@ -811,8 +809,13 @@ def main() -> int:
         seen_names.add(name)
         if not safe_branch_name(name) or not git_ok(repo_root, "check-ref-format", "--branch", name):
             raise SystemExit(f"branch_name is not safe: {name!r}")
-        if branch_exists(repo_root, name) and branch_checked_out_in_worktree(repo_root, name):
-            raise SystemExit(f"target branch is already checked out in a worktree: {name}")
+        if branch_exists(repo_root, name):
+            if branch_checked_out_in_worktree(repo_root, name):
+                raise SystemExit(f"target branch is already checked out in a worktree: {name}")
+            raise SystemExit(
+                f"target branch already exists and will not be reused for a fresh branch worktree: {name}; "
+                "choose a unique branch_name or remove the stale branch explicitly"
+            )
         worktree_rel = require_relative_path(branch["worktree_path"], "worktree_path")
         worktree_path = resolve(repo_root, worktree_rel)
         if worktree_path in seen_worktrees:
