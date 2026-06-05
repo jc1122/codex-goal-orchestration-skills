@@ -623,6 +623,25 @@ def main() -> int:
         require(config["models"]["lite_agent"]["model"] == "deepseek/deepseek-v4-flash", "lite model mismatch")
         require(config["models"]["demanding_agent"]["model"] == "deepseek/deepseek-v4-pro", "demanding model mismatch")
         require(
+            config["harnesses"]["opencode"]["smoke_args"] == [
+                "run",
+                "--pure",
+                "--format",
+                "json",
+                "--model",
+                "{model}",
+                "--variant",
+                "max",
+                "{prompt}",
+            ],
+            "opencode generated smoke args must use max variant",
+        )
+        require(
+            "--variant" in config["harnesses"]["opencode"]["run_args"]
+            and "max" in config["harnesses"]["opencode"]["run_args"],
+            "opencode generated runtime args must use max variant",
+        )
+        require(
             set(config["harness_smokes"]) == set(config["models"]),
             "generated config must include smoke definitions for every model role",
         )

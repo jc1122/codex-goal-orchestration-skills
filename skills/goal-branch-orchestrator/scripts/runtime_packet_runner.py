@@ -2230,7 +2230,19 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         output_path=output_path,
     )
     if not args:
-        args = ["run", "--pure", "--format", "json", "--model", string_value(attempt, "model"), "--dir", worktree, prompt_text]
+        args = [
+            "run",
+            "--pure",
+            "--format",
+            "json",
+            "--model",
+            string_value(attempt, "model"),
+            "--variant",
+            "max",
+            "--dir",
+            worktree,
+            prompt_text,
+        ]
     command = [resolved, *args]
     record_executed_command(attempt, command)
     extra_env, db_path = opencode_packet_env(packet_dir)

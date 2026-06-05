@@ -1,6 +1,6 @@
 ---
 name: goal-config
-version: 0.2.106
+version: 0.2.107
 description: "Configure and verify goal orchestration model/provider profiles. Use when the user wants lean agent UX for model ladders, harness providers, branch/worker aggressiveness, token/character/time effort settings, or a fail-closed smoke test before goal-preflight or runtime orchestration."
 ---
 
@@ -51,6 +51,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/runtime_phase_manifest.py" --mark
 - Treat missing binaries, missing models, missing assistant output, auth/API errors, or smoke text mismatches as blocked evidence. Preserve checker-reported provider/status/message/count fields; use `--include-raw-errors` only when full raw provider payloads are needed for debugging.
 - Inspect `goal-config-state.json` for `phase`, `missing_preferences`, `next_command`, and `complete`; do not guess whether config validation is done.
 - If the config will be used for `/goal`, pass both the config and passing check report to `goal-preflight` with `--goal-config` and `--goal-config-check`; this is how manifest policies and runtime packet launch attempts are configured.
+- Generated opencode DeepSeek v4 Flash and Pro routes must use `--variant max` in both smoke and runtime harness args.
 - Record token counts, character counts, elapsed milliseconds, provider, model, harness, and role separately. Treat token totals as complete only for smoke entries with `token_telemetry.available=true`; otherwise compare character counts and elapsed time.
 - Do not record USD/pricing fields. Do not inspect provider credentials or unrelated opencode database tables.
 - Do not read or search `skills/*/scripts/*.py` during normal configuration, including with `rg`, `grep`, `cat`, `sed`, or `head`. Inspect Python source only when a script failed and debugging that script is the assigned task.

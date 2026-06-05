@@ -70,7 +70,7 @@ For opencode-backed roles, `check_goal_config.py` must:
 - find the `opencode` binary unless a fixture model list is supplied;
 - confirm the exact `provider/model` string appears in `opencode models <provider>`;
 - accept nested provider model ids such as `openrouter/deepseek/deepseek-v4-pro` and provider-list aliases such as the model id without the repeated provider prefix;
-- run `opencode run --pure --format json --model <provider/model>` when `--smoke` is requested;
+- run `opencode run --pure --format json --model <provider/model> --variant max` when `--smoke` is requested for generated opencode DeepSeek v4 routes;
 - for `codex` roles, run `codex exec <prompt>` when `--smoke` is requested;
 - for `gemini` roles, run `gemini <prompt>` when `--smoke` is requested;
 - for `generic-cli` roles, run the configured harness `command` plus `smoke_args` template with prompt context when `--smoke` is requested;

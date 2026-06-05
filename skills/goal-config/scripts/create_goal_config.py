@@ -188,6 +188,8 @@ def default_harnesses() -> dict[str, Any]:
                 "json",
                 "--model",
                 "{model}",
+                "--variant",
+                "max",
                 "{prompt}",
             ],
             "run_args": [
@@ -197,6 +199,8 @@ def default_harnesses() -> dict[str, Any]:
                 "json",
                 "--model",
                 "{model}",
+                "--variant",
+                "max",
                 "--dir",
                 "{worktree}",
                 "--title",

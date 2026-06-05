@@ -143,7 +143,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --output /abs/goal.config.json
 ```
 
-The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. It records effort in tokens, characters, and elapsed time only.
+The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. Generated opencode smoke and runtime invocations pass `--variant max` for both Flash and Pro. It records effort in tokens, characters, and elapsed time only.
 
 Create flags are binding. If the user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, the rendered `goal.config.json` must apply those values or the command must fail.
 
@@ -231,7 +231,7 @@ jq '.unvisited_routes' /abs/goal-config-smoke.json
 
 Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. The canonical `/goal` smoke report should omit `--harness` so it covers worker, reviewer, amender, Lite, and demanding aliases that runtime packets may use. To isolate a failing route after the full report fails, pass repeated or comma-separated `--harness` values, for example `--harness worker_opencode`.
 
-The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Full raw provider error payloads are emitted only with `--include-raw-errors`. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
+The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Generated opencode route smokes use `--variant max` for both DeepSeek v4 Flash and Pro. Full raw provider error payloads are emitted only with `--include-raw-errors`. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
 
 Discovery mode checks provider-listed candidates without manually writing every role first:
 

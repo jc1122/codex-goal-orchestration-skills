@@ -129,7 +129,7 @@ def build_inventory(contract: Any) -> dict[str, Any]:
                         "antigravity",
                     ],
                     "opencode_model_availability_command": "opencode models <provider>",
-                    "opencode_smoke_shape": "run --pure --format json --model <provider/model> <prompt>",
+                    "opencode_smoke_shape": "run --pure --format json --model <provider/model> --variant max <prompt>",
                     "codex_smoke_shape": "codex exec <prompt>",
                     "gemini_smoke_shape": "gemini <prompt>",
                     "generic_smoke_shape": "custom command template with {prompt}, {model}, {provider}, {role}, {alias}",
@@ -198,7 +198,7 @@ def build_preference_questions() -> dict[str, Any]:
                     {
                         "id": "opencode_deepseek_v4",
                         "label": "Opencode DeepSeek v4",
-                        "description": "Use opencode with DeepSeek v4 Flash for Lite work and DeepSeek v4 Pro for demanding work.",
+                        "description": "Use opencode with DeepSeek v4 Flash for Lite work and DeepSeek v4 Pro for demanding work, both with --variant max.",
                         "maps_to": [
                             "create_goal_config.py --preset opencode-deepseek-v4 --effort-profile PROFILE --validation-mode MODE --state-output /abs/goal-config-state.json",
                         ],
