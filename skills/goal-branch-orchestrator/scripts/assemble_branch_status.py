@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import re
 import shlex
 import shutil
 import subprocess
@@ -36,6 +37,10 @@ BRANCH_VALIDATOR = _load_module("goal_branch_validate_branch_status", SCRIPT_DIR
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 is_repo_relative_path = PATH_RULES.is_repo_relative_path
 require_safe_label = PATH_RULES.require_safe_packet_label
+
+
+LOCAL_VALIDATION_FAILURE_TOKENS = ("failed", "error", "mismatch=false")
+TEST_COMMAND_TOKENS = (" pytest ", "python3 -m pytest", "python -m pytest", "make test", "npm test")
 
 
 def read_json(path: Path) -> dict:
@@ -105,7 +110,161 @@ def worker_role(item: dict) -> str:
     return role if role in CONTRACT.WORK_ITEM_ROLES else "worker"
 
 
-def collect_worker_statuses(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[list[dict], list[str]]:
+def command_is_test(command: str) -> bool:
+    normalized = f" {command.lower()} "
+    return any(token in normalized for token in TEST_COMMAND_TOKENS)
+
+
+def local_validation_failed(result: str) -> bool:
+    lowered = result.lower()
+    return any(token in lowered for token in LOCAL_VALIDATION_FAILURE_TOKENS)
+
+
+def issue059_repair_evidence_path(bundle_dir: Path, branch_id: str, packet_id: str) -> Path:
+    return bundle_dir / "branches" / f"{branch_id}.{packet_id}.repair-evidence.json"
+
+
+def synthesize_issue059_repair_evidence(
+    bundle_dir: Path,
+    branch: dict,
+    branch_id: str,
+    packet_id: str,
+    worktree: Path,
+) -> tuple[Path | None, list[str]]:
+    partial_path = bundle_dir / "branches" / f"{branch_id}.partial.evidence.json"
+    if not partial_path.exists():
+        return None, [f"no repair-evidence candidate for {packet_id}"]
+    partial = read_json(partial_path)
+    if partial.get("branch_id") != branch_id:
+        return None, [f"partial repair evidence branch_id mismatch for {packet_id}: {partial.get('branch_id')!r}"]
+    if partial.get("status") != "partial":
+        return None, [f"partial repair evidence status is not partial for {packet_id}: {partial.get('status')!r}"]
+    if partial.get("code_integrated") is not True:
+        return None, [f"partial repair evidence did not set code_integrated=true for {packet_id}"]
+    worker_blocker = partial.get("worker_blocker")
+    if not isinstance(worker_blocker, dict):
+        return None, [f"partial repair evidence is missing worker_blocker metadata for {packet_id}"]
+    if worker_blocker.get("packet_id") != packet_id:
+        return None, [
+            f"partial repair evidence maps to {worker_blocker.get('packet_id')!r}, not {packet_id!r} for repair promotion",
+        ]
+    integrated_commit = partial.get("integrated_commit")
+    if not isinstance(integrated_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", integrated_commit):
+        return None, [f"partial repair evidence missing valid 40-char integrated_commit for {packet_id}"]
+    local_validation = partial.get("local_validation")
+    if not isinstance(local_validation, list) or not local_validation:
+        return None, [f"partial repair evidence missing local_validation commands for {packet_id}"]
+    commands: list[str] = []
+    tests: list[str] = []
+    for item in local_validation:
+        if not isinstance(item, dict):
+            return None, ["partial repair evidence local_validation entries must be objects"]
+        command = item.get("command")
+        result = item.get("result")
+        if not isinstance(command, str) or not command.strip():
+            continue
+        command = command.strip()
+        if command not in commands:
+            commands.append(command)
+        if command_is_test(command) and command not in tests:
+            tests.append(command)
+        if isinstance(result, str) and local_validation_failed(result):
+            return None, [f"partial repair evidence command failed: {command!r} -> {result!r}"]
+    if not commands:
+        return None, [f"partial repair evidence for {packet_id} has no commands"]
+    if not tests:
+        return None, [f"partial repair evidence for {packet_id} has no test commands"]
+    if not any("git diff --check" in command for command in commands):
+        return None, [f"partial repair evidence for {packet_id} lacks git diff --check command"]
+
+    work_item_id = ""
+    work_items = branch.get("work_items")
+    if isinstance(work_items, list):
+        for item in work_items:
+            if isinstance(item, dict) and item.get("packet_id") == packet_id and isinstance(item.get("id"), str):
+                work_item_id = item.get("id")
+                break
+    evidence = {
+        "schema_version": 1,
+        "kind": "worker-repair-promotion",
+        "branch_id": branch_id,
+        "packet_id": packet_id,
+        "work_item_id": work_item_id,
+        "code_integrated": True,
+        "integrated_commit": integrated_commit,
+        "worktree": worktree.as_posix(),
+        "commands_run": commands,
+        "tests": tests,
+        "local_validation": local_validation,
+        "evidence_summary": f"Recovered deterministic repair evidence from {branch_id}.partial.evidence.json.",
+        "handoff": f"Recovered repair evidence for {packet_id} after worker route failures.",
+    }
+    repair_path = issue059_repair_evidence_path(bundle_dir, branch_id, packet_id)
+    write_json(repair_path, evidence)
+    return repair_path, []
+
+
+def promote_worker_with_repair_evidence(
+    manifest_path: Path,
+    bundle_dir: Path,
+    branch: dict,
+    branch_id: str,
+    packet_id: str,
+    status: dict,
+    worktree: Path,
+) -> list[str]:
+    blockers: list[str] = []
+    if status.get("status") == "pass":
+        return blockers
+    repair_path = issue059_repair_evidence_path(bundle_dir, branch_id, packet_id)
+    if not repair_path.exists():
+        partial_path = bundle_dir / "branches" / f"{branch_id}.partial.evidence.json"
+        if not partial_path.exists():
+            return blockers
+        synth_path, synth_errors = synthesize_issue059_repair_evidence(
+            bundle_dir=bundle_dir,
+            branch=branch,
+            branch_id=branch_id,
+            packet_id=packet_id,
+            worktree=worktree,
+        )
+        if synth_path is None:
+            blockers.extend(f"partial repair evidence synthesis unavailable for {packet_id}: {error}" for error in synth_errors)
+            return blockers
+        repair_path = synth_path
+    result = subprocess.run(
+        [
+            "python3",
+            (SCRIPT_DIR / "promote_worker_repair_evidence.py").as_posix(),
+            "--manifest",
+            manifest_path.as_posix(),
+            "--branch-id",
+            branch_id,
+            "--packet-id",
+            packet_id,
+            "--worktree",
+            worktree.as_posix(),
+            "--evidence",
+            repair_path.as_posix(),
+        ],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    if result.returncode != 0:
+        blockers.append(f"could not promote repair evidence for {packet_id}: {result.stdout.strip()}")
+    return blockers
+
+
+def collect_worker_statuses(
+    bundle_dir: Path,
+    manifest_path: Path,
+    manifest: dict,
+    branch: dict,
+    branch_id: str,
+    worktree: Path,
+) -> tuple[list[dict], list[str]]:
     statuses: list[dict] = []
     blockers: list[str] = []
     work_items = branch.get("work_items")
@@ -131,6 +290,19 @@ def collect_worker_statuses(bundle_dir: Path, branch: dict, branch_id: str) -> t
             blockers.append(f"missing {role} artifact for {packet_id}: {artifact_path}")
             continue
         status = read_json(artifact_path)
+        if role == "worker":
+            repair_blockers = promote_worker_with_repair_evidence(
+                manifest_path=manifest_path,
+                bundle_dir=bundle_dir,
+                branch=branch,
+                branch_id=branch_id,
+                packet_id=packet_id,
+                status=status,
+                worktree=worktree,
+            )
+            if repair_blockers:
+                blockers.extend(repair_blockers)
+            status = read_json(artifact_path)
         if role == "worker":
             status.setdefault("role", "worker")
         status["status_path"] = artifact_path.resolve().as_posix()
@@ -540,7 +712,14 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     if output_path.exists() and not args.replace:
         raise SystemExit(f"branch status already exists; pass --replace to recreate: {output_path}")
 
-    worker_statuses, worker_blockers = collect_worker_statuses(bundle_dir, branch, branch_id)
+    worker_statuses, worker_blockers = collect_worker_statuses(
+        bundle_dir=bundle_dir,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        branch=branch,
+        branch_id=branch_id,
+        worktree=worktree,
+    )
     worker_parallelism, scheduler_defects = scheduler_rollup(manifest_path, branch, branch_id)
     inferred_review_status, review_blockers = review_status(bundle_dir, branch, branch_id)
     base_ref = str(manifest.get("base_ref", "main"))

@@ -51,6 +51,7 @@ WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
 WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
 ROUTE_POLICY_VERSION = "goal-route-policy-v2"
 RESEARCH_ALIASES = CONTRACT.RESEARCH_ALIASES
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RESEARCH_FORBIDDEN_COMMAND_PATTERNS = [
     (r"\bgit\s+(push|commit|reset|checkout|clean|merge|rebase)\b", "git state mutation"),
     (r"\b(curl|http|https)\b.*\s-x\s*(post|put|patch|delete)\b", "state-changing HTTP method"),
@@ -740,6 +741,122 @@ def validate_worker_artifact(defects: list[str], value: object, path: str) -> di
     )
 
 
+def resolve_bundle_artifact_path(defects: list[str], value: object, path: str, *, manifest_path: Path) -> Path | None:
+    artifact = require_string(defects, value, path)
+    if not artifact:
+        return None
+    candidate = Path(artifact)
+    if candidate.is_absolute():
+        resolved = candidate.resolve()
+    elif is_repo_relative_path(artifact):
+        resolved = (manifest_path.parent / artifact).resolve()
+    else:
+        defect(defects, path, "must be an absolute path or safe bundle-relative path")
+        return None
+    try:
+        resolved.relative_to(manifest_path.parent.resolve())
+    except ValueError:
+        defect(defects, path, "must stay inside the bundle root")
+        return None
+    return resolved
+
+
+def validate_worker_repair_promotion(
+    defects: list[str],
+    worker: dict,
+    path: str,
+    *,
+    manifest_path: Path,
+    branch_id: str,
+    packet_id: str,
+    work_item_id: str,
+    status_artifact: Path,
+    worktree: str,
+) -> bool:
+    repair_path_value = worker.get("repair_evidence_path")
+    promotion = worker.get("repair_promotion")
+    if repair_path_value is None and promotion is None:
+        return False
+    if worker.get("status") != "pass":
+        defect(defects, path, "may be present only on pass worker status")
+        return False
+    if not isinstance(promotion, dict):
+        defect(defects, f"{path}.repair_promotion", "must be an object when repair_evidence_path is present")
+        return False
+    evidence_path = resolve_bundle_artifact_path(defects, repair_path_value, path, manifest_path=manifest_path)
+    if evidence_path is None:
+        return False
+    if not evidence_path.exists():
+        defect(defects, path, f"repair evidence artifact does not exist: {evidence_path}")
+        return False
+    try:
+        evidence = load_json_artifact(defects, evidence_path, path)
+    except Exception:  # noqa: BLE001
+        return False
+    evidence_obj = require_object(defects, evidence, path)
+    if evidence_obj.get("schema_version") != 1:
+        defect(defects, f"{path}.schema_version", "must be 1")
+    if evidence_obj.get("kind") != "worker-repair-promotion":
+        defect(defects, f"{path}.kind", "must be worker-repair-promotion")
+    if evidence_obj.get("branch_id") != branch_id:
+        defect(defects, f"{path}.branch_id", f"must be {branch_id!r}")
+    if evidence_obj.get("packet_id") != packet_id:
+        defect(defects, f"{path}.packet_id", f"must be {packet_id!r}")
+    if evidence_obj.get("code_integrated") is not True:
+        defect(defects, f"{path}.code_integrated", "must be true")
+    integrated_commit = require_string(defects, evidence_obj.get("integrated_commit"), f"{path}.integrated_commit")
+    if integrated_commit and not COMMIT_SHA_RE.fullmatch(integrated_commit):
+        defect(defects, f"{path}.integrated_commit", "must be a 40-character lowercase git commit")
+    if promotion.get("kind") != "worker-repair-promotion":
+        defect(defects, f"{path}.repair_promotion.kind", "must be worker-repair-promotion")
+    if promotion.get("integrated_commit") != integrated_commit:
+        defect(defects, f"{path}.repair_promotion.integrated_commit", "must match repair evidence integrated_commit")
+    if promotion.get("validated_by") != "promote_worker_repair_evidence.py":
+        defect(defects, f"{path}.repair_promotion.validated_by", "must be promote_worker_repair_evidence.py")
+    source_status_path = resolve_bundle_artifact_path(
+        defects,
+        promotion.get("source_status_path"),
+        f"{path}.repair_promotion.source_status_path",
+        manifest_path=manifest_path,
+    )
+    if source_status_path is not None:
+        if not source_status_path.exists():
+            defect(defects, f"{path}.repair_promotion.source_status_path", f"artifact does not exist: {source_status_path}")
+        elif source_status_path == status_artifact:
+            defect(defects, f"{path}.repair_promotion.source_status_path", "must not point at the promoted canonical status")
+        else:
+            source_status = load_json_artifact(defects, source_status_path, f"{path}.repair_promotion.source_status_path")
+            if isinstance(source_status, dict) and source_status.get("status") == "pass":
+                defect(defects, f"{path}.repair_promotion.source_status_path.status", "must preserve a non-pass source status")
+    source_telemetry = promotion.get("source_telemetry_path")
+    if source_telemetry is not None:
+        source_telemetry_path = resolve_bundle_artifact_path(
+            defects,
+            source_telemetry,
+            f"{path}.repair_promotion.source_telemetry_path",
+            manifest_path=manifest_path,
+        )
+        if source_telemetry_path is not None and not source_telemetry_path.exists():
+            defect(defects, f"{path}.repair_promotion.source_telemetry_path", f"artifact does not exist: {source_telemetry_path}")
+    evidence_commands = require_string_list(defects, evidence_obj.get("commands_run"), f"{path}.commands_run", min_items=1)
+    evidence_tests = require_string_list(defects, evidence_obj.get("tests"), f"{path}.tests", min_items=1)
+    worker_commands = worker.get("commands_run") if isinstance(worker.get("commands_run"), list) else []
+    worker_tests = worker.get("tests") if isinstance(worker.get("tests"), list) else []
+    for command in evidence_commands:
+        if command not in worker_commands:
+            defect(defects, f"{path}.commands_run", "must be copied into promoted worker commands_run")
+    for test_command in evidence_tests:
+        if test_command not in worker_tests:
+            defect(defects, f"{path}.tests", "must be copied into promoted worker tests")
+    if not any("git diff --check" in command for command in evidence_commands):
+        defect(defects, f"{path}.commands_run", "must include git diff --check evidence")
+    if evidence_obj.get("work_item_id") not in {None, work_item_id}:
+        defect(defects, f"{path}.work_item_id", f"must be {work_item_id!r} when present")
+    if evidence_obj.get("worktree") not in {None, worktree}:
+        defect(defects, f"{path}.worktree", "must match promoted worker worktree when present")
+    return True
+
+
 def validate_research_artifact(defects: list[str], value: object, path: str) -> dict:
     return validate_research_payload(
         defects,
@@ -851,6 +968,19 @@ def validate_worker_artifacts(
                     defect(defects, f"{item_path}.changed_files[{changed_index}]", "must not include runtime cache or bytecode paths")
                 elif artifact.get("status") == "pass" and owned_paths and not path_is_owned(changed, owned_paths):
                     defect(defects, f"{item_path}.changed_files[{changed_index}]", "must be inside the manifest work item owned_paths")
+            repair_promoted = validate_worker_repair_promotion(
+                defects,
+                artifact,
+                f"{item_path}.repair_evidence_path",
+                manifest_path=manifest_path,
+                branch_id=branch_id if isinstance(branch_id, str) else "",
+                packet_id=str(packet_id) if isinstance(packet_id, str) else "",
+                work_item_id=expected_work_item_id if isinstance(expected_work_item_id, str) else "",
+                status_artifact=status_artifact,
+                worktree=artifact.get("worktree") if isinstance(artifact.get("worktree"), str) else "",
+            )
+        else:
+            repair_promoted = False
         for key in compared_keys:
             if artifact.get(key) != item.get(key):
                 defect(defects, f"{item_path}.{key}", "must match packet status artifact")
@@ -905,7 +1035,7 @@ def validate_worker_artifacts(
         effective_ladder = effective_ladder_for_called_attempts(selected_ladder, telemetry_attempts)
         if called_aliases and selected_ladder and called_aliases != effective_ladder[: len(called_aliases)]:
             defect(defects, f"{item_path}.telemetry_path.attempts", "called worker attempts must be a prefix of selected_ladder")
-        if artifact.get("status") == "pass" and telemetry.get("accepted_alias") not in selected_ladder:
+        if artifact.get("status") == "pass" and not repair_promoted and telemetry.get("accepted_alias") not in selected_ladder:
             defect(defects, f"{item_path}.telemetry_path.accepted_alias", "must identify the accepted worker route when worker status is pass")
 
 

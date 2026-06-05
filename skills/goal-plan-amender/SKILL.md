@@ -1,6 +1,6 @@
 ---
 name: goal-plan-amender
-version: 0.2.101
+version: 0.2.102
 description: "Runtime-only plan amender for audited /goal bundles. Use only when goal-main-orchestrator has validated a terminal branch result and needs amendment proposals or deterministic blocker-repair proposals; create file-backed packets, validate safe manifest amendments, and apply accepted amendments without changing active or terminal branch evidence."
 ---
 

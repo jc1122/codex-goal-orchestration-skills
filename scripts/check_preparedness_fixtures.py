@@ -3071,6 +3071,383 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
         raise SystemExit("append_scheduler_event without --timestamp must produce deterministic ledger content")
 
 
+def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
+    repo = tmp_path / "worker-repair-repo"
+    repo.mkdir()
+    run_command(["git", "init", "-b", "repair-branch"], root=repo)
+    run_command(["git", "config", "user.email", "fixture@example.invalid"], root=repo)
+    run_command(["git", "config", "user.name", "Fixture"], root=repo)
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    run_command(["git", "add", "README.md"], root=repo)
+    run_command(["git", "commit", "-m", "base"], root=repo)
+    run_command(["git", "branch", "base"], root=repo)
+    (repo / "src").mkdir()
+    (repo / "tests").mkdir()
+    (repo / "src" / "repair.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (repo / "tests" / "test_repair.py").write_text("def test_repair():\n    assert True\n", encoding="utf-8")
+    run_command(["git", "add", "src/repair.py", "tests/test_repair.py"], root=repo)
+    run_command(["git", "commit", "-m", "repair evidence"], root=repo)
+    head = run_command(["git", "rev-parse", "HEAD"], root=repo).stdout.strip()
+
+    bundle = tmp_path / "worker-repair-promotion"
+    manifest_path = bundle / "job.manifest.json"
+    manifest = {
+        "base_ref": "base",
+        "branches": [
+            {
+                "id": "B01",
+                "branch_name": "repair-branch",
+                "status_path": "branches/B01.status.json",
+                "review_path": "branches/B01.review.json",
+                "pre_review_gate_path": "branches/B01.pre_review_gate.json",
+                "max_active_worker_packets": 4,
+                "worker_parallelism": {"scheduler_path": "schedulers/B01.worker.scheduler.json"},
+                "dod": ["repair promotion fixture reaches review-ready worker evidence"],
+                "work_items": [
+                    {
+                        "id": "W01",
+                        "packet_id": "B01-W01",
+                        "objective": "Repair promoted worker.",
+                        "route_class": "normal-code",
+                        "owned_paths": ["src/repair.py", "tests/test_repair.py"],
+                        "context_files": ["README.md"],
+                        "verification": ["pytest tests/test_repair.py", "git diff --check base...HEAD"],
+                        "dod": ["worker repair promotion validates"],
+                    }
+                ],
+            }
+        ],
+    }
+    write_json(manifest_path, manifest)
+    manifest_hash = sha256_file(manifest_path)
+    packet_dir = bundle / "workers" / "B01-W01"
+    route_reason = "Normal-code route class selected from manifest worker_model_policy."
+    blocked_status = {
+        "packet_id": "B01-W01",
+        "role": "worker",
+        "status": "blocked",
+        "branch_id": "B01",
+        "work_item_id": "W01",
+        "manifest_hash": manifest_hash,
+        "manifest_epoch": "current",
+        "worktree_path": repo.as_posix(),
+        "route_id": "B01-W01:normal-code:codex-spark",
+        "evidence_summary": "Fixture blocked worker status before repair promotion.",
+        "branch": "repair-branch",
+        "worktree": repo.as_posix(),
+        "route_class": "normal-code",
+        "selected_ladder": ["codex-spark"],
+        "selection_reason": route_reason,
+        "changed_files": [],
+        "commands_run": ["codex exec --ephemeral -m gpt-5.3-codex-spark"],
+        "tests": [],
+        "blockers": ["route failed before deterministic repair evidence could be promoted"],
+        "handoff": "Blocked fixture worker.",
+    }
+    write_json(packet_dir / "status.json", blocked_status)
+    write_json(packet_dir / "status.schema.json", {"type": "object", "additionalProperties": True})
+    write_json(
+        packet_dir / "route.json",
+        {
+            "schema_version": 1,
+            "packet_id": "B01-W01",
+            "role": "worker",
+            "route_class": "normal-code",
+            "selected_ladder": ["codex-spark"],
+            "selection_reason": route_reason,
+            "policy_router": "fixture",
+            "policy_version": "fixture",
+            "route_policy_version": "goal-route-policy-v2",
+            "allowed_aliases": ["codex-spark"],
+            "default_ladder": ["codex-spark"],
+        },
+    )
+    write_json(
+        packet_dir / "launch-config.json",
+        {
+            "schema_version": 1,
+            "packet_id": "B01-W01",
+            "role": "worker",
+            "branch": "repair-branch",
+            "worktree": repo.as_posix(),
+            "schema_name": "status.schema.json",
+            "output_name": "status.json",
+            "telemetry_script": (ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "extract_telemetry.py").as_posix(),
+            "selected_ladder": ["codex-spark"],
+            "attempts": [
+                {
+                    "alias": "codex-spark",
+                    "provider": "codex",
+                    "model": "gpt-5.3-codex-spark",
+                    "command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s workspace-write",
+                    "rendered_command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s workspace-write",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "sandbox": "workspace-write",
+                    "timeout_seconds": 3600,
+                    "event_logs": ["events-codex-spark.jsonl"],
+                    "probe_logs": [],
+                    "ignore_user_config": True,
+                    "ignore_rules": True,
+                }
+            ],
+        },
+    )
+    write_json(
+        packet_dir / "telemetry.json",
+        telemetry(
+            "B01-W01",
+            "worker",
+            "status.json",
+            accepted_alias=None,
+            attempts=[
+                {
+                    "alias": "codex-spark",
+                    "provider": "codex",
+                    "model": "gpt-5.3-codex-spark",
+                    "effort": None,
+                    "command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s workspace-write",
+                    "timeout_seconds": 3600,
+                    "called": True,
+                    "accepted": False,
+                    "event_logs": [{"path": "events-codex-spark.jsonl", "exists": True, "bytes": 1, "chars": 1}],
+                    "probe_logs": [],
+                    "usage": None,
+                }
+            ],
+        ),
+    )
+    write_json(packet_dir / "launcher-state.json", {"schema_version": 1, "packet_id": "B01-W01", "terminal_state": "blocked", "events": []})
+    write_json(
+        packet_dir / "packet.summary.json",
+        {
+            "schema_version": 1,
+            "packet_id": "B01-W01",
+            "role": "worker",
+            "output_path": "status.json",
+            "output_exists": True,
+            "output_status": "blocked",
+            "terminal_state": "blocked",
+            "telemetry_path": "telemetry.json",
+            "telemetry_exists": True,
+            "launcher_state_path": "launcher-state.json",
+            "launcher_state_exists": True,
+            "attempts": [{"attempt_index": 0, "alias": "codex-spark", "state": "fail-clean"}],
+        },
+    )
+    worker_tick = [
+        "python3",
+        "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
+        "--manifest",
+        manifest_path.as_posix(),
+        "--scope",
+        "worker",
+        "--branch-id",
+        "B01",
+        "--runtime-ref",
+        "repair-promotion-fixture",
+    ]
+    run([*worker_tick, "--init", "--record-ready", "--launch", "B01-W01", "--finish", "B01-W01", "--status", "blocked", "--close", "B01-W01"])
+    issue059_bundle = tmp_path / "worker-repair-promotion-issue059"
+    shutil.copytree(bundle, issue059_bundle)
+    issue059_partial_validation = [
+        {"command": "pytest tests/test_repair.py", "result": "1 passed"},
+        {"command": "git diff --check base...HEAD", "result": "pass"},
+        {
+            "command": "python3 - <<'PY' ... compare src/repair.py to expected contract ... PY",
+            "result": "contract_matches=True",
+        },
+    ]
+    issue059_partial = {
+        "branch_id": "B01",
+        "status": "partial",
+        "code_integrated": True,
+        "branch_status_path": "branches/B01.status.json",
+        "local_validation": issue059_partial_validation,
+        "worker_blocker": {
+            "packet_id": "B01-W01",
+            "canonical_status": "blocked",
+            "reason": "Final W01 verification packet route failures blocked canonical status, but route-scope validators passed.",
+            "route_evidence": ["worker_primary transport error", "worker_fallback stream disconnect", "lite_agent dirty artifact violation"],
+        },
+        "integrated_commit": head,
+    }
+    write_json(issue059_bundle / "branches" / "B01.partial.evidence.json", issue059_partial)
+    issue059_assemble = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+                "--manifest",
+                (issue059_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                "B01",
+                "--worktree",
+                repo.as_posix(),
+                "--replace",
+                "--json",
+            ]
+        ).stdout
+    )
+    if issue059_assemble.get("branch_status") not in {"partial", "blocked"}:
+        raise SystemExit(f"issue-059 partial evidence should produce non-pass branch status: {issue059_assemble!r}")
+    issue059_worker_status = read_json(issue059_bundle / "workers" / "B01-W01" / "status.json")
+    if issue059_worker_status.get("status") != "pass" or issue059_worker_status.get("repair_evidence_path") != "branches/B01.B01-W01.repair-evidence.json":
+        raise SystemExit(f"issue-059 partial evidence should promote canonical worker status: {issue059_worker_status!r}")
+    issue059_branch_status = read_json(issue059_bundle / "branches" / "B01.status.json")
+    if any("finished 'blocked'" in blocker for blocker in issue059_branch_status.get("blockers", []) if isinstance(blocker, str)):
+        raise SystemExit(f"issue-059 partial evidence should remove blocked-worker blocker: {issue059_branch_status!r}")
+    issue059_validation = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
+            "--manifest",
+            (issue059_bundle / "job.manifest.json").as_posix(),
+            "--status",
+            (issue059_bundle / "branches" / "B01.status.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--branch",
+            "repair-branch",
+            "--worktree",
+            repo.as_posix(),
+            "--json",
+        ]
+    )
+    if issue059_validation.returncode != 0:
+        raise SystemExit(f"issue-059 partial repair evidence should validate: {issue059_validation.stdout!r}")
+
+    issue059_weak_bundle = tmp_path / "worker-repair-promotion-issue059-weak"
+    shutil.copytree(bundle, issue059_weak_bundle)
+    issue059_weak_partial = dict(issue059_partial)
+    issue059_weak_partial["local_validation"] = [{"command": "git diff --check base...HEAD", "result": "pass"}]
+    write_json(issue059_weak_bundle / "branches" / "B01.partial.evidence.json", issue059_weak_partial)
+    issue059_weak_assemble = json.loads(run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+            "--manifest",
+            (issue059_weak_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            repo.as_posix(),
+            "--replace",
+            "--json",
+        ]
+    ).stdout)
+    if issue059_weak_assemble.get("branch_status") != "partial":
+        raise SystemExit(f"weak issue-059 evidence should leave branch partial: {issue059_weak_assemble!r}")
+    weak_worker_status = read_json(issue059_weak_bundle / "workers" / "B01-W01" / "status.json")
+    if weak_worker_status.get("status") == "pass" or weak_worker_status.get("repair_evidence_path"):
+        raise SystemExit(f"weak issue-059 evidence must not promote worker status: {weak_worker_status!r}")
+    weak_branch_status = read_json(issue059_weak_bundle / "branches" / "B01.status.json")
+    weak_blockers = "\n".join(str(item) for item in weak_branch_status.get("blockers", []))
+    assert_contains(weak_blockers, "has no test commands", "issue-059 weak partial repair evidence should be rejected")
+
+    evidence_path = bundle / "branches" / "B01.B01-W01.repair-evidence.json"
+    write_json(
+        evidence_path,
+        {
+            "schema_version": 1,
+            "kind": "worker-repair-promotion",
+            "branch_id": "B01",
+            "packet_id": "B01-W01",
+            "work_item_id": "W01",
+            "code_integrated": True,
+            "integrated_commit": head,
+            "worktree": repo.as_posix(),
+            "commands_run": ["pytest tests/test_repair.py", "git diff --check base...HEAD"],
+            "tests": ["pytest tests/test_repair.py"],
+            "local_validation": [
+                {"command": "pytest tests/test_repair.py", "result": "1 passed"},
+                {"command": "git diff --check base...HEAD", "result": "pass"},
+            ],
+            "evidence_summary": "Fixture deterministic repair evidence passed tests and diff checks.",
+            "handoff": "Fixture worker repair promotion.",
+        },
+    )
+    promote_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py",
+                "--manifest",
+                manifest_path.as_posix(),
+                "--branch-id",
+                "B01",
+                "--packet-id",
+                "B01-W01",
+                "--worktree",
+                repo.as_posix(),
+                "--evidence",
+                evidence_path.as_posix(),
+                "--json",
+            ]
+        ).stdout
+    )
+    if promote_result.get("status") != "pass":
+        raise SystemExit(f"repair promotion should pass: {promote_result!r}")
+    promoted_status = read_json(packet_dir / "status.json")
+    if promoted_status.get("status") != "pass" or promoted_status.get("repair_evidence_path") != "branches/B01.B01-W01.repair-evidence.json":
+        raise SystemExit(f"repair promotion did not write canonical pass status: {promoted_status!r}")
+    assemble_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+                "--manifest",
+                manifest_path.as_posix(),
+                "--branch-id",
+                "B01",
+                "--worktree",
+                repo.as_posix(),
+                "--replace",
+                "--json",
+            ]
+        ).stdout
+    )
+    if assemble_result.get("status") != "pass":
+        raise SystemExit(f"repair-promoted branch status should validate: {assemble_result!r}")
+    branch_status_data = read_json(bundle / "branches" / "B01.status.json")
+    if any("finished 'blocked'" in blocker for blocker in branch_status_data.get("blockers", []) if isinstance(blocker, str)):
+        raise SystemExit(f"repair promotion should remove blocked-worker blocker: {branch_status_data!r}")
+    weak_evidence = bundle / "branches" / "B01.B01-W01.weak-repair-evidence.json"
+    write_json(
+        weak_evidence,
+        {
+            "schema_version": 1,
+            "kind": "worker-repair-promotion",
+            "branch_id": "B01",
+            "packet_id": "B01-W01",
+            "code_integrated": True,
+            "integrated_commit": head,
+            "commands_run": ["git diff --check base...HEAD"],
+            "local_validation": [{"command": "git diff --check base...HEAD", "result": "pass"}],
+        },
+    )
+    weak_result = run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py",
+            "--manifest",
+            manifest_path.as_posix(),
+            "--branch-id",
+            "B01",
+            "--packet-id",
+            "B01-W01",
+            "--worktree",
+            repo.as_posix(),
+            "--evidence",
+            weak_evidence.as_posix(),
+            "--replace",
+            "--json",
+        ],
+        expect=1,
+    )
+    assert_contains(weak_result.stdout, "at least one test command", "weak repair evidence fixture")
+
+
 def write_prompt_audit_fixture(bundle: Path) -> Path:
     audit_path = bundle / "audit" / "prompt-audit.json"
     write_json(
@@ -8909,6 +9286,7 @@ def main() -> int:
         run_example_brief_fixtures(tmp_path)
         run_scheduler_fixtures(bundle / "job.manifest.json")
         run_scheduler_tick_fixture(tmp_path)
+        run_worker_repair_promotion_fixture(tmp_path)
         run_launch_ready_helper_fixtures(tmp_path)
         run_preflight_brief_lint_fixtures(tmp_path)
         run_python_interpreter_normalization_fixture(tmp_path)

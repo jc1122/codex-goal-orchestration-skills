@@ -629,7 +629,14 @@ def validate_scheduler_ledger(
                 defect(defects, f"{event_path}.eligible_ids", "must list eligible items considered for refill")
                 eligible_values = []
             for value_index, value in enumerate(eligible_values):
-                if not isinstance(value, str) or value not in before_eligible:
+                repair_relaunch_eligible = bool(
+                    scheduler_kind == "branch-worker-pool"
+                    and isinstance(value, str)
+                    and value in launched
+                    and value in closed
+                    and finished_status.get(value) != "pass"
+                )
+                if not isinstance(value, str) or (value not in before_eligible and not repair_relaunch_eligible):
                     defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
             if len(active) >= capacity:
                 defect(defects, event_path, "refill requires free capacity")
@@ -646,7 +653,7 @@ def validate_scheduler_ledger(
             )
             if event_id in launched and not repair_relaunch:
                 defect(defects, f"{event_path}.id", "duplicates launch event")
-            if event_id and event_id not in before_eligible:
+            if event_id and event_id not in before_eligible and not repair_relaunch:
                 failed_deps = failed_dependency_ids(str(event_id))
                 if failed_deps:
                     defect(defects, f"{event_path}.id", "cannot launch after dependency finished non-pass: " + ", ".join(failed_deps))

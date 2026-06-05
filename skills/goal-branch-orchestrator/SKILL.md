@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-version: 0.2.101
+version: 0.2.102
 description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, optionally use CLI-only Lite advisors for packet planning/context packing/completed-worker summaries/blocked triage, create path-safe worker/research-worker/reviewer packets with telemetry, choose allowed per-worker routes from the Gemini Pro -> Gemini Flash -> Codex Spark -> Codex mini ladder for normal workers, keep worker launcher slots saturated with ready workers, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 
@@ -33,6 +33,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/runtime_phase_manife
 - Preserve the manifest-configured worker route-class ladder by default. Do not pass `--allow-route-pruning` unless a validator, model catalog, route-health artifact, explicit operator request, timeout, budget cap, or provider failure justifies the shorter ladder with a concrete reason.
 - Create reviewer packets only when pre-review validation succeeds and the branch status has no unresolved blocker evidence.
 - Reviewer promotion is validator-owned: use `validate_branch_status.py`/`create_pre_review_gate.py` to ensure the branch review artifact is promoted to the canonical branch review path and launcher config route policy is consistent.
+- If deterministic branch repair was command-verified after worker route failures, promote it through `promote_worker_repair_evidence.py` before pre-review; do not commit repair code while leaving the canonical worker status blocked.
 - Use separate child worktrees for write-capable workers when owned paths do not conflict.
 - Do not poll active worker/research/reviewer packet logs. Inspect artifacts only after launchers exit or return terminal status.
 - Use `context_pack.py`/packet context excerpts instead of broad reads.

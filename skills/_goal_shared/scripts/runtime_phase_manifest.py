@@ -268,7 +268,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "integrate_workers",
-                "agent_does": "after launcher exit, inspect status/diff/tests; let scheduler_tick record launch/finish/close/refill from artifacts",
+                "agent_does": "after launcher exit, inspect status/diff/tests; let scheduler_tick record launch/finish/close/refill from artifacts; if route failures required command-verified branch repair before review, first write a branches/Bxx.<packet>.repair-evidence.json artifact and run promote_worker_repair_evidence.py so canonical worker status and scheduler evidence agree",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --init --record-ready --close-from-artifacts --validate-final",
             },
             {

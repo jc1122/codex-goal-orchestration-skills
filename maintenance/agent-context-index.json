@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:bb8ea9e52baa3d6aeebcf780266f38a2b775de8165820818f923e74cd2b4eb8e"
+    "source_fingerprint": "sha256:6dcf2caeff962b2ad681f8ceeb919cde51e95fc0c5f77e0767b253b74e5ba01f"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,14 +16,14 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 8935,
-      "approx_tokens": 107312,
+      "lines": 9313,
+      "approx_tokens": 111478,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3951:run_runtime_packet_fixtures:1460l",
-        "6079:run_base_ref_default_fixture:1272l",
-        "8127:run_branch_status_negative_fixtures:765l",
-        "1875:run_negative_amendment_fixtures:362l"
+        "4328:run_runtime_packet_fixtures:1460l",
+        "6456:run_base_ref_default_fixture:1272l",
+        "8504:run_branch_status_negative_fixtures:765l",
+        "3074:run_worker_repair_promotion_fixture:375l"
       ]
     },
     {
@@ -66,16 +66,16 @@
       ]
     },
     {
-      "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
-      "owner": "goal-preflight",
-      "lines": 2107,
-      "approx_tokens": 27742,
+      "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 2279,
+      "approx_tokens": 27784,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1185:lint:836l",
-        "775:validate_preflight_lite_records:152l",
-        "1076:validate_runtime_metadata:107l",
-        "989:validate_goal_config_manifest:85l"
+        "870:validate_worker_artifacts:170l",
+        "2066:validate_branch_status:157l",
+        "1857:validate_review_artifact_for_branch:153l",
+        "507:validate_launch_config_artifact:102l"
       ]
     }
   ],
@@ -148,6 +148,7 @@
         "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
         "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
         "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+        "skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py",
         "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
         "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
         "skills/goal-branch-orchestrator/scripts/validate_branch_status.py"
