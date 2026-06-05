@@ -7,6 +7,7 @@ import argparse
 import importlib.util
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 
@@ -58,6 +59,13 @@ NATIVE_DELEGATION_ENVS = (
     "CODEX_NATIVE_BRANCH_DELEGATION",
     "CODEX_NATIVE_AGENT_DELEGATION",
 )
+DEFAULT_CLI_BRANCH_MODEL = "gpt-5.4-mini"
+CLI_BRANCH_MODEL_ENVS = (
+    "GOAL_CLI_BRANCH_MODEL",
+    "GOAL_BRANCH_CONTROL_MODEL",
+    "CODEX_BRANCH_CONTROL_MODEL",
+)
+SAFE_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
 def git_ok(repo_root: Path, *args: str) -> bool:
@@ -117,6 +125,32 @@ def native_delegation_available(explicit: bool) -> tuple[bool, str | None]:
         if env_flag_enabled(name):
             return True, f"env:{name}"
     return False, None
+
+
+def resolve_cli_branch_model(explicit_model: str | None) -> tuple[str | None, str]:
+    if explicit_model is not None:
+        raw_model = explicit_model.strip()
+        source = "argument"
+    else:
+        raw_model = ""
+        source = ""
+        for name in CLI_BRANCH_MODEL_ENVS:
+            value = os.environ.get(name)
+            if value is not None and value.strip():
+                raw_model = value.strip()
+                source = f"env:{name}"
+                break
+        if not raw_model:
+            raw_model = DEFAULT_CLI_BRANCH_MODEL
+            source = "default"
+
+    if raw_model.lower() in {"none", "off", "omit", "disabled", "false"}:
+        return None, source
+    if not SAFE_CODEX_MODEL_RE.fullmatch(raw_model):
+        raise SystemExit(
+            "--cli-branch-model must be a simple Codex model id without whitespace or shell metacharacters"
+        )
+    return raw_model, source
 
 
 def validate_audit_telemetry(audit_path: Path) -> None:
@@ -469,7 +503,13 @@ def worktree_command(branch: dict, repo_root: Path, base_ref: str) -> str:
     return f"git worktree add -b {shell_quote(name)} {shell_quote(worktree_path.as_posix())} {shell_quote(base_ref)}"
 
 
-def bounded_cli_launch_plan(branch: dict, manifest_path: Path, repo_root: Path) -> dict:
+def bounded_cli_launch_plan(
+    branch: dict,
+    manifest_path: Path,
+    repo_root: Path,
+    cli_branch_model: str | None,
+    cli_branch_model_source: str,
+) -> dict:
     branch_id = str(branch["id"])
     prompt_rel = require_relative_path(str(branch["prompt"]), f"branch {branch_id}.prompt")
     worktree_rel = require_relative_path(str(branch["worktree_path"]), f"branch {branch_id}.worktree_path")
@@ -494,15 +534,21 @@ def bounded_cli_launch_plan(branch: dict, manifest_path: Path, repo_root: Path) 
             "Critical runtime constraints:",
             "- Use installed skills under $GOAL_SKILLS_ROOT when set, otherwise resolve the installed skills root from the skill instructions.",
             "- Use CLI worker mode when native nested subagents are unavailable.",
+            "- This Codex CLI session is branch-control only; keep worker, reviewer, amender, and Lite packet work on the configured route ladders.",
             "- Preserve configured route ladders unless concrete validator/model-catalog/route-health/operator/timeout/budget/provider evidence justifies pruning.",
             "- Finish only after branch status validates against the manifest, or write structured blocked/partial evidence.",
             heredoc_label,
             f"cat {shell_quote(prompt_path.as_posix())} >> {shell_quote(launch_prompt_path.as_posix())}",
         ]
     )
+    model_args = []
+    if cli_branch_model is not None:
+        model_args = ["-m", cli_branch_model]
     launch_command = " ".join(
         [
-            "codex exec --dangerously-bypass-approvals-and-sandbox",
+            "codex exec",
+            *model_args,
+            "--dangerously-bypass-approvals-and-sandbox",
             "-C",
             shell_quote(worktree_path.as_posix()),
             "--add-dir",
@@ -523,6 +569,9 @@ def bounded_cli_launch_plan(branch: dict, manifest_path: Path, repo_root: Path) 
         "launch_prompt_path": launch_prompt_path.as_posix(),
         "final_message_path": final_message_path.as_posix(),
         "log_path": log_path.as_posix(),
+        "codex_model": cli_branch_model,
+        "codex_model_source": cli_branch_model_source,
+        "codex_model_policy": "CLI branch-control model only; packet routes remain governed by manifest worker/reviewer/amender/lite policies.",
         "launch_prompt_command": launch_prompt_command,
         "launch_command": launch_command,
         "parent_context_contract": "Do not stream branch CLI stdout/stderr into the main orchestrator context; read final_message_path and validated status artifacts after launch exits.",
@@ -543,12 +592,20 @@ def branch_delegation_entry(
     fallback_reason: str | None,
     native_available: bool,
     native_availability_source: str | None,
+    cli_branch_model: str | None,
+    cli_branch_model_source: str,
 ) -> dict:
     branch_id = str(branch["id"])
     prompt_rel = require_relative_path(str(branch["prompt"]), f"branch {branch_id}.prompt")
     worktree_rel = require_relative_path(str(branch["worktree_path"]), f"branch {branch_id}.worktree_path")
     command = worktree_command(branch, repo_root, base_ref)
-    cli_plan = bounded_cli_launch_plan(branch, manifest_path, repo_root)
+    cli_plan = bounded_cli_launch_plan(
+        branch,
+        manifest_path,
+        repo_root,
+        cli_branch_model,
+        cli_branch_model_source,
+    )
     return {
         "branch_id": branch_id,
         "preferred_delegation": "native_agent",
@@ -587,6 +644,8 @@ def render_delegation_plan(
     fallback_reason: str | None,
     native_available: bool,
     native_availability_source: str | None,
+    cli_branch_model: str | None,
+    cli_branch_model_source: str,
 ) -> dict:
     return {
         "schema_version": 1,
@@ -598,6 +657,8 @@ def render_delegation_plan(
         "native_agent_available": native_available,
         "native_agent_availability_source": native_availability_source,
         "cli_fallback_reason": fallback_reason,
+        "cli_branch_control_model": cli_branch_model,
+        "cli_branch_control_model_source": cli_branch_model_source,
         "branches": [
             branch_delegation_entry(
                 branch,
@@ -608,6 +669,8 @@ def render_delegation_plan(
                 fallback_reason,
                 native_available,
                 native_availability_source,
+                cli_branch_model,
+                cli_branch_model_source,
             )
             for branch in branches
         ],
@@ -641,6 +704,13 @@ def main() -> int:
         "--native-agent-unavailable-reason",
         default="native_agent_delegation_unavailable",
         help="Fallback reason recorded when --delegation-mode auto selects CLI worktrees.",
+    )
+    parser.add_argument(
+        "--cli-branch-model",
+        help=(
+            "Codex model id for CLI branch-control fallback launches. Defaults to gpt-5.4-mini; "
+            "set to none/off/omit to preserve legacy ambient-model behavior."
+        ),
     )
     parser.add_argument("--delegation-report", help="Write a JSON branch delegation plan with native/CLI selection provenance.")
     parser.add_argument("--json", action="store_true", help="Print the branch delegation plan as JSON instead of shell/comments.")
@@ -919,6 +989,7 @@ def main() -> int:
         native_available,
         str(args.native_agent_unavailable_reason or "native_agent_delegation_unavailable"),
     )
+    cli_branch_model, cli_branch_model_source = resolve_cli_branch_model(args.cli_branch_model)
     plan = render_delegation_plan(
         selected_branches,
         manifest_path,
@@ -928,6 +999,8 @@ def main() -> int:
         fallback_reason,
         native_available,
         native_source,
+        cli_branch_model,
+        cli_branch_model_source,
     )
     if args.delegation_report:
         report_path = resolve_absolute_path(args.delegation_report, "--delegation-report", must_exist=False)

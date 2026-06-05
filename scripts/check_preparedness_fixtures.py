@@ -3841,6 +3841,10 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"native fallback metadata should still carry bounded CLI policy: {native_cli_fallback!r}")
     if " > " not in native_cli_fallback.get("launch_command", "") or "2>&1" not in native_cli_fallback.get("launch_command", ""):
         raise SystemExit(f"bounded CLI fallback launch command should redirect output: {native_cli_fallback!r}")
+    if native_cli_fallback.get("codex_model") != "gpt-5.4-mini" or native_cli_fallback.get("codex_model_source") != "default":
+        raise SystemExit(f"native fallback metadata should default branch-control Codex to mini: {native_cli_fallback!r}")
+    if "codex exec -m gpt-5.4-mini" not in native_cli_fallback.get("launch_command", ""):
+        raise SystemExit(f"native fallback launch command should pin the branch-control model: {native_cli_fallback!r}")
     native_text_result = run(
         [
             "python3",
@@ -3861,7 +3865,7 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"native delegation stdout must not emit runnable CLI fallback commands: {native_text_result.stdout!r}")
     if not any(line.startswith("# git worktree add -b ") for line in native_text_lines):
         raise SystemExit(f"native delegation stdout should preserve commented CLI fallback context: {native_text_result.stdout!r}")
-    if not any("codex exec" in line and "2>&1" in line for line in native_text_lines):
+    if not any("codex exec -m gpt-5.4-mini" in line and "2>&1" in line for line in native_text_lines):
         raise SystemExit(f"native delegation stdout should preserve commented bounded CLI launch context: {native_text_result.stdout!r}")
     fallback_report = main_bundle / "branches" / "B02.delegation.json"
     fallback_result = run(
@@ -3885,15 +3889,19 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"CLI should be an explicit fallback when native delegation is unavailable: {fallback_plan!r}")
     if fallback_plan.get("cli_fallback_reason") != "native_agent_delegation_unavailable":
         raise SystemExit(f"CLI fallback plan should record a reason: {fallback_plan!r}")
+    if fallback_plan.get("cli_branch_control_model") != "gpt-5.4-mini" or fallback_plan.get("cli_branch_control_model_source") != "default":
+        raise SystemExit(f"CLI fallback plan should record the branch-control Codex model: {fallback_plan!r}")
     if not fallback_result.stdout.strip().startswith("git worktree add -b "):
         raise SystemExit(f"CLI fallback should still render the worktree command: {fallback_result.stdout!r}")
     fallback_branch = fallback_plan.get("branches", [{}])[0]
     fallback_cli = fallback_branch.get("cli_worktree_fallback", {})
     if fallback_cli.get("stdout_policy") != "redirect_stdout_stderr_to_log":
         raise SystemExit(f"CLI fallback report should include bounded output policy: {fallback_cli!r}")
+    if fallback_cli.get("codex_model") != "gpt-5.4-mini" or "codex exec -m gpt-5.4-mini" not in fallback_cli.get("launch_command", ""):
+        raise SystemExit(f"CLI fallback launch should pin the branch-control model: {fallback_cli!r}")
     assert_all_contains(
         fallback_result.stdout,
-        ["cat > ", "codex exec", "--output-last-message", ".codex.final.md", ".codex.log", "2>&1"],
+        ["cat > ", "codex exec", "-m gpt-5.4-mini", "--output-last-message", ".codex.final.md", ".codex.log", "2>&1"],
         "CLI fallback bounded launch command",
     )
     existing_branch_manifest = read_json(main_bundle / "job.manifest.json")

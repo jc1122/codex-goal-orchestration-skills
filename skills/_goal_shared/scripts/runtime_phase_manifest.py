@@ -196,7 +196,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "branch_schedule",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --audit /abs/bundle/audit/prompt-audit.json --list-ready --limit 4",
-                "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap; for each selected branch, prefer native branch-agent delegation and use render_branch_worktree_commands.py --branch Bxx --delegation-report /abs/bundle/branches/Bxx.delegation.json to record native-vs-CLI selection; when CLI fallback is selected, run only the report's bounded launch plan so branch CLI stdout/stderr goes to branches/Bxx.codex.log and the parent consumes final-message/status artifacts instead of raw branch output",
+                "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap; for each selected branch, prefer native branch-agent delegation and use render_branch_worktree_commands.py --branch Bxx --delegation-report /abs/bundle/branches/Bxx.delegation.json to record native-vs-CLI selection; when CLI fallback is selected, run only the report's bounded launch plan, which defaults branch-control Codex to gpt-5.4-mini, redirects branch CLI stdout/stderr to branches/Bxx.codex.log, and lets the parent consume final-message/status artifacts instead of raw branch output",
             },
             {
                 "id": "scheduler",

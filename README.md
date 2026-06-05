@@ -561,7 +561,7 @@ Preflight:
 Main:
 
 - `create_audit_packet.py`, `runtime_prompt_audit_runner.py`, `deterministic_prompt_audit.py`, `run_prompt_audit_phase.py`, `validate_prompt_audit.py`.
-- `render_branch_worktree_commands.py`: list eligible branches after audit and render a native-first branch delegation plan with an explicit CLI worktree fallback reason.
+- `render_branch_worktree_commands.py`: list eligible branches after audit and render a native-first branch delegation plan with an explicit CLI worktree fallback reason and default `gpt-5.4-mini` branch-control model.
 - `assemble_main_status.py`, `validate_main_status.py`.
 - `summarize_telemetry.py`: write standard or debug telemetry summaries.
 
