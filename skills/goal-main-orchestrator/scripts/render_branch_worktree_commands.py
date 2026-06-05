@@ -451,6 +451,71 @@ def worktree_command(branch: dict, repo_root: Path, base_ref: str) -> str:
     return f"git worktree add -b {shell_quote(name)} {shell_quote(worktree_path.as_posix())} {shell_quote(base_ref)}"
 
 
+def bounded_cli_launch_plan(branch: dict, manifest_path: Path, repo_root: Path) -> dict:
+    branch_id = str(branch["id"])
+    prompt_rel = require_relative_path(str(branch["prompt"]), f"branch {branch_id}.prompt")
+    worktree_rel = require_relative_path(str(branch["worktree_path"]), f"branch {branch_id}.worktree_path")
+    bundle_dir = manifest_path.parent
+    prompt_path = bundle_dir / prompt_rel
+    worktree_path = resolve(repo_root, worktree_rel)
+    launch_prompt_path = bundle_dir / "branches" / f"{branch_id}.cli.prompt.md"
+    final_message_path = bundle_dir / "branches" / f"{branch_id}.codex.final.md"
+    log_path = bundle_dir / "branches" / f"{branch_id}.codex.log"
+    heredoc_label = f"GOAL_BRANCH_{branch_id}_CLI_PROMPT"
+    launch_prompt_command = "\n".join(
+        [
+            f"cat > {shell_quote(launch_prompt_path.as_posix())} <<'{heredoc_label}'",
+            "/goal",
+            "Use $goal-branch-orchestrator with the generated branch context below.",
+            "",
+            f"Bundle root: {bundle_dir.as_posix()}",
+            f"Repository root for this branch worktree: {worktree_path.as_posix()}",
+            f"Manifest: {manifest_path.as_posix()}",
+            f"Branch prompt: {prompt_path.as_posix()}",
+            "",
+            "Critical runtime constraints:",
+            "- Use installed skills under $GOAL_SKILLS_ROOT when set, otherwise resolve the installed skills root from the skill instructions.",
+            "- Use CLI worker mode when native nested subagents are unavailable.",
+            "- Preserve configured route ladders unless concrete validator/model-catalog/route-health/operator/timeout/budget/provider evidence justifies pruning.",
+            "- Finish only after branch status validates against the manifest, or write structured blocked/partial evidence.",
+            heredoc_label,
+            f"cat {shell_quote(prompt_path.as_posix())} >> {shell_quote(launch_prompt_path.as_posix())}",
+        ]
+    )
+    launch_command = " ".join(
+        [
+            "codex exec --dangerously-bypass-approvals-and-sandbox",
+            "-C",
+            shell_quote(worktree_path.as_posix()),
+            "--add-dir",
+            shell_quote(bundle_dir.as_posix()),
+            "--output-last-message",
+            shell_quote(final_message_path.as_posix()),
+            "-",
+            "<",
+            shell_quote(launch_prompt_path.as_posix()),
+            ">",
+            shell_quote(log_path.as_posix()),
+            "2>&1",
+        ]
+    )
+    return {
+        "stdout_policy": "redirect_stdout_stderr_to_log",
+        "prompt_path": prompt_path.as_posix(),
+        "launch_prompt_path": launch_prompt_path.as_posix(),
+        "final_message_path": final_message_path.as_posix(),
+        "log_path": log_path.as_posix(),
+        "launch_prompt_command": launch_prompt_command,
+        "launch_command": launch_command,
+        "parent_context_contract": "Do not stream branch CLI stdout/stderr into the main orchestrator context; read final_message_path and validated status artifacts after launch exits.",
+    }
+
+
+def print_commented_block(text: str) -> None:
+    for line in text.splitlines():
+        print(f"# {line}")
+
+
 def branch_delegation_entry(
     branch: dict,
     manifest_path: Path,
@@ -465,6 +530,7 @@ def branch_delegation_entry(
     prompt_rel = require_relative_path(str(branch["prompt"]), f"branch {branch_id}.prompt")
     worktree_rel = require_relative_path(str(branch["worktree_path"]), f"branch {branch_id}.worktree_path")
     command = worktree_command(branch, repo_root, base_ref)
+    cli_plan = bounded_cli_launch_plan(branch, manifest_path, repo_root)
     return {
         "branch_id": branch_id,
         "preferred_delegation": "native_agent",
@@ -489,6 +555,7 @@ def branch_delegation_entry(
             "reason": fallback_reason,
             "command": command,
             "base_ref": base_ref,
+            **cli_plan,
         },
     }
 
@@ -855,9 +922,15 @@ def main() -> int:
             print(f"# worktree_path: {native['worktree_path']}")
             print("# cli fallback command, only if native delegation is unavailable:")
             print(f"# {entry['cli_worktree_fallback']['command']}")
+            print("# cli fallback launch must use redirected output:")
+            print_commented_block(entry["cli_worktree_fallback"]["launch_prompt_command"])
+            print(f"# {entry['cli_worktree_fallback']['launch_command']}")
     else:
         for entry in plan["branches"]:
-            print(entry["cli_worktree_fallback"]["command"])
+            fallback = entry["cli_worktree_fallback"]
+            print(fallback["command"])
+            print(fallback["launch_prompt_command"])
+            print(fallback["launch_command"])
 
     return 0
 

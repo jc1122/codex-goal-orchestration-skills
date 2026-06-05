@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:3d5c460bc1dbfb8cf0fe9616906bf7fca1bc31b8e32733104bc19b5168ca71e4"
+    "source_fingerprint": "sha256:2d06b78f7f356ed3a6b095ad5110a1ace625afcb94d293c46abea0e8fc3539e4"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,27 +16,27 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 8754,
-      "approx_tokens": 105266,
+      "lines": 8814,
+      "approx_tokens": 106034,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3772:run_runtime_packet_fixtures:1460l",
-        "5900:run_base_ref_default_fixture:1272l",
-        "7948:run_branch_status_negative_fixtures:765l",
-        "1831:run_negative_amendment_fixtures:362l"
+        "3832:run_runtime_packet_fixtures:1460l",
+        "5960:run_base_ref_default_fixture:1272l",
+        "8008:run_branch_status_negative_fixtures:765l",
+        "1875:run_negative_amendment_fixtures:362l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3234,
-      "approx_tokens": 38379,
+      "lines": 3290,
+      "approx_tokens": 38968,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1672:normalize_brief:238l",
-        "3017:create_bundle:137l",
-        "2727:manifest_from_normalized_brief:128l",
-        "2361:build_runtime_index:96l"
+        "1685:normalize_brief:238l",
+        "3073:create_bundle:137l",
+        "2782:manifest_from_normalized_brief:128l",
+        "2374:build_runtime_index:96l"
       ]
     },
     {

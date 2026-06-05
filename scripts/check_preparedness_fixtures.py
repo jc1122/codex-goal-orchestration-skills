@@ -1458,6 +1458,50 @@ def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
             "--json",
         ]
     )
+    inline_exact_brief = {
+        **valid_brief,
+        "job_id": "brief-inline-exact-source-contract",
+        "goal": """Implement the exact FT10 fixture.
+
+Use this exact FT10 instance:
+
+FT10 = [
+    [(0, 29), (1, 78), (2, 9), (3, 36), (4, 49), (5, 11), (6, 62), (7, 56), (8, 44), (9, 21)],
+    [(0, 43), (2, 90), (4, 75), (9, 11), (3, 69), (1, 28), (6, 46), (5, 46), (7, 72), (8, 30)],
+]
+
+The branch that implements data must compare against the exact payload above before pass.""",
+        "source_summary": "The exact FT10 source payload is inline in the goal text.",
+        "required_evidence": ["Branch prompts carry the exact inline source contract to workers and reviewers."],
+        "final_dod": ["The generated branch prompt includes the exact source contract."],
+    }
+    inline_exact_path = tmp_path / "brief-inline-exact-source-contract.json"
+    inline_exact_bundle = tmp_path / "brief-inline-exact-source-contract-bundle"
+    write_json(inline_exact_path, inline_exact_brief)
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/create_goal_bundle.py",
+            "--brief",
+            inline_exact_path.as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--out-dir",
+            inline_exact_bundle.as_posix(),
+        ]
+    )
+    inline_branch_prompt = (inline_exact_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
+    assert_all_contains(
+        inline_branch_prompt,
+        [
+            "## Authoritative Source Contract",
+            "Inline exact-source goal payload:",
+            "FT10 = [",
+            "[(0, 43), (2, 90), (4, 75), (9, 11)",
+            "command-backed comparison against the contract or `main.prompt.md`",
+        ],
+        "inline exact source branch prompt contract",
+    )
     invalid_runtime_cap_brief = {
         **valid_brief,
         "job_id": "brief-lint-invalid-runtime-cap",
@@ -3297,6 +3341,11 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     native_branch = native_plan.get("branches", [{}])[0]
     if native_branch.get("selected_delegation") != "native_agent" or native_branch.get("cli_fallback_reason") is not None:
         raise SystemExit(f"native branch plan should not carry a fallback reason: {native_branch!r}")
+    native_cli_fallback = native_branch.get("cli_worktree_fallback", {})
+    if native_cli_fallback.get("stdout_policy") != "redirect_stdout_stderr_to_log":
+        raise SystemExit(f"native fallback metadata should still carry bounded CLI policy: {native_cli_fallback!r}")
+    if " > " not in native_cli_fallback.get("launch_command", "") or "2>&1" not in native_cli_fallback.get("launch_command", ""):
+        raise SystemExit(f"bounded CLI fallback launch command should redirect output: {native_cli_fallback!r}")
     native_text_result = run(
         [
             "python3",
@@ -3317,6 +3366,8 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"native delegation stdout must not emit runnable CLI fallback commands: {native_text_result.stdout!r}")
     if not any(line.startswith("# git worktree add -b ") for line in native_text_lines):
         raise SystemExit(f"native delegation stdout should preserve commented CLI fallback context: {native_text_result.stdout!r}")
+    if not any("codex exec" in line and "2>&1" in line for line in native_text_lines):
+        raise SystemExit(f"native delegation stdout should preserve commented bounded CLI launch context: {native_text_result.stdout!r}")
     fallback_report = main_bundle / "branches" / "B02.delegation.json"
     fallback_result = run(
         [
@@ -3341,6 +3392,15 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"CLI fallback plan should record a reason: {fallback_plan!r}")
     if not fallback_result.stdout.strip().startswith("git worktree add -b "):
         raise SystemExit(f"CLI fallback should still render the worktree command: {fallback_result.stdout!r}")
+    fallback_branch = fallback_plan.get("branches", [{}])[0]
+    fallback_cli = fallback_branch.get("cli_worktree_fallback", {})
+    if fallback_cli.get("stdout_policy") != "redirect_stdout_stderr_to_log":
+        raise SystemExit(f"CLI fallback report should include bounded output policy: {fallback_cli!r}")
+    assert_all_contains(
+        fallback_result.stdout,
+        ["cat > ", "codex exec", "--output-last-message", ".codex.final.md", ".codex.log", "2>&1"],
+        "CLI fallback bounded launch command",
+    )
     existing_branch_manifest = read_json(main_bundle / "job.manifest.json")
     existing_branch_name = "goal-fixture-existing-branch-test"
     existing_worktree_path = ".worktrees/goal-fixture-existing-branch-test"

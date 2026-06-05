@@ -29,6 +29,10 @@ Ownership feasibility: {ownership_feasibility_status}; commands needing review: 
 
 {scope}
 
+## Authoritative Source Contract
+
+{source_contract}
+
 ## Owned Paths
 
 {owned_paths}
@@ -96,5 +100,6 @@ Return blocked if either command fails.
 - `{worker_scheduler_path}` exists, matches the current manifest hash, and proves worker slot saturation with schema v2 event metadata plus explicit refill/deferral/blocking evidence.
 - `{pre_review_gate_path}` passed before reviewer launch; reviewer `route.json` exists, records matching `semantic_input_hashes`, and has no verification gaps.
 - `git diff --check {base_ref}...HEAD` passed before review or merge readiness was reported.
+- If this branch implements or tests data from the Authoritative Source Contract, pre-review evidence includes a command-backed comparison against the contract or `main.prompt.md`; matching a local duplicate constant is not enough.
 - Final branch status JSON passed manifest-bound `validate_branch_status.py --manifest {manifest_path_shell} --status {branch_status_path_shell}`.
 {dod}

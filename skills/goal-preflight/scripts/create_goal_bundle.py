@@ -79,6 +79,19 @@ TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
 RUNTIME_RULES_PATH = "runtime-rules.md"
 PROMOTED_CONTEXT_ATTACHMENT_MIN_BYTES = 8192
 PROMOTED_CONTEXT_ATTACHMENT_MIN_USES = 2
+INLINE_SOURCE_CONTRACT_MAX_CHARS = 12000
+EXACT_SOURCE_RE = re.compile(
+    r"\b("
+    r"exact\s+(?:operation\s+)?(?:list|instance|source|payload|dataset|benchmark|data)|"
+    r"provided\s+in\s+this\s+brief|"
+    r"matching\s+the\s+exact|"
+    r"matches\s+the\s+exact|"
+    r"source[-\s]+of[-\s]+truth|"
+    r"exact\s+FT\d+"
+    r")\b",
+    re.IGNORECASE,
+)
+INLINE_SOURCE_TUPLE_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
 
 DOC_PATH_RE = re.compile(
     r"(^|/)(readme|changelog|license|notice|contributing|docs?|documentation)(\.|/|$)|"
@@ -2563,6 +2576,48 @@ def render_source_attachments(attachments: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def has_inline_source_payload(text: str) -> bool:
+    if len(INLINE_SOURCE_TUPLE_RE.findall(text)) >= 10:
+        return True
+    if len(text) < 400:
+        return False
+    lowered = text.lower()
+    return "ft10 = [" in lowered or ("operation list" in lowered and text.count("[") >= 4 and text.count("]") >= 4)
+
+
+def render_branch_source_contract(brief: dict, bundle_root: str) -> str:
+    goal = str(brief.get("goal", "")).strip()
+    source_summary = str(brief.get("source_summary", "")).strip()
+    collected = "\n".join(
+        text
+        for text in [
+            goal,
+            source_summary,
+            "\n".join(str(item) for item in brief.get("required_evidence", []) if isinstance(item, str)),
+            "\n".join(str(item) for item in brief.get("final_dod", []) if isinstance(item, str)),
+        ]
+        if text
+    )
+    exact_source_referenced = bool(EXACT_SOURCE_RE.search(collected))
+    lines = [
+        f"- Main prompt source: {bundle_root}/main.prompt.md",
+        f"- Source summary: {source_summary or 'not supplied'}",
+    ]
+    attachments = render_source_attachments(brief.get("source_attachments", []))
+    if attachments != "- none":
+        lines.extend(["", "Source attachments:", attachments])
+    if exact_source_referenced and has_inline_source_payload(goal):
+        if len(goal) <= INLINE_SOURCE_CONTRACT_MAX_CHARS:
+            lines.extend(["", "Inline exact-source goal payload:", "```text", goal, "```"])
+        else:
+            lines.append(
+                f"- Inline exact-source payload is in main.prompt.md and is {len(goal)} chars; use that file as the source of truth before pass."
+            )
+    elif exact_source_referenced:
+        lines.append("- Exact source data is referenced; compare against main.prompt.md and any listed source attachments before pass.")
+    return "\n".join(lines)
+
+
 def render_runtime_cap(value: object) -> str:
     if value is None:
         return "- none declared"
@@ -2971,6 +3026,7 @@ def render_branch_prompt_text(brief: dict, branch: dict) -> str:
         route_class_ladders=route_class_ladder_guidance(worker_policy, recommendations_enabled=route_enabled, deferred_text=route_deferred),
         objective=branch.get("objective", "Objective not supplied."),
         scope=scope,
+        source_contract=render_branch_source_contract(brief, bundle_root),
         owned_paths=bullets(branch.get("owned_paths", [])),
         work_items=format_work_items(branch["id"], work_items),
         tests=branch_additional_validators(branch),

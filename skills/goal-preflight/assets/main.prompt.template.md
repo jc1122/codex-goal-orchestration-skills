@@ -40,7 +40,7 @@ AUDIT="$B/audit/prompt-audit.json"
 python3 "${{GOAL_SKILLS_ROOT}}"/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest "$MANIFEST" --repo-root {repo_root_shell} --audit "$AUDIT" --list-ready --limit 4
 ```
 
-Launch the next eligible branch from that output only.
+Launch the next eligible branch only after rendering a delegation plan with `--branch Bxx --delegation-report "$B/branches/Bxx.delegation.json"`. Prefer native branch-agent delegation when available. If the plan selects `cli_worktree`, run the plan's worktree command, `launch_prompt_command`, and `launch_command` exactly; the launch command redirects branch CLI stdout/stderr to `branches/Bxx.codex.log` and writes the terminal message to `branches/Bxx.codex.final.md`. Do not run a raw `codex exec` branch command that streams branch output into this main session. After the branch launch exits, inspect `branches/Bxx.codex.final.md`, `branches/Bxx.status.json`, validator output, and compact telemetry summaries before opening raw logs.
 - Defer only unresolved manifest `depends_on` entries. Treat waves as scheduling/order groups, not barriers; non-pass dependencies require structured `dependency_failed` evidence.
 - Record the scheduler ledger at `{main_scheduler_path}` with schema v2 events. `branch_parallelism.scheduler_path` in `main.status.json` must be `{main_scheduler_path}`.
 - If no branch completes after `orchestration_watchdog.main_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active branches with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.

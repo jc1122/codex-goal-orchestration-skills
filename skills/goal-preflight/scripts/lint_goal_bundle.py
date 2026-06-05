@@ -604,11 +604,11 @@ def collect_manifest_text(manifest: dict) -> str:
 
 
 def has_inline_source_payload(text: str) -> bool:
-    if len(text) < 400:
-        return False
     tuple_count = len(INLINE_SOURCE_TUPLE_RE.findall(text))
     if tuple_count >= 10:
         return True
+    if len(text) < 400:
+        return False
     lowered = text.lower()
     return "ft10 = [" in lowered or ("operation list" in lowered and text.count("[") >= 4 and text.count("]") >= 4)
 
