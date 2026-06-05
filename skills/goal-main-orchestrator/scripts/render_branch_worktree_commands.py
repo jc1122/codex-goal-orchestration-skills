@@ -551,7 +551,11 @@ def bounded_cli_launch_plan(
             "- Use CLI worker mode when native nested subagents are unavailable.",
             "- This Codex CLI session is branch-control only; keep worker, reviewer, amender, and Lite packet work on the configured route ladders.",
             "- Preserve configured route ladders unless concrete validator/model-catalog/route-health/operator/timeout/budget/provider evidence justifies pruning.",
-            "- Finish only after branch status validates against the manifest, or write structured blocked/partial evidence.",
+            "- Do not read, tail, grep, cat, or otherwise inspect your own redirected branch log or final-message file while running.",
+            "- Do not read memory files, create memory citations, or answer the user directly; all useful output must be packet/status/review/scheduler artifacts.",
+            "- If the worker scheduler has ready work and no matching worker packet/status, run the ready-workers and worker-packets phases now instead of monitoring yourself.",
+            "- Before any final response, either validate branches/{branch_id}.status.json against the manifest or write validator-visible structured blocked/partial branch evidence.",
+            "- Never return only prose while workers are ready/unlaunched or while branches/{branch_id}.status.json is missing.",
             heredoc_label,
             f"cat {shell_quote(prompt_path.as_posix())} >> {shell_quote(launch_prompt_path.as_posix())}",
         ]

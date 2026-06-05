@@ -196,7 +196,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "branch_schedule",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/render_branch_worktree_commands.py --manifest /abs/bundle/job.manifest.json --repo-root /abs/repo --audit /abs/bundle/audit/prompt-audit.json --list-ready --limit 4",
-                "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap; for each selected branch, prefer native branch-agent delegation and use render_branch_worktree_commands.py --branch Bxx --delegation-report /abs/bundle/branches/Bxx.delegation.json to record native-vs-CLI selection and a scheduler_launch_command; run scheduler_launch_command immediately before starting a native branch agent or CLI branch fallback; when CLI fallback is selected, run only the report's bounded launch plan in execution_order, which defaults branch-control Codex to gpt-5.4-mini, redirects branch CLI stdout/stderr to branches/Bxx.codex.log, and lets the parent consume final-message/status artifacts instead of raw branch output",
+                "agent_does": "launch eligible branch orchestrators as a saturated pool up to manifest cap; for each selected branch, prefer native branch-agent delegation and use render_branch_worktree_commands.py --branch Bxx --delegation-report /abs/bundle/branches/Bxx.delegation.json to record native-vs-CLI selection and a scheduler_launch_command; run scheduler_launch_command immediately before starting a native branch agent or CLI branch fallback; when CLI fallback is selected, run only the report's bounded launch plan in execution_order, which defaults branch-control Codex to gpt-5.4-mini, redirects branch CLI stdout/stderr to branches/Bxx.codex.log, forbids branch self-log polling, and lets the parent consume final-message/status artifacts instead of raw branch output",
             },
             {
                 "id": "scheduler",
@@ -218,6 +218,7 @@ PHASES: dict[str, dict[str, Any]] = {
                 "id": "finalize",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope main --runtime-ref goal-main-orchestrator --init --record-ready --close-from-artifacts --validate-final && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/summarize_telemetry.py --bundle-dir /abs/bundle && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/assemble_main_status.py --manifest /abs/bundle/job.manifest.json --out /abs/bundle/main.status.json --replace && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/validate_main_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/main.status.json && python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/reconcile_goal_run.py --manifest /abs/bundle/job.manifest.json --write",
                 "pass": "main.status.json validates and DoD evidence is complete",
+                "agent_does": "do not emit a terminal/final answer until this phase has either validated main.status.json or preserved validator-visible blocked/partial main evidence",
             },
         ],
         "details": [
@@ -248,7 +249,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "ready_workers",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/render_worker_schedule.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --list-ready --limit 4",
-                "agent_does": "after scheduler_init and script_repair_gate pass, launch independent ready workers as a saturated pool up to max_active_worker_packets",
+                "agent_does": "after scheduler_init and script_repair_gate pass, launch independent ready workers as a saturated pool up to max_active_worker_packets; if scheduler evidence has ready work and no worker packet/status exists, create and launch the worker instead of self-monitoring or returning prose",
             },
             {
                 "id": "context_pack",
@@ -296,6 +297,7 @@ PHASES: dict[str, dict[str, Any]] = {
                 "id": "assemble_validate",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/assemble_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --worktree /abs/branch-worktree --allow-pass --replace && python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json --branch-id Bxx --worktree /abs/branch-worktree",
                 "pass": "validated branch status",
+                "agent_does": "do not emit a final answer until branches/Bxx.status.json exists and validates, or until validator-visible blocked/partial branch evidence has been written",
             },
         ],
         "details": [

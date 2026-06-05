@@ -3920,6 +3920,17 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"CLI fallback report should include a scheduler launch command for B02: {fallback_cli!r}")
     if fallback_cli.get("codex_model") != "gpt-5.4-mini" or "codex exec -m gpt-5.4-mini" not in fallback_cli.get("launch_command", ""):
         raise SystemExit(f"CLI fallback launch should pin the branch-control model: {fallback_cli!r}")
+    fallback_prompt_command = fallback_cli.get("launch_prompt_command", "")
+    assert_all_contains(
+        fallback_prompt_command,
+        [
+            "Do not read, tail, grep, cat, or otherwise inspect your own redirected branch log",
+            "Do not read memory files, create memory citations, or answer the user directly",
+            "If the worker scheduler has ready work and no matching worker packet/status",
+            "Never return only prose while workers are ready/unlaunched",
+        ],
+        "CLI fallback branch-control prompt guardrails",
+    )
     assert_all_contains(
         fallback_result.stdout,
         [
@@ -4205,6 +4216,24 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         raise SystemExit(f"opencode runtime should use packet-local XDG data: {extra_env!r}")
     if db_path != Path(extra_env["XDG_DATA_HOME"]) / "opencode" / "opencode.db":
         raise SystemExit(f"opencode readback db should use packet-local XDG data: {db_path!r}")
+    auth_fixture_data = tmp_path / "opencode-global-data"
+    global_auth = auth_fixture_data / "opencode" / "auth.json"
+    global_auth.parent.mkdir(parents=True)
+    global_auth.write_text('{"provider":"fixture"}\n', encoding="utf-8")
+    previous_xdg_data = os.environ.get("XDG_DATA_HOME")
+    os.environ["XDG_DATA_HOME"] = auth_fixture_data.as_posix()
+    try:
+        auth_packet_dir = tmp_path / "opencode-auth-linked"
+        auth_packet_dir.mkdir()
+        auth_env, _auth_db = module.opencode_packet_env(auth_packet_dir)
+    finally:
+        if previous_xdg_data is None:
+            os.environ.pop("XDG_DATA_HOME", None)
+        else:
+            os.environ["XDG_DATA_HOME"] = previous_xdg_data
+    packet_auth = Path(auth_env["XDG_DATA_HOME"]) / "opencode" / "auth.json"
+    if not packet_auth.is_symlink() or packet_auth.resolve() != global_auth:
+        raise SystemExit(f"opencode packet env should link global auth into packet XDG data: {packet_auth!r}")
     stderr_path = opencode_packet_dir / "events-lite_agent.jsonl.stderr"
     stderr_path.write_text("Failed to run the query 'PRAGMA journal_mode = WAL'\n", encoding="utf-8")
     parse_report = module.opencode_wal_failure_report({"stderr_path": stderr_path.name}, opencode_packet_dir)
@@ -7179,12 +7208,22 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     source_attachments = pipeline_manifest.get("source_attachments", [])
     if not source_attachments or source_attachments[0].get("path") != "README.md" or not source_attachments[0].get("sha256"):
         raise SystemExit(f"source_attachments should be normalized and hashed in manifest: {source_attachments!r}")
+    pipeline_main_prompt = (pipeline_bundle / "main.prompt.md").read_text(encoding="utf-8")
     assert_all_contains(
-        (pipeline_bundle / "main.prompt.md").read_text(encoding="utf-8"),
+        pipeline_main_prompt,
         ["## Source Attachments", "Fixture README", "sha256="],
         "source attachments prompt section",
     )
-    assert_not_contains((pipeline_bundle / "main.prompt.md").read_text(encoding="utf-8"), "/absolute/path/to/", "main prompt concrete paths")
+    assert_all_contains(
+        pipeline_main_prompt,
+        [
+            "Do not write a terminal/final response while any launched branch is still active",
+            "Before any final response, run the finalize phase",
+            "never end with only `TERMINAL_SUMMARY.md`, `mini-control.final.md`, or missing `main.status.json`",
+        ],
+        "main prompt finalization guardrails",
+    )
+    assert_not_contains(pipeline_main_prompt, "/absolute/path/to/", "main prompt concrete paths")
     runtime_rules = (pipeline_bundle / "runtime-rules.md").read_text(encoding="utf-8")
     assert_all_contains(runtime_rules, ["Shared Branch Runtime Rules", "Worker Parallelism", "Reviewer Requirement", "Lite Advisors"], "runtime rules appendix")
     if pipeline_manifest.get("runtime_rules_path") != "runtime-rules.md" or not pipeline_manifest.get("runtime_rules_sha256"):
@@ -8773,6 +8812,10 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
         raise SystemExit(f"reviewer packet context should be compact: {reviewer_context_text!r}")
     if f"Packet context to read first:\n- {reviewer_packet_context.as_posix()}" not in reviewer_prompt:
         raise SystemExit("reviewer prompt should read compact_reviewer_context first")
+    if "The same packet-local compact_reviewer_context is embedded below" not in reviewer_prompt:
+        raise SystemExit("reviewer prompt should embed compact_reviewer_context for restricted CLI harnesses")
+    if '"kind": "compact_reviewer_context"' not in reviewer_prompt:
+        raise SystemExit("reviewer prompt should include inline compact_reviewer_context JSON")
     reviewer_attempts = assert_lean_codex_attempts(reviewer_config.get("attempts"), "reviewer Codex attempts")
     reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
     if reviewer_aliases != ["gpt-5.5", "gpt-5.4"]:

@@ -452,6 +452,13 @@ def opencode_db_path(xdg_data_home: Path | None = None) -> Path:
     return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
 
 
+def opencode_global_auth_path() -> Path:
+    xdg_data = os.environ.get("XDG_DATA_HOME")
+    if xdg_data:
+        return Path(xdg_data) / "opencode" / "auth.json"
+    return Path.home() / ".local" / "share" / "opencode" / "auth.json"
+
+
 def opencode_packet_env(packet_dir: Path) -> tuple[dict[str, str], Path]:
     root = packet_dir / ".runtime-cache" / "opencode"
     xdg_data = root / "xdg-data"
@@ -459,6 +466,15 @@ def opencode_packet_env(packet_dir: Path) -> tuple[dict[str, str], Path]:
     xdg_cache = root / "xdg-cache"
     for path in [xdg_data, xdg_state, xdg_cache]:
         path.mkdir(parents=True, exist_ok=True)
+    packet_opencode_data = xdg_data / "opencode"
+    packet_opencode_data.mkdir(parents=True, exist_ok=True)
+    global_auth = opencode_global_auth_path()
+    packet_auth = packet_opencode_data / "auth.json"
+    if global_auth.exists() and not packet_auth.exists():
+        try:
+            packet_auth.symlink_to(global_auth)
+        except OSError:
+            pass
     return {
         "XDG_DATA_HOME": xdg_data.as_posix(),
         "XDG_STATE_HOME": xdg_state.as_posix(),
@@ -2251,6 +2267,9 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
         "xdg_state_home": extra_env["XDG_STATE_HOME"],
         "xdg_cache_home": extra_env["XDG_CACHE_HOME"],
         "db_path": db_path.as_posix(),
+        "auth_context": "packet_xdg_linked_global_auth"
+        if (Path(extra_env["XDG_DATA_HOME"]) / "opencode" / "auth.json").exists()
+        else "packet_xdg_no_global_auth_file",
     }
     execution = run_with_timeout(
         command=command,

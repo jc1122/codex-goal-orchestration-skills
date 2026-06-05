@@ -1847,12 +1847,21 @@ def reviewer_prompt(
     schema_name: str,
     context_files: list[str],
     packet_context_path: str,
+    packet_context_inline: str,
     include_worktree_context_excerpts: bool,
 ) -> str:
     context_pointer = (
         f"Packet context to read first:\n- {packet_context_path}"
         if packet_context_path
         else context_section(worktree, context_files, include_worktree_excerpts=include_worktree_context_excerpts)
+    )
+    inline_context = (
+        "\nThe same packet-local compact_reviewer_context is embedded below so restricted CLI harnesses can review without reading outside the worktree:\n\n"
+        "```json\n"
+        f"{packet_context_inline}\n"
+        "```\n"
+        if packet_context_inline
+        else ""
     )
     return f"""# Branch Reviewer Packet {packet_id}
 
@@ -1862,6 +1871,7 @@ Worktree: {worktree}
 Branch: {branch}
 
 {context_pointer}
+{inline_context}
 
 Before reviewing, run:
 
@@ -2067,11 +2077,21 @@ def prompt_for(
     route_class: str,
     selection_reason: str,
     packet_context_path: str = "",
+    packet_context_inline: str = "",
     include_worktree_context_excerpts: bool = False,
     worker_attribution: dict[str, str] | None = None,
 ) -> str:
     if role == "reviewer":
-        return reviewer_prompt(packet_id, branch, worktree, schema_name, context_files, packet_context_path, include_worktree_context_excerpts)
+        return reviewer_prompt(
+            packet_id,
+            branch,
+            worktree,
+            schema_name,
+            context_files,
+            packet_context_path,
+            packet_context_inline,
+            include_worktree_context_excerpts,
+        )
     if role == "research-worker":
         return research_worker_prompt(
             packet_id, branch, worktree, schema_name, owned_files, context_files, task_text, include_worktree_context_excerpts
@@ -2705,6 +2725,7 @@ def main() -> int:
             review_schema_path=packet_dir / schema_name,
             review_output_path=packet_dir / output_name,
         )
+    packet_context_inline = json.dumps(packet_context, indent=2, sort_keys=True) if packet_context is not None else ""
     if args.role == "worker":
         compact_context = compact_worker_context(
             branch_id=manifest_branch_id,
@@ -2744,6 +2765,7 @@ def main() -> int:
         route_class,
         selection_reason,
         packet_context_path,
+        packet_context_inline,
         args.include_worktree_context_excerpts,
         worker_attribution=worker_attribution,
     )
