@@ -2959,6 +2959,7 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
     )
     (auto_worker_dir / "workers").mkdir(parents=True, exist_ok=True)
     write_json(auto_worker_dir / "workers" / "B01-W01" / "status.json", {"status": "pass"})
+    write_json(auto_worker_dir / "workers" / "B01-W01" / "packet.summary.json", {"output_status": "blocked"})
     write_json(auto_worker_dir / "workers" / "B01-W02" / "status.json", {"status": "blocked"})
     auto_worker_result = run(
         [
@@ -2980,7 +2981,7 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
         ]
     )
     auto_worker_data = json.loads(auto_worker_result.stdout)
-    if auto_worker_data["state"]["finished_status"] != {"B01-W01": "pass", "B01-W02": "blocked"}:
+    if auto_worker_data["state"]["finished_status"] != {"B01-W01": "blocked", "B01-W02": "blocked"}:
         raise SystemExit(
             f"scheduler_tick worker closeout status mismatch: {auto_worker_data['state']['finished_status']!r}"
         )
@@ -4046,7 +4047,8 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         task_file=bundle / "branches" / "B01.prompt.md",
         manifest=bundle / "job.manifest.json",
         worker_route=["codex-mini"],
-        selection_reason="Fixture exercises marker-wrapped Codex output.",
+        selection_reason="Fixture deliberately prunes to Codex mini to exercise marker-wrapped Codex output.",
+        extra_args=["--allow-route-pruning"],
     )
     manifest_packet_dir = manifest_packet_root / "B01-W01"
     manifest_worker_prompt = (manifest_packet_dir / "prompt.md").read_text(encoding="utf-8")
@@ -4141,6 +4143,51 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     restored_route = read_json(configured_route_root / "B01-W01" / "route.json")
     if restored_route.get("selected_ladder") != configured_ladder:
         raise SystemExit(f"configured route-class ladder should retain final fallback: {restored_route!r}")
+    restored_policy = restored_route.get("route_policy", {})
+    if restored_policy.get("restored_configured_ladder") is not True or restored_policy.get("allow_route_pruning") is not False:
+        raise SystemExit(f"restored worker route should record route-policy restoration: {restored_policy!r}")
+    restored_launch = read_json(configured_route_root / "B01-W01" / "launch-config.json")
+    if restored_launch.get("selected_ladder") != configured_ladder:
+        raise SystemExit(f"configured launch-config should retain final fallback: {restored_launch!r}")
+    if restored_launch.get("route_policy", {}).get("restored_configured_ladder") is not True:
+        raise SystemExit(f"configured launch-config should record route-policy restoration: {restored_launch!r}")
+    if restored_launch.get("scheduler_guard", {}).get("packet_id") != "B01-W01":
+        raise SystemExit(f"worker launch-config should carry a scheduler closed-pass guard: {restored_launch!r}")
+    (configured_route_bundle / "schedulers").mkdir(exist_ok=True)
+    write_json(
+        configured_route_bundle / "schedulers" / "B01.worker.scheduler.json",
+        {
+            "schema_version": 2,
+            "scheduler_kind": "branch-worker-pool",
+            "scheduler_path": "schedulers/B01.worker.scheduler.json",
+            "manifest_sha256": sha256_file(configured_route_bundle / "job.manifest.json"),
+            "capacity": 1,
+            "item_ids": ["B01-W01"],
+            "events": [
+                scheduler_event(1, "ready", id="B01-W01"),
+                scheduler_event(2, "launch", id="B01-W01"),
+                scheduler_event(3, "finish", id="B01-W01", status="pass"),
+                scheduler_event(4, "close", id="B01-W01"),
+            ],
+        },
+    )
+    closed_pass_launch = run([(configured_route_root / "B01-W01" / "launch.sh").as_posix()], expect=1)
+    assert_contains(closed_pass_launch.stdout, "scheduler already closed B01-W01 as pass", "closed pass runner guard")
+    closed_pass_replace = create_runtime_packet(
+        role="worker",
+        packet_id="B01-W01",
+        branch="B01",
+        out_dir=configured_route_root,
+        worktree=clean_worker_worktree,
+        task_file=bundle / "branches" / "B01.prompt.md",
+        manifest=configured_route_bundle / "job.manifest.json",
+        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        selection_reason="Fixture verifies closed pass packet replacement is refused.",
+        extra_args=["--replace"],
+        expect=1,
+    )
+    if "refusing to replace scheduler-closed pass packet" not in closed_pass_replace.stdout:
+        raise SystemExit(f"closed pass packet replacement should fail closed: {closed_pass_replace.stdout}")
     create_runtime_packet(
         role="worker",
         packet_id="B01-W02",
@@ -4156,6 +4203,24 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     pruned_route = read_json(configured_route_root / "B01-W02" / "route.json")
     if pruned_route.get("selected_ladder") != ["worker_primary", "worker_opencode", "worker_fallback"]:
         raise SystemExit(f"--allow-route-pruning should preserve the explicit shorter ladder: {pruned_route!r}")
+    pruned_policy = pruned_route.get("route_policy", {})
+    if pruned_policy.get("pruned_configured_ladder") is not True or pruned_policy.get("restored_configured_ladder") is not False:
+        raise SystemExit(f"--allow-route-pruning should record explicit pruning metadata: {pruned_policy!r}")
+    weak_prune_result = create_runtime_packet(
+        role="worker",
+        packet_id="B01-W03",
+        branch="B01",
+        out_dir=configured_route_root,
+        worktree=clean_worker_worktree,
+        task_file=bundle / "branches" / "B01.prompt.md",
+        manifest=configured_route_bundle / "job.manifest.json",
+        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        selection_reason="Fixture says Lite is advisory only.",
+        extra_args=["--allow-route-pruning"],
+        expect=1,
+    )
+    if "--allow-route-pruning requires --selection-reason" not in weak_prune_result.stdout:
+        raise SystemExit(f"weak pruning reason should fail closed: {weak_prune_result.stdout}")
     oversized_task = tmp_path / "oversized-runtime-task.md"
     oversized_task.write_text("# Oversized Task\n\n" + ("x" * 50000), encoding="utf-8")
     oversized_root = tmp_path / "oversized-runtime-packets"
@@ -4283,6 +4348,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
+    manifest_worker_config = read_json(manifest_packet_dir / "launch-config.json")
+    manifest_worker_config.pop("scheduler_guard", None)
+    write_json(manifest_packet_dir / "launch-config.json", manifest_worker_config)
     run(
         [(manifest_packet_dir / "launch.sh").as_posix()],
         env={**os.environ, "PATH": fake_codex_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
@@ -4290,9 +4358,11 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     manifest_worker_status = read_json(manifest_packet_dir / "status.json")
     if manifest_worker_status.get("branch") != "preparedness-research-fixture":
         raise SystemExit(f"worker runtime did not preserve normalized branch label: {manifest_worker_status!r}")
-    raw_status_text = (manifest_packet_dir / "status.json.raw").read_text(encoding="utf-8")
-    if "BEGIN_WORKER_STATUS_JSON" not in raw_status_text:
-        raise SystemExit("worker runtime did not preserve raw marker-wrapped Codex output")
+    raw_status_path = manifest_packet_dir / "status.json.raw"
+    if raw_status_path.exists():
+        raw_status_text = raw_status_path.read_text(encoding="utf-8")
+        if "BEGIN_WORKER_STATUS_JSON" not in raw_status_text:
+            raise SystemExit("worker runtime did not preserve raw marker-wrapped Codex output")
     manifest_worker_telemetry = read_json(manifest_packet_dir / "telemetry.json")
     usage = manifest_worker_telemetry.get("totals", {}).get("known_usage", {})
     if manifest_worker_telemetry.get("accepted_alias") != "codex-mini" or usage.get("input_tokens") != 321:
@@ -5115,8 +5185,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
 
 
 def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
-    fallback_root = tmp_path / "opencode-wal-fallback-packets"
-    fallback_root.mkdir()
+    fallback_bundle = tmp_path / "opencode-wal-fallback-bundle"
+    fallback_root = fallback_bundle / "workers"
+    fallback_root.mkdir(parents=True)
     fallback_worktree = tmp_path / "opencode-wal-fallback-worktree"
     fallback_worktree.mkdir()
     run(["git", "init", fallback_worktree.as_posix()])
@@ -5251,6 +5322,42 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
         for event in failed_opencode_events
     ):
         raise SystemExit(f"opencode WAL attempt should be classified as harness_unavailable: {launcher!r}")
+    write_json(
+        fallback_bundle / "route-health.json",
+        {
+            "schema_version": 1,
+            "routes": {
+                "wal_opencode": {
+                    "alias": "wal_opencode",
+                    "provider": "opencode",
+                    "model": "deepseek/unsupported",
+                    "failures": {"opencode_empty_assistant_output": 2},
+                    "degraded": True,
+                    "degraded_reason": "opencode_empty_assistant_output",
+                    "degraded_after_count": 2,
+                }
+            },
+        },
+    )
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+            "--packet-dir",
+            packet_dir.as_posix(),
+        ],
+        env={**os.environ, "PATH": fake_bin_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+    )
+    degraded_summary = read_json(packet_dir / "packet.summary.json")
+    degraded_attempts = degraded_summary.get("attempts")
+    if (
+        not isinstance(degraded_attempts, list)
+        or not degraded_attempts
+        or degraded_attempts[0].get("failure_subclass") != "route_degraded"
+    ):
+        raise SystemExit(f"degraded opencode route should be skipped before fallback: {degraded_summary!r}")
+    if degraded_summary.get("terminal_state") != "pass":
+        raise SystemExit(f"degraded opencode route should still allow codex fallback pass: {degraded_summary!r}")
 
 
 def create_goal_fixture_bundle(tmp_path: Path) -> Path:
@@ -7484,6 +7591,24 @@ def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
     deterministic_telemetry = read_json(deterministic_audit_phase / "telemetry.json")
     if deterministic_telemetry.get("accepted_alias") != "deterministic-prompt-audit":
         raise SystemExit(f"deterministic prompt-audit telemetry mismatch: {deterministic_telemetry!r}")
+    rerun_phase = run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py",
+            "--manifest",
+            (bundle / "job.manifest.json").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--audit-dir",
+            deterministic_audit_phase.as_posix(),
+            "--deterministic",
+            "--require-pass",
+            "--json",
+        ]
+    )
+    rerun_report = json.loads(rerun_phase.stdout)
+    if rerun_report.get("status") != "pass" or rerun_report.get("commands", {}).get("reuse_existing_audit", {}).get("status") != "attempted":
+        raise SystemExit(f"prompt-audit phase rerun should reuse existing valid audit: {rerun_report!r}")
     run(
         [
             "python3",
@@ -7810,6 +7935,37 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit("mergeable-with-gaps review should normalize to non-validator-failing branch status")
 
     assemble_branch_status(bundle)
+    premature_pass_bundle = tmp_path / "branch-status-premature-pass-before-review"
+    shutil.copytree(bundle, premature_pass_bundle)
+    write_valid_research_fixture(premature_pass_bundle)
+    write_worker_scheduler(premature_pass_bundle)
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+            "--manifest",
+            (premature_pass_bundle / "job.manifest.json").as_posix(),
+            "--branch-id",
+            "B01",
+            "--worktree",
+            ROOT.as_posix(),
+            "--replace",
+            "--status",
+            "pass",
+            "--test-evidence",
+            "static preparedness fixture validates research-worker evidence",
+            "--dod-item",
+            "research-worker fixture validates with source URL, tools_used, and timeout telemetry",
+            "--handoff",
+            "Fixture verifies premature pass before reviewer is downgraded to partial.",
+        ]
+    )
+    premature_pass_status = read_json(premature_pass_bundle / "branches" / "B01.status.json")
+    if premature_pass_status.get("status") != "partial" or premature_pass_status.get("review_status") != "missing":
+        raise SystemExit(f"premature pass before reviewer should assemble as partial: {premature_pass_status!r}")
+    premature_validation = json.loads(validate_branch(premature_pass_bundle).stdout)
+    if premature_validation.get("artifact_valid") is not True:
+        raise SystemExit(f"premature pass downgrade should validate: {premature_validation!r}")
     missing_waiver_bundle = tmp_path / "branch-status-missing-review-waiver"
     shutil.copytree(bundle, missing_waiver_bundle)
     missing_waiver_status = read_json(missing_waiver_bundle / "branches" / "B01.status.json")
@@ -8111,6 +8267,30 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(f"main validator should distinguish valid artifact from non-pass runtime outcome: {main_validation!r}")
     if main_validation.get("dod_complete") is not False or main_validation.get("review_complete") is not False:
         raise SystemExit(f"main validator should expose incomplete DoD/review lanes: {main_validation!r}")
+    invalid_main_bundle = tmp_path / "main-status-invalid-scheduler-mismatch"
+    shutil.copytree(bundle, invalid_main_bundle)
+    invalid_scheduler = read_json(invalid_main_bundle / "schedulers" / "main.scheduler.json")
+    for event in invalid_scheduler.get("events", []):
+        if isinstance(event, dict) and event.get("event") == "finish" and event.get("id") == "B01":
+            event["status"] = "pass"
+    write_json(invalid_main_bundle / "schedulers" / "main.scheduler.json", invalid_scheduler)
+    invalid_main_status_result = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/assemble_main_status.py",
+                "--manifest",
+                (invalid_main_bundle / "job.manifest.json").as_posix(),
+                "--replace",
+                "--json",
+            ]
+        ).stdout
+    )
+    invalid_main_status = read_json(invalid_main_bundle / "main.status.json")
+    if invalid_main_status_result.get("artifact_valid") is not False or invalid_main_status.get("artifact_valid") is not False:
+        raise SystemExit(f"invalid main status assembly should expose artifact_valid=false: {invalid_main_status!r}")
+    if not any("must match scheduler finish status" in item for item in invalid_main_status.get("blockers", [])):
+        raise SystemExit(f"invalid main status should preserve scheduler mismatch validator defect: {invalid_main_status!r}")
 
     dependency_failed_bundle = tmp_path / "reconcile-dependency-failed-terminal"
     shutil.copytree(bundle, dependency_failed_bundle)

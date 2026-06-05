@@ -34,8 +34,21 @@ def _load_status_validation():
     return module
 
 
+def _load_main_validator():
+    path = Path(__file__).resolve().parent / "validate_main_status.py"
+    if not path.exists():
+        raise SystemExit(f"missing main status validator: {path}")
+    spec = importlib.util.spec_from_file_location("goal_main_validate_main_status", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load main status validator: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 CONTRACT = _load_contract()
 STATUS_VALIDATION = _load_status_validation()
+MAIN_VALIDATOR = _load_main_validator()
 STATUSES = set(CONTRACT.STATUSES)
 REVIEW_STATUSES = set(CONTRACT.REVIEW_STATUSES)
 
@@ -326,6 +339,15 @@ def choose_status(audit: str, branches: list[dict], expected_branch_count: int, 
     return "blocked"
 
 
+def self_validation_blocking_defects(defects: list[str]) -> list[str]:
+    deferred_prefix = "$.telemetry_summary"
+    return [
+        item
+        for item in defects
+        if not (item.startswith(deferred_prefix) and "telemetry summary does not exist" in item)
+    ]
+
+
 def aggregate_review_status(branch_statuses: list[dict], expected_branch_count: int) -> str:
     if not branch_statuses:
         return "missing"
@@ -400,6 +422,38 @@ def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summa
         ),
     }
     write_json(out_path, data)
+    validation_defects = MAIN_VALIDATOR.validate_main_status(
+        data,
+        job_id=None,
+        manifest=manifest,
+        manifest_path=manifest_path,
+    )
+    blocking_validation_defects = self_validation_blocking_defects(validation_defects)
+    if validation_defects and not blocking_validation_defects:
+        data["deferred_validation_defects"] = validation_defects
+        write_json(out_path, data)
+    if blocking_validation_defects:
+        data["status"] = "blocked" if data.get("status") != "failed" else "failed"
+        data["schema_status"] = "failed"
+        data["runtime_status"] = data["status"]
+        data["dod_status"] = "incomplete"
+        data["artifact_valid"] = False
+        data["runtime_success"] = False
+        data["dod_complete"] = False
+        data["resume_action"] = "resume_or_repair"
+        existing_blockers = [item for item in data.get("blockers", []) if isinstance(item, str)]
+        validation_blockers = [f"main status validation: {item}" for item in blocking_validation_defects]
+        data["blockers"] = sorted(dict.fromkeys([*existing_blockers, *validation_blockers]))
+        data["validation_defects"] = blocking_validation_defects
+        if len(blocking_validation_defects) != len(validation_defects):
+            data["deferred_validation_defects"] = [
+                item for item in validation_defects if item not in set(blocking_validation_defects)
+            ]
+        data["summary"] = (
+            summary_text
+            or "Main status assembly found invalid terminal evidence and preserved validator defects for repair."
+        )
+        write_json(out_path, data)
     return data
 
 

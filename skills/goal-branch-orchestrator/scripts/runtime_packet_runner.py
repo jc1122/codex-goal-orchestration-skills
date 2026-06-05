@@ -29,6 +29,8 @@ STREAM_DISCONNECT_PATTERN = re.compile(r"stream disconnected", re.IGNORECASE)
 CAPACITY_ERROR_CODES = {"MODEL_CAPACITY_EXHAUSTED", "RESOURCE_EXHAUSTED"}
 LAUNCHER_STATES = ("active", "timeout", "fail-clean", "fail-dirty", "pass", "blocked")
 GENERATED_CLEANUP_NAME = "generated-artifact-cleanup.json"
+ROUTE_HEALTH_NAME = "route-health.json"
+ROUTE_DEGRADE_EMPTY_OUTPUT_THRESHOLD = 2
 OPENCODE_WAL_FAILURE_SIGNATURE = "PRAGMA journal_mode = WAL"
 OPENCODE_SQLITE_WAL_SUBCLASS = "opencode_sqlite_wal_failure"
 OPENCODE_EMPTY_OUTPUT_SUBCLASS = "opencode_empty_assistant_output"
@@ -79,6 +81,127 @@ def read_json(path: Path) -> dict[str, Any]:
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def scheduler_closed_pass_for_packet(scheduler_path: Path, packet_id: str) -> bool:
+    if not scheduler_path.exists():
+        return False
+    data = read_json(scheduler_path)
+    events = data.get("events")
+    if not isinstance(events, list):
+        return False
+    active = False
+    finished_status: str | None = None
+    closed_pass = False
+    for event in events:
+        if not isinstance(event, dict) or event.get("id") != packet_id:
+            continue
+        name = event.get("event")
+        if name == "launch":
+            active = True
+            finished_status = None
+            closed_pass = False
+        elif name == "finish" and active:
+            status = event.get("status")
+            finished_status = status if isinstance(status, str) else None
+        elif name == "close" and active:
+            closed_pass = finished_status == "pass"
+            active = False
+    return closed_pass
+
+
+def guard_scheduler_closed_pass(packet_dir: Path, config: dict[str, Any]) -> None:
+    guard = config.get("scheduler_guard")
+    if not isinstance(guard, dict):
+        return
+    scheduler_path_value = guard.get("scheduler_path")
+    packet_id = guard.get("packet_id") or config.get("packet_id")
+    if not isinstance(scheduler_path_value, str) or not scheduler_path_value.strip():
+        return
+    if not isinstance(packet_id, str) or not packet_id.strip():
+        return
+    scheduler_path = Path(scheduler_path_value)
+    if scheduler_closed_pass_for_packet(scheduler_path, packet_id):
+        raise SystemExit(
+            f"refusing to run {packet_dir}: scheduler already closed {packet_id} as pass; create a new packet id for retries"
+        )
+
+
+def bundle_root_for_packet_dir(packet_dir: Path) -> Path | None:
+    if packet_dir.parent.name in {"workers", "reviewers", "research"}:
+        return packet_dir.parent.parent
+    return None
+
+
+def route_health_path(packet_dir: Path) -> Path | None:
+    bundle_root = bundle_root_for_packet_dir(packet_dir)
+    if bundle_root is None:
+        return None
+    return bundle_root / ROUTE_HEALTH_NAME
+
+
+def read_route_health(packet_dir: Path) -> dict[str, Any]:
+    path = route_health_path(packet_dir)
+    if path is None or not path.exists():
+        return {"schema_version": 1, "routes": {}}
+    data = read_json(path)
+    routes = data.get("routes")
+    if not isinstance(routes, dict):
+        data["routes"] = {}
+    return data
+
+
+def write_route_health(packet_dir: Path, data: dict[str, Any]) -> None:
+    path = route_health_path(packet_dir)
+    if path is None:
+        return
+    write_json(path, data)
+
+
+def route_health_key(attempt: dict[str, Any]) -> str:
+    alias = attempt.get("alias")
+    if isinstance(alias, str) and alias.strip():
+        return alias
+    provider = attempt.get("provider") or attempt.get("harness_kind")
+    model = attempt.get("model")
+    return f"{provider or 'unknown'}:{model or 'unknown'}"
+
+
+def degraded_route_health(packet_dir: Path, attempt: dict[str, Any]) -> dict[str, Any] | None:
+    data = read_route_health(packet_dir)
+    route = data.get("routes", {}).get(route_health_key(attempt))
+    if isinstance(route, dict) and route.get("degraded") is True:
+        return route
+    return None
+
+
+def record_bundle_route_failure(packet_dir: Path, attempt: dict[str, Any]) -> None:
+    if attempt.get("failure_subclass") != OPENCODE_EMPTY_OUTPUT_SUBCLASS:
+        return
+    key = route_health_key(attempt)
+    data = read_route_health(packet_dir)
+    routes = data.setdefault("routes", {})
+    if not isinstance(routes, dict):
+        routes = {}
+        data["routes"] = routes
+    route = routes.setdefault(key, {})
+    if not isinstance(route, dict):
+        route = {}
+        routes[key] = route
+    route["alias"] = attempt.get("alias")
+    route["provider"] = attempt.get("provider") or attempt.get("harness_kind")
+    route["model"] = attempt.get("model")
+    failures = route.setdefault("failures", {})
+    if not isinstance(failures, dict):
+        failures = {}
+        route["failures"] = failures
+    count = int(failures.get(OPENCODE_EMPTY_OUTPUT_SUBCLASS, 0) or 0) + 1
+    failures[OPENCODE_EMPTY_OUTPUT_SUBCLASS] = count
+    if count >= ROUTE_DEGRADE_EMPTY_OUTPUT_THRESHOLD:
+        route["degraded"] = True
+        route["degraded_reason"] = OPENCODE_EMPTY_OUTPUT_SUBCLASS
+        route["degraded_after_count"] = count
+    write_route_health(packet_dir, data)
 
 
 def append_debug_event(packet_dir: Path, config: dict[str, Any], event: dict[str, Any]) -> None:
@@ -2468,12 +2591,52 @@ def run_packet(packet_dir: Path) -> int:
     debug_name = config.get("telemetry_debug_name")
     if isinstance(debug_name, str) and debug_name.strip():
         remove_if_exists(packet_dir / debug_name)
+    guard_scheduler_closed_pass(packet_dir, config)
     clean_outputs(packet_dir, output_name, attempts, config)
 
     if role == "worker":
         baseline_changed_files = changed_file_fingerprints(worktree)
         for index, attempt in enumerate(attempts):
             command_lines = command_lines_from_attempts(attempts)
+            degraded = degraded_route_health(packet_dir, attempt)
+            if degraded is not None:
+                message = (
+                    f"{event_label(attempt, f'attempt-{index + 1}')} skipped because bundle route health "
+                    f"degraded after {degraded.get('degraded_reason')}"
+                )
+                attempt["called"] = False
+                attempt["accepted"] = False
+                attempt["failure_class"] = "route_degraded"
+                attempt["failure_subclass"] = "route_degraded"
+                attempt["provider_error_code"] = "ROUTE_HEALTH_DEGRADED"
+                attempt["route_health"] = {
+                    "transport_disconnect_count": 0,
+                    "capacity_exhausted": False,
+                    "degraded": True,
+                    "degraded_reason": degraded.get("degraded_reason"),
+                    "degraded_after_count": degraded.get("degraded_after_count"),
+                }
+                attempt["status_parse"] = {
+                    "status": "failed",
+                    "failure_subclass": "route_degraded",
+                    "provider_error_code": "ROUTE_HEALTH_DEGRADED",
+                    "messages": [message],
+                    "message_count": 1,
+                    "final_message": message,
+                }
+                write_launcher_state(
+                    packet_dir,
+                    config,
+                    state="fail-clean",
+                    attempt=attempt,
+                    attempt_index=index,
+                    returncode=1,
+                    dirty=False,
+                    output_nonempty=False,
+                    message=message,
+                    stop_reason="route_degraded",
+                )
+                continue
             write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
             rc, event_path = run_worker_attempt(
                 packet_dir=packet_dir,
@@ -2508,6 +2671,7 @@ def run_packet(packet_dir: Path) -> int:
                 output_nonempty=output_nonempty,
                 message=failure_message,
             )
+            record_bundle_route_failure(packet_dir, attempt)
             command_lines = command_lines_from_attempts(attempts)
             write_launcher_state(
                 packet_dir,

@@ -531,7 +531,10 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     status_schema = json.loads((packet_dir / "status.schema.json").read_text(encoding="utf-8"))
     require(route["selected_ladder"] == ["lite_agent"], "packet route must use configured cheap route-class ladder")
     require(route["default_ladder"] == ["demanding_agent", "lite_agent"], "packet default ladder must use config")
-    require("goal_config" in route["selection_reason"], "packet route reason should cite goal_config")
+    require(
+        "goal_config" in route["selection_reason"] or "manifest worker_model_policy" in route["selection_reason"],
+        "packet route reason should cite manifest-configured route policy",
+    )
     require("Codex Spark" not in route["selection_reason"], "configured route reason must not cite legacy Codex ladder")
     selected_ladder_schema = status_schema["properties"]["selected_ladder"]
     require(

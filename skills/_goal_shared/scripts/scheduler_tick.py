@@ -651,6 +651,13 @@ def artifact_statuses(manifest_path: Path, manifest: dict, scope: str, branch_id
         status = read_json(status_path).get("status")
         if status not in TERMINAL_STATUSES:
             raise SystemExit(f"status artifact {status_path} must contain a terminal status")
+        if worker_type != CONTRACT.RESEARCH_WORKER_TYPE and status == "pass":
+            summary_path = bundle_dir / "workers" / packet_id / "packet.summary.json"
+            if summary_path.exists():
+                summary = read_json(summary_path)
+                summary_status = summary.get("output_status")
+                if summary_status in TERMINAL_STATUSES and summary_status != "pass":
+                    status = "blocked"
         statuses[packet_id] = str(status)
     return statuses
 

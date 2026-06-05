@@ -242,6 +242,54 @@ def main() -> int:
     telemetry_path = audit_dir / "telemetry.json"
     launch_path = audit_dir / "launch.sh"
 
+    if audit_path.exists() and not args.replace:
+        basic_validation = run_command(validation_command(audit_path, manifest_path, repo_root, require_pass=False))
+        require_pass_validation = run_command(validation_command(audit_path, manifest_path, repo_root, require_pass=True))
+        audit = audit_snapshot(audit_path)
+        telemetry = telemetry_snapshot(telemetry_path)
+        status = phase_status(
+            create_rc=0,
+            launch_rc=None,
+            basic_validation_rc=int(basic_validation["returncode"]),
+            require_pass_validation_rc=int(require_pass_validation["returncode"]),
+            audit=audit,
+        )
+        commands: dict[str, Any] = {
+            "reuse_existing_audit": {
+                "status": "attempted",
+                "reason": "prompt-audit.json already exists and --replace was not requested",
+            },
+            "create": None,
+            "deterministic_audit": None,
+            "launch": None,
+            "validate": basic_validation,
+            "validate_require_pass": require_pass_validation,
+        }
+        result = {
+            "schema_version": 1,
+            "status": status,
+            "manifest": manifest_path.as_posix(),
+            "repo_root": repo_root.as_posix(),
+            "audit_dir": audit_dir.as_posix(),
+            "audit": audit,
+            "telemetry": telemetry,
+            "validation": {
+                "basic": parsed_validation(basic_validation),
+                "require_pass": parsed_validation(require_pass_validation),
+            },
+            "commands": commands,
+            "next_action": next_action(status),
+        }
+        audit_dir.mkdir(parents=True, exist_ok=True)
+        write_json(phase_report_path, result)
+        if args.json:
+            print(json.dumps(result, indent=2, sort_keys=True))
+        else:
+            print(f"status={status}")
+            print(f"phase_report={phase_report_path}")
+            print(f"next_action={result['next_action']}")
+        return 0 if status == "pass" or (status == "blocked" and not args.require_pass) else 1
+
     create_command = [
         sys.executable,
         CREATE_AUDIT_PACKET.as_posix(),

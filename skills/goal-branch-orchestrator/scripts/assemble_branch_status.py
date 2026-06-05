@@ -450,6 +450,9 @@ def promote_current_reviewer_if_newer(bundle_dir: Path, review_path: Path, branc
 
 def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, list[str]]:
     review_path = safe_bundle_path(bundle_dir, branch.get("review_path"), "manifest branch review_path")
+    gate_path = bundle_dir / CONTRACT.pre_review_gate_path(branch_id)
+    if not review_path.exists() and not gate_path.exists():
+        return "missing", []
     if not review_path.exists():
         promotion_defects = promote_reviewer_output(bundle_dir, review_path, branch_id)
         if promotion_defects:
@@ -575,6 +578,8 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         status = "partial"
     else:
         status = "blocked"
+    if status == "pass" and inferred_review_status == "missing":
+        status = "partial"
     if status != "pass" and not blockers:
         blockers.append("Branch status assembled conservatively without explicit pass evidence.")
     tests = list(args.test_evidence) if args.test_evidence else collect_worker_tests(worker_statuses)

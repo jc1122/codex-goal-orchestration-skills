@@ -250,6 +250,14 @@ def worker_policy_from_manifest(manifest: dict | None) -> dict:
     return CONTRACT.WORKER_MODEL_POLICY
 
 
+def worker_policy_is_manifest_configured(manifest: dict | None, policy: dict) -> bool:
+    if not isinstance(manifest, dict):
+        return False
+    if isinstance(manifest.get("worker_model_policy"), dict):
+        return True
+    return policy.get("source") == "goal_config"
+
+
 def goal_config_from_manifest(manifest: dict | None, manifest_path: Path | None = None) -> dict | None:
     if isinstance(manifest, dict) and isinstance(manifest.get("goal_config"), dict):
         return manifest["goal_config"]
@@ -334,6 +342,66 @@ def restore_configured_ladder_when_unpruned(
     if not is_ordered_subsequence(selected_ladder, configured):
         return selected_ladder, False
     return configured, True
+
+
+def explicit_route_would_prune_configured_ladder(
+    selected_ladder: list[str],
+    *,
+    route_class: str,
+    worker_policy: dict,
+    explicit_routes: bool,
+) -> bool:
+    if not explicit_routes:
+        return False
+    configured = ladder_for_route_class(route_class, worker_policy)
+    return len(selected_ladder) < len(configured) and is_ordered_subsequence(selected_ladder, configured)
+
+
+def validate_route_pruning_reason(selection_reason: str) -> None:
+    reason = selection_reason.lower()
+    markers = (
+        "prun",
+        "skip",
+        "omit",
+        "exclude",
+        "unavailable",
+        "unsupported",
+        "transport",
+        "disconnect",
+        "empty output",
+        "operator",
+        "runtime cap",
+        "budget",
+        "timeout",
+        "degraded",
+    )
+    if not any(marker in reason for marker in markers):
+        raise SystemExit(
+            "--allow-route-pruning requires --selection-reason to state why a configured fallback is being pruned"
+        )
+
+
+def route_policy_metadata(
+    *,
+    route_class: str,
+    worker_policy: dict,
+    explicit_routes: bool,
+    allow_route_pruning: bool,
+    pruned_configured_ladder: bool,
+    restored_configured_ladder: bool,
+) -> dict:
+    return {
+        "source": worker_policy.get("source", "default"),
+        "policy_version": worker_policy.get("version", ROUTE_POLICY_VERSION),
+        "route_class": route_class,
+        "route_class_ladder": ladder_for_route_class(route_class, worker_policy),
+        "default_ladder": policy_default_ladder(worker_policy),
+        "allowed_routes": policy_allowed_routes(worker_policy),
+        "explicit_worker_routes": explicit_routes,
+        "allow_route_pruning": allow_route_pruning,
+        "pruned_configured_ladder": pruned_configured_ladder,
+        "restored_configured_ladder": restored_configured_ladder,
+    }
 
 
 def model_catalog_rows(path: Path) -> tuple[dict, dict[str, dict]]:
@@ -1173,6 +1241,51 @@ def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> str | Non
         },
     )
     return archive_dir.name
+
+
+def scheduler_closed_pass_for_packet(scheduler_path: Path, packet_id: str) -> bool:
+    if not scheduler_path.exists():
+        return False
+    try:
+        ledger = load_json(scheduler_path)
+    except Exception:
+        return False
+    events = ledger.get("events")
+    if not isinstance(events, list):
+        return False
+    active = False
+    finished_status: str | None = None
+    closed_pass = False
+    for event in events:
+        if not isinstance(event, dict) or event.get("id") != packet_id:
+            continue
+        name = event.get("event")
+        if name == "launch":
+            active = True
+            finished_status = None
+            closed_pass = False
+        elif name == "finish" and active:
+            status = event.get("status")
+            finished_status = status if isinstance(status, str) else None
+        elif name == "close" and active:
+            closed_pass = finished_status == "pass"
+            active = False
+    return closed_pass
+
+
+def worker_scheduler_path(manifest_path: Path | None, branch_id: str) -> Path | None:
+    if manifest_path is None or not branch_id:
+        return None
+    return manifest_path.parent / "schedulers" / f"{branch_id}.worker.scheduler.json"
+
+
+def refuse_closed_pass_replacement(packet_dir: Path, *, replace: bool, scheduler_path: Path | None, packet_id: str) -> None:
+    if not replace or scheduler_path is None or not packet_dir.exists():
+        return
+    if scheduler_closed_pass_for_packet(scheduler_path, packet_id):
+        raise SystemExit(
+            f"refusing to replace scheduler-closed pass packet {packet_id}; create a new packet id or update scheduler evidence first"
+        )
 
 
 def branch_entry(manifest: dict, branch_id: str) -> dict:
@@ -2183,6 +2296,7 @@ def compact_launch_config(
     review_reuse_policy: dict | None = None,
     telemetry_debug: bool = False,
     goal_config: dict | None = None,
+    route_policy: dict | None = None,
     retry_ordinal: str | None = None,
 ) -> dict | None:
     telemetry_script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
@@ -2214,6 +2328,7 @@ def compact_launch_config(
             "attempts": worker_attempts,
             "selected_commands": selected_commands_from_attempts(worker_attempts),
             "model_catalog": model_catalog or {},
+            "route_policy": route_policy or {},
             "telemetry_script": telemetry_script,
             "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
             "gemini_probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
@@ -2422,6 +2537,8 @@ def main() -> int:
     selection_reason = ""
     model_catalog: dict | None = None
     manifest_work_item: dict | None = None
+    worker_route_policy: dict | None = None
+    goal_config: dict | None = None
     if args.role == "worker":
         normalized_worker_routes: list[str] = []
         for item in args.worker_route:
@@ -2437,8 +2554,10 @@ def main() -> int:
             telemetry_debug = telemetry_debug or CONTRACT.telemetry_debug_enabled(_manifest)
         worker_policy = worker_policy_from_manifest(manifest)
         goal_config = goal_config_from_manifest(manifest, manifest_path)
+        manifest_configured_worker_policy = worker_policy_is_manifest_configured(manifest, worker_policy)
         worker_default_ladder = policy_default_ladder(worker_policy)
         worker_allowed_routes = policy_allowed_routes(worker_policy)
+        explicit_worker_routes = bool(normalized_worker_routes)
         manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
         route_class = normalize_route_class(args.route_class or manifest_route_class or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS))
         selected_ladder = (
@@ -2450,11 +2569,17 @@ def main() -> int:
             if normalized_worker_routes
             else ladder_for_route_class(route_class, worker_policy)
         )
+        explicit_route_prunes_configured_ladder = explicit_route_would_prune_configured_ladder(
+            selected_ladder,
+            route_class=route_class,
+            worker_policy=worker_policy,
+            explicit_routes=explicit_worker_routes and manifest_configured_worker_policy,
+        )
         selected_ladder, restored_configured_ladder = restore_configured_ladder_when_unpruned(
             selected_ladder,
             route_class=route_class,
             worker_policy=worker_policy,
-            explicit_routes=bool(normalized_worker_routes) and goal_config is not None,
+            explicit_routes=explicit_worker_routes and manifest_configured_worker_policy,
             allow_route_pruning=args.allow_route_pruning,
         )
         catalog_path = (
@@ -2471,9 +2596,9 @@ def main() -> int:
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
         if not selection_reason:
-            if goal_config:
+            if manifest_configured_worker_policy:
                 selection_reason = (
-                    f"{route_class} route class selected from goal_config worker_model_policy: "
+                    f"{route_class} route class selected from manifest worker_model_policy: "
                     + ", ".join(selected_ladder)
                 )
             else:
@@ -2483,6 +2608,8 @@ def main() -> int:
                 " Explicit worker route was expanded to the full configured route-class ladder; "
                 "use --allow-route-pruning with a pruning reason to keep a shorter ladder."
             )
+        if args.allow_route_pruning and explicit_route_prunes_configured_ladder:
+            validate_route_pruning_reason(selection_reason)
         if model_catalog and model_catalog.get("filtered_aliases"):
             aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
             selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
@@ -2490,7 +2617,15 @@ def main() -> int:
             route_class,
             selected_ladder,
             selection_reason,
-            worker_policy if goal_config else None,
+            worker_policy if manifest_configured_worker_policy else None,
+        )
+        worker_route_policy = route_policy_metadata(
+            route_class=route_class,
+            worker_policy=worker_policy,
+            explicit_routes=explicit_worker_routes,
+            allow_route_pruning=args.allow_route_pruning,
+            pruned_configured_ladder=explicit_route_prunes_configured_ladder and not restored_configured_ladder,
+            restored_configured_ladder=restored_configured_ladder,
         )
 
     worker_attribution: dict[str, str] = {}
@@ -2623,10 +2758,18 @@ def main() -> int:
             "route_catalog_sha256": model_catalog.get("sha256") if isinstance(model_catalog, dict) else None,
             "route_catalog_source": model_catalog.get("source") if isinstance(model_catalog, dict) else None,
             "model_catalog": model_catalog or {},
+            "route_policy": worker_route_policy or {},
             "context_budget": context_budget,
         }
     elif args.role == "reviewer" and review_route is not None:
         route = review_route
+    scheduler_path = worker_scheduler_path(manifest_path, manifest_branch_id) if args.role == "worker" else None
+    refuse_closed_pass_replacement(
+        packet_dir,
+        replace=args.replace,
+        scheduler_path=scheduler_path,
+        packet_id=packet_id,
+    )
     retry_ordinal = archive_existing_packet_dir(packet_dir, replace=args.replace)
     launch_config = compact_launch_config(
         args.role,
@@ -2644,13 +2787,20 @@ def main() -> int:
         review_semantic_hashes=review_semantic_hashes,
         review_reuse_policy=review_reuse_policy,
         telemetry_debug=telemetry_debug,
-        goal_config=goal_config_from_manifest(manifest, manifest_path),
+        goal_config=goal_config if args.role == "worker" else goal_config_from_manifest(manifest, manifest_path),
+        route_policy=worker_route_policy,
         retry_ordinal=retry_ordinal,
     )
     if launch_config is not None:
         launch_config["context_budget"] = context_budget
         if args.role == "worker":
             launch_config.update(worker_attribution)
+            if scheduler_path is not None:
+                launch_config["scheduler_guard"] = {
+                    "scheduler_path": scheduler_path.resolve().as_posix(),
+                    "packet_id": packet_id,
+                    "closed_pass_action": "refuse_clean_outputs",
+                }
         validate_launch_config_adapter(launch_config)
         launch_config["adapter_validation"] = {
             "status": "pass",

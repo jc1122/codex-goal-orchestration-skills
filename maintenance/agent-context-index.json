@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:c5774524cb2c716ac24bc9d88a174cbf34fc405ea029c85c45b5085e19548a09"
+    "source_fingerprint": "sha256:be2ef338b194b67aaa639a351ba41b1ab5ed2c6f79370a577c6653a373e49d98"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,13 +16,13 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 8526,
-      "approx_tokens": 102255,
+      "lines": 8706,
+      "approx_tokens": 104637,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "3725:run_runtime_packet_fixtures:1390l",
-        "5746:run_base_ref_default_fixture:1272l",
-        "7776:run_branch_status_negative_fixtures:710l",
+        "3726:run_runtime_packet_fixtures:1459l",
+        "5853:run_base_ref_default_fixture:1272l",
+        "7901:run_branch_status_negative_fixtures:765l",
         "1831:run_negative_amendment_fixtures:362l"
       ]
     },
@@ -42,27 +42,27 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2886,
-      "approx_tokens": 29167,
+      "lines": 3050,
+      "approx_tokens": 30762,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2455:run_packet:391l",
-        "1376:summarize_dirty_stop_salvage:128l",
-        "2277:extract_status_json:102l",
-        "758:write_launcher_state:85l"
+        "2578:run_packet:432l",
+        "1499:summarize_dirty_stop_salvage:128l",
+        "2400:extract_status_json:102l",
+        "881:write_launcher_state:85l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2696,
-      "approx_tokens": 28831,
+      "lines": 2846,
+      "approx_tokens": 30281,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2270:main:423l",
-        "1010:compact_worker_context:118l",
-        "1225:reviewer_packet_context:99l",
-        "2169:compact_launch_config:99l"
+        "2385:main:458l",
+        "1078:compact_worker_context:118l",
+        "2282:compact_launch_config:101l",
+        "1338:reviewer_packet_context:99l"
       ]
     },
     {
