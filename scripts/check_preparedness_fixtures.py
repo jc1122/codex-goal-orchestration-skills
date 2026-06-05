@@ -4047,7 +4047,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         task_file=bundle / "branches" / "B01.prompt.md",
         manifest=bundle / "job.manifest.json",
         worker_route=["codex-mini"],
-        selection_reason="Fixture deliberately prunes to Codex mini to exercise marker-wrapped Codex output.",
+        selection_reason="Fixture records operator choice to prune to Codex mini for marker-wrapped Codex output.",
         extra_args=["--allow-route-pruning"],
     )
     manifest_packet_dir = manifest_packet_root / "B01-W01"
@@ -4219,7 +4219,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         extra_args=["--allow-route-pruning"],
         expect=1,
     )
-    if "--allow-route-pruning requires --selection-reason" not in weak_prune_result.stdout:
+    if "--allow-route-pruning requires --selection-reason to state a concrete external reason" not in weak_prune_result.stdout:
         raise SystemExit(f"weak pruning reason should fail closed: {weak_prune_result.stdout}")
     oversized_task = tmp_path / "oversized-runtime-task.md"
     oversized_task.write_text("# Oversized Task\n\n" + ("x" * 50000), encoding="utf-8")
@@ -4333,7 +4333,6 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         "  'route_id': cfg['route_id'],\n"
         "  'evidence_summary': 'fake codex marker-wrapped pass evidence',\n"
         "  'branch': 'preparedness-research-fixture',\n"
-        f"  'worktree': {clean_worker_worktree.as_posix()!r},\n"
         "  'route_class': 'normal-code',\n"
         "  'selected_ladder': ['codex-mini'],\n"
         "  'selection_reason': 'Fixture exercises marker-wrapped Codex output.',\n"
@@ -4358,6 +4357,8 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     manifest_worker_status = read_json(manifest_packet_dir / "status.json")
     if manifest_worker_status.get("branch") != "preparedness-research-fixture":
         raise SystemExit(f"worker runtime did not preserve normalized branch label: {manifest_worker_status!r}")
+    if manifest_worker_status.get("worktree") != manifest_worker_status.get("worktree_path"):
+        raise SystemExit(f"worker runtime did not normalize missing worktree from worktree_path: {manifest_worker_status!r}")
     raw_status_path = manifest_packet_dir / "status.json.raw"
     if raw_status_path.exists():
         raw_status_text = raw_status_path.read_text(encoding="utf-8")

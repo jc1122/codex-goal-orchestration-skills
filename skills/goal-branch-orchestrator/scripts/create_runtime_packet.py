@@ -360,24 +360,38 @@ def explicit_route_would_prune_configured_ladder(
 def validate_route_pruning_reason(selection_reason: str) -> None:
     reason = selection_reason.lower()
     markers = (
-        "prun",
-        "skip",
-        "omit",
-        "exclude",
+        "operator",
+        "user",
+        "explicit request",
+        "model catalog",
         "unavailable",
         "unsupported",
+        "route health",
+        "route-health",
+        "provider",
+        "harness",
+        "auth",
+        "401",
+        "403",
         "transport",
         "disconnect",
         "empty output",
-        "operator",
+        "capacity",
+        "quota",
         "runtime cap",
         "budget",
         "timeout",
         "degraded",
+        "smoke failure",
+        "previous failure",
+        "prior failure",
+        "retry after",
     )
     if not any(marker in reason for marker in markers):
         raise SystemExit(
-            "--allow-route-pruning requires --selection-reason to state why a configured fallback is being pruned"
+            "--allow-route-pruning requires --selection-reason to state a concrete external reason "
+            "such as operator choice, route health, model catalog unavailability, provider failure, "
+            "timeout, or budget cap"
         )
 
 

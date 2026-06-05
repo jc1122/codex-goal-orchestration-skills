@@ -2346,12 +2346,21 @@ def normalize_status_before_validation(data: Any, config: dict[str, Any]) -> lis
         return []
     if config.get("role") != "worker":
         return []
+    messages: list[str] = []
+    worktree = data.get("worktree")
+    worktree_path = data.get("worktree_path")
+    if (not isinstance(worktree, str) or not worktree.strip()) and isinstance(worktree_path, str) and worktree_path.strip():
+        data["worktree"] = worktree_path.strip()
+        messages.append("normalized missing worktree from worktree_path")
+    elif (not isinstance(worktree_path, str) or not worktree_path.strip()) and isinstance(worktree, str) and worktree.strip():
+        data["worktree_path"] = worktree.strip()
+        messages.append("normalized missing worktree_path from worktree")
     evidence = data.get("evidence_summary")
     handoff = data.get("handoff")
     if (not isinstance(evidence, str) or not evidence.strip()) and isinstance(handoff, str) and handoff.strip():
         data["evidence_summary"] = handoff.strip()
-        return ["normalized missing evidence_summary from handoff"]
-    return []
+        messages.append("normalized missing evidence_summary from handoff")
+    return messages
 
 
 def output_matches_schema(schema_path: Path, output_path: Path, config: dict[str, Any]) -> bool:

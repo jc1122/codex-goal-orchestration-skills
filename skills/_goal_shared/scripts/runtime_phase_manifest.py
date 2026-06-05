@@ -257,8 +257,8 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "worker_packets",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --model-catalog /abs/bundle/branches/Bxx.model-catalog.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context --selection-reason 'bounded route choice'",
-                "agent_does": "run packet launch.sh; do not inspect active logs while running; include worktree context excerpts only when a bounded source excerpt is required",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/create_runtime_packet.py --role worker --packet-id Bxx-Wyy --branch Bxx --worktree /abs/worker-worktree --out-dir /abs/bundle/workers --manifest /abs/bundle/job.manifest.json --model-catalog /abs/bundle/branches/Bxx.model-catalog.json --task-file /abs/bundle/branches/Bxx.prompt.md --owned-file repo/path --context-file /abs/context",
+                "agent_does": "run packet launch.sh; do not inspect active logs while running; keep the manifest-configured route-class ladder unless a validator, model catalog, route-health artifact, explicit operator request, timeout, budget cap, or provider failure justifies --allow-route-pruning with a concrete reason; include worktree context excerpts only when a bounded source excerpt is required",
             },
             {
                 "id": "watchdog",
