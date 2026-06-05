@@ -2391,6 +2391,10 @@ def compact_launch_config(
             },
             "terminal_commands": terminal_commands,
             "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
+            "gemini_probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
+            "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
+            "gemini_approval_mode": GEMINI_APPROVAL_MODE,
+            "gemini_command": GEMINI_COMMAND,
             "retry_ordinal": retry_ordinal,
         }, retry_ordinal=retry_ordinal)
     return None

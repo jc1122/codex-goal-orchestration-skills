@@ -4190,6 +4190,46 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         raise SystemExit(f"opencode empty assistant output should be a schema/readback failure: {failure_class!r} {empty_report!r}")
     if module.opencode_empty_output_report("assistant text", {"status": "pass", "tokens": {"input": 0}}) is not None:
         raise SystemExit("opencode empty output classifier must not fire when assistant text is present")
+    provider_error_event = opencode_packet_dir / "events-provider-error.jsonl"
+    provider_error_event.write_text(
+        json.dumps(
+            {
+                "type": "error",
+                "sessionID": "provider-error-fixture",
+                "error": {
+                    "name": "APIError",
+                    "data": {
+                        "message": "Unauthorized: Authentication Fails (governor)",
+                        "statusCode": 401,
+                        "responseBody": "Authentication Fails (governor)",
+                        "metadata": {"url": "https://api.deepseek.com/chat/completions"},
+                    },
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    provider_error_report = module.opencode_error_event_report(provider_error_event)
+    if (
+        not isinstance(provider_error_report, dict)
+        or provider_error_report.get("failure_class") != "provider_api_error"
+        or provider_error_report.get("failure_subclass") != module.OPENCODE_PROVIDER_API_ERROR_SUBCLASS
+        or provider_error_report.get("provider_http_status") != 401
+        or provider_error_report.get("provider_error_code") != "OPENCODE_PROVIDER_HTTP_401"
+        or "Authentication Fails" not in provider_error_report.get("provider_error_message", "")
+    ):
+        raise SystemExit(f"opencode provider error events should preserve API error details: {provider_error_report!r}")
+    provider_failure_class = module.attempt_failure_class(
+        {"state": "fail-clean", "returncode": 1},
+        {"harness_kind": "opencode"},
+        parse_report=provider_error_report,
+    )
+    if provider_failure_class != "provider_api_error" or not module._parse_failure_detected(provider_error_report):
+        raise SystemExit(
+            f"opencode provider API errors should not collapse into schema/readback failures: "
+            f"{provider_failure_class!r} {provider_error_report!r}"
+        )
     fake_gemini = tmp_path / "fake-gemini-probe" / "gemini"
     fake_gemini.parent.mkdir()
     fake_gemini.write_text(
@@ -4558,6 +4598,70 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     ):
         raise SystemExit(f"configured Gemini attempts should carry probe metadata: {configured_gemini_config!r}")
     packet_module.validate_launch_config_adapter(configured_gemini_config)
+    configured_reviewer_config = packet_module.compact_launch_config(
+        "reviewer",
+        "B01-R99",
+        "preparedness-configured-reviewer-gemini-fallback",
+        ROOT.as_posix(),
+        "review.schema.json",
+        "review.json",
+        review_route={
+            "selected_ladder": ["demanding_agent", "worker_fallback", "lite_agent"],
+            "selection_reason": "Fixture validates reviewer Gemini fallback adapter metadata.",
+        },
+        goal_config={
+            "schema_version": 1,
+            "models": {
+                "demanding_agent": {
+                    "alias": "demanding-agent",
+                    "role": "demanding_agent",
+                    "harness": "opencode",
+                    "provider": "deepseek",
+                    "model": "deepseek/deepseek-v4-pro",
+                },
+                "worker_fallback": {
+                    "alias": "worker-fallback",
+                    "role": "worker_fallback",
+                    "harness": "gemini",
+                    "provider": "gemini",
+                    "model": "gemini-3-flash-preview",
+                },
+                "lite_agent": {
+                    "alias": "lite-agent",
+                    "role": "lite_agent",
+                    "harness": "gemini",
+                    "provider": "gemini",
+                    "model": "gemini-3.1-flash-lite-preview",
+                },
+            },
+            "harnesses": {
+                "opencode": {
+                    "kind": "opencode",
+                    "command": "opencode",
+                    "run_args": ["run", "--pure", "--format", "json", "--model", "{model}", "{prompt}"],
+                    "run_readback": "opencode_session_db",
+                },
+                "gemini": {
+                    "kind": "gemini",
+                    "command": "gemini",
+                    "run_args": ["--model", "{model}", "{prompt}"],
+                    "run_readback": "stdout",
+                },
+            },
+        },
+    )
+    configured_reviewer_attempts = configured_reviewer_config.get("attempts", [])
+    configured_reviewer_providers = [
+        attempt.get("harness_kind") or attempt.get("provider")
+        for attempt in configured_reviewer_attempts
+        if isinstance(attempt, dict)
+    ]
+    if configured_reviewer_providers != ["opencode", "gemini", "gemini"]:
+        raise SystemExit(f"configured reviewer ladder should preserve opencode plus Gemini fallbacks: {configured_reviewer_config!r}")
+    for key in ("gemini_command", "gemini_probe_prompt", "gemini_approval_mode"):
+        if not configured_reviewer_config.get(key):
+            raise SystemExit(f"configured reviewer Gemini fallback launch config omitted {key}: {configured_reviewer_config!r}")
+    packet_module.validate_launch_config_adapter(configured_reviewer_config)
     configured_codex_config = packet_module.compact_launch_config(
         "worker",
         "B01-W13",

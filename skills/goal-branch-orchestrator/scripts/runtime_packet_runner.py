@@ -34,6 +34,7 @@ ROUTE_DEGRADE_EMPTY_OUTPUT_THRESHOLD = 2
 OPENCODE_WAL_FAILURE_SIGNATURE = "PRAGMA journal_mode = WAL"
 OPENCODE_SQLITE_WAL_SUBCLASS = "opencode_sqlite_wal_failure"
 OPENCODE_EMPTY_OUTPUT_SUBCLASS = "opencode_empty_assistant_output"
+OPENCODE_PROVIDER_API_ERROR_SUBCLASS = "opencode_provider_api_error"
 CACHE_PATH_PARTS = (
     "__pycache__",
     ".pytest_cache",
@@ -546,6 +547,44 @@ def detect_provider_error_code(lines: list[str]) -> str | None:
     return None
 
 
+def opencode_error_event_report(event_path: Path) -> dict[str, Any] | None:
+    if not event_path.exists():
+        return None
+    for line in event_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        event = safe_parse_json_dict(line)
+        if not event or event.get("type") != "error":
+            continue
+        error = event.get("error")
+        if not isinstance(error, dict):
+            continue
+        data = error.get("data")
+        data = data if isinstance(data, dict) else {}
+        metadata = data.get("metadata")
+        metadata = metadata if isinstance(metadata, dict) else {}
+        message = data.get("message") or error.get("message")
+        message = message if isinstance(message, str) and message.strip() else "opencode provider API error"
+        status_code = data.get("statusCode") or data.get("status_code") or data.get("status")
+        if isinstance(status_code, bool) or not isinstance(status_code, int):
+            status_code = None
+        provider_error_code = data.get("code") or error.get("code")
+        if not isinstance(provider_error_code, str) or not provider_error_code.strip():
+            provider_error_code = f"OPENCODE_PROVIDER_HTTP_{status_code}" if status_code is not None else "OPENCODE_PROVIDER_API_ERROR"
+        report: dict[str, Any] = {
+            "status": "failed",
+            "failure_class": "provider_api_error",
+            "failure_subclass": OPENCODE_PROVIDER_API_ERROR_SUBCLASS,
+            "provider_error_code": provider_error_code,
+            "provider_error_name": error.get("name") if isinstance(error.get("name"), str) else None,
+            "provider_error_message": message,
+            "provider_http_status": status_code,
+            "provider_error_url": metadata.get("url") if isinstance(metadata.get("url"), str) else None,
+            "provider_response_body": data.get("responseBody") if isinstance(data.get("responseBody"), str) else None,
+            "messages": [message],
+        }
+        return {key: value for key, value in report.items() if value is not None}
+    return None
+
+
 def _command_from_parts(parts: list[str] | tuple[str, ...]) -> str:
     return shlex.join(str(item) for item in parts)
 
@@ -750,6 +789,15 @@ def _finalize_attempt_observation(
         attempt["failure_subclass"] = parse_report["failure_subclass"]
     else:
         attempt.pop("failure_subclass", None)
+    for key in (
+        "provider_error_name",
+        "provider_error_message",
+        "provider_http_status",
+        "provider_error_url",
+        "provider_response_body",
+    ):
+        if key in parse_report:
+            attempt[key] = parse_report[key]
     attempt["failure_class"] = attempt_failure_class(
         {
             "state": attempt_state,
@@ -769,6 +817,16 @@ def _finalize_attempt_observation(
         "messages": status_parse_messages[:3] if isinstance(status_parse_messages, list) else [],
         "message_count": len(status_parse_messages) if isinstance(status_parse_messages, list) else 0,
     }
+    for key in (
+        "failure_class",
+        "provider_error_name",
+        "provider_error_message",
+        "provider_http_status",
+        "provider_error_url",
+        "provider_response_body",
+    ):
+        if key in parse_report:
+            status_parse[key] = parse_report[key]
     if message:
         status_parse["final_message"] = message
     attempt["status_parse"] = status_parse
@@ -808,6 +866,7 @@ def _parse_failure_detected(parse_report: dict[str, Any]) -> bool:
         "parser_failure",
         OPENCODE_SQLITE_WAL_SUBCLASS,
         OPENCODE_EMPTY_OUTPUT_SUBCLASS,
+        OPENCODE_PROVIDER_API_ERROR_SUBCLASS,
     }
 
 
@@ -997,6 +1056,9 @@ def attempt_failure_class(
         return "none"
     if state == "timeout":
         return "timeout"
+    failure_class = parse_report.get("failure_class")
+    if isinstance(failure_class, str) and failure_class.strip():
+        return failure_class.strip()
     failure_subclass = parse_report.get("failure_subclass")
     if failure_subclass:
         if failure_subclass == "transport_disconnect":
@@ -2190,7 +2252,7 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
     )
     append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
     if execution.get("returncode", 1) != 0:
-        parse_report = opencode_wal_failure_report(execution, packet_dir)
+        parse_report = opencode_wal_failure_report(execution, packet_dir) or opencode_error_event_report(event_path)
         if parse_report:
             attempt["_parse_report"] = parse_report
         return int(execution.get("returncode", 1)), execution, event_path
@@ -2201,16 +2263,9 @@ def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dic
     assistant_text, readback = read_opencode_assistant_text(session_id, db_path)
     assistant_log_path = packet_dir / f"events-{label}-assistant.log"
     assistant_log_path.write_text(assistant_text, encoding="utf-8")
-    parse_report: dict[str, Any] = opencode_empty_output_report(assistant_text, readback) or {}
+    parse_report: dict[str, Any] = opencode_error_event_report(event_path) or opencode_empty_output_report(assistant_text, readback) or {}
     if parse_report:
-        readback = {
-            **readback,
-            "status": "failed",
-            "failure_class": parse_report.get("failure_class"),
-            "failure_subclass": parse_report.get("failure_subclass"),
-            "provider_error_code": parse_report.get("provider_error_code"),
-            "messages": parse_report.get("messages"),
-        }
+        readback = {**readback, **parse_report, "status": "failed"}
     (packet_dir / f"events-{label}-opencode-readback.json").write_text(json.dumps(readback, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     attempt["_parse_report"] = parse_report
     if parse_report:
