@@ -96,6 +96,51 @@ def routes_verified(report: dict) -> bool:
     return isinstance(accepted_route_count, int) and not isinstance(accepted_route_count, bool) and accepted_route_count > 0
 
 
+def accepted_route_roles(report: dict | None) -> set[str]:
+    if not isinstance(report, dict):
+        return set()
+    roles: set[str] = set()
+    routes = report.get("accepted_routes")
+    if not isinstance(routes, list):
+        return roles
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        for key in ("role", "alias"):
+            value = route.get(key)
+            if isinstance(value, str) and value.strip():
+                roles.add(value.strip())
+    return roles
+
+
+def worker_policy_roles(config: dict) -> list[str]:
+    policies = config.get("model_policies") if isinstance(config.get("model_policies"), dict) else {}
+    worker_policy = policies.get("worker_model_policy") if isinstance(policies.get("worker_model_policy"), dict) else {}
+    roles: list[str] = []
+
+    def add(values: object) -> None:
+        if not isinstance(values, list):
+            return
+        for value in values:
+            if isinstance(value, str) and value.strip() and value not in roles:
+                roles.append(value)
+
+    add(worker_policy.get("default_ladder"))
+    add(worker_policy.get("allowed_routes"))
+    route_classes = worker_policy.get("route_classes")
+    if isinstance(route_classes, dict):
+        for key in sorted(route_classes):
+            add(route_classes.get(key))
+    return roles
+
+
+def missing_worker_route_roles(config: dict, report: dict | None) -> list[str]:
+    accepted = accepted_route_roles(report)
+    if not accepted:
+        return worker_policy_roles(config)
+    return [role for role in worker_policy_roles(config) if role not in accepted]
+
+
 def find_reusable_route_verified_check(config: Path, explicit: Path | None, check_dir: Path) -> Path | None:
     candidate_paths: list[Path] = []
     if explicit is not None:
@@ -133,7 +178,10 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
             report = read_json(candidate)
         except Exception:  # noqa: BLE001
             continue
-        if routes_verified(report) and report_matches_config(report, config, config_sha256=config_sha256):
+        if (
+            routes_verified(report)
+            and report_matches_config(report, config, config_sha256=config_sha256)
+        ):
             return candidate
     return None
 
@@ -594,11 +642,17 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         "--remediated-output",
         remediated_config.as_posix(),
     ]
+    if reusable_check is not None:
+        command.extend(["--reuse-smoke-report", reusable_check.as_posix()])
     start = time.perf_counter()
     result = run(command)
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     failure_output = "\n".join(item for item in [result.stdout, result.stderr] if item)
     original = read_json(original_report) if original_report.exists() else {"status": "failed", "failures": [failure_output]}
+    try:
+        config_data = read_json(config)
+    except Exception:  # noqa: BLE001
+        config_data = {}
     candidate = {
         "config_path": config.as_posix(),
         "original_check_path": original_report.as_posix(),
@@ -611,6 +665,7 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         "selected_config_path": None,
         "selected_check_path": None,
         "selection_reason": None,
+        "route_coverage_missing_worker_roles": missing_worker_route_roles(config_data, original),
         "original_check_telemetry": subprocess_telemetry(command, result, elapsed_ms),
     }
     if result.returncode == 0 and original.get("status") == "pass":
@@ -618,6 +673,8 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         selection_reason = "original config passed preflight compatibility"
         if reusable_check is not None:
             selected_check_path = reusable_check
+            reused_report = read_json(reusable_check)
+            candidate["route_coverage_missing_worker_roles"] = missing_worker_route_roles(config_data, reused_report)
             selection_reason = (
                 "original config passed preflight compatibility "
                 "with route verification reused from explicit/colocated smoke evidence"
@@ -629,6 +686,9 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
                 "selected_config_path": config.as_posix(),
                 "selected_check_path": selected_check_path.as_posix(),
                 "selection_reason": selection_reason,
+                "route_coverage_status": "pass"
+                if not candidate.get("route_coverage_missing_worker_roles")
+                else "partial_or_unverified",
             }
         )
         return candidate
@@ -652,10 +712,12 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         remediated_elapsed_ms = int((time.perf_counter() - start) * 1000)
         remediated_failure_output = "\n".join(item for item in [remediated_result.stdout, remediated_result.stderr] if item)
         remediated = read_json(remediated_report) if remediated_report.exists() else {"status": "failed", "failures": [remediated_failure_output]}
+        remediated_config_data = read_json(remediated_config) if remediated_config.exists() else {}
         candidate["remediated_config_path"] = remediated_config.as_posix()
         candidate["remediated_check_path"] = remediated_report.as_posix()
         candidate["remediated_status"] = remediated.get("status")
         candidate["remediated_failures"] = remediated.get("failures", [])
+        candidate["remediated_route_coverage_missing_worker_roles"] = missing_worker_route_roles(remediated_config_data, remediated)
         candidate["remediated_check_telemetry"] = subprocess_telemetry(remediated_command, remediated_result, remediated_elapsed_ms)
         if remediated_result.returncode == 0 and remediated.get("status") == "pass":
             candidate.update(
@@ -666,6 +728,9 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
                     "selected_config_path": remediated_config.as_posix(),
                     "selected_check_path": remediated_report.as_posix(),
                     "selection_reason": "remediated config passed preflight compatibility",
+                    "route_coverage_status": "pass"
+                    if not candidate.get("remediated_route_coverage_missing_worker_roles")
+                    else "partial_or_unverified",
                 }
             )
     return candidate

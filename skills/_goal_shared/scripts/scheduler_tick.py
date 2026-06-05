@@ -705,18 +705,6 @@ def close_from_artifacts(
             and item_id not in state["blocked"]
         ]
         if blocked_candidates:
-            if state["remaining_capacity"] > 0:
-                appended.append(
-                    append_event(
-                        ledger,
-                        event="refill",
-                        runtime_ref=runtime_ref,
-                        timestamp_value=timestamp_value,
-                        manifest_sha256=manifest_sha,
-                        manifest_epoch_value=manifest_epoch_value,
-                        eligible_ids=blocked_candidates,
-                    )
-                )
             for item_id in blocked_candidates:
                 status = terminal_statuses[item_id]
                 reason_code = "process_exited_blocked" if status == "blocked" else "artifact_invalid"
@@ -768,18 +756,6 @@ def close_from_artifacts(
             progressed = True
             after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
             if worker_scope and terminal_status in TERMINAL_STATUSES and terminal_status != "pass" and item_id not in after_close["blocked"]:
-                if after_close["remaining_capacity"] > 0:
-                    appended.append(
-                        append_event(
-                            ledger,
-                            event="refill",
-                            runtime_ref=runtime_ref,
-                            timestamp_value=timestamp_value,
-                            manifest_sha256=manifest_sha,
-                            manifest_epoch_value=manifest_epoch_value,
-                            eligible_ids=[item_id],
-                        )
-                    )
                 appended.append(
                     append_event(
                         ledger,

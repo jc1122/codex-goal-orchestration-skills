@@ -1082,6 +1082,130 @@ def route_recommendations_enabled(goal_config_check: dict | None) -> bool:
     return verified is True
 
 
+def accepted_route_roles(goal_config_check: dict | None) -> set[str]:
+    if not isinstance(goal_config_check, dict):
+        return set()
+    accepted: set[str] = set()
+    routes = goal_config_check.get("accepted_routes")
+    if not isinstance(routes, list):
+        return accepted
+    for route in routes:
+        if not isinstance(route, dict):
+            continue
+        for key in ("role", "alias"):
+            value = route.get(key)
+            if isinstance(value, str) and value.strip():
+                accepted.add(value.strip())
+    return accepted
+
+
+def ordered_worker_policy_roles(worker_policy: dict) -> list[str]:
+    normalized = normalize_worker_model_policy(worker_policy)
+    roles: list[str] = []
+
+    def add(values: object) -> None:
+        if not isinstance(values, list):
+            return
+        for value in values:
+            if isinstance(value, str) and value.strip() and value not in roles:
+                roles.append(value)
+
+    add(normalized.get("default_ladder"))
+    add(normalized.get("allowed_routes"))
+    route_classes = normalized.get("route_classes")
+    if isinstance(route_classes, dict):
+        for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
+            add(route_classes.get(route_class))
+    return roles
+
+
+def route_coverage_summary(goal_config: dict | None, goal_config_check: dict | None, worker_policy: dict) -> dict:
+    required = ordered_worker_policy_roles(worker_policy)
+    accepted = sorted(accepted_route_roles(goal_config_check))
+    accepted_set = set(accepted)
+    missing = [role for role in required if role not in accepted_set]
+    return {
+        "required_worker_roles": required,
+        "accepted_route_roles": accepted,
+        "missing_worker_roles": missing,
+        "worker_route_coverage": "pass" if required and not missing else "missing" if missing else "not_applicable",
+    }
+
+
+def prune_worker_policy_to_accepted_routes(worker_policy: dict, goal_config_check: dict | None) -> tuple[dict, dict]:
+    normalized = normalize_worker_model_policy(worker_policy)
+    accepted = accepted_route_roles(goal_config_check)
+    if not accepted:
+        return normalized, {
+            "status": "not_applied",
+            "reason": "goal-config check did not include accepted route role evidence",
+            "accepted_route_roles": [],
+            "removed_worker_roles": [],
+        }
+
+    original_roles = ordered_worker_policy_roles(normalized)
+    removed = [role for role in original_roles if role not in accepted]
+    if not removed:
+        return normalized, {
+            "status": "not_needed",
+            "accepted_route_roles": sorted(accepted),
+            "removed_worker_roles": [],
+        }
+
+    pruned = dict(normalized)
+    default_ladder = [
+        role
+        for role in normalized.get("default_ladder", [])
+        if isinstance(role, str) and role in accepted
+    ]
+    allowed_routes = [
+        role
+        for role in normalized.get("allowed_routes", [])
+        if isinstance(role, str) and role in accepted
+    ]
+    if not default_ladder:
+        return normalized, {
+            "status": "blocked",
+            "reason": "accepted route evidence removes every configured worker default route",
+            "accepted_route_roles": sorted(accepted),
+            "removed_worker_roles": removed,
+        }
+    if not allowed_routes:
+        allowed_routes = list(default_ladder)
+    pruned["default_ladder"] = default_ladder
+    pruned["allowed_routes"] = allowed_routes
+    pruned_classes: dict[str, list[str]] = {}
+    route_classes = normalized.get("route_classes") if isinstance(normalized.get("route_classes"), dict) else {}
+    for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
+        ladder = route_classes.get(route_class)
+        filtered = [
+            role
+            for role in ladder
+            if isinstance(role, str) and role in accepted
+        ] if isinstance(ladder, list) else []
+        pruned_classes[route_class] = filtered or list(default_ladder)
+    pruned["route_classes"] = pruned_classes
+    pruned["route_class_ladder_source"] = "goal_config_check.accepted_routes_pruned_unverified_worker_aliases"
+    pruned["route_policy_pruning"] = {
+        "status": "pruned",
+        "accepted_route_roles": sorted(accepted),
+        "removed_worker_roles": removed,
+        "reason": "worker routes not present in accepted goal-config smoke/discovery evidence were removed before runtime",
+    }
+    return pruned, dict(pruned["route_policy_pruning"])
+
+
+def sanitize_and_prune_runtime_goal_config(config: dict, goal_config_check: dict | None) -> tuple[dict, dict]:
+    sanitized = sanitized_runtime_goal_config(config)
+    policies = sanitized.setdefault("model_policies", {})
+    worker_policy = policies.get("worker_model_policy", WORKER_MODEL_POLICY) if isinstance(policies, dict) else WORKER_MODEL_POLICY
+    pruned_worker_policy, pruning = prune_worker_policy_to_accepted_routes(worker_policy, goal_config_check)
+    if isinstance(policies, dict):
+        policies["worker_model_policy"] = pruned_worker_policy
+    sanitized["route_policy_pruning"] = pruning
+    return sanitized, pruning
+
+
 def route_deferred_text(goal_config_check: dict | None) -> str:
     verified = route_availability_verified_from_check(goal_config_check)
     if verified is None:
@@ -1849,6 +1973,9 @@ def preflight_compatibility_summary(config: dict | None, check: dict | None) -> 
     if config_validation_mode in {"smoke", "debug"} and check_mode not in {"smoke", "discover"}:
         defects.append(f"config validation mode {config_validation_mode!r} requires a smoke/discovery check report; got check mode {check_mode!r}")
 
+    policies = config.get("model_policies") if isinstance(config.get("model_policies"), dict) else {}
+    worker_policy = normalize_worker_model_policy(policies.get("worker_model_policy", WORKER_MODEL_POLICY))
+    route_coverage = route_coverage_summary(config, check, worker_policy)
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
     token_summary = {}
     if isinstance(check, dict):
@@ -1875,6 +2002,8 @@ def preflight_compatibility_summary(config: dict | None, check: dict | None) -> 
             "token_telemetry": token_summary,
         },
         "effort": config.get("effort") if isinstance(config.get("effort"), dict) else {},
+        "route_coverage": route_coverage,
+        "route_policy_pruning": config.get("route_policy_pruning") if isinstance(config.get("route_policy_pruning"), dict) else {},
     }
 
 
@@ -2205,7 +2334,11 @@ def build_ownership_feasibility(branches: list[dict], repo_root: Path | None) ->
 def build_route_contract(goal_config_check: dict | None, *, goal_config_check_sha256: str | None, worker_policy: dict) -> dict:
     summary = compact_goal_config_check_summary(goal_config_check or {}) if isinstance(goal_config_check, dict) else {}
     accepted_route_count = summary.get("accepted_route_count")
+    coverage = route_coverage_summary(None, goal_config_check, worker_policy)
+    missing_worker_roles = coverage.get("missing_worker_roles", [])
     verified = route_availability_verified_from_check(goal_config_check)
+    if missing_worker_roles:
+        verified = False
     return {
         "schema_version": 1,
         "policy_router": worker_policy.get("policy_router") or ("goal-config-v1" if goal_config_check_sha256 else "deterministic-v1"),
@@ -2216,6 +2349,9 @@ def build_route_contract(goal_config_check: dict | None, *, goal_config_check_sh
         "route_model_availability_verified": verified is True,
         "route_recommendations_enabled": verified is True,
         "accepted_route_count": accepted_route_count if isinstance(accepted_route_count, int) and not isinstance(accepted_route_count, bool) else 0,
+        "accepted_route_roles": coverage.get("accepted_route_roles", []),
+        "required_worker_roles": coverage.get("required_worker_roles", []),
+        "missing_worker_roles": missing_worker_roles,
         "catalog_refresh_required": verified is not True,
         "route_catalog_source": "goal_config_check" if goal_config_check_sha256 else "branch_runtime_model_catalog",
         "diagnostic_note": route_deferred_text(goal_config_check) if verified is not True else "route availability verified by goal-config check hash",
@@ -2492,6 +2628,7 @@ def compact_goal_config_summary(config: dict, *, manifest_telemetry_policy: dict
             "route_model_availability_verified": discovery_summary.get("accepted_route_count", validation_summary.get("accepted_route_count")) not in (None, 0),
             "note": "copied source config metadata is provenance only; goal_config_check_summary is the current preflight check result",
         },
+        "route_policy_pruning": config.get("route_policy_pruning", {}),
         "compatibility": config.get("compatibility", {}),
     }
 
@@ -2512,6 +2649,7 @@ def compact_goal_config_check_summary(check: dict) -> dict:
         "check_mode": check.get("check_mode"),
         "config_validation_mode": check.get("config_validation_mode"),
         "accepted_route_count": accepted,
+        "accepted_route_roles": sorted(accepted_route_roles(check)),
         "rejected_route_count": summary.get("rejected_route_count"),
         "skipped_route_count": summary.get("skipped_route_count"),
         "unvisited_route_count": summary.get("unvisited_route_count"),
@@ -2889,11 +3027,15 @@ def create_bundle(
     if goal_config is not None and goal_config_check is None:
         raise SystemExit("--goal-config requires --goal-config-check with status=pass")
     original_brief = dict(brief)
-    compatibility = preflight_compatibility_summary(goal_config, goal_config_check)
+    runtime_goal_config = None
+    route_policy_pruning = {}
+    if goal_config is not None:
+        runtime_goal_config, route_policy_pruning = sanitize_and_prune_runtime_goal_config(goal_config, goal_config_check)
+    compatibility = preflight_compatibility_summary(runtime_goal_config or goal_config, goal_config_check)
     if compatibility.get("status") == "failed":
         defects = "; ".join(str(item) for item in compatibility.get("defects", []))
         raise SystemExit(f"goal_config is not preflight-compatible: {defects}")
-    brief = apply_goal_config_to_brief(brief, goal_config)
+    brief = apply_goal_config_to_brief(brief, runtime_goal_config)
     brief = normalize_brief(
         brief,
         default_base_ref=current_git_branch(repo_root),
@@ -2911,10 +3053,10 @@ def create_bundle(
     brief["repo_status"] = git_repo_status(repo_root, base_ref=brief["base_ref"], branch_paths=branch_paths)
     brief["preflight_compatibility"] = compatibility
     brief["preflight_input_precedence"] = preflight_input_precedence(original_brief, brief, goal_config)
-    runtime_goal_config = sanitized_runtime_goal_config(goal_config) if goal_config is not None else None
     if runtime_goal_config is not None:
         brief["goal_config"] = runtime_goal_config
         brief["goal_config_check"] = goal_config_check or {}
+        brief["route_policy_pruning"] = route_policy_pruning
 
     bundle_dir = out_dir or repo_root / "plans" / "orchestration" / brief["job_id"]
     ensure_bundle_dirs(bundle_dir)

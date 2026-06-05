@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import importlib.util
 import os
@@ -44,6 +45,62 @@ scheduler_event = make_scheduler_event("preparedness-fixture")
 
 def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return run_command(command, root=ROOT, expect=expect, env=env)
+
+
+def sha256_json(value: object) -> str:
+    return hashlib.sha256((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")).hexdigest()
+
+
+def mark_worker_routes_verified(manifest: dict, accepted_roles: list[str]) -> str | None:
+    old_sha = manifest.get("route_contract_sha256") if isinstance(manifest.get("route_contract_sha256"), str) else None
+    manifest["goal_config_check_summary"] = {
+        **(manifest.get("goal_config_check_summary") if isinstance(manifest.get("goal_config_check_summary"), dict) else {}),
+        "status": "pass",
+        "accepted_route_count": len(accepted_roles),
+        "accepted_route_roles": list(accepted_roles),
+        "route_verification_status": "routes_verified",
+    }
+    route_contract = dict(manifest.get("route_contract") if isinstance(manifest.get("route_contract"), dict) else {})
+    route_contract.update(
+        {
+            "route_model_availability_verified": True,
+            "route_recommendations_enabled": True,
+            "accepted_route_count": len(accepted_roles),
+            "accepted_route_roles": list(accepted_roles),
+            "required_worker_roles": list(accepted_roles),
+            "missing_worker_roles": [],
+            "catalog_refresh_required": False,
+            "diagnostic_note": "route availability verified by synthetic fixture accepted roles",
+        }
+    )
+    manifest["route_contract"] = route_contract
+    manifest["route_contract_sha256"] = sha256_json(route_contract)
+    for branch in manifest.get("branches", []):
+        if isinstance(branch, dict):
+            branch["route_contract_sha256"] = manifest["route_contract_sha256"]
+    return old_sha
+
+
+def refresh_route_contract_artifacts(bundle: Path, manifest: dict, old_sha: str | None) -> None:
+    runtime_index_path = bundle / str(manifest.get("runtime_index_path") or "runtime.index.json")
+    if runtime_index_path.exists():
+        runtime_index = read_json(runtime_index_path)
+        route_contract_index = runtime_index.get("route_contract")
+        if isinstance(route_contract_index, dict):
+            route_contract_index["sha256"] = manifest.get("route_contract_sha256")
+            route_contract = manifest.get("route_contract") if isinstance(manifest.get("route_contract"), dict) else {}
+            route_contract_index["catalog_refresh_required"] = route_contract.get("catalog_refresh_required")
+        write_json(runtime_index_path, runtime_index)
+        manifest["runtime_index_sha256"] = sha256_file(runtime_index_path).removeprefix("sha256:")
+    if old_sha:
+        prompt_paths = [bundle / str(manifest.get("main_prompt") or "main.prompt.md")]
+        prompt_paths.extend(sorted((bundle / "branches").glob("*.prompt.md")))
+        for prompt_path in prompt_paths:
+            if prompt_path.exists():
+                prompt_path.write_text(
+                    prompt_path.read_text(encoding="utf-8").replace(old_sha, str(manifest.get("route_contract_sha256"))),
+                    encoding="utf-8",
+                )
 
 
 def fake_pytest_env(bundle: Path) -> dict[str, str]:
@@ -2157,13 +2214,25 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         "repo_is_git": True,
         "base_ref_status": "exists",
     }
+    lite_worker_policy = {
+        **runtime_metadata_manifest["worker_model_policy"],
+        "default_ladder": ["lite_agent"],
+        "allowed_routes": ["lite_agent"],
+        "route_classes": {
+            "mechanical": ["lite_agent"],
+            "docs": ["lite_agent"],
+            "small-edit": ["lite_agent"],
+            "normal-code": ["lite_agent"],
+            "complex-code": ["lite_agent"],
+        },
+    }
     runtime_goal_config = {
         "schema_version": 1,
         "models": {"lite_agent": {"alias": "lite_agent", "provider": "codex", "model": "gpt-5.4-mini"}},
         "harnesses": {"codex": {"kind": "codex", "command": "codex"}},
         "model_ladders": {"worker": ["lite_agent"], "reviewer": ["lite_agent"], "amender": ["lite_agent"], "lite": ["lite_agent"]},
         "model_policies": {
-            "worker_model_policy": runtime_metadata_manifest["worker_model_policy"],
+            "worker_model_policy": lite_worker_policy,
             "review_model_policy": runtime_metadata_manifest["review_model_policy"],
             "amender_model_policy": runtime_metadata_manifest["amender_model_policy"],
             "lite_model_policy": runtime_metadata_manifest["lite_model_policy"],
@@ -2172,6 +2241,9 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     }
     runtime_goal_config_check = {
         "status": "pass",
+        "accepted_routes": [
+            {"role": "lite_agent", "alias": "lite_agent", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"}
+        ],
         "summary": {
             "accepted_route_count": 1,
             "rejected_route_count": 0,
@@ -2504,10 +2576,8 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(10, "launch", id="B01-W03"),
             scheduler_event(11, "finish", id="B01-W02", status="pass"),
             scheduler_event(12, "close", id="B01-W02"),
-            scheduler_event(13, "refill", eligible_ids=["B01-W01"]),
-            scheduler_event(14, "under_capacity", eligible_ids=["B01-W01"], reason_code="operator_requested", reason="Fixture preserves W01 as terminal blocked while continuing independent workers."),
-            scheduler_event(15, "finish", id="B01-W03", status="pass"),
-            scheduler_event(16, "close", id="B01-W03"),
+            scheduler_event(13, "finish", id="B01-W03", status="pass"),
+            scheduler_event(14, "close", id="B01-W03"),
         ],
     }
     reviewer_repair_relaunch = {
@@ -4016,6 +4086,76 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if manifest_worker_route.get("context_budget") != context_budget:
         raise SystemExit(f"worker route metadata should carry the packet context budget: {manifest_worker_route!r}")
     assert_contains(manifest_worker_prompt, "Compact Worker Task", "worker --manifest prompt")
+    configured_route_bundle = tmp_path / "runtime-configured-worker-routes"
+    shutil.copytree(bundle, configured_route_bundle)
+    configured_route_manifest = read_json(configured_route_bundle / "job.manifest.json")
+    configured_ladder = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+    configured_route_manifest["goal_config_path"] = "goal.config.json"
+    configured_route_manifest["worker_model_policy"] = {
+        "source": "goal_config",
+        "default_ladder": configured_ladder,
+        "allowed_routes": configured_ladder,
+        "default_route_class": "normal-code",
+        "route_classes": {
+            "mechanical": ["lite_agent"],
+            "docs": ["worker_opencode", "lite_agent"],
+            "small-edit": ["worker_opencode", "worker_fallback", "lite_agent"],
+            "normal-code": configured_ladder,
+            "complex-code": configured_ladder,
+        },
+        "branch_may_select_worker_route": True,
+        "selection_reason_required": True,
+        "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder.",
+    }
+    configured_route_manifest["branches"][0]["work_items"][0]["route_class"] = "normal-code"
+    write_json(configured_route_bundle / "job.manifest.json", configured_route_manifest)
+    write_json(
+        configured_route_bundle / "goal.config.json",
+        {
+            "schema_version": 1,
+            "models": {
+                "worker_primary": {"role": "worker_primary", "alias": "worker_primary", "harness": "codex", "provider": "openai", "model": "gpt-5.3-codex-spark"},
+                "worker_opencode": {"role": "worker_opencode", "alias": "worker_opencode", "harness": "opencode", "provider": "deepseek", "model": "deepseek/deepseek-v4-flash"},
+                "worker_fallback": {"role": "worker_fallback", "alias": "worker_fallback", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"},
+                "lite_agent": {"role": "lite_agent", "alias": "lite_agent", "harness": "gemini", "provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+            },
+            "harnesses": {
+                "codex": {"kind": "codex", "command": "codex", "run_args": ["exec", "-m", "{model}", "{prompt}"], "run_readback": "stdout"},
+                "opencode": {"kind": "opencode", "command": "opencode", "run_args": ["run", "--model", "{model}", "{prompt}"], "run_readback": "stdout"},
+                "gemini": {"kind": "gemini", "command": "gemini", "run_args": ["--model", "{model}", "{prompt}"], "run_readback": "stdout"},
+            },
+        },
+    )
+    configured_route_root = tmp_path / "runtime-configured-route-packets"
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W01",
+        branch="B01",
+        out_dir=configured_route_root,
+        worktree=clean_worker_worktree,
+        task_file=bundle / "branches" / "B01.prompt.md",
+        manifest=configured_route_bundle / "job.manifest.json",
+        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        selection_reason="Fixture claims it is using the configured ladder.",
+    )
+    restored_route = read_json(configured_route_root / "B01-W01" / "route.json")
+    if restored_route.get("selected_ladder") != configured_ladder:
+        raise SystemExit(f"configured route-class ladder should retain final fallback: {restored_route!r}")
+    create_runtime_packet(
+        role="worker",
+        packet_id="B01-W02",
+        branch="B01",
+        out_dir=configured_route_root,
+        worktree=clean_worker_worktree,
+        task_file=bundle / "branches" / "B01.prompt.md",
+        manifest=configured_route_bundle / "job.manifest.json",
+        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        selection_reason="Fixture deliberately prunes lite_agent after validated operator choice.",
+        extra_args=["--allow-route-pruning"],
+    )
+    pruned_route = read_json(configured_route_root / "B01-W02" / "route.json")
+    if pruned_route.get("selected_ladder") != ["worker_primary", "worker_opencode", "worker_fallback"]:
+        raise SystemExit(f"--allow-route-pruning should preserve the explicit shorter ladder: {pruned_route!r}")
     oversized_task = tmp_path / "oversized-runtime-task.md"
     oversized_task.write_text("# Oversized Task\n\n" + ("x" * 50000), encoding="utf-8")
     oversized_root = tmp_path / "oversized-runtime-packets"
@@ -4295,6 +4435,57 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     standalone_summary = read_json(standalone_packet / "packet.summary.json")
     if standalone_summary.get("output_status") != "blocked" or standalone_summary.get("terminal_state") != "blocked":
         raise SystemExit(f"standalone no-manifest worker should write blocked packet summary: {standalone_summary!r}")
+
+    dirty_salvage_worktree = tmp_path / "dirty-salvage-worktree"
+    dirty_salvage_worktree.mkdir()
+    run(["git", "init", dirty_salvage_worktree.as_posix()])
+    dirty_salvage_root = tmp_path / "dirty-salvage-packets"
+    dirty_salvage_files = ["src/fixture_pkg/__init__.py", "src/fixture_pkg/model.py"]
+    create_runtime_packet(
+        role="worker",
+        packet_id="B99-W03",
+        branch="dirty-salvage-fixture",
+        out_dir=dirty_salvage_root,
+        worktree=dirty_salvage_worktree,
+        task_file=task_file,
+        owned_files=dirty_salvage_files,
+        worker_route=["codex-mini"],
+        selection_reason="Fixture verifies dirty-stop salvage preserves untracked owned files.",
+    )
+    dirty_salvage_packet = dirty_salvage_root / "B99-W03"
+    dirty_salvage_fake_dir = tmp_path / "fake-codex-dirty-salvage"
+    dirty_salvage_fake_dir.mkdir()
+    dirty_salvage_fake = dirty_salvage_fake_dir / "codex"
+    dirty_salvage_fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "worktree = pathlib.Path(args[args.index('-C') + 1])\n"
+        "(worktree / 'src' / 'fixture_pkg').mkdir(parents=True, exist_ok=True)\n"
+        "(worktree / 'src' / 'fixture_pkg' / '__init__.py').write_text('', encoding='utf-8')\n"
+        "(worktree / 'src' / 'fixture_pkg' / 'model.py').write_text('VALUE = 2\\n', encoding='utf-8')\n"
+        "print('dirty salvage fixture leaves untracked owned files')\n"
+        "sys.exit(1)\n",
+        encoding="utf-8",
+    )
+    dirty_salvage_fake.chmod(0o755)
+    run(
+        [(dirty_salvage_packet / "launch.sh").as_posix()],
+        env={**os.environ, "PATH": dirty_salvage_fake_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+        expect=2,
+    )
+    dirty_salvage_context = read_json(dirty_salvage_packet / "dirty-stop-context.json")
+    copied_salvage = dirty_salvage_context.get("untracked_file_salvage", {}).get("copied_files", [])
+    copied_paths = [item.get("path") for item in copied_salvage if isinstance(item, dict)]
+    if copied_paths != dirty_salvage_files:
+        raise SystemExit(f"dirty-stop salvage should copy untracked owned files: {dirty_salvage_context!r}")
+    if dirty_salvage_context.get("patch", {}).get("has_content") is not False:
+        raise SystemExit(f"untracked-only dirty stop should not claim patch content: {dirty_salvage_context!r}")
+    if "copy files from dirty-stop-untracked-files" not in dirty_salvage_context.get("relaunch_recommendation", ""):
+        raise SystemExit(f"dirty-stop recommendation should reference untracked salvage copies: {dirty_salvage_context!r}")
+    for rel_path in dirty_salvage_files:
+        if not (dirty_salvage_packet / "dirty-stop-untracked-files" / rel_path).is_file():
+            raise SystemExit(f"dirty-stop salvage missing copied file: {rel_path}")
 
     cache_fallback_worktree = tmp_path / "cache-fallback-worktree"
     cache_fallback_worktree.mkdir()
@@ -4839,14 +5030,6 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
                 ),
                 scheduler_event(4, "finish", id="B01-W01", status="blocked"),
                 scheduler_event(5, "close", id="B01-W01"),
-                scheduler_event(6, "refill", eligible_ids=["B01-W01"]),
-                scheduler_event(
-                    7,
-                    "under_capacity",
-                    eligible_ids=["B01-W01"],
-                    reason_code="operator_requested",
-                    reason="Fixture preserves ownership violation as terminal blocked evidence.",
-                ),
             ],
         },
     )
@@ -4863,6 +5046,43 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
             "--replace",
         ]
     )
+    ownership_status_after_assemble = read_json(ownership_bundle / "branches" / "B01.status.json")
+    ownership_serial_reasons = ownership_status_after_assemble.get("worker_parallelism", {}).get("serial_reasons", [])
+    if not any("Worker changed files outside owned paths" in str(reason) for reason in ownership_serial_reasons):
+        raise SystemExit(f"branch status should preserve scheduler blocked reasons: {ownership_status_after_assemble!r}")
+    scheduler_no_refill_bundle = tmp_path / "scheduler-no-terminal-refill"
+    shutil.copytree(ownership_bundle, scheduler_no_refill_bundle)
+    scheduler_no_refill_path = scheduler_no_refill_bundle / "schedulers" / "B01.worker.scheduler.json"
+    scheduler_no_refill_path.unlink()
+    run(
+        [
+            "python3",
+            "skills/goal-branch-orchestrator/scripts/scheduler_tick.py",
+            "--manifest",
+            (scheduler_no_refill_bundle / "job.manifest.json").as_posix(),
+            "--scope",
+            "worker",
+            "--branch-id",
+            "B01",
+            "--runtime-ref",
+            "fixture",
+            "--init",
+            "--record-ready",
+            "--close-from-artifacts",
+            "--validate-final",
+        ]
+    )
+    scheduler_no_refill = read_json(scheduler_no_refill_path)
+    terminal_refills = [
+        event
+        for event in scheduler_no_refill.get("events", [])
+        if isinstance(event, dict)
+        and event.get("event") == "refill"
+        and isinstance(event.get("eligible_ids"), list)
+        and "B01-W01" in event.get("eligible_ids", [])
+    ]
+    if terminal_refills:
+        raise SystemExit(f"scheduler should not refill a terminal blocked worker: {scheduler_no_refill!r}")
     run(
         [
             "python3",
@@ -5664,16 +5884,15 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     shutil.copytree(pipeline_bundle, degraded_telemetry_bundle)
     degraded_manifest_path = degraded_telemetry_bundle / "job.manifest.json"
     degraded_manifest = read_json(degraded_manifest_path)
-    degraded_manifest["goal_config_check_summary"] = {
-        "status": "pass",
-        "accepted_route_count": 2,
-        "route_verification_status": "routes_verified",
-        "token_telemetry": {
-            "available_routes": 1,
-            "unavailable_routes": 1,
-            "by_harness": {"codex": {"available": 1, "unavailable": 1}},
-        },
+    default_worker_roles = degraded_manifest.get("worker_model_policy", {}).get("default_ladder", [])
+    old_route_sha = mark_worker_routes_verified(degraded_manifest, [role for role in default_worker_roles if isinstance(role, str)])
+    degraded_manifest["goal_config_check_summary"]["token_telemetry"] = {
+        "available_routes": 1,
+        "unavailable_routes": 1,
+        "by_harness": {"codex": {"available": 1, "unavailable": 1}},
     }
+    write_json(degraded_manifest_path, degraded_manifest)
+    refresh_route_contract_artifacts(degraded_telemetry_bundle, degraded_manifest, old_route_sha)
     write_json(degraded_manifest_path, degraded_manifest)
     degraded_readiness = json.loads(
         run(
@@ -5843,17 +6062,16 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     degraded_blocked_bundle = tmp_path / "preflight-degraded-token-telemetry-blocked-bundle"
     shutil.copytree(pipeline_bundle, degraded_blocked_bundle)
     blocked_manifest = read_json(degraded_blocked_bundle / "job.manifest.json")
-    blocked_manifest["goal_config_check_summary"] = {
-        "status": "pass",
-        "accepted_route_count": 2,
-        "route_verification_status": "routes_verified",
-        "token_telemetry": {
-            "available_routes": 1,
-            "unavailable_routes": 1,
-            "by_harness": {"codex": {"available": 1, "unavailable": 1}},
-        },
+    default_worker_roles = blocked_manifest.get("worker_model_policy", {}).get("default_ladder", [])
+    old_route_sha = mark_worker_routes_verified(blocked_manifest, [role for role in default_worker_roles if isinstance(role, str)])
+    blocked_manifest["goal_config_check_summary"]["token_telemetry"] = {
+        "available_routes": 1,
+        "unavailable_routes": 1,
+        "by_harness": {"codex": {"available": 1, "unavailable": 1}},
     }
     blocked_manifest["route_policy_degraded_telemetry_waiver"] = {"accepted": False}
+    write_json(degraded_blocked_bundle / "job.manifest.json", blocked_manifest)
+    refresh_route_contract_artifacts(degraded_blocked_bundle, blocked_manifest, old_route_sha)
     write_json(degraded_blocked_bundle / "job.manifest.json", blocked_manifest)
     blocked_readiness = json.loads(
         run(
@@ -6330,11 +6548,15 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "check_mode": "smoke",
             "config_validation_mode": "smoke",
             "config_path": config_debug_path.as_posix(),
+            "accepted_routes": [
+                {"role": "lite_agent", "alias": "gemini-lite", "harness": "gemini", "provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                {"role": "demanding_agent", "alias": "gpt-5.4", "harness": "codex", "provider": "openai", "model": "gpt-5.4"},
+            ],
             "summary": {
                 "route_verification_status": "routes_verified",
-                "accepted_route_count": 7,
-                "checked_role_count": 1,
-                "harness_count": 1,
+                "accepted_route_count": 2,
+                "checked_role_count": 2,
+                "harness_count": 2,
                 "failure_count": 0,
             },
         },
@@ -6368,6 +6590,12 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     colocated_readiness = read_json(colocated_smoke_bundle / "readiness.json")
     if "config_schema_pass_routes_unverified" in colocated_readiness.get("launch_blockers", []):
         raise SystemExit(f"colocated route-verified smoke check should prevent schema_pass_routes_unverified: {colocated_readiness!r}")
+    colocated_manifest = read_json(colocated_smoke_bundle / "job.manifest.json")
+    if colocated_manifest.get("worker_model_policy", {}).get("default_ladder") != ["lite_agent"]:
+        raise SystemExit(f"partial smoke evidence should prune unverified worker aliases: {colocated_manifest.get('worker_model_policy')!r}")
+    pruning = colocated_manifest.get("goal_config_summary", {}).get("route_policy_pruning", {})
+    if pruning.get("status") != "pruned" or "worker_opencode" not in pruning.get("removed_worker_roles", []):
+        raise SystemExit(f"partial smoke pruning should be recorded in goal_config_summary: {pruning!r}")
 
     aliased_goal_config_path = tmp_path / "goal-config-debug-alias.json"
     shutil.copyfile(config_debug_path, aliased_goal_config_path)
@@ -6417,6 +6645,10 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "check_mode": "smoke",
             "config_validation_mode": "debug",
             "config_path": config_debug_path.as_posix(),
+            "accepted_routes": [
+                {"role": "lite_agent", "alias": "gemini-lite", "harness": "gemini", "provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                {"role": "demanding_agent", "alias": "gpt-5.4", "harness": "codex", "provider": "openai", "model": "gpt-5.4"},
+            ],
             "summary": {
                 "route_verification_status": "routes_verified",
                 "accepted_route_count": 2,

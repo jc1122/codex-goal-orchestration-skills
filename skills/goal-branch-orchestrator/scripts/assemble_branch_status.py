@@ -162,6 +162,7 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
         require_all_launched=False,
     )
     refill_events = []
+    scheduler_serial_reasons: list[str] = []
     if scheduler_file.exists():
         try:
             scheduler_data = read_json(scheduler_file)
@@ -171,8 +172,32 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
                     eligible = event.get("eligible_ids", [])
                     suffix = ",".join(item for item in eligible if isinstance(item, str)) if isinstance(eligible, list) else ""
                     refill_events.append(f"seq:{seq}:{suffix}" if isinstance(seq, int) else suffix)
+                if isinstance(event, dict) and event.get("event") in {"defer", "under_capacity", "blocked"}:
+                    ids: list[str] = []
+                    event_id = event.get("id")
+                    if isinstance(event_id, str):
+                        ids = [event_id]
+                    eligible_ids = event.get("eligible_ids")
+                    if isinstance(eligible_ids, list):
+                        ids = [item for item in eligible_ids if isinstance(item, str)]
+                    reason = event.get("reason")
+                    reason_code = event.get("reason_code")
+                    detail = reason if isinstance(reason, str) and reason.strip() else reason_code
+                    if ids and isinstance(detail, str) and detail.strip():
+                        scheduler_serial_reasons.append(
+                            f"scheduler {event.get('event')} for {','.join(ids)}: {detail.strip()}"
+                        )
         except Exception as exc:  # noqa: BLE001
             defects.append(f"could not read scheduler refill events: {exc}")
+    manifest_serial_reasons = (
+        branch.get("worker_parallelism", {}).get("serial_reasons", [])
+        if isinstance(branch.get("worker_parallelism"), dict)
+        else branch.get("worker_serial_reasons", [])
+    )
+    serial_reasons: list[str] = []
+    for reason in [*manifest_serial_reasons, *scheduler_serial_reasons]:
+        if isinstance(reason, str) and reason.strip() and reason not in serial_reasons:
+            serial_reasons.append(reason)
     worker_parallelism = {
         "scheduler_path": expected_path,
         "max_worker_packets_per_branch": CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH,
@@ -189,9 +214,7 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
         "deferred_ids": summary.get("deferred", []),
         "serialized_workers": [],
         "deferred_workers": summary.get("deferred", []),
-        "serial_reasons": branch.get("worker_parallelism", {}).get("serial_reasons", [])
-        if isinstance(branch.get("worker_parallelism"), dict)
-        else branch.get("worker_serial_reasons", []),
+        "serial_reasons": serial_reasons,
         "refill_events": refill_events,
     }
     return worker_parallelism, defects

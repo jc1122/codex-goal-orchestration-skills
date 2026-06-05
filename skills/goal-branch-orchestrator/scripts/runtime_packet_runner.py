@@ -59,6 +59,8 @@ KNOWN_PACKET_CACHE_ROOT_NAMES = (
     ".pytest_cache",
     ".ruff_cache",
 )
+MAX_UNTRACKED_SALVAGE_FILE_BYTES = 1024 * 1024
+MAX_UNTRACKED_SALVAGE_TOTAL_BYTES = 5 * 1024 * 1024
 KNOWN_PACKET_CACHE_RELATIVE = (
     "tmp",
     "lock",
@@ -1412,6 +1414,55 @@ def summarize_dirty_stop_salvage(
         )
         diff_text = completed.stdout
     patch_path.write_text(diff_text, encoding="utf-8")
+    untracked_salvage_dir = packet_dir / "dirty-stop-untracked-files"
+    if untracked_salvage_dir.exists():
+        shutil.rmtree(untracked_salvage_dir)
+    copied_untracked: list[dict[str, Any]] = []
+    skipped_untracked: list[dict[str, Any]] = []
+    total_salvaged_bytes = 0
+    for relative_path in sorted(set(untracked_changes)):
+        target = safe_worktree_target(worktree, relative_path)
+        if target is None:
+            skipped_untracked.append({"path": relative_path, "reason": "path escaped worktree"})
+            continue
+        if not target.is_file():
+            skipped_untracked.append({"path": relative_path, "reason": "not a regular file"})
+            continue
+        try:
+            size = target.stat().st_size
+        except OSError as exc:
+            skipped_untracked.append({"path": relative_path, "reason": f"stat failed: {exc.__class__.__name__}"})
+            continue
+        if size > MAX_UNTRACKED_SALVAGE_FILE_BYTES:
+            skipped_untracked.append({"path": relative_path, "reason": "file exceeds per-file salvage limit", "bytes": size})
+            continue
+        if total_salvaged_bytes + size > MAX_UNTRACKED_SALVAGE_TOTAL_BYTES:
+            skipped_untracked.append({"path": relative_path, "reason": "total salvage byte limit exceeded", "bytes": size})
+            continue
+        destination = untracked_salvage_dir / relative_path
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(target, destination)
+        total_salvaged_bytes += size
+        copied_untracked.append(
+            {
+                "path": relative_path,
+                "salvaged_path": f"{untracked_salvage_dir.name}/{relative_path}",
+                "bytes": size,
+                "sha256": hashlib.sha256(destination.read_bytes()).hexdigest(),
+            }
+        )
+    if not copied_untracked and untracked_salvage_dir.exists():
+        shutil.rmtree(untracked_salvage_dir)
+    if external_changes and owned_files:
+        recommendation = "repair manually; dirty changes include files outside owned paths"
+    elif diff_text and copied_untracked:
+        recommendation = "apply dirty-stop.patch, copy files from dirty-stop-untracked-files into a fresh worktree, and retry the worker packet"
+    elif diff_text:
+        recommendation = "apply dirty-stop.patch in a fresh worktree and retry the worker packet"
+    elif copied_untracked:
+        recommendation = "copy files from dirty-stop-untracked-files into a fresh worktree and retry the worker packet"
+    else:
+        recommendation = "inspect dirty-stop-context.json; no recoverable patch or untracked file copy was produced"
     salvage_context: dict[str, Any] = {
         "schema_version": 1,
         "kind": "dirty_stop_salvage",
@@ -1437,11 +1488,15 @@ def summarize_dirty_stop_salvage(
             "has_content": bool(diff_text),
             "patched_files": sorted(set(diff_paths)),
         },
-        "relaunch_recommendation": (
-            "apply patch in a fresh worktree and retry the worker packet"
-            if (not external_changes or not owned_files)
-            else "repair manually; dirty changes include files outside owned paths"
-        ),
+        "untracked_file_salvage": {
+            "directory": untracked_salvage_dir.name if copied_untracked else None,
+            "copied_files": copied_untracked,
+            "skipped_files": skipped_untracked,
+            "total_bytes": total_salvaged_bytes,
+            "per_file_limit_bytes": MAX_UNTRACKED_SALVAGE_FILE_BYTES,
+            "total_limit_bytes": MAX_UNTRACKED_SALVAGE_TOTAL_BYTES,
+        },
+        "relaunch_recommendation": recommendation,
     }
     context_path = packet_dir / "dirty-stop-context.json"
     context_path.write_text(json.dumps(salvage_context, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -69,8 +69,9 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "harness_smoke",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --require-models --smoke --harness lite --harness demanding --stdout summary --output /abs/goal-config-smoke.json --state-output /abs/goal-config-state.json",
-                "pass": "status=pass with assistant smoke text, token counts, character counts, and elapsed milliseconds for each role",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py --config /abs/goal.config.json --require-models --smoke --stdout summary --output /abs/goal-config-smoke.json --state-output /abs/goal-config-state.json",
+                "pass": "status=pass with accepted_routes covering every runtime role in worker/reviewer/amender/lite ladders; assistant smoke text, token counts, character counts, and elapsed milliseconds are recorded for each role",
+                "agent_does": "omit --harness for the canonical smoke report so every configured role is checked; use repeated --harness only after a full report fails and you need to isolate a route",
                 "on_fail": "return blocked with checker failures and opencode status/message fields; do not silently fall back to another provider/model",
             },
             {

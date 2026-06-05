@@ -308,6 +308,34 @@ def validate_route_class_selection(route_class: str, selected_ladder: list[str],
             raise SystemExit("--selection-reason for route_class 'complex-code' must include a concrete cost/risk justification")
 
 
+def is_ordered_subsequence(values: list[str], ladder: list[str]) -> bool:
+    if not values:
+        return False
+    position = 0
+    for alias in ladder:
+        if position < len(values) and values[position] == alias:
+            position += 1
+    return position == len(values)
+
+
+def restore_configured_ladder_when_unpruned(
+    selected_ladder: list[str],
+    *,
+    route_class: str,
+    worker_policy: dict,
+    explicit_routes: bool,
+    allow_route_pruning: bool,
+) -> tuple[list[str], bool]:
+    if not explicit_routes or allow_route_pruning:
+        return selected_ladder, False
+    configured = ladder_for_route_class(route_class, worker_policy)
+    if len(selected_ladder) >= len(configured):
+        return selected_ladder, False
+    if not is_ordered_subsequence(selected_ladder, configured):
+        return selected_ladder, False
+    return configured, True
+
+
 def model_catalog_rows(path: Path) -> tuple[dict, dict[str, dict]]:
     data = load_json(path)
     if data.get("schema_version") != 1:
@@ -2285,6 +2313,11 @@ def main() -> int:
             "route aliases are pruned from the default ladder and rejected when explicitly selected."
         ),
     )
+    parser.add_argument(
+        "--allow-route-pruning",
+        action="store_true",
+        help="Honor an explicit --worker-route subsequence that prunes a manifest-configured route-class ladder.",
+    )
     parser.add_argument("--selection-reason", help="Required when --worker-route is supplied; recorded in route.json and worker status.")
     parser.add_argument("--replace", action="store_true", help="Archive an existing packet directory under attempts/ and recreate it.")
     args = parser.parse_args()
@@ -2403,6 +2436,7 @@ def main() -> int:
             manifest_path = _manifest_path
             telemetry_debug = telemetry_debug or CONTRACT.telemetry_debug_enabled(_manifest)
         worker_policy = worker_policy_from_manifest(manifest)
+        goal_config = goal_config_from_manifest(manifest, manifest_path)
         worker_default_ladder = policy_default_ladder(worker_policy)
         worker_allowed_routes = policy_allowed_routes(worker_policy)
         manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
@@ -2415,6 +2449,13 @@ def main() -> int:
             )
             if normalized_worker_routes
             else ladder_for_route_class(route_class, worker_policy)
+        )
+        selected_ladder, restored_configured_ladder = restore_configured_ladder_when_unpruned(
+            selected_ladder,
+            route_class=route_class,
+            worker_policy=worker_policy,
+            explicit_routes=bool(normalized_worker_routes) and goal_config is not None,
+            allow_route_pruning=args.allow_route_pruning,
         )
         catalog_path = (
             resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
@@ -2430,7 +2471,6 @@ def main() -> int:
         if args.worker_route and not selection_reason:
             raise SystemExit("--selection-reason is required when --worker-route is supplied")
         if not selection_reason:
-            goal_config = goal_config_from_manifest(manifest, manifest_path)
             if goal_config:
                 selection_reason = (
                     f"{route_class} route class selected from goal_config worker_model_policy: "
@@ -2438,6 +2478,11 @@ def main() -> int:
                 )
             else:
                 selection_reason = default_selection_reason(route_class)
+        if restored_configured_ladder:
+            selection_reason += (
+                " Explicit worker route was expanded to the full configured route-class ladder; "
+                "use --allow-route-pruning with a pruning reason to keep a shorter ladder."
+            )
         if model_catalog and model_catalog.get("filtered_aliases"):
             aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
             selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
@@ -2445,7 +2490,7 @@ def main() -> int:
             route_class,
             selected_ladder,
             selection_reason,
-            worker_policy if goal_config_from_manifest(manifest, manifest_path) else None,
+            worker_policy if goal_config else None,
         )
 
     worker_attribution: dict[str, str] = {}

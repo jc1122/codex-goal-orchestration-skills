@@ -206,15 +206,13 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --state-output /abs/goal-config-state.json
 ```
 
-Smoke-test both configured harness roles:
+Smoke-test every configured role before passing the report to preflight:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --config /abs/goal.config.json \
   --require-models \
   --smoke \
-  --harness lite \
-  --harness demanding \
   --stdout summary \
   --output /abs/goal-config-smoke.json \
   --state-output /abs/goal-config-state.json
@@ -231,7 +229,7 @@ jq '.accepted_routes | length' /abs/goal-config-smoke.json
 jq '.unvisited_routes' /abs/goal-config-smoke.json
 ```
 
-Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. To isolate a failing route without rerunning the full matrix, pass repeated or comma-separated `--harness` values, for example `--harness lite_agent,demanding_agent`.
+Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. The canonical `/goal` smoke report should omit `--harness` so it covers worker, reviewer, amender, Lite, and demanding aliases that runtime packets may use. To isolate a failing route after the full report fails, pass repeated or comma-separated `--harness` values, for example `--harness worker_opencode`.
 
 The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Full raw provider error payloads are emitted only with `--include-raw-errors`. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
 

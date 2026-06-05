@@ -1,6 +1,6 @@
 ---
 name: goal-config
-version: 0.2.95
+version: 0.2.96
 description: "Configure and verify goal orchestration model/provider profiles. Use when the user wants lean agent UX for model ladders, harness providers, branch/worker aggressiveness, token/character/time effort settings, or a fail-closed smoke test before goal-preflight or runtime orchestration."
 ---
 
@@ -46,7 +46,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/runtime_phase_manifest.py" --mark
   `--reuse-smoke-report /abs/goal-config-discovery.json` on the subsequent config smoke check to avoid duplicate harness calls.
 - Run `check_goal_config.py --require-models --stdout summary --output /abs/goal-config-check.json --state-output /abs/goal-config-state.json` before trusting configured model routes.
 - Before heavy checks, run `check_goal_config.py --config /abs/goal.config.json --for-preflight --state-output /abs/goal-config-state.json` to fail early on preflight schema/capability mismatches.
-- Run `check_goal_config.py --smoke --stdout summary` when the user requests harness validation, a new provider/model profile, or trace-analysis debug telemetry.
+- Run `check_goal_config.py --require-models --smoke --stdout summary` without `--harness` for the canonical `/goal` smoke report, so every configured runtime role is verified before preflight; use `--harness` only to isolate a failure after the full report fails.
 - Do not combine `--discover-all-candidates` and final route smoke as a performance default; that sequence is a discovery-path test, not a routine validation path.
 - Treat missing binaries, missing models, missing assistant output, auth/API errors, or smoke text mismatches as blocked evidence. Preserve checker-reported provider/status/message/count fields; use `--include-raw-errors` only when full raw provider payloads are needed for debugging.
 - Inspect `goal-config-state.json` for `phase`, `missing_preferences`, `next_command`, and `complete`; do not guess whether config validation is done.

@@ -235,11 +235,15 @@ def _git_status(repo_root: Path | None) -> list[str]:
 def _config_compatibility(manifest: dict) -> str:
     has_config = bool(manifest.get("goal_config_path") or manifest.get("goal_config_summary"))
     check_report = manifest.get("goal_config_check_summary", {})
+    route_contract = manifest.get("route_contract") if isinstance(manifest.get("route_contract"), dict) else {}
+    missing_worker_roles = route_contract.get("missing_worker_roles")
     if not has_config and not check_report:
         return "no goal config supplied"
     if not isinstance(check_report, dict):
         return "goal config check summary malformed"
     if check_report.get("status") == "pass":
+        if isinstance(missing_worker_roles, list) and missing_worker_roles:
+            return "config_schema_pass_routes_unverified"
         accepted = check_report.get("accepted_route_count")
         if isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0:
             return "goal config check pass"
@@ -254,6 +258,12 @@ def _verified_routes_summary(manifest: dict) -> dict[str, object]:
     summary = dict(check_report)
     accepted = summary.get("accepted_route_count")
     route_verified = isinstance(accepted, int) and not isinstance(accepted, bool) and accepted > 0
+    route_contract = manifest.get("route_contract") if isinstance(manifest.get("route_contract"), dict) else {}
+    missing_worker_roles = route_contract.get("missing_worker_roles")
+    if isinstance(missing_worker_roles, list) and missing_worker_roles:
+        route_verified = False
+        summary["missing_worker_roles"] = missing_worker_roles
+        summary["route_contract_sha256"] = manifest.get("route_contract_sha256")
     summary["route_model_availability_verified"] = route_verified
     token_telemetry = summary.get("token_telemetry") if isinstance(summary.get("token_telemetry"), dict) else {}
     unavailable = token_telemetry.get("unavailable_routes")

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:f767379646adbe033c6ec21ba3f2790c0f32a6ac73da4b0d7d055b86af96e02b"
+    "source_fingerprint": "sha256:c5774524cb2c716ac24bc9d88a174cbf34fc405ea029c85c45b5085e19548a09"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,53 +16,53 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 8294,
-      "approx_tokens": 98871,
+      "lines": 8526,
+      "approx_tokens": 102255,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "5526:run_base_ref_default_fixture:1260l",
-        "3655:run_runtime_packet_fixtures:1240l",
-        "7544:run_branch_status_negative_fixtures:710l",
-        "1774:run_negative_amendment_fixtures:362l"
+        "3725:run_runtime_packet_fixtures:1390l",
+        "5746:run_base_ref_default_fixture:1272l",
+        "7776:run_branch_status_negative_fixtures:710l",
+        "1831:run_negative_amendment_fixtures:362l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3092,
-      "approx_tokens": 36794,
+      "lines": 3234,
+      "approx_tokens": 38379,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1548:normalize_brief:238l",
-        "2879:create_bundle:133l",
-        "2589:manifest_from_normalized_brief:128l",
-        "2225:build_runtime_index:96l"
+        "1672:normalize_brief:238l",
+        "3017:create_bundle:137l",
+        "2727:manifest_from_normalized_brief:128l",
+        "2361:build_runtime_index:96l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2831,
-      "approx_tokens": 28428,
+      "lines": 2886,
+      "approx_tokens": 29167,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2400:run_packet:391l",
-        "2222:extract_status_json:102l",
-        "756:write_launcher_state:85l",
-        "988:run_with_timeout:85l"
+        "2455:run_packet:391l",
+        "1376:summarize_dirty_stop_salvage:128l",
+        "2277:extract_status_json:102l",
+        "758:write_launcher_state:85l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2651,
-      "approx_tokens": 28412,
+      "lines": 2696,
+      "approx_tokens": 28831,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2242:main:406l",
-        "982:compact_worker_context:118l",
-        "1197:reviewer_packet_context:99l",
-        "2141:compact_launch_config:99l"
+        "2270:main:423l",
+        "1010:compact_worker_context:118l",
+        "1225:reviewer_packet_context:99l",
+        "2169:compact_launch_config:99l"
       ]
     },
     {

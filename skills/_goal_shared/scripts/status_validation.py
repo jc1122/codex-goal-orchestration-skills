@@ -488,6 +488,7 @@ def validate_scheduler_ledger(
     deferred_reason_codes: dict[str, str] = {}
     blocked: dict[str, str] = {}
     blocked_reason_codes: dict[str, str] = {}
+    repair_relaunch_ids: set[str] = set()
     under_capacity: dict[str, str] = {}
     under_capacity_reason_codes: dict[str, str] = {}
     deferred_excuses: set[str] = set()
@@ -505,7 +506,12 @@ def validate_scheduler_ledger(
             if item_id in active:
                 continue
             if item_id in launched:
-                if item_id not in closed or finished_status.get(item_id) == "pass" or scheduler_kind != "branch-worker-pool":
+                if (
+                    scheduler_kind != "branch-worker-pool"
+                    or item_id not in closed
+                    or finished_status.get(item_id) == "pass"
+                    or item_id not in repair_relaunch_ids
+                ):
                     continue
             deps = dependencies.get(item_id, [])
             if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
@@ -712,6 +718,8 @@ def validate_scheduler_ledger(
                 blocked[str(event_id)] = reason
                 blocked_reason_codes[str(event_id)] = reason_code
                 blocked_excuses.add(str(event_id))
+                if any(marker in reason.lower() for marker in ("repair", "retry", "amendment", "reviewer-feedback")):
+                    repair_relaunch_ids.add(str(event_id))
             continue
 
         if event_name == "under_capacity":
