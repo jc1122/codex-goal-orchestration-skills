@@ -312,13 +312,13 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "script_repair_gate",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --scope amender --status /abs/bundle/branches/Bxx.status.json --json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/script_only_repair_gate.py --manifest /abs/bundle/job.manifest.json --bundle-dir /abs/bundle --repo-root /abs/repo --scope amender --status /abs/bundle/branches/Bxx.status.json --json",
                 "pass": "decision=pass_no_actions before semantic amender packet launch",
                 "agent_does": "use amendment decision and blocker repair commands before launching an amender model",
             },
             {
                 "id": "packet",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/create_adaptation_packet.py --manifest /abs/bundle/job.manifest.json --amendment-id A001 --amender-route gpt-5.4 --selection-reason 'bounded recovery planning'",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-plan-amender/scripts/create_adaptation_packet.py --manifest /abs/bundle/job.manifest.json --main-prompt /abs/bundle/main.prompt.md --repo-root /abs/repo --amendment-id A001",
             },
             {
                 "id": "validate_apply",

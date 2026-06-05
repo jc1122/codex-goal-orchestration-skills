@@ -1871,6 +1871,69 @@ def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
     )
     assert_contains(skip_launch_reason.stdout, "not valid for a skip decision", "skip launch-only reason fixture")
 
+    configured_route_bundle = create_amendment_bundle(tmp_path, "amendment-configured-route-fixture")
+    configured_manifest = read_json(configured_route_bundle / "job.manifest.json")
+    configured_manifest["amender_model_policy"] = {
+        "source": "goal_config",
+        "default_ladder": ["demanding_agent", "worker_primary"],
+        "allowed_routes": ["demanding_agent", "worker_primary"],
+        "launcher": "goal-main-orchestrator",
+        "selection_reason_required": True,
+        "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
+        "sandbox": "read-only",
+        "timeout_seconds": 1200,
+    }
+    configured_manifest["goal_config_summary"] = {
+        "models": {
+            "demanding_agent": {
+                "alias": "gpt-5.4",
+                "harness": "codex",
+                "provider": "openai",
+                "model": "gpt-5.4",
+                "role": "demanding_agent",
+            },
+            "worker_primary": {
+                "alias": "codex-spark",
+                "harness": "codex",
+                "provider": "openai",
+                "model": "gpt-5.3-codex-spark",
+                "role": "worker_primary",
+            },
+        }
+    }
+    write_json(configured_route_bundle / "job.manifest.json", configured_manifest)
+    create_amendment_decision(
+        configured_route_bundle,
+        "A005",
+        reason_code="remaining_work_dod_gap",
+        reason="Preparedness fixture records a configured amender route decision.",
+    )
+    run(
+        [
+            "python3",
+            "skills/goal-plan-amender/scripts/create_adaptation_packet.py",
+            "--manifest",
+            (configured_route_bundle / "job.manifest.json").as_posix(),
+            "--main-prompt",
+            (configured_route_bundle / "main.prompt.md").as_posix(),
+            "--repo-root",
+            ROOT.as_posix(),
+            "--amendment-id",
+            "A005",
+            "--terminal-branch",
+            "B01",
+            "--amender-route",
+            "gpt-5.4",
+            "--selection-reason",
+            "Fixture maps a raw Codex alias to the configured amender role.",
+        ]
+    )
+    configured_route = read_json(configured_route_bundle / "amendments" / "A005.packet" / "route.json")
+    if configured_route.get("selected_ladder") != ["demanding_agent"]:
+        raise SystemExit(f"configured amender route should normalize raw alias to role alias: {configured_route!r}")
+    if configured_route.get("policy") != configured_manifest["amender_model_policy"]:
+        raise SystemExit(f"configured amender route should preserve manifest policy: {configured_route!r}")
+
 
 def run_negative_amendment_fixtures(tmp_path: Path) -> None:
     no_infer_bundle = create_amendment_bundle(tmp_path, "amendment-no-infer-fixture")
@@ -6175,6 +6238,55 @@ def run_repair_gate_fixture(bundle: Path) -> None:
     telemetry_check = next((item for item in branch_decision.get("checks", []) if item.get("name") == "telemetry_summary"), None)
     if not telemetry_check or telemetry_check.get("status") != "pass" or "branch scope" not in telemetry_check.get("reason", ""):
         raise SystemExit(f"branch repair gate should skip bundle-wide telemetry freshness: {branch_decision!r}")
+
+    amender_bundle = bundle.parent / "amender-repair-gate"
+    shutil.copytree(bundle, amender_bundle)
+    amender_status_path = amender_bundle / "branches" / "B01.status.json"
+    write_json(
+        amender_status_path,
+        {
+            **status_data,
+            "blockers": ["amender-scope blocker should emit current blocker-repair helper CLI"],
+        },
+    )
+    amender_decision = json.loads(
+        run(
+            [
+                "python3",
+                "skills/_goal_shared/scripts/script_only_repair_gate.py",
+                "--manifest",
+                (amender_bundle / "job.manifest.json").as_posix(),
+                "--bundle-dir",
+                amender_bundle.as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--scope",
+                "amender",
+                "--status",
+                amender_status_path.as_posix(),
+                "--json",
+            ],
+            expect=2,
+        ).stdout
+    )
+    amender_commands = [
+        item.get("command")
+        for item in amender_decision.get("actions", [])
+        if isinstance(item, dict) and isinstance(item.get("command"), str)
+    ]
+    blocker_commands = [command for command in amender_commands if "create_blocker_repair_packet.py" in command]
+    if not blocker_commands:
+        raise SystemExit(f"amender repair gate should emit blocker repair command: {amender_decision!r}")
+    blocker_command = blocker_commands[0]
+    assert_all_contains(
+        blocker_command,
+        ["--main-prompt", "--repo-root", "--amendment-id A001", "--terminal-branch B01", "--replace"],
+        "amender blocker repair command",
+    )
+    if "--status" in blocker_command or "--branch-id" in blocker_command:
+        raise SystemExit(f"amender blocker repair command must not use stale helper flags: {blocker_command}")
+    if not any("--write-decision --replace" in command for command in amender_commands):
+        raise SystemExit(f"amender repair gate should emit a decision-writing command before packet creation: {amender_commands!r}")
     if context_index.get("severity") != "info":
         raise SystemExit(f"context_index skip must be severity info: {context_index!r}")
 
@@ -6322,6 +6434,9 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     main_phase_manifest = run(
         ["python3", "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py", "--markdown"]
     ).stdout
+    amender_phase_manifest = run(
+        ["python3", "skills/goal-plan-amender/scripts/runtime_phase_manifest.py", "--markdown"]
+    ).stdout
     compact_phase_manifest = run(
         ["python3", "skills/goal-branch-orchestrator/scripts/runtime_phase_manifest.py", "--compact", "--markdown"]
     ).stdout
@@ -6330,6 +6445,7 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     assert_all_contains(compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest")
     assert_all_contains(preflight_phase_manifest, ["telemetry_mode=debug", "debug mode"], "preflight phase manifest")
     assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit", "reconcile_goal_run.py"], "main phase manifest")
+    assert_all_contains(amender_phase_manifest, ["--main-prompt /abs/bundle/main.prompt.md", "--repo-root /abs/repo"], "amender phase manifest")
     assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
     readiness = run(
         [
@@ -8894,6 +9010,28 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(f"branch validator should distinguish valid artifact from non-pass runtime outcome: {branch_validation!r}")
     if branch_validation.get("dod_complete") is not False or branch_validation.get("review_complete") is not False:
         raise SystemExit(f"branch validator should expose incomplete DoD/review lanes: {branch_validation!r}")
+    write_json(
+        bundle / "branches" / "B01.review.json",
+        {
+            "packet_id": "B01-R99",
+            "role": "reviewer",
+            "verdict": "blocked",
+            "findings": ["Stale review fixture should be ignored when branch review_status is missing."],
+            "finding_classes": ["verification_gap"],
+            "commands_run": ["git diff --check main...HEAD"],
+            "verification_gaps": ["stale fixture"],
+            "residual_risks": [],
+            "semantic_input_hashes": {"branches/B01.pre_review_evidence.json": "sha256:" + "0" * 64},
+            "reuse_policy": {
+                "mode": "new",
+                "accepted": False,
+                "semantic_hashes_match": False,
+                "source_review_path": None,
+                "source_telemetry_path": None,
+            },
+            "summary": "Stale review fixture.",
+        },
+    )
     main_status_result = json.loads(
         run(
             [
@@ -8908,6 +9046,9 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     )
     if main_status_result.get("artifact_valid") is not True or main_status_result.get("runtime_success") is not False:
         raise SystemExit(f"assembled main status should distinguish artifact validity from runtime success: {main_status_result!r}")
+    assembled_main_status = read_json(bundle / "main.status.json")
+    if not assembled_main_status.get("amendment_decision_blockers"):
+        raise SystemExit(f"blocked main status should preserve amendment decision blocker evidence: {assembled_main_status!r}")
     main_validation = json.loads(
         run(
             [

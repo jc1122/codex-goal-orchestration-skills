@@ -234,22 +234,75 @@ def scheduler_rollup(manifest_path: Path, manifest: dict, branches: list[dict], 
     }
 
 
-def amendment_records(bundle_dir: Path) -> list[dict]:
-    amendments_dir = bundle_dir / "amendments"
+def _terminal_statuses(branch_statuses: list[dict]) -> dict[str, str]:
+    return {
+        str(item["branch_id"]): str(item["status"])
+        for item in branch_statuses
+        if item.get("status") in STATUSES and isinstance(item.get("branch_id"), str)
+    }
+
+
+def current_amendment_records(
+    manifest_path: Path,
+    branch_statuses: list[dict],
+    branch_parallelism: dict,
+    blockers: list[str],
+) -> tuple[list[dict], set[str], list[str]]:
+    amendments_dir = manifest_path.parent / "amendments"
     if not amendments_dir.is_dir():
-        return []
+        return [], set(), []
+    terminal_statuses = _terminal_statuses(branch_statuses)
+    active_ids = {
+        item
+        for item in branch_parallelism.get("active_ids", [])
+        if isinstance(item, str) and item.strip()
+    }
+    manifest_sha = sha256_file(manifest_path)
     records = []
+    covered_branch_ids: set[str] = set()
+    ignored: list[str] = []
     for path in sorted(amendments_dir.glob("*.decision.json")):
         data = load_json(path)
         amendment_id = data.get("amendment_id")
         decision = data.get("decision")
         if not isinstance(amendment_id, str) or decision not in CONTRACT.AMENDMENT_DECISIONS:
             continue
+        terminal_ids = [
+            item
+            for item in data.get("terminal_branch_ids", [])
+            if isinstance(item, str) and item.strip()
+        ] if isinstance(data.get("terminal_branch_ids"), list) else []
+        reasons: list[str] = []
+        if data.get("manifest") != manifest_path.as_posix():
+            reasons.append("manifest path mismatch")
+        if data.get("manifest_sha256") != manifest_sha:
+            reasons.append("manifest sha256 mismatch")
+        overlap = sorted(active_ids & set(terminal_ids))
+        if overlap:
+            reasons.append("active_branch_ids overlaps terminal_branch_ids: " + ", ".join(overlap))
+        missing = sorted(set(terminal_ids) - set(terminal_statuses))
+        if missing:
+            reasons.append("terminal_branch_ids not present in current branch summaries: " + ", ".join(missing))
+        decision_statuses = data.get("terminal_branch_statuses")
+        if isinstance(decision_statuses, dict):
+            drift = sorted(
+                branch_id
+                for branch_id in terminal_ids
+                if branch_id in terminal_statuses and decision_statuses.get(branch_id) != terminal_statuses[branch_id]
+            )
+            if drift:
+                reasons.append("terminal_branch_statuses drifted for: " + ", ".join(drift))
+        else:
+            reasons.append("terminal_branch_statuses missing or invalid")
+        if reasons:
+            ignored.append(f"{path.relative_to(manifest_path.parent).as_posix()}: " + "; ".join(reasons))
+            continue
+        covered_branch_ids.update(terminal_ids)
         records.append(
             {
                 "amendment_id": amendment_id,
                 "decision": decision,
-                "decision_path": path.relative_to(bundle_dir).as_posix(),
+                "decision_path": path.relative_to(manifest_path.parent).as_posix(),
                 "packet_validation_path": (
                     f"amendments/{amendment_id}.packet/packet.validation.json"
                     if decision == "launch"
@@ -257,7 +310,9 @@ def amendment_records(bundle_dir: Path) -> list[dict]:
                 ),
             }
         )
-    return records
+    for item in ignored:
+        blockers.append("ignored stale amendment decision artifact: " + item)
+    return records, covered_branch_ids, ignored
 
 
 def ensure_skip_decision(
@@ -267,22 +322,21 @@ def ensure_skip_decision(
     branch_parallelism: dict,
     *,
     allow_write: bool,
-) -> list[dict]:
-    existing = amendment_records(manifest_path.parent)
+) -> tuple[list[dict], set[str], list[str]]:
+    blockers: list[str] = []
+    existing, covered, ignored = current_amendment_records(manifest_path, branch_statuses, branch_parallelism, blockers)
     if existing or not branch_statuses:
-        return existing
+        return existing, covered, ignored
     if not allow_write:
-        return []
-    terminal_statuses = {
-        str(item["branch_id"]): str(item["status"])
-        for item in branch_statuses
-        if item.get("status") in STATUSES
-    }
+        return [], set(), ignored
+    terminal_statuses = _terminal_statuses(branch_statuses)
     if not terminal_statuses:
-        return []
+        return [], set(), ignored
     amendment_id = "A000"
     decision = "skip"
     all_pass = all(value == "pass" for value in terminal_statuses.values())
+    if not all_pass:
+        return [], set(), ignored
     reason_code = "no_adaptation_needed" if all_pass else "finalization_still_plausible"
     reason = (
         "All terminal branch checkpoints are pass; no future-work amendment is needed."
@@ -321,7 +375,46 @@ def ensure_skip_decision(
         "accepted_path": None,
     }
     write_json(decision_path, data)
-    return amendment_records(manifest_path.parent)
+    return current_amendment_records(manifest_path, branch_statuses, branch_parallelism, blockers)
+
+
+def amendment_decision_blockers(
+    branch_statuses: list[dict],
+    branch_parallelism: dict,
+    covered_branch_ids: set[str],
+    ignored_decisions: list[str],
+) -> list[dict]:
+    terminal_statuses = _terminal_statuses(branch_statuses)
+    if not terminal_statuses:
+        return []
+    missing = sorted(set(terminal_statuses) - covered_branch_ids)
+    if not missing:
+        return []
+    if all(terminal_statuses[branch_id] == "pass" for branch_id in missing):
+        return []
+    evidence_paths = [
+        str(item.get("status_path"))
+        for item in branch_statuses
+        if isinstance(item, dict) and item.get("branch_id") in missing and isinstance(item.get("status_path"), str)
+    ]
+    return [
+        {
+            "schema_version": 1,
+            "reason_code": "amendment_creation_blocked",
+            "reason": (
+                "Terminal branch checkpoints require amendment launch-or-skip handling, but no current valid "
+                "decision artifact is available for these checkpoints. Preserve this as blocked evidence "
+                "instead of reusing stale amendment decisions."
+            ),
+            "active_branch_ids": [
+                item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()
+            ],
+            "terminal_branch_ids": missing,
+            "terminal_branch_statuses": {branch_id: terminal_statuses[branch_id] for branch_id in missing},
+            "evidence_paths": evidence_paths,
+            "ignored_decision_artifacts": ignored_decisions,
+        }
+    ]
 
 
 def choose_status(audit: str, branches: list[dict], expected_branch_count: int, blockers: list[str]) -> str:
@@ -374,14 +467,28 @@ def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summa
     status = choose_status(audit, branch_statuses, len(branches), blockers)
     branch_parallelism = scheduler_rollup(manifest_path, manifest, branches, status=status, blockers=blockers)
     status = choose_status(audit, branch_statuses, len(branches), blockers)
-    amendments = ensure_skip_decision(
+    amendments, covered_amendment_branches, ignored_amendments = ensure_skip_decision(
         manifest_path,
         manifest,
         branch_statuses,
         branch_parallelism,
         allow_write=write_decision,
     )
-    if branch_statuses and not amendments:
+    amendment_blockers = amendment_decision_blockers(
+        branch_statuses,
+        branch_parallelism,
+        covered_amendment_branches,
+        ignored_amendments,
+    )
+    if amendment_blockers:
+        blockers.extend(
+            "amendment decision blocked for terminal branches "
+            + ", ".join(item["terminal_branch_ids"])
+            + ": "
+            + item["reason"]
+            for item in amendment_blockers
+        )
+    elif branch_statuses and not amendments:
         blockers.append("amendment launch-or-skip decision artifact is missing for terminal branch checkpoints")
         status = "partial" if status == "pass" else status
     dod = [f"prompt audit status: {audit}"]
@@ -408,6 +515,7 @@ def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summa
         "branch_parallelism": branch_parallelism,
         "branch_statuses": branch_statuses,
         "amendment_decisions": amendments,
+        "amendment_decision_blockers": amendment_blockers,
         "lite_advice": [],
         "cost_summary_path": "telemetry.summary.json#cost_summary",
         "commands_run": [

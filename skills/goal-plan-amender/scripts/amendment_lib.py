@@ -99,6 +99,216 @@ def load_json_object(path: Path) -> dict:
     return data
 
 
+def goal_config_from_manifest(manifest: dict | None, manifest_path: Path | None = None) -> dict | None:
+    if isinstance(manifest, dict) and isinstance(manifest.get("goal_config"), dict):
+        return manifest["goal_config"]
+    if not isinstance(manifest, dict) or manifest_path is None:
+        return None
+    config_path = manifest.get("goal_config_path")
+    if not isinstance(config_path, str) or not config_path.strip():
+        return None
+    candidate = (manifest_path.parent / config_path).resolve()
+    if not candidate.is_file():
+        return None
+    return load_json_object(candidate)
+
+
+def _model_items(value: object) -> list[tuple[str, dict]]:
+    if isinstance(value, dict):
+        return [(alias, spec) for alias, spec in value.items() if isinstance(alias, str) and isinstance(spec, dict)]
+    if isinstance(value, list):
+        result: list[tuple[str, dict]] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            alias = item.get("role") or item.get("alias")
+            if isinstance(alias, str) and alias.strip():
+                result.append((alias, item))
+        return result
+    return []
+
+
+def amender_model_specs(manifest: dict | None, manifest_path: Path | None = None) -> dict[str, dict]:
+    specs: dict[str, dict] = {}
+    if isinstance(manifest, dict):
+        for alias, spec in _model_items(manifest.get("models")):
+            specs[alias] = dict(spec)
+        summary = manifest.get("goal_config_summary")
+        if isinstance(summary, dict):
+            for alias, spec in _model_items(summary.get("models")):
+                specs[alias] = dict(spec)
+    goal_config = goal_config_from_manifest(manifest, manifest_path)
+    if isinstance(goal_config, dict):
+        for alias, spec in _model_items(goal_config.get("models")):
+            specs[alias] = dict(spec)
+    return specs
+
+
+def amender_harnesses(manifest: dict | None, manifest_path: Path | None = None) -> dict[str, dict]:
+    goal_config = goal_config_from_manifest(manifest, manifest_path)
+    harnesses = goal_config.get("harnesses") if isinstance(goal_config, dict) else None
+    return {key: value for key, value in harnesses.items() if isinstance(key, str) and isinstance(value, dict)} if isinstance(harnesses, dict) else {}
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    result: list[str] = []
+    for item in value:
+        if isinstance(item, str) and item.strip():
+            result.append(item.strip())
+    return result
+
+
+def amender_model_policy(manifest: dict | None, manifest_path: Path | None = None) -> dict:
+    policy = manifest.get("amender_model_policy") if isinstance(manifest, dict) else None
+    if not isinstance(policy, dict):
+        return CONTRACT.AMENDER_MODEL_POLICY
+    validate_amender_model_policy(manifest, manifest_path)
+    return policy
+
+
+def validate_amender_model_policy(manifest: dict | None, manifest_path: Path | None = None) -> dict:
+    policy = manifest.get("amender_model_policy") if isinstance(manifest, dict) else None
+    if policy == CONTRACT.AMENDER_MODEL_POLICY:
+        return CONTRACT.AMENDER_MODEL_POLICY
+    defects: list[str] = []
+    if not isinstance(policy, dict):
+        raise ValueError("manifest amender_model_policy must be an object")
+    default_ladder = _string_list(policy.get("default_ladder"))
+    allowed_routes = _string_list(policy.get("allowed_routes"))
+    if not default_ladder:
+        defects.append("default_ladder must be a non-empty string array")
+    if not allowed_routes:
+        defects.append("allowed_routes must be a non-empty string array")
+    if len(set(allowed_routes)) != len(allowed_routes):
+        defects.append("allowed_routes must not contain duplicates")
+    if len(set(default_ladder)) != len(default_ladder):
+        defects.append("default_ladder must not contain duplicates")
+    missing = [alias for alias in default_ladder if alias not in allowed_routes]
+    if missing:
+        defects.append("default_ladder aliases must be present in allowed_routes: " + ", ".join(missing))
+    positions = [allowed_routes.index(alias) for alias in default_ladder if alias in allowed_routes]
+    if positions != sorted(positions):
+        defects.append("default_ladder must preserve allowed_routes order")
+    if policy.get("launcher") != "goal-main-orchestrator":
+        defects.append("launcher must be goal-main-orchestrator")
+    if policy.get("selection_reason_required") is not True:
+        defects.append("selection_reason_required must be true")
+    if policy.get("sandbox") != "read-only":
+        defects.append("sandbox must be read-only")
+    timeout = policy.get("timeout_seconds")
+    if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
+        defects.append("timeout_seconds must be a positive integer")
+    if not isinstance(policy.get("ordering_rule"), str) or not policy.get("ordering_rule", "").strip():
+        defects.append("ordering_rule must be a non-empty string")
+    specs = amender_model_specs(manifest, manifest_path)
+    missing_specs = [
+        alias
+        for alias in allowed_routes
+        if alias not in specs and alias not in CONTRACT.ALLOWED_AMENDER_ROUTES
+    ]
+    if missing_specs:
+        defects.append("allowed_routes aliases need goal-config model metadata or built-in Codex aliases: " + ", ".join(missing_specs))
+    if defects:
+        raise ValueError("manifest amender_model_policy is not compatible with plan-amender routing: " + "; ".join(defects))
+    return policy
+
+
+def normalize_amender_ladder(manifest: dict | None, manifest_path: Path | None, values: list[str]) -> list[str]:
+    policy = amender_model_policy(manifest, manifest_path)
+    default_ladder = _string_list(policy.get("default_ladder")) or list(CONTRACT.DEFAULT_AMENDER_LADDER)
+    allowed_routes = _string_list(policy.get("allowed_routes")) or list(CONTRACT.ALLOWED_AMENDER_ROUTES)
+    if not values:
+        return default_ladder
+    specs = amender_model_specs(manifest, manifest_path)
+    alias_to_route: dict[str, str] = {alias: alias for alias in allowed_routes}
+    for route_alias in allowed_routes:
+        spec = specs.get(route_alias)
+        if not isinstance(spec, dict):
+            continue
+        for key in ("alias", "model"):
+            value = spec.get(key)
+            if isinstance(value, str) and value.strip():
+                alias_to_route.setdefault(value.strip(), route_alias)
+    flattened: list[str] = []
+    for value in values:
+        for item in value.split(","):
+            item = item.strip()
+            if item:
+                flattened.append(item)
+    if not flattened:
+        raise ValueError("amender route must contain at least one route alias")
+    normalized: list[str] = []
+    seen: set[str] = set()
+    positions: list[int] = []
+    for item in flattened:
+        route_alias = alias_to_route.get(item)
+        if route_alias is None:
+            raise ValueError(f"unsupported amender route alias: {item!r}")
+        if route_alias in seen:
+            raise ValueError(f"amender route alias repeated: {item!r}")
+        seen.add(route_alias)
+        normalized.append(route_alias)
+        positions.append(allowed_routes.index(route_alias))
+    if positions != sorted(positions):
+        raise ValueError("amender route aliases must preserve allowed route order: " + ", ".join(allowed_routes))
+    return normalized
+
+
+def amender_event_label(alias: str) -> str:
+    label = "".join(char if char.isalnum() or char in "._-" else "-" for char in alias).strip("-").lower()
+    return label or "configured"
+
+
+def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None, selected_ladder: list[str]) -> list[dict]:
+    policy = amender_model_policy(manifest, manifest_path)
+    timeout = policy.get("timeout_seconds")
+    timeout_seconds = timeout if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0 else CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS
+    specs = amender_model_specs(manifest, manifest_path)
+    harnesses = amender_harnesses(manifest, manifest_path)
+    if not specs:
+        return CONTRACT.codex_telemetry_attempts(selected_ladder, timeout_seconds=timeout_seconds, sandbox="read-only")
+    attempts: list[dict] = []
+    for alias in selected_ladder:
+        spec = specs.get(alias)
+        if not isinstance(spec, dict):
+            if alias in CONTRACT.ALLOWED_AMENDER_ROUTES:
+                attempts.extend(CONTRACT.codex_telemetry_attempts([alias], timeout_seconds=timeout_seconds, sandbox="read-only"))
+                continue
+            raise SystemExit(f"goal_config missing model role used by amender route ladder: {alias}")
+        harness_name = spec.get("harness")
+        harness = harnesses.get(harness_name) if isinstance(harness_name, str) else None
+        kind = harness.get("kind") if isinstance(harness, dict) else harness_name
+        label = amender_event_label(alias)
+        event_suffix = "jsonl" if kind in {"codex", "opencode"} else "log"
+        command_binary = harness.get("command") if isinstance(harness, dict) else harness_name
+        model = spec.get("model") or spec.get("alias") or alias
+        command = f"{command_binary} {model}".strip()
+        if kind == "codex":
+            command = f"codex exec --ephemeral -m {model} -s read-only"
+        attempts.append(
+            {
+                "alias": alias,
+                "provider": kind,
+                "provider_id": spec.get("provider"),
+                "model": model,
+                "harness": harness_name,
+                "harness_kind": kind,
+                "command_binary": command_binary,
+                "command": command,
+                "run_args": harness.get("run_args") or harness.get("smoke_args") or [] if isinstance(harness, dict) else [],
+                "run_readback": harness.get("run_readback", "stdout") if isinstance(harness, dict) else "stdout",
+                "effort": "configured",
+                "sandbox": "read-only",
+                "timeout_seconds": timeout_seconds,
+                "event_logs": [f"events-{label}.{event_suffix}"],
+                "probe_logs": [],
+            }
+        )
+    return attempts
+
+
 def write_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json_text(data), encoding="utf-8")
@@ -807,8 +1017,10 @@ def validate_proposal(
         defects.append("rationale must be a non-empty string")
     if manifest.get("adaptation_policy") != CONTRACT.ADAPTATION_POLICY:
         defects.append("manifest adaptation_policy does not match the shared amendment proposal policy")
-    if manifest.get("amender_model_policy") != CONTRACT.AMENDER_MODEL_POLICY:
-        defects.append("manifest amender_model_policy does not match the shared deterministic plan-amender router policy")
+    try:
+        validate_amender_model_policy(manifest, manifest_path)
+    except ValueError as exc:
+        defects.append(str(exc))
 
     candidate = None
     normalized_brief = None

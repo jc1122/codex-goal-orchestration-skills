@@ -259,6 +259,7 @@ def check_amendments_and_blockers(
     actions: list[dict],
     checks: list[dict],
     bundle_dir: Path,
+    repo_root: Path | None,
     status_path: Path | None,
     branch_id: str | None,
     scope: str,
@@ -278,23 +279,36 @@ def check_amendments_and_blockers(
     data = load_json(status_path)
     blockers = status_blockers(data)
     status = data.get("status") if isinstance(data, dict) else None
+    status_branch_id = data.get("branch_id") if isinstance(data, dict) else None
+    terminal_branch = branch_id or (status_branch_id if isinstance(status_branch_id, str) and status_branch_id.strip() else None)
+    if terminal_branch is None and status_path.name.endswith(".status.json"):
+        terminal_branch = status_path.name.removesuffix(".status.json")
     checks.append({"name": "amendment_and_blocker_repair", "status": "pass" if status == "pass" and not blockers else "actionable", "blocker_count": len(blockers)})
     if status in {"partial", "blocked", "failed"}:
         amend_script = skills_root() / "goal-plan-amender" / "scripts" / "recommend_amendment_decision.py"
+        terminal_arg = f" --terminal-branch {terminal_branch}" if terminal_branch else ""
         action(
             actions,
             kind="amendment_eligibility",
             reason=f"terminal status is {status!r}; deterministic amendment decision should run before an amender model",
-            command=f"python3 {amend_script} --manifest {bundle_dir / 'job.manifest.json'} --amendment-id A001",
+            command=f"python3 {amend_script} --manifest {bundle_dir / 'job.manifest.json'} --amendment-id A001{terminal_arg} --write-decision --replace",
         )
     if blockers:
         repair_script = skills_root() / "goal-plan-amender" / "scripts" / "create_blocker_repair_packet.py"
-        branch_arg = f" --branch-id {branch_id}" if branch_id else ""
+        main_prompt = bundle_dir / "main.prompt.md"
+        repo_arg = f" --repo-root {repo_root}" if repo_root else " --repo-root /abs/repo"
+        audit_path = bundle_dir / "audit" / "prompt-audit.json"
+        audit_arg = f" --prompt-audit {audit_path}" if audit_path.exists() else ""
+        terminal_arg = f" --terminal-branch {terminal_branch}" if terminal_branch else ""
         action(
             actions,
             kind="blocker_repair_candidate",
             reason="status blockers are present; deterministic blocker-repair packet should be attempted before semantic amender launch",
-            command=f"python3 {repair_script} --manifest {bundle_dir / 'job.manifest.json'} --status {status_path}{branch_arg}",
+            command=(
+                f"python3 {repair_script} --manifest {bundle_dir / 'job.manifest.json'}"
+                f" --main-prompt {main_prompt}{repo_arg}{audit_arg}"
+                f" --amendment-id A001{terminal_arg} --replace"
+            ),
         )
 
 
@@ -314,7 +328,7 @@ def gate(args: argparse.Namespace) -> dict:
     check_bundle_lint(actions, checks, bundle_dir, lint_report_path)
     check_scheduler(actions, checks, manifest, bundle_dir, args.scope, args.branch_id)
     check_telemetry_summary(actions, checks, bundle_dir, args.scope, args.branch_id)
-    check_amendments_and_blockers(actions, checks, bundle_dir, status_path, args.branch_id, args.scope)
+    check_amendments_and_blockers(actions, checks, bundle_dir, repo_root, status_path, args.branch_id, args.scope)
     decision = "script_actions_needed" if actions else "pass_no_actions"
     status = "pass" if decision == "pass_no_actions" else "blocked"
     runtime_gate = runtime_launch_gate(manifest, repo_root)

@@ -15,6 +15,7 @@ from amendment_lib import (
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
+    validate_amender_model_policy,
     write_json,
 )
 
@@ -158,8 +159,10 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
 def write_decision(manifest_path: Path, manifest: dict, amendment_id: str, rec: dict, *, scheduler_event_seq: int | None, replace: bool) -> Path:
     if manifest.get("adaptation_policy") != CONTRACT.ADAPTATION_POLICY:
         raise SystemExit("manifest adaptation_policy does not match the shared amendment proposal policy")
-    if manifest.get("amender_model_policy") != CONTRACT.AMENDER_MODEL_POLICY:
-        raise SystemExit("manifest amender_model_policy does not match the shared deterministic plan-amender router policy")
+    try:
+        validate_amender_model_policy(manifest, manifest_path)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     amendment_id = ensure_amendment_id(amendment_id)
     decision = rec["decision"]
     reason_code = rec["reason_code"]

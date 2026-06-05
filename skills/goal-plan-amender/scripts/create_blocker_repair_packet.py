@@ -12,6 +12,7 @@ from amendment_lib import (
     CONTRACT,
     branch_map,
     add_lineage_stage,
+    amender_model_policy,
     amendment_lineage_path,
     ensure_amendment_id,
     init_lineage,
@@ -21,6 +22,7 @@ from amendment_lib import (
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
+    validate_amender_model_policy,
     write_json,
 )
 
@@ -507,8 +509,10 @@ def create_packet(args: argparse.Namespace) -> Path:
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
     amendment_id = ensure_amendment_id(args.amendment_id)
     manifest = load_json_object(manifest_path)
-    if manifest.get("amender_model_policy") != CONTRACT.AMENDER_MODEL_POLICY:
-        raise SystemExit("manifest amender_model_policy does not match the shared deterministic plan-amender router policy")
+    try:
+        policy = validate_amender_model_policy(manifest, manifest_path)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     bundle_dir = manifest_path.parent
     amendments_dir = bundle_dir / "amendments"
     decision_path = amendments_dir / f"{amendment_id}.decision.json"
@@ -592,6 +596,7 @@ def create_packet(args: argparse.Namespace) -> Path:
         "terminal_branch_reviews": terminal_reviews,
         "selected_ladder": [],
         "selection_reason": "Deterministic blocker and reviewer-finding diagnosis from terminal artifacts.",
+        "route_policy": policy,
         "source_files": records,
     }
     route = {
@@ -601,7 +606,7 @@ def create_packet(args: argparse.Namespace) -> Path:
         "mode": DETERMINISTIC_MODE,
         "selected_ladder": [],
         "selection_reason": "Deterministic blocker and reviewer-finding diagnosis from terminal artifacts.",
-        "policy": CONTRACT.AMENDER_MODEL_POLICY,
+        "policy": amender_model_policy(manifest, manifest_path),
         "source_review_paths": sorted(
             item["source_review_path"]
             for item in terminal_reviews.values()

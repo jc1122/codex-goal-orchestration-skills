@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:7193026f6e42c0c4668e42d18300fca4d582d8b1a1758a6fa457bd6fbb2c5967"
+    "source_fingerprint": "sha256:5afb729bca91e78b9a33e5f38e7caf727fd910edf01825c41c69ca660d7dc371"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,14 +16,14 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 9456,
-      "approx_tokens": 113244,
+      "lines": 9597,
+      "approx_tokens": 114798,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "4383:run_runtime_packet_fixtures:1460l",
-        "6511:run_base_ref_default_fixture:1272l",
-        "8559:run_branch_status_negative_fixtures:853l",
-        "3129:run_worker_repair_promotion_fixture:375l"
+        "4446:run_runtime_packet_fixtures:1460l",
+        "6627:run_base_ref_default_fixture:1272l",
+        "8675:run_branch_status_negative_fixtures:878l",
+        "3192:run_worker_repair_promotion_fixture:375l"
       ]
     },
     {
@@ -238,6 +238,7 @@
       "depends_on": [
         "_goal_shared",
         "goal-config",
+        "goal-main-orchestrator",
         "goal-preflight"
       ]
     },
@@ -477,7 +478,8 @@
       "paths": [
         "skills/goal-plan-amender/SKILL.md",
         "skills/goal-plan-amender/agents/openai.yaml",
-        "skills/goal-plan-amender/references/amendment-contract.md"
+        "skills/goal-plan-amender/references/amendment-contract.md",
+        "skills/goal-plan-amender/scripts/amendment_lib.py"
       ]
     },
     {

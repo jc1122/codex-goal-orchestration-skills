@@ -320,6 +320,56 @@ def validate_decision_artifact(defects: list[str], data: object, path: str, *, a
     return decision
 
 
+def validate_amendment_decision_blockers(defects: list[str], root: dict, *, status: object) -> set[str]:
+    records = root.get("amendment_decision_blockers", [])
+    if records is None:
+        return set()
+    if not isinstance(records, list):
+        defect(defects, "$.amendment_decision_blockers", "must be an array when present")
+        return set()
+    if status == "pass" and records:
+        defect(defects, "$.amendment_decision_blockers", "must be empty or omitted when status is pass")
+    branch_statuses = root.get("branch_statuses")
+    terminal_branch_statuses: dict[str, str] = {}
+    if isinstance(branch_statuses, list):
+        for item in branch_statuses:
+            if isinstance(item, dict) and isinstance(item.get("branch_id"), str) and item.get("status") in STATUSES:
+                terminal_branch_statuses[str(item.get("branch_id"))] = str(item.get("status"))
+    covered: set[str] = set()
+    for index, item in enumerate(records):
+        item_path = f"$.amendment_decision_blockers[{index}]"
+        record = require_object(defects, item, item_path)
+        if record.get("schema_version") != 1:
+            defect(defects, f"{item_path}.schema_version", "must be 1")
+        reason_code = require_string(defects, record.get("reason_code"), f"{item_path}.reason_code")
+        if reason_code not in {"amendment_creation_blocked", "amender_packet_blocked", "amender_route_blocked"}:
+            defect(defects, f"{item_path}.reason_code", "must be an accepted amendment blocker reason")
+        require_string(defects, record.get("reason"), f"{item_path}.reason")
+        terminal_ids = require_string_list(defects, record.get("terminal_branch_ids"), f"{item_path}.terminal_branch_ids", min_items=1)
+        active_ids = record.get("active_branch_ids", [])
+        if not isinstance(active_ids, list) or any(not isinstance(value, str) or not value.strip() for value in active_ids):
+            defect(defects, f"{item_path}.active_branch_ids", "must be an array of non-empty strings")
+            active_set: set[str] = set()
+        else:
+            active_set = set(active_ids)
+        overlap = sorted(active_set & set(terminal_ids))
+        if overlap:
+            defect(defects, f"{item_path}.active_branch_ids", "must not overlap terminal_branch_ids: " + ", ".join(overlap))
+        statuses = require_object(defects, record.get("terminal_branch_statuses"), f"{item_path}.terminal_branch_statuses")
+        for branch_id in terminal_ids:
+            if branch_id not in terminal_branch_statuses:
+                defect(defects, f"{item_path}.terminal_branch_ids", f"branch is not present in branch_statuses: {branch_id}")
+                continue
+            if statuses.get(branch_id) != terminal_branch_statuses[branch_id]:
+                defect(defects, f"{item_path}.terminal_branch_statuses", f"must match branch_statuses for {branch_id}")
+            covered.add(branch_id)
+        require_string_list(defects, record.get("evidence_paths"), f"{item_path}.evidence_paths", min_items=1)
+        ignored = record.get("ignored_decision_artifacts", [])
+        if ignored is not None:
+            require_string_list(defects, ignored, f"{item_path}.ignored_decision_artifacts")
+    return covered
+
+
 def validate_packet_validation_artifact(defects: list[str], data: object, path: str, *, amendment_id: str, manifest_path: Path) -> dict:
     validation = require_object(defects, data, path)
     if validation.get("schema_version") != 1:
@@ -365,6 +415,7 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
     if not isinstance(records, list):
         defect(defects, "$.amendment_decisions", "must be an array")
         return
+    blocker_branch_ids = validate_amendment_decision_blockers(defects, root, status=status)
     bundle_dir = manifest_path.parent
     amendments_dir = bundle_dir / "amendments"
     decision_files = sorted(amendments_dir.glob("*.decision.json")) if amendments_dir.is_dir() else []
@@ -376,7 +427,7 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
     decision_branch_ids: set[str] = set()
     seen_ids: set[str] = set()
 
-    if root.get("branch_statuses") and not records:
+    if root.get("branch_statuses") and not records and not blocker_branch_ids:
         defect(defects, "$.amendment_decisions", "must record launch or skip decisions for terminal branch checkpoints")
 
     for index, item in enumerate(records):
@@ -433,8 +484,28 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
             defect(defects, f"{item_path}.packet_validation_path", "must be null or omitted for skip decisions")
 
     omitted_decisions = sorted(discovered_decisions - recorded_decisions)
-    if omitted_decisions:
-        defect(defects, "$.amendment_decisions", "omits discovered amendment decision artifacts: " + ", ".join(omitted_decisions))
+    current_omitted: list[str] = []
+    for decision_rel in omitted_decisions:
+        amendment_id = Path(decision_rel).name.removesuffix(".decision.json")
+        local_defects: list[str] = []
+        decision_data = validate_decision_artifact(
+            local_defects,
+            load_json_artifact(local_defects, bundle_dir / decision_rel, "$.amendment_decisions.omitted"),
+            "$.amendment_decisions.omitted",
+            amendment_id=amendment_id,
+            manifest_path=manifest_path,
+        )
+        decision_terminal_ids = {
+            branch_id
+            for branch_id in decision_data.get("terminal_branch_ids", [])
+            if isinstance(branch_id, str)
+        } if isinstance(decision_data, dict) else set()
+        if not local_defects and not decision_terminal_ids <= blocker_branch_ids:
+            current_omitted.append(decision_rel)
+        elif status == "pass" or not blocker_branch_ids:
+            current_omitted.append(decision_rel)
+    if current_omitted:
+        defect(defects, "$.amendment_decisions", "omits discovered amendment decision artifacts: " + ", ".join(current_omitted))
     for amendment_id in sorted(discovered_packets):
         if f"amendments/{amendment_id}.decision.json" not in discovered_decisions:
             defect(defects, "$.amendment_decisions", f"missing amender decision artifact for packet: {amendment_id}")
@@ -450,7 +521,7 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
             for item in branch_statuses
             if isinstance(item, dict) and item.get("status") in STATUSES and isinstance(item.get("branch_id"), str)
         }
-        missing = sorted(terminal_branch_ids - decision_branch_ids)
+        missing = sorted(terminal_branch_ids - decision_branch_ids - blocker_branch_ids)
         if missing:
             defect(defects, "$.amendment_decisions", "missing amendment launch/skip decisions for terminal branches: " + ", ".join(missing))
 
@@ -741,6 +812,8 @@ def validate_branch_artifacts(
         if not review_artifact.exists():
             if require_review_artifact:
                 defect(defects, f"{item_path}.review_path", f"artifact does not exist: {review_artifact}")
+        elif item.get("review_status") == "missing" and item.get("status") != "pass":
+            continue
         else:
             validate_review_artifact(
                 defects,

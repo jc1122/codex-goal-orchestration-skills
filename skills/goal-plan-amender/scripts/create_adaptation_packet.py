@@ -9,12 +9,16 @@ from pathlib import Path
 
 from amendment_lib import (
     CONTRACT,
+    amender_model_policy,
+    amender_telemetry_attempts,
     ensure_amendment_id,
     load_json_object,
+    normalize_amender_ladder,
     protected_ids,
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
+    validate_amender_model_policy,
     write_json,
 )
 
@@ -103,27 +107,14 @@ def proposal_example(amendment_id: str, job_id: str) -> dict:
     }
 
 
-def normalize_amender_ladder(values: list[str]) -> list[str]:
-    try:
-        return CONTRACT.normalize_route_ladder(
-            values,
-            default_ladder=CONTRACT.DEFAULT_AMENDER_LADDER,
-            allowed_routes=CONTRACT.ALLOWED_AMENDER_ROUTES,
-            route_name="amender",
-        )
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-
-
-def amender_telemetry_attempts(selected_ladder: list[str]) -> list[dict]:
-    return CONTRACT.codex_telemetry_attempts(
-        selected_ladder,
-        timeout_seconds=CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS,
-        sandbox="read-only",
-    )
-
-
-def telemetry_function(amendment_id: str, selected_ladder: list[str], *, telemetry_debug: bool = False) -> str:
+def telemetry_function(
+    amendment_id: str,
+    manifest: dict,
+    manifest_path: Path,
+    selected_ladder: list[str],
+    *,
+    telemetry_debug: bool = False,
+) -> str:
     script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
     return CONTRACT.telemetry_shell_function(
         script_path=script,
@@ -132,7 +123,7 @@ def telemetry_function(amendment_id: str, selected_ladder: list[str], *, telemet
         role=CONTRACT.AMENDER_ROLE,
         output_name=AMENDER_OUTPUT_NAME.format(amendment_id=amendment_id),
         prompt_name="prompt.md",
-        attempts=amender_telemetry_attempts(selected_ladder),
+        attempts=amender_telemetry_attempts(manifest, manifest_path, selected_ladder),
         debug_output_name=CONTRACT.TELEMETRY_DEBUG_NAME if telemetry_debug else None,
     )
 
@@ -159,15 +150,63 @@ def task_text(amendment_id: str, manifest_path: Path, active: list[str], termina
     )
 
 
-def launch_script(amendment_id: str, job_id: str, repo_root: Path, selected_ladder: list[str], *, telemetry_debug: bool = False) -> str:
-    telemetry = telemetry_function(amendment_id, selected_ladder, telemetry_debug=telemetry_debug)
+def _attempt_label(attempt: dict) -> str:
+    logs = attempt.get("event_logs")
+    if isinstance(logs, list) and logs and isinstance(logs[0], str):
+        stem = Path(logs[0]).stem
+        return stem.removeprefix("events-")
+    return str(attempt.get("alias", "amender")).replace("/", "-")
+
+
+def _configured_attempt_command(attempt: dict, *, amendment_id: str, repo_root: Path) -> str | None:
+    kind = attempt.get("harness_kind") or attempt.get("provider")
+    model = str(attempt.get("model") or "")
+    alias = str(attempt.get("alias") or "amender")
+    if kind == "opencode":
+        return (
+            "opencode run --pure --format json "
+            f"--model {CONTRACT.shell_quote(model)} "
+            f"--dir {CONTRACT.shell_quote(repo_root.as_posix())} "
+            f"--title {CONTRACT.shell_quote(amendment_id + '-' + alias)} "
+            '"$(cat "$packet_dir/prompt.md")"'
+        )
+    if kind == "gemini":
+        return (
+            f"gemini --model {CONTRACT.shell_quote(model)} "
+            '--approval-mode yolo -p "$(cat "$packet_dir/prompt.md")"'
+        )
+    return None
+
+
+def launch_script(
+    amendment_id: str,
+    job_id: str,
+    repo_root: Path,
+    manifest: dict,
+    manifest_path: Path,
+    selected_ladder: list[str],
+    *,
+    telemetry_debug: bool = False,
+) -> str:
+    telemetry = telemetry_function(amendment_id, manifest, manifest_path, selected_ladder, telemetry_debug=telemetry_debug)
     attempt_lines: list[str] = []
-    for alias in selected_ladder:
-        label = CONTRACT.codex_event_label(alias)
-        model = CONTRACT.codex_model(alias)
+    for attempt in amender_telemetry_attempts(manifest, manifest_path, selected_ladder):
+        alias = str(attempt.get("alias") or "")
+        label = _attempt_label(attempt)
+        kind = attempt.get("harness_kind") or attempt.get("provider")
+        if kind == "codex":
+            model = str(attempt.get("model") or "")
+            runner = f"run_codex_model {CONTRACT.shell_quote(label)} {CONTRACT.shell_quote(model)}"
+        else:
+            logs = attempt.get("event_logs")
+            event_name = logs[0] if isinstance(logs, list) and logs and isinstance(logs[0], str) else f"events-{label}.log"
+            command = _configured_attempt_command(attempt, amendment_id=amendment_id, repo_root=repo_root)
+            if command is None:
+                command = f"unsupported_attempt {CONTRACT.shell_quote(event_name)} {CONTRACT.shell_quote(alias)} {CONTRACT.shell_quote(str(kind or 'unknown'))}"
+            runner = f"run_configured_model {CONTRACT.shell_quote(event_name)} {command}"
         attempt_lines.extend(
             [
-                f"if run_model {CONTRACT.shell_quote(label)} {CONTRACT.shell_quote(model)} && valid_proposal; then",
+                f"if {runner} && valid_proposal; then",
                 "  write_telemetry",
                 "  exit 0",
                 "fi",
@@ -205,7 +244,7 @@ run_with_timeout() {{
   timeout --foreground --kill-after="${{timeout_kill_after_seconds}}s" "${{seconds}}s" "$@"
 }}
 
-run_model() {{
+run_codex_model() {{
   local label="$1"
   local model="$2"
   run_with_timeout "$attempt_timeout_seconds" codex exec --ephemeral \\
@@ -216,7 +255,71 @@ run_model() {{
     --output-schema "$packet_dir/proposal.schema.json" \\
     -o "$proposal_path" \\
     - < "$packet_dir/prompt.md" \\
-    > "$packet_dir/events-${{label}}.jsonl" 2>&1
+	    > "$packet_dir/events-${{label}}.jsonl" 2>&1
+}}
+
+extract_stdout_proposal() {{
+  local source_path="$1"
+  python3 - "$source_path" "$proposal_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+proposal = Path(sys.argv[2])
+text = source.read_text(encoding="utf-8", errors="replace")
+candidates = [text]
+try:
+    parsed = json.loads(text)
+except Exception:
+    parsed = None
+if isinstance(parsed, dict):
+    for key in ("content", "output", "text", "message"):
+        value = parsed.get(key)
+        if isinstance(value, str):
+            candidates.append(value)
+    choices = parsed.get("choices")
+    if isinstance(choices, list):
+        for item in choices:
+            if isinstance(item, dict):
+                value = item.get("text") or item.get("content")
+                if isinstance(value, str):
+                    candidates.append(value)
+for candidate in candidates:
+    candidate = candidate.strip()
+    if not candidate:
+        continue
+    try:
+        data = json.loads(candidate)
+    except Exception:
+        start = candidate.find("{{")
+        end = candidate.rfind("}}")
+        if start < 0 or end <= start:
+            continue
+        try:
+            data = json.loads(candidate[start : end + 1])
+        except Exception:
+            continue
+    if isinstance(data, dict):
+        proposal.write_text(json.dumps(data, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}}
+
+run_configured_model() {{
+  local event_name="$1"
+  shift
+  run_with_timeout "$attempt_timeout_seconds" "$@" > "$packet_dir/${{event_name}}" 2>&1
+  extract_stdout_proposal "$packet_dir/${{event_name}}"
+}}
+
+unsupported_attempt() {{
+  local event_name="$1"
+  local alias="$2"
+  local kind="$3"
+  echo "Unsupported configured amender harness for $alias: $kind" > "$packet_dir/${{event_name}}"
+  return 127
 }}
 
 valid_proposal() {{
@@ -297,9 +400,11 @@ def main() -> int:
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
     amendment_id = ensure_amendment_id(args.amendment_id)
     manifest = load_json_object(manifest_path)
-    if manifest.get("amender_model_policy") != CONTRACT.AMENDER_MODEL_POLICY:
-        raise SystemExit("manifest amender_model_policy does not match the shared deterministic plan-amender router policy")
-    selected_ladder = normalize_amender_ladder(args.amender_route)
+    try:
+        policy = validate_amender_model_policy(manifest, manifest_path)
+        selected_ladder = normalize_amender_ladder(manifest, manifest_path, args.amender_route)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if args.amender_route and not str(args.selection_reason or "").strip():
         raise SystemExit("--selection-reason is required when --amender-route is supplied")
     selection_reason = str(args.selection_reason or "").strip() or "Default deterministic plan-amender model ladder from amender_model_policy."
@@ -381,6 +486,7 @@ def main() -> int:
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
         "selected_ladder": selected_ladder,
         "selection_reason": selection_reason,
+        "route_policy": policy,
         "source_files": records,
     }
     route = {
@@ -389,7 +495,7 @@ def main() -> int:
         "role": CONTRACT.AMENDER_ROLE,
         "selected_ladder": selected_ladder,
         "selection_reason": selection_reason,
-        "policy": CONTRACT.AMENDER_MODEL_POLICY,
+        "policy": amender_model_policy(manifest, manifest_path),
     }
     write_json(packet_dir / "input-files.json", packet)
     write_json(packet_dir / "proposal.schema.json", proposal_schema(amendment_id, str(manifest.get("job_id", ""))))
@@ -406,6 +512,8 @@ def main() -> int:
         amendment_id,
         str(manifest.get("job_id", "")),
         repo_root,
+        manifest,
+        manifest_path,
         selected_ladder,
         telemetry_debug=CONTRACT.telemetry_debug_enabled(manifest),
     )

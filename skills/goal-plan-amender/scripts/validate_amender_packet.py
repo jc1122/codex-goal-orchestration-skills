@@ -7,7 +7,17 @@ import argparse
 import json
 from pathlib import Path
 
-from amendment_lib import CONTRACT, ensure_amendment_id, resolve_absolute_path, sha256_file, write_json
+from amendment_lib import (
+    CONTRACT,
+    amender_model_policy,
+    amender_telemetry_attempts,
+    ensure_amendment_id,
+    normalize_amender_ladder,
+    resolve_absolute_path,
+    sha256_file,
+    validate_amender_model_policy,
+    write_json,
+)
 
 
 def defect(defects: list[str], path: str, message: str) -> None:
@@ -74,7 +84,7 @@ def deterministic_mode(route: dict) -> bool:
     return route.get("mode") == "deterministic_blocker_repair"
 
 
-def validate_route(defects: list[str], route: dict, *, amendment_id: str) -> list[str]:
+def validate_route(defects: list[str], route: dict, *, amendment_id: str, manifest: dict, manifest_path: Path) -> list[str]:
     if route.get("schema_version") != 1:
         defect(defects, "$.route.schema_version", "must be 1")
     if route.get("packet_id") != amendment_id:
@@ -88,20 +98,20 @@ def validate_route(defects: list[str], route: dict, *, amendment_id: str) -> lis
     else:
         selected = require_string_list(defects, route.get("selected_ladder"), "$.route.selected_ladder", min_items=1)
         try:
-            normalized = CONTRACT.normalize_route_ladder(
-                selected,
-                default_ladder=CONTRACT.DEFAULT_AMENDER_LADDER,
-                allowed_routes=CONTRACT.ALLOWED_AMENDER_ROUTES,
-                route_name="amender",
-            )
+            normalized = normalize_amender_ladder(manifest, manifest_path, selected)
         except ValueError as exc:
             defect(defects, "$.route.selected_ladder", str(exc))
             normalized = selected
         if selected and normalized != selected:
             defect(defects, "$.route.selected_ladder", "must preserve allowed route order exactly")
     require_string(defects, route.get("selection_reason"), "$.route.selection_reason")
-    if route.get("policy") != CONTRACT.AMENDER_MODEL_POLICY:
-        defect(defects, "$.route.policy", "must match shared amender_model_policy")
+    try:
+        policy = amender_model_policy(manifest, manifest_path)
+    except ValueError as exc:
+        defect(defects, "$.manifest.amender_model_policy", str(exc))
+        policy = {}
+    if route.get("policy") != policy:
+        defect(defects, "$.route.policy", "must match manifest amender_model_policy")
     return selected
 
 
@@ -144,7 +154,16 @@ def validate_input_files(
             defect(defects, f"{item_path}.sha256", "does not match current source file")
 
 
-def validate_telemetry(defects: list[str], telemetry: dict, *, amendment_id: str, route: dict, proposal_name: str) -> None:
+def validate_telemetry(
+    defects: list[str],
+    telemetry: dict,
+    *,
+    amendment_id: str,
+    route: dict,
+    proposal_name: str,
+    manifest: dict,
+    manifest_path: Path,
+) -> None:
     if telemetry.get("schema_version") != 1:
         defect(defects, "$.telemetry.schema_version", "must be 1")
     if telemetry.get("packet_id") != amendment_id:
@@ -199,24 +218,34 @@ def validate_telemetry(defects: list[str], telemetry: dict, *, amendment_id: str
         defect(defects, "$.telemetry.accepted_alias", "must match the accepted attempt alias")
     if telemetry.get("accepted_alias") is None and accepted:
         defect(defects, "$.telemetry.accepted_alias", "must be set when a plan-amender attempt is accepted")
+    expected_attempts = {
+        item.get("alias"): item
+        for item in amender_telemetry_attempts(manifest, manifest_path, selected)
+        if isinstance(item, dict) and isinstance(item.get("alias"), str)
+    }
     for index, item in enumerate(attempts):
         attempt = require_object(defects, item, f"$.telemetry.attempts[{index}]")
-        if attempt.get("timeout_seconds") != CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS:
-            defect(defects, f"$.telemetry.attempts[{index}].timeout_seconds", f"must be {CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS}")
         alias = attempt.get("alias")
-        if isinstance(alias, str) and alias in CONTRACT.ALLOWED_AMENDER_ROUTES:
-            expected_model = CONTRACT.codex_model(alias)
-            if attempt.get("model") != expected_model:
-                defect(defects, f"$.telemetry.attempts[{index}].model", f"must be {expected_model!r}")
-        if attempt.get("provider") != "codex":
-            defect(defects, f"$.telemetry.attempts[{index}].provider", "must be 'codex'")
+        expected = expected_attempts.get(alias) if isinstance(alias, str) else None
+        if not isinstance(expected, dict):
+            defect(defects, f"$.telemetry.attempts[{index}].alias", "must be declared by manifest amender_model_policy")
+            continue
+        if attempt.get("timeout_seconds") != expected.get("timeout_seconds"):
+            defect(defects, f"$.telemetry.attempts[{index}].timeout_seconds", f"must be {expected.get('timeout_seconds')}")
+        if attempt.get("model") != expected.get("model"):
+            defect(defects, f"$.telemetry.attempts[{index}].model", f"must be {expected.get('model')!r}")
+        if attempt.get("provider") != expected.get("provider"):
+            defect(defects, f"$.telemetry.attempts[{index}].provider", f"must be {expected.get('provider')!r}")
 
 
 def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path) -> dict:
     defects: list[str] = []
     manifest = load_json_for_validation(defects, manifest_path, "$.manifest")
-    if manifest and manifest.get("amender_model_policy") != CONTRACT.AMENDER_MODEL_POLICY:
-        defect(defects, "$.manifest.amender_model_policy", "must match shared amender_model_policy")
+    if manifest:
+        try:
+            validate_amender_model_policy(manifest, manifest_path)
+        except ValueError as exc:
+            defect(defects, "$.manifest.amender_model_policy", str(exc))
     if packet_dir.name != f"{amendment_id}.packet":
         defect(defects, "$.packet_dir", f"must be named {amendment_id}.packet")
     amendments_dir = packet_dir.parent
@@ -234,7 +263,7 @@ def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path)
     proposal = load_json_for_validation(defects, proposal_path, "$.proposal")
 
     validate_decision(defects, decision, amendment_id=amendment_id, manifest_path=manifest_path)
-    validate_route(defects, route, amendment_id=amendment_id)
+    validate_route(defects, route, amendment_id=amendment_id, manifest=manifest, manifest_path=manifest_path)
     validate_input_files(
         defects,
         inputs,
@@ -243,7 +272,15 @@ def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path)
         decision_path=decision_path,
         route=route,
     )
-    validate_telemetry(defects, telemetry, amendment_id=amendment_id, route=route, proposal_name=proposal_name)
+    validate_telemetry(
+        defects,
+        telemetry,
+        amendment_id=amendment_id,
+        route=route,
+        proposal_name=proposal_name,
+        manifest=manifest,
+        manifest_path=manifest_path,
+    )
     if proposal:
         if proposal.get("schema_version") != 1:
             defect(defects, "$.proposal.schema_version", "must be 1")
