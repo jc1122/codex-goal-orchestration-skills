@@ -520,6 +520,21 @@ def bounded_cli_launch_plan(
     final_message_path = bundle_dir / "branches" / f"{branch_id}.codex.final.md"
     log_path = bundle_dir / "branches" / f"{branch_id}.codex.log"
     heredoc_label = f"GOAL_BRANCH_{branch_id}_CLI_PROMPT"
+    scheduler_launch_command = " ".join(
+        [
+            'python3 "${GOAL_SKILLS_ROOT}"/goal-main-orchestrator/scripts/scheduler_tick.py',
+            "--manifest",
+            shell_quote(manifest_path.as_posix()),
+            "--scope",
+            "main",
+            "--runtime-ref",
+            "goal-main-orchestrator",
+            "--init",
+            "--record-ready",
+            "--launch",
+            branch_id,
+        ]
+    )
     launch_prompt_command = "\n".join(
         [
             f"cat > {shell_quote(launch_prompt_path.as_posix())} <<'{heredoc_label}'",
@@ -572,7 +587,10 @@ def bounded_cli_launch_plan(
         "codex_model": cli_branch_model,
         "codex_model_source": cli_branch_model_source,
         "codex_model_policy": "CLI branch-control model only; packet routes remain governed by manifest worker/reviewer/amender/lite policies.",
+        "execution_order": ["command", "launch_prompt_command", "scheduler_launch_command", "launch_command"],
         "launch_prompt_command": launch_prompt_command,
+        "scheduler_launch_command": scheduler_launch_command,
+        "scheduler_launch_policy": "Run immediately before launch_command so the main scheduler ledger records active branch work before the branch-control process starts.",
         "launch_command": launch_command,
         "parent_context_contract": "Do not stream branch CLI stdout/stderr into the main orchestrator context; read final_message_path and validated status artifacts after launch exits.",
     }
@@ -613,6 +631,9 @@ def branch_delegation_entry(
         "native_agent_available": native_available,
         "native_agent_availability_source": native_availability_source,
         "cli_fallback_reason": fallback_reason,
+        "scheduler_launch_command": cli_plan["scheduler_launch_command"],
+        "scheduler_launch_required": True,
+        "scheduler_launch_policy": "Record scheduler launch evidence immediately before starting a native or CLI branch-control session.",
         "native_agent": {
             "skill": "goal-branch-orchestrator",
             "branch_prompt": prompt_rel,
@@ -623,7 +644,7 @@ def branch_delegation_entry(
             "status_path": str(branch["status_path"]),
             "review_path": str(branch["review_path"]),
             "pre_review_gate_path": str(branch["pre_review_gate_path"]),
-            "instructions": "Spawn a native branch-orchestrator agent for this branch and wait on native agent completion before collecting artifacts.",
+            "instructions": "Run scheduler_launch_command immediately before spawning a native branch-orchestrator agent for this branch, then wait on native agent completion before collecting artifacts.",
         },
         "cli_worktree_fallback": {
             "allowed": selected_mode == "cli_worktree",
@@ -1019,12 +1040,15 @@ def main() -> int:
             print(f"# {entry['cli_worktree_fallback']['command']}")
             print("# cli fallback launch must use redirected output:")
             print_commented_block(entry["cli_worktree_fallback"]["launch_prompt_command"])
+            print("# scheduler launch evidence, required immediately before starting CLI fallback:")
+            print_commented_block(entry["cli_worktree_fallback"]["scheduler_launch_command"])
             print(f"# {entry['cli_worktree_fallback']['launch_command']}")
     else:
         for entry in plan["branches"]:
             fallback = entry["cli_worktree_fallback"]
             print(fallback["command"])
             print(fallback["launch_prompt_command"])
+            print(fallback["scheduler_launch_command"])
             print(fallback["launch_command"])
 
     return 0

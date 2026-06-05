@@ -3836,9 +3836,20 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     native_branch = native_plan.get("branches", [{}])[0]
     if native_branch.get("selected_delegation") != "native_agent" or native_branch.get("cli_fallback_reason") is not None:
         raise SystemExit(f"native branch plan should not carry a fallback reason: {native_branch!r}")
+    native_scheduler_launch = native_branch.get("scheduler_launch_command", "")
+    if (
+        "scheduler_tick.py" not in native_scheduler_launch
+        or "--launch B02" not in native_scheduler_launch
+        or "--record-ready" not in native_scheduler_launch
+    ):
+        raise SystemExit(f"native branch plan should require scheduler launch evidence before branch start: {native_branch!r}")
     native_cli_fallback = native_branch.get("cli_worktree_fallback", {})
     if native_cli_fallback.get("stdout_policy") != "redirect_stdout_stderr_to_log":
         raise SystemExit(f"native fallback metadata should still carry bounded CLI policy: {native_cli_fallback!r}")
+    if native_cli_fallback.get("execution_order") != ["command", "launch_prompt_command", "scheduler_launch_command", "launch_command"]:
+        raise SystemExit(f"native fallback execution order should include scheduler launch before branch CLI launch: {native_cli_fallback!r}")
+    if native_cli_fallback.get("scheduler_launch_command") != native_scheduler_launch:
+        raise SystemExit(f"native fallback should reuse the branch scheduler launch command: {native_cli_fallback!r}")
     if " > " not in native_cli_fallback.get("launch_command", "") or "2>&1" not in native_cli_fallback.get("launch_command", ""):
         raise SystemExit(f"bounded CLI fallback launch command should redirect output: {native_cli_fallback!r}")
     if native_cli_fallback.get("codex_model") != "gpt-5.4-mini" or native_cli_fallback.get("codex_model_source") != "default":
@@ -3867,6 +3878,8 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"native delegation stdout should preserve commented CLI fallback context: {native_text_result.stdout!r}")
     if not any("codex exec -m gpt-5.4-mini" in line and "2>&1" in line for line in native_text_lines):
         raise SystemExit(f"native delegation stdout should preserve commented bounded CLI launch context: {native_text_result.stdout!r}")
+    if not any("scheduler_tick.py" in line and "--launch B02" in line for line in native_text_lines):
+        raise SystemExit(f"native delegation stdout should preserve commented scheduler launch context: {native_text_result.stdout!r}")
     fallback_report = main_bundle / "branches" / "B02.delegation.json"
     fallback_result = run(
         [
@@ -3897,14 +3910,35 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     fallback_cli = fallback_branch.get("cli_worktree_fallback", {})
     if fallback_cli.get("stdout_policy") != "redirect_stdout_stderr_to_log":
         raise SystemExit(f"CLI fallback report should include bounded output policy: {fallback_cli!r}")
+    if fallback_cli.get("execution_order") != ["command", "launch_prompt_command", "scheduler_launch_command", "launch_command"]:
+        raise SystemExit(f"CLI fallback execution order should include scheduler launch before branch CLI launch: {fallback_cli!r}")
+    if (
+        "scheduler_tick.py" not in fallback_cli.get("scheduler_launch_command", "")
+        or "--manifest" not in fallback_cli.get("scheduler_launch_command", "")
+        or "--launch B02" not in fallback_cli.get("scheduler_launch_command", "")
+    ):
+        raise SystemExit(f"CLI fallback report should include a scheduler launch command for B02: {fallback_cli!r}")
     if fallback_cli.get("codex_model") != "gpt-5.4-mini" or "codex exec -m gpt-5.4-mini" not in fallback_cli.get("launch_command", ""):
         raise SystemExit(f"CLI fallback launch should pin the branch-control model: {fallback_cli!r}")
     assert_all_contains(
         fallback_result.stdout,
-        ["cat > ", "codex exec", "-m gpt-5.4-mini", "--output-last-message", ".codex.final.md", ".codex.log", "2>&1"],
+        [
+            "cat > ",
+            "scheduler_tick.py",
+            "--record-ready",
+            "--launch",
+            "B02",
+            "codex exec",
+            "-m gpt-5.4-mini",
+            "--output-last-message",
+            ".codex.final.md",
+            ".codex.log",
+            "2>&1",
+        ],
         "CLI fallback bounded launch command",
     )
     existing_branch_manifest = read_json(main_bundle / "job.manifest.json")
+    original_branch_manifest = json.loads(json.dumps(existing_branch_manifest))
     existing_branch_name = "goal-fixture-existing-branch-test"
     existing_worktree_path = ".worktrees/goal-fixture-existing-branch-test"
     if subprocess.run(["git", "branch", "--list", existing_branch_name], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False).stdout.strip():
@@ -3935,11 +3969,21 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         )
     finally:
         subprocess.run(["git", "branch", "-D", existing_branch_name], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        write_json(main_bundle / "job.manifest.json", original_branch_manifest)
     assert_contains(
         existing_branch_result.stdout,
         "target branch already exists and will not be reused",
         "existing stale branch worktree fixture",
     )
+    scheduler_env = os.environ.copy()
+    scheduler_env["GOAL_SKILLS_ROOT"] = (ROOT / "skills").as_posix()
+    run(["bash", "-lc", fallback_cli["scheduler_launch_command"]], env=scheduler_env)
+    main_scheduler = read_json(main_bundle / "schedulers" / "main.scheduler.json")
+    scheduler_events = main_scheduler.get("events", [])
+    if not any(isinstance(event, dict) and event.get("event") == "launch" and event.get("id") == "B02" for event in scheduler_events):
+        raise SystemExit(f"generated scheduler launch command did not record B02 launch evidence: {main_scheduler!r}")
+    if main_scheduler.get("max_observed_active", 0) < 1:
+        raise SystemExit(f"generated scheduler launch command did not update active branch accounting: {main_scheduler!r}")
 
 
 def load_script_module(name: str, relative_path: str):

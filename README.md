@@ -395,7 +395,7 @@ Branch and worker parallelism are rolling saturated pools:
 - `depends_on` is the only dependency mechanism and must reference prior ids.
 - downstream work unlocks only after dependencies finish with `pass`.
 - non-pass dependencies require `dependency_failed` scheduler evidence.
-- under-capacity, defer, blocked, finish, close, and refill events belong in schema v2 scheduler ledgers.
+- ready, launch, under-capacity, defer, blocked, finish, close, and refill events belong in schema v2 scheduler ledgers.
 
 Use scheduler helpers rather than hand-editing ledgers:
 
