@@ -3363,6 +3363,63 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         },
         {"role": "worker", "selected_ladder": ["codex-mini"]},
     )
+    missing_evidence_status = {
+        "packet_id": "B01-W01",
+        "role": "worker",
+        "status": "pass",
+        "handoff": "Worker completed the owned implementation and verification.",
+    }
+    normalization_notes = module.normalize_status_before_validation(missing_evidence_status, {"role": "worker"})
+    if normalization_notes != ["normalized missing evidence_summary from handoff"]:
+        raise SystemExit(f"worker status normalization should record evidence_summary recovery: {normalization_notes!r}")
+    module.validate_instance(
+        missing_evidence_status,
+        {
+            "type": "object",
+            "required": ["evidence_summary", "handoff"],
+            "properties": {
+                "evidence_summary": {"type": "string", "minLength": 1},
+                "handoff": {"type": "string", "minLength": 1},
+            },
+        },
+    )
+    if missing_evidence_status.get("evidence_summary") != missing_evidence_status["handoff"]:
+        raise SystemExit(f"worker status normalization should derive evidence_summary from handoff: {missing_evidence_status!r}")
+    normalization_packet = tmp_path / "normalization-packet"
+    normalization_packet.mkdir()
+    normalization_schema = normalization_packet / "status.schema.json"
+    normalization_raw = normalization_packet / "raw.txt"
+    normalization_schema.write_text(
+        json.dumps(
+            {
+                "type": "object",
+                "required": ["evidence_summary", "handoff"],
+                "properties": {
+                    "evidence_summary": {"type": "string", "minLength": 1},
+                    "handoff": {"type": "string", "minLength": 1},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    normalization_raw.write_text(
+        "BEGIN_WORKER_STATUS_JSON\n"
+        + json.dumps({"handoff": "Worker completed owned implementation and tests."})
+        + "\nEND_WORKER_STATUS_JSON\n",
+        encoding="utf-8",
+    )
+    normalization_parse_report: dict[str, object] = {}
+    if not module.extract_status_json(
+        normalization_packet,
+        normalization_schema,
+        normalization_raw,
+        {"role": "worker", "output_name": "status.json"},
+        parse_report=normalization_parse_report,
+    ):
+        raise SystemExit(f"worker status extraction should recover evidence_summary from handoff: {normalization_parse_report!r}")
+    normalized_status = read_json(normalization_packet / "status.json")
+    if normalized_status.get("evidence_summary") != normalized_status.get("handoff"):
+        raise SystemExit(f"worker status extraction should write normalized evidence_summary: {normalized_status!r}")
     try:
         module.validate_packet_post_constraints(
             {

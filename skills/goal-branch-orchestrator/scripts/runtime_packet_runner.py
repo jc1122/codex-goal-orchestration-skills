@@ -2163,6 +2163,19 @@ def validate_packet_post_constraints(data: dict[str, Any], config: dict[str, Any
         raise ValueError("passing worker status commands_run must include git diff --check HEAD")
 
 
+def normalize_status_before_validation(data: Any, config: dict[str, Any]) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    if config.get("role") != "worker":
+        return []
+    evidence = data.get("evidence_summary")
+    handoff = data.get("handoff")
+    if (not isinstance(evidence, str) or not evidence.strip()) and isinstance(handoff, str) and handoff.strip():
+        data["evidence_summary"] = handoff.strip()
+        return ["normalized missing evidence_summary from handoff"]
+    return []
+
+
 def output_matches_schema(schema_path: Path, output_path: Path, config: dict[str, Any]) -> bool:
     if not output_path.exists():
         return False
@@ -2172,8 +2185,11 @@ def output_matches_schema(schema_path: Path, output_path: Path, config: dict[str
         if isinstance(data, dict) and data.get("status") == "success":
             data["status"] = "pass"
             output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        normalization_messages = normalize_status_before_validation(data, config)
         validate_instance(data, schema)
         validate_packet_post_constraints(data, config)
+        if normalization_messages:
+            output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     except Exception:
         return False
     return True
@@ -2282,6 +2298,7 @@ def extract_status_json(
         try:
             if isinstance(data, dict) and data.get("status") == "success":
                 data["status"] = "pass"
+            normalization_messages = normalize_status_before_validation(data, config)
             validate_instance(data, schema)
             validate_packet_post_constraints(data, config)
         except Exception as exc:
@@ -2290,7 +2307,8 @@ def extract_status_json(
         output_path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         parse_report["failure_subclass"] = None
         parse_report["status"] = "recovered"
-        parse_report["messages"] = source_errors + source_validation_errors
+        normalization_notes = [f"{source_name}: {message}" for message in normalization_messages]
+        parse_report["messages"] = source_errors + source_validation_errors + normalization_notes
         return True
 
     for message in source_errors:

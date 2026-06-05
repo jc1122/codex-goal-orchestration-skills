@@ -12,6 +12,23 @@ from pathlib import Path
 
 
 REQUIRED_FILES = {
+    "goal-config": [
+        "SKILL.md",
+        "scripts/check_goal_config.py",
+        "scripts/check_goal_skill_availability.py",
+        "scripts/check_model_catalog.py",
+        "scripts/context_pack.py",
+        "scripts/create_goal_config.py",
+        "scripts/create_lite_advice_packet.py",
+        "scripts/extract_telemetry.py",
+        "scripts/reconcile_goal_run.py",
+        "scripts/runtime_lite_runner.py",
+        "scripts/runtime_phase_manifest.py",
+        "scripts/scan_configurables.py",
+        "scripts/scheduler_tick.py",
+        "scripts/script_only_repair_gate.py",
+        "scripts/validate_lite_advice.py",
+    ],
     "goal-preflight": [
         "SKILL.md",
         "scripts/create_goal_bundle.py",

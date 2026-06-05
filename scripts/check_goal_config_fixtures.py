@@ -19,6 +19,7 @@ SCAN = GOAL_CONFIG / "scripts" / "scan_configurables.py"
 CREATE_BUNDLE = ROOT / "skills" / "goal-preflight" / "scripts" / "create_goal_bundle.py"
 LINT_BUNDLE = ROOT / "skills" / "goal-preflight" / "scripts" / "lint_goal_bundle.py"
 CREATE_PACKET = ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "create_runtime_packet.py"
+CHECK_SKILL_AVAILABILITY = ROOT / "skills" / "_goal_shared" / "scripts" / "check_goal_skill_availability.py"
 
 
 def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -45,6 +46,26 @@ def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = Non
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise SystemExit(message)
+
+
+def run_goal_config_availability_fixture() -> None:
+    result = run(
+        [
+            sys.executable,
+            CHECK_SKILL_AVAILABILITY.as_posix(),
+            "--skills-root",
+            (ROOT / "skills").as_posix(),
+            "--require",
+            "goal-config",
+            "--json",
+        ]
+    )
+    report = json.loads(result.stdout)
+    require(report.get("status") == "pass", f"goal-config availability check should pass: {report!r}")
+    require(
+        report.get("skills", {}).get("goal-config", {}).get("status") == "pass",
+        f"goal-config should be accepted as a public skill requirement: {report!r}",
+    )
 
 
 def write_fake_codex_catalog(bin_dir: Path, models: list[str]) -> None:
@@ -529,6 +550,7 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
 
 
 def main() -> int:
+    run_goal_config_availability_fixture()
     with tempfile.TemporaryDirectory(prefix="goal-config-fixtures-") as tmp:
         tmp_path = Path(tmp)
         config_path = tmp_path / "goal.config.json"

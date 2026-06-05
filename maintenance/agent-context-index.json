@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:62bfe6ea9a4dafce025de8b9f92306f1b910b43e82343b968a195ff06381a479"
+    "source_fingerprint": "sha256:f767379646adbe033c6ec21ba3f2790c0f32a6ac73da4b0d7d055b86af96e02b"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,13 +16,13 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 8237,
-      "approx_tokens": 98203,
+      "lines": 8294,
+      "approx_tokens": 98871,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "5469:run_base_ref_default_fixture:1260l",
-        "3598:run_runtime_packet_fixtures:1240l",
-        "7487:run_branch_status_negative_fixtures:710l",
+        "5526:run_base_ref_default_fixture:1260l",
+        "3655:run_runtime_packet_fixtures:1240l",
+        "7544:run_branch_status_negative_fixtures:710l",
         "1774:run_negative_amendment_fixtures:362l"
       ]
     },
@@ -40,29 +40,29 @@
       ]
     },
     {
+      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 2831,
+      "approx_tokens": 28428,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "2400:run_packet:391l",
+        "2222:extract_status_json:102l",
+        "756:write_launcher_state:85l",
+        "988:run_with_timeout:85l"
+      ]
+    },
+    {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
       "lines": 2651,
-      "approx_tokens": 28386,
+      "approx_tokens": 28412,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "2242:main:406l",
         "982:compact_worker_context:118l",
         "1197:reviewer_packet_context:99l",
         "2141:compact_launch_config:99l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 2813,
-      "approx_tokens": 28190,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "2382:run_packet:391l",
-        "2206:extract_status_json:100l",
-        "756:write_launcher_state:85l",
-        "988:run_with_timeout:85l"
       ]
     },
     {

@@ -1889,7 +1889,7 @@ Task:
 
 {task_text}
 
-Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`. `changed_files` must contain repo-relative file paths only, without git porcelain prefixes such as `M ` or `?? `. `commands_run` and `tests` must contain exact command strings that were actually run.
+Return a worker status object matching `{schema_name}`. Allowed `status` values are exactly `pass`, `partial`, `blocked`, or `failed`. Use `pass` for successful completion; never use `success`. Include every field shown in the example status, especially non-empty `evidence_summary` and `handoff`. `changed_files` must contain repo-relative file paths only, without git porcelain prefixes such as `M ` or `?? `. `commands_run` and `tests` must contain exact command strings that were actually run.
 
 If your CLI harness does not write `{schema_name}` directly, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
