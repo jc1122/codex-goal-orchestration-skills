@@ -363,6 +363,36 @@ def validate_route_class_cost(defects: list[str], route_class: str, selected_lad
             defect(defects, path, "complex-code route_class must include a concrete cost/risk justification in selection_reason")
 
 
+def is_route_health_skipped_attempt(attempt: object) -> bool:
+    if not isinstance(attempt, dict) or attempt.get("called") is not False:
+        return False
+    route_health = attempt.get("route_health") if isinstance(attempt.get("route_health"), dict) else {}
+    status_parse = attempt.get("status_parse") if isinstance(attempt.get("status_parse"), dict) else {}
+    if route_health.get("degraded") is True:
+        return True
+    provider_error = status_parse.get("provider_error_code") or attempt.get("provider_error_code")
+    if isinstance(provider_error, str) and provider_error.strip().upper() == "ROUTE_HEALTH_DEGRADED":
+        return True
+    markers = [
+        attempt.get("failure_class"),
+        attempt.get("failure_subclass"),
+        status_parse.get("failure_class"),
+        status_parse.get("failure_subclass"),
+    ]
+    return any(isinstance(marker, str) and marker.strip().lower() == "route_degraded" for marker in markers)
+
+
+def effective_ladder_for_called_attempts(selected_ladder: list[str], telemetry_attempts: list[object]) -> list[str]:
+    skipped_aliases = {
+        attempt.get("alias")
+        for attempt in telemetry_attempts
+        if is_route_health_skipped_attempt(attempt) and isinstance(attempt.get("alias"), str)
+    }
+    if not skipped_aliases:
+        return selected_ladder
+    return [alias for alias in selected_ladder if alias not in skipped_aliases]
+
+
 def validate_worker_route_artifact(
     defects: list[str],
     route_value: object,
@@ -872,7 +902,8 @@ def validate_worker_artifacts(
             for attempt in telemetry_attempts
             if isinstance(attempt, dict) and attempt.get("called") is True and isinstance(attempt.get("alias"), str)
         ]
-        if called_aliases and selected_ladder and called_aliases != selected_ladder[: len(called_aliases)]:
+        effective_ladder = effective_ladder_for_called_attempts(selected_ladder, telemetry_attempts)
+        if called_aliases and selected_ladder and called_aliases != effective_ladder[: len(called_aliases)]:
             defect(defects, f"{item_path}.telemetry_path.attempts", "called worker attempts must be a prefix of selected_ladder")
         if artifact.get("status") == "pass" and telemetry.get("accepted_alias") not in selected_ladder:
             defect(defects, f"{item_path}.telemetry_path.accepted_alias", "must identify the accepted worker route when worker status is pass")
@@ -1812,7 +1843,8 @@ def validate_review_artifact_for_branch(
         for attempt in telemetry_attempts
         if isinstance(attempt, dict) and attempt.get("called") is True and isinstance(attempt.get("alias"), str)
     ]
-    if route_aliases and called_aliases and called_aliases != route_aliases[: len(called_aliases)]:
+    effective_ladder = effective_ladder_for_called_attempts(route_aliases, telemetry_attempts)
+    if route_aliases and called_aliases and called_aliases != effective_ladder[: len(called_aliases)]:
         defect(defects, "$.review_status.telemetry_path.attempts", "called reviewer attempts must be a prefix of route.json selected_ladder")
 
 

@@ -3671,13 +3671,59 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         raise SystemExit(f"Gemini probe fixture did not write expected token: {gemini_log}")
 
 
-def test_configured_reviewer_route_policy() -> None:
+def load_validate_branch_status_module():
     path = ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "validate_branch_status.py"
     spec = importlib.util.spec_from_file_location("preparedness_validate_branch_status", path)
     if spec is None or spec.loader is None:
         raise SystemExit(f"could not load validate_branch_status.py from {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_route_health_skipped_attempt_prefix() -> None:
+    module = load_validate_branch_status_module()
+    selected_ladder = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+    telemetry_attempts = [
+        {"alias": "worker_primary", "called": True},
+        {
+            "alias": "worker_opencode",
+            "called": False,
+            "route_health": {"degraded": True, "degraded_reason": "opencode_empty_assistant_output"},
+            "status_parse": {
+                "failure_subclass": "route_degraded",
+                "provider_error_code": "ROUTE_HEALTH_DEGRADED",
+            },
+        },
+        {"alias": "worker_fallback", "called": True},
+        {"alias": "lite_agent", "called": True},
+    ]
+    effective_ladder = module.effective_ladder_for_called_attempts(selected_ladder, telemetry_attempts)
+    expected_ladder = ["worker_primary", "worker_fallback", "lite_agent"]
+    if effective_ladder != expected_ladder:
+        raise SystemExit(f"route-health skipped aliases should not break fallback prefix validation: {effective_ladder!r}")
+    called_aliases = [attempt["alias"] for attempt in telemetry_attempts if attempt.get("called") is True]
+    if called_aliases != effective_ladder[: len(called_aliases)]:
+        raise SystemExit(f"called aliases should be a prefix after removing route-health skips: {called_aliases!r}")
+
+    ordinary_uncalled = [
+        {"alias": "worker_primary", "called": True},
+        {
+            "alias": "worker_opencode",
+            "called": False,
+            "not_executed_reason": "fallback_not_needed",
+            "status_parse": {"provider_error_code": None, "failure_subclass": None},
+        },
+        {"alias": "worker_fallback", "called": True},
+    ]
+    if module.is_route_health_skipped_attempt(ordinary_uncalled[1]):
+        raise SystemExit(f"ordinary uncalled attempts must not be treated as route-health skips: {ordinary_uncalled[1]!r}")
+    if module.effective_ladder_for_called_attempts(selected_ladder, ordinary_uncalled) != selected_ladder:
+        raise SystemExit("ordinary uncalled attempts must preserve the configured selected_ladder")
+
+
+def test_configured_reviewer_route_policy() -> None:
+    module = load_validate_branch_status_module()
     review_policy = {
         "source": "goal_config",
         "router": "goal-config-v1",
@@ -8670,6 +8716,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="goal-preparedness-fixtures-") as tmp:
         tmp_path = Path(tmp)
         test_launcher_state_classifier(tmp_path)
+        test_route_health_skipped_attempt_prefix()
         test_configured_reviewer_route_policy()
         bundle = create_goal_fixture_bundle(tmp_path)
         run_repair_gate_fixture(bundle)
