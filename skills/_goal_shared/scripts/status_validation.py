@@ -489,6 +489,7 @@ def validate_scheduler_ledger(
     blocked: dict[str, str] = {}
     blocked_reason_codes: dict[str, str] = {}
     repair_relaunch_ids: set[str] = set()
+    stale_relaunch_reason_codes = {"stale_active", "native_agent_unreachable", "timeout", "launcher_failed"}
     under_capacity: dict[str, str] = {}
     under_capacity_reason_codes: dict[str, str] = {}
     deferred_excuses: set[str] = set()
@@ -500,18 +501,23 @@ def validate_scheduler_ledger(
     if manifest_path is not None and not event_manifest_allowed:
         event_manifest_allowed = {sha256_file(manifest_path)}
 
+    def relaunch_allowed(item_id: str) -> bool:
+        if scheduler_kind == "branch-worker-pool":
+            return True
+        if scheduler_kind == "main-branch-pool":
+            return blocked_reason_codes.get(item_id) in stale_relaunch_reason_codes
+        return False
+
+    def relaunch_candidate(item_id: str) -> bool:
+        return item_id in launched and item_id in closed and finished_status.get(item_id) != "pass" and relaunch_allowed(item_id)
+
     def eligible_ids() -> list[str]:
         eligible = []
         for item_id in expected_ids:
             if item_id in active:
                 continue
             if item_id in launched:
-                if (
-                    scheduler_kind != "branch-worker-pool"
-                    or item_id not in closed
-                    or finished_status.get(item_id) == "pass"
-                    or item_id not in repair_relaunch_ids
-                ):
+                if not relaunch_candidate(item_id):
                     continue
             deps = dependencies.get(item_id, [])
             if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
@@ -528,7 +534,7 @@ def validate_scheduler_ledger(
 
     def unexcused_eligible() -> list[str]:
         excused = deferred_excuses | blocked_excuses | under_capacity_excuses
-        return [item_id for item_id in eligible_ids() if item_id not in excused]
+        return [item_id for item_id in eligible_ids() if item_id not in excused and not relaunch_candidate(item_id)]
 
     for index, raw_event in enumerate(events):
         event_path = f"{path}.events[{index}]"
@@ -630,11 +636,8 @@ def validate_scheduler_ledger(
                 eligible_values = []
             for value_index, value in enumerate(eligible_values):
                 repair_relaunch_eligible = bool(
-                    scheduler_kind == "branch-worker-pool"
-                    and isinstance(value, str)
-                    and value in launched
-                    and value in closed
-                    and finished_status.get(value) != "pass"
+                    isinstance(value, str)
+                    and relaunch_candidate(value)
                 )
                 if not isinstance(value, str) or (value not in before_eligible and not repair_relaunch_eligible):
                     defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
@@ -645,11 +648,8 @@ def validate_scheduler_ledger(
 
         if event_name == "launch":
             repair_relaunch = bool(
-                scheduler_kind == "branch-worker-pool"
-                and event_id
-                and event_id in launched
-                and event_id in closed
-                and finished_status.get(str(event_id)) != "pass"
+                event_id
+                and relaunch_candidate(str(event_id))
             )
             if event_id in launched and not repair_relaunch:
                 defect(defects, f"{event_path}.id", "duplicates launch event")

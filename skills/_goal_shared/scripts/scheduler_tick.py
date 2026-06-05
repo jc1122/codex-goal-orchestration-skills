@@ -282,7 +282,15 @@ def load_or_create_ledger(path: Path, spec: dict, manifest_path: Path, *, create
     return ledger
 
 
-def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]], capacity: int, *, allow_relaunch: bool = False) -> dict:
+def replay(
+    ledger: dict,
+    item_ids: list[str],
+    dependencies: dict[str, list[str]],
+    capacity: int,
+    *,
+    allow_relaunch: bool = False,
+    relaunch_reason_codes: set[str] | None = None,
+) -> dict:
     active: set[str] = set()
     ready: set[str] = set()
     launched: set[str] = set()
@@ -295,6 +303,7 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
     deferred_excuses: set[str] = set()
     under_capacity_excuses: set[str] = set()
     finished_status: dict[str, str] = {}
+    blocked_reason_codes: dict[str, str] = {}
     max_observed_active = 0
     known = set(item_ids)
     for index, event in enumerate(ledger.get("events", [])):
@@ -349,6 +358,9 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
         elif name == "blocked":
             blocked.add(str(event_id))
             blocked_excuses.add(str(event_id))
+            reason_code = event.get("reason_code")
+            if isinstance(reason_code, str):
+                blocked_reason_codes[str(event_id)] = reason_code
         elif name == "under_capacity":
             values = event.get("eligible_ids")
             if isinstance(values, list):
@@ -361,7 +373,11 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
             raise SystemExit(f"scheduler events[{index}].event is unsupported: {name!r}")
 
     def is_repair_relaunch(item_id: str) -> bool:
-        return allow_relaunch and item_id in launched and item_id in closed and finished_status.get(item_id) != "pass"
+        if not (allow_relaunch and item_id in launched and item_id in closed and finished_status.get(item_id) != "pass"):
+            return False
+        if relaunch_reason_codes is None:
+            return True
+        return blocked_reason_codes.get(item_id) in relaunch_reason_codes
 
     def eligible_ids() -> list[str]:
         eligible = []
@@ -369,7 +385,7 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
             if item_id in active:
                 continue
             if item_id in launched:
-                if item_id not in closed or finished_status.get(item_id) == "pass" or not allow_relaunch:
+                if item_id not in closed or finished_status.get(item_id) == "pass" or not is_repair_relaunch(item_id):
                     continue
             deps = dependencies.get(item_id, [])
             if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
@@ -381,7 +397,7 @@ def replay(ledger: dict, item_ids: list[str], dependencies: dict[str, list[str]]
     unexcused = [
         item_id
         for item_id in eligible
-        if item_id not in excused
+        if item_id not in excused or is_repair_relaunch(item_id)
     ]
     launchable = [item_id for item_id in unexcused if item_id not in launched or is_repair_relaunch(item_id)]
     return {
@@ -456,13 +472,28 @@ def apply_actions(
     item_ids = list(spec["item_ids"])
     dependencies = dict(spec["dependencies"])
     capacity = int(spec["capacity"])
-    # Allow repair relaunches in normal operation; artifact closeout handles this separately.
-    allow_relaunch = spec.get("kind") == "branch-worker-pool"
+    # Allow explicit relaunches in normal operation; artifact closeout handles this separately.
+    if spec.get("kind") == "branch-worker-pool":
+        allow_relaunch = True
+        relaunch_reason_codes = None
+    elif spec.get("kind") == "main-branch-pool":
+        allow_relaunch = True
+        relaunch_reason_codes = {"stale_active", "native_agent_unreachable", "timeout", "launcher_failed"}
+    else:
+        allow_relaunch = False
+        relaunch_reason_codes = None
     known = set(item_ids)
     appended: list[dict] = []
 
     if args.record_ready:
-        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        state = replay(
+            ledger,
+            item_ids,
+            dependencies,
+            capacity,
+            allow_relaunch=allow_relaunch,
+            relaunch_reason_codes=relaunch_reason_codes,
+        )
         already_ready = set(state["ready"])
         for item_id in state["eligible"]:
             if item_id not in already_ready:
@@ -479,7 +510,14 @@ def apply_actions(
                 )
 
     for item_id in validate_ids(args.launch, known, "--launch"):
-        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        state = replay(
+            ledger,
+            item_ids,
+            dependencies,
+            capacity,
+            allow_relaunch=allow_relaunch,
+            relaunch_reason_codes=relaunch_reason_codes,
+        )
         if item_id not in state["launchable"]:
             raise SystemExit(f"--launch {item_id} is not currently eligible")
         if state["remaining_capacity"] <= 0:
@@ -500,7 +538,14 @@ def apply_actions(
         if not args.status:
             raise SystemExit("--finish requires --status")
         for item_id in validate_ids(args.finish, known, "--finish"):
-            state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+            state = replay(
+                ledger,
+                item_ids,
+                dependencies,
+                capacity,
+                allow_relaunch=allow_relaunch,
+                relaunch_reason_codes=relaunch_reason_codes,
+            )
             if item_id not in state["active"]:
                 raise SystemExit(f"--finish {item_id} is not active")
             appended.append(
@@ -519,7 +564,14 @@ def apply_actions(
         raise SystemExit("--status is allowed only with --finish")
 
     for item_id in validate_ids(args.close, known, "--close"):
-        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        state = replay(
+            ledger,
+            item_ids,
+            dependencies,
+            capacity,
+            allow_relaunch=allow_relaunch,
+            relaunch_reason_codes=relaunch_reason_codes,
+        )
         if item_id not in state["active"]:
             raise SystemExit(f"--close {item_id} is not active")
         if item_id not in state["finished"]:
@@ -535,7 +587,14 @@ def apply_actions(
                 id=item_id,
             )
         )
-        after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        after_close = replay(
+            ledger,
+            item_ids,
+            dependencies,
+            capacity,
+            allow_relaunch=allow_relaunch,
+            relaunch_reason_codes=relaunch_reason_codes,
+        )
         if after_close["remaining_capacity"] > 0 and after_close["unexcused"]:
             appended.append(
                 append_event(
@@ -550,7 +609,14 @@ def apply_actions(
             )
 
     for item_id in validate_ids(args.defer, known, "--defer"):
-        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        state = replay(
+            ledger,
+            item_ids,
+            dependencies,
+            capacity,
+            allow_relaunch=allow_relaunch,
+            relaunch_reason_codes=relaunch_reason_codes,
+        )
         if item_id not in state["eligible"]:
             raise SystemExit(f"--defer {item_id} is not currently eligible")
         reason_code, reason = require_reason(args, "defer")
@@ -585,7 +651,14 @@ def apply_actions(
         )
 
     if args.under_capacity:
-        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        state = replay(
+            ledger,
+            item_ids,
+            dependencies,
+            capacity,
+            allow_relaunch=allow_relaunch,
+            relaunch_reason_codes=relaunch_reason_codes,
+        )
         if not state["unexcused"]:
             raise SystemExit("--under-capacity requires at least one unexcused eligible id")
         reason_code, reason = require_reason(args, "under_capacity")
@@ -603,7 +676,14 @@ def apply_actions(
             )
         )
 
-    return appended, replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+    return appended, replay(
+        ledger,
+        item_ids,
+        dependencies,
+        capacity,
+        allow_relaunch=allow_relaunch,
+        relaunch_reason_codes=relaunch_reason_codes,
+    )
 
 
 def artifact_statuses(manifest_path: Path, manifest: dict, scope: str, branch_id: str | None) -> dict[str, str]:

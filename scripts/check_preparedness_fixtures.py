@@ -2760,6 +2760,22 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(10, "close", id="B02"),
         ],
     }
+    stale_active_relaunch = {
+        **base,
+        "capacity": 1,
+        "item_ids": ["B01"],
+        "events": [
+            scheduler_event(1, "ready", id="B01"),
+            scheduler_event(2, "launch", id="B01"),
+            scheduler_event(3, "blocked", id="B01", reason_code="stale_active", reason="Native agent state was unreachable after watchdog limit."),
+            scheduler_event(4, "finish", id="B01", status="blocked"),
+            scheduler_event(5, "close", id="B01"),
+            scheduler_event(6, "refill", eligible_ids=["B01"]),
+            scheduler_event(7, "launch", id="B01"),
+            scheduler_event(8, "finish", id="B01", status="pass"),
+            scheduler_event(9, "close", id="B01"),
+        ],
+    }
     partial_subset = {
         **base,
         "item_ids": ["B01", "B02", "B03"],
@@ -2789,6 +2805,7 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         ("dependency-failed-blocking", dependency_failed, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, True, False),
         ("dependency-failed-wrong-reason", dependency_failed_wrong_reason, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, False, False),
         ("stale-active-closeout-refill", stale_active_closeout, ["B01", "B02"], {"B01": [], "B02": []}, 1, True, True),
+        ("stale-active-main-relaunch", stale_active_relaunch, ["B01"], {"B01": []}, 1, True, True),
         ("partial-subset-structured-closeout", partial_subset, main_ids, main_deps, 2, True, False),
     ]
     for label, ledger, expected_ids, dependencies, capacity, expect_pass, require_all_launched in scheduler_cases:
@@ -2925,6 +2942,44 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
         deterministic_ledgers.append(json.dumps(deterministic_ledger, indent=2, sort_keys=True))
     if deterministic_ledgers[0] != deterministic_ledgers[1]:
         raise SystemExit("scheduler_tick without --timestamp must produce deterministic ledger content")
+    stale_relaunch_dir = tmp_path / "scheduler-tick-main-stale-relaunch"
+    stale_relaunch_manifest = stale_relaunch_dir / "job.manifest.json"
+    write_json(
+        stale_relaunch_manifest,
+        {
+            "max_active_branch_agents": 1,
+            "parallelization": {"scheduler_path": "schedulers/main.scheduler.json"},
+            "branches": [{"id": "B01", "depends_on": []}],
+        },
+    )
+    stale_relaunch_common = [
+        "python3",
+        "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
+        "--manifest",
+        stale_relaunch_manifest.as_posix(),
+        "--scope",
+        "main",
+        "--runtime-ref",
+        "scheduler-tick-stale-relaunch-fixture",
+    ]
+    run([*stale_relaunch_common, "--init", "--record-ready", "--launch", "B01"])
+    run(
+        [
+            *stale_relaunch_common,
+            "--blocked",
+            "B01",
+            "--reason-code",
+            "stale_active",
+            "--reason",
+            "Native agent state was unreachable after watchdog limit.",
+        ]
+    )
+    run([*stale_relaunch_common, "--finish", "B01", "--status", "blocked", "--close", "B01"])
+    stale_relaunch_result = json.loads(
+        run([*stale_relaunch_common, "--launch", "B01", "--finish", "B01", "--status", "pass", "--close", "B01", "--json"]).stdout
+    )
+    if stale_relaunch_result["state"]["finished_status"].get("B01") != "pass":
+        raise SystemExit(f"scheduler_tick should allow relaunch after stale-active closeout: {stale_relaunch_result!r}")
     auto_dir = tmp_path / "scheduler-tick-artifacts"
     auto_manifest = auto_dir / "job.manifest.json"
     write_json(
@@ -9164,6 +9219,94 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     if not render_commands or "audit/prompt-audit.json" not in render_commands[0] or "prompt-audit-phase.json" in render_commands[0]:
         raise SystemExit(f"pre-dispatch branch render command should use canonical prompt-audit.json: {render_commands!r}")
     run(shlex.split(render_commands[0]))
+    stale_active_resume_bundle = tmp_path / "reconcile-stale-active-resume"
+    shutil.copytree(pre_dispatch_bundle, stale_active_resume_bundle)
+    write_prompt_audit_fixture(stale_active_resume_bundle)
+    stale_active_manifest = read_json(stale_active_resume_bundle / "job.manifest.json")
+    stale_active_branch_ids = [
+        str(branch.get("id"))
+        for branch in stale_active_manifest.get("branches", [])
+        if isinstance(branch, dict) and isinstance(branch.get("id"), str)
+    ]
+    if not stale_active_branch_ids:
+        raise SystemExit("stale-active resume fixture requires at least one branch id")
+    stale_active_branch_id = stale_active_branch_ids[0]
+    write_json(
+        stale_active_resume_bundle / "schedulers" / "main.scheduler.json",
+        {
+            "schema_version": 2,
+            "scheduler_kind": "main-branch-pool",
+            "scheduler_path": "schedulers/main.scheduler.json",
+            "manifest_sha256": sha256_file(stale_active_resume_bundle / "job.manifest.json"),
+            "capacity": int(stale_active_manifest.get("max_active_branch_agents"))
+            if isinstance(stale_active_manifest.get("max_active_branch_agents"), int)
+            else 1,
+            "item_ids": stale_active_branch_ids,
+            "events": [
+                scheduler_event(1, "ready", id=stale_active_branch_id),
+                scheduler_event(2, "launch", id=stale_active_branch_id),
+            ],
+        },
+    )
+    stale_active_report = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/reconcile_goal_run.py",
+                "--manifest",
+                (stale_active_resume_bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--write",
+                "--json",
+            ]
+        ).stdout
+    )
+    if stale_active_report.get("execution_phase") != "runtime_or_finalization":
+        raise SystemExit(f"stale-active scheduler evidence should force runtime resume phase: {stale_active_report!r}")
+    if not any(item.get("code") == "stale_active_branch_launch" for item in stale_active_report.get("stale_or_unreconciled", [])):
+        raise SystemExit(f"stale-active resume should report stale active branch launch: {stale_active_report!r}")
+    stale_active_commands = [
+        command
+        for command in stale_active_report.get("next_commands", [])
+        if isinstance(command, str)
+    ]
+    expected_closeout_fragments = [
+        f"scheduler_tick.py --manifest {(stale_active_resume_bundle / 'job.manifest.json').as_posix()} --scope main --runtime-ref goal-main-orchestrator --blocked {stale_active_branch_id} --reason-code stale_active",
+        f"scheduler_tick.py --manifest {(stale_active_resume_bundle / 'job.manifest.json').as_posix()} --scope main --runtime-ref goal-main-orchestrator --finish {stale_active_branch_id} --status blocked",
+        f"scheduler_tick.py --manifest {(stale_active_resume_bundle / 'job.manifest.json').as_posix()} --scope main --runtime-ref goal-main-orchestrator --close {stale_active_branch_id}",
+    ]
+    if len(stale_active_commands) < 3 or any(fragment not in stale_active_commands[index] for index, fragment in enumerate(expected_closeout_fragments)):
+        raise SystemExit(f"stale-active resume should put scheduler closeout commands first: {stale_active_commands!r}")
+    stale_active_render_commands = [
+        command
+        for command in stale_active_commands
+        if "render_branch_worktree_commands.py" in command and f"--branch {stale_active_branch_id}" in command
+    ]
+    if not stale_active_render_commands:
+        raise SystemExit(f"stale-active resume should preserve a relaunch render command: {stale_active_commands!r}")
+    for command in stale_active_commands[:3]:
+        run(shlex.split(command))
+    run(shlex.split(stale_active_render_commands[0]))
+    stale_active_relaunch_state = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
+                "--manifest",
+                (stale_active_resume_bundle / "job.manifest.json").as_posix(),
+                "--scope",
+                "main",
+                "--runtime-ref",
+                "stale-active-resume-fixture",
+                "--launch",
+                stale_active_branch_id,
+                "--json",
+            ]
+        ).stdout
+    )
+    if stale_active_branch_id not in stale_active_relaunch_state.get("state", {}).get("active", []):
+        raise SystemExit(f"stale-active closeout should make the branch launchable again: {stale_active_relaunch_state!r}")
     blocked_codes = {
         item.get("code")
         for item in pre_dispatch_report.get("blocked_work_remaining", [])

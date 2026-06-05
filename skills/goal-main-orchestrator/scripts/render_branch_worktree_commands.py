@@ -328,10 +328,10 @@ def scheduler_state_from_ledger(
     manifest_path: Path,
     ordered_branch_ids: list[str],
     max_active: int,
-) -> tuple[set[str], set[str], set[str]]:
+) -> tuple[set[str], set[str], set[str], set[str]]:
     scheduler_path = manifest_path.parent / CONTRACT.MAIN_SCHEDULER_PATH
     if not scheduler_path.exists():
-        return set(), set(), set()
+        return set(), set(), set(), set()
     ledger = load_json(scheduler_path)
     if ledger.get("schema_version") != 2:
         raise SystemExit(f"main scheduler ledger schema_version must be 2: {scheduler_path}")
@@ -352,6 +352,7 @@ def scheduler_state_from_ledger(
     active: set[str] = set()
     finished_status: dict[str, str] = {}
     terminal_status: dict[str, str] = {}
+    blocked_reason_codes: dict[str, str] = {}
     for index, event in enumerate(events):
         if not isinstance(event, dict):
             raise SystemExit(f"main scheduler events[{index}] must be an object: {scheduler_path}")
@@ -386,6 +387,10 @@ def scheduler_state_from_ledger(
                 raise SystemExit(f"main scheduler events[{index}] closes unfinished branch {event_id}")
             active.discard(str(event_id))
             terminal_status[str(event_id)] = finished_status[str(event_id)]
+        elif name == "blocked":
+            reason_code = event.get("reason_code")
+            if isinstance(reason_code, str):
+                blocked_reason_codes[str(event_id)] = reason_code
         elif name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
             continue
         else:
@@ -393,7 +398,12 @@ def scheduler_state_from_ledger(
 
     passed = {branch_id for branch_id, status in terminal_status.items() if status == "pass"}
     non_pass = {branch_id for branch_id, status in terminal_status.items() if status != "pass"}
-    return active, passed, non_pass
+    relaunchable = {
+        branch_id
+        for branch_id in non_pass
+        if blocked_reason_codes.get(branch_id) in {"stale_active", "native_agent_unreachable", "timeout", "launcher_failed"}
+    }
+    return active, passed, non_pass, relaunchable
 
 
 def require_unique_manifest_values(branches: list[dict]) -> None:
@@ -448,6 +458,14 @@ def worktree_command(branch: dict, repo_root: Path, base_ref: str) -> str:
     name = str(branch["branch_name"])
     worktree_rel = require_relative_path(str(branch["worktree_path"]), "worktree_path")
     worktree_path = resolve(repo_root, worktree_rel)
+    if worktree_path.exists():
+        if not git_ok(worktree_path, "rev-parse", "--is-inside-work-tree"):
+            raise SystemExit(f"branch worktree_path exists but is not a git worktree: {worktree_path}")
+        return f"git -C {shell_quote(worktree_path.as_posix())} status --short --branch"
+    if branch_exists(repo_root, name):
+        if branch_checked_out_in_worktree(repo_root, name):
+            raise SystemExit(f"branch {name} is already checked out in another worktree")
+        return f"git worktree add {shell_quote(worktree_path.as_posix())} {shell_quote(name)}"
     return f"git worktree add -b {shell_quote(name)} {shell_quote(worktree_path.as_posix())} {shell_quote(base_ref)}"
 
 
@@ -777,7 +795,11 @@ def main() -> int:
         if value not in known_ids:
             raise SystemExit(f"--active-branch references unknown branch id: {value}")
         active.add(value)
-    scheduler_active, scheduler_passed, scheduler_non_pass = scheduler_state_from_ledger(manifest_path, ordered_branch_ids, max_active)
+    scheduler_active, scheduler_passed, scheduler_non_pass, scheduler_relaunchable = scheduler_state_from_ledger(
+        manifest_path,
+        ordered_branch_ids,
+        max_active,
+    )
     if completed & scheduler_non_pass:
         raise SystemExit("--completed-branch includes branch ids whose scheduler status is non-pass: " + ", ".join(sorted(completed & scheduler_non_pass)))
     if completed & scheduler_active:
@@ -809,7 +831,7 @@ def main() -> int:
         ready = []
         for branch in manifest_branches:
             bid = branch.get("id")
-            if bid in completed or bid in active or bid in scheduler_non_pass:
+            if bid in completed or bid in active or (bid in scheduler_non_pass and bid not in scheduler_relaunchable):
                 continue
             deps = branch_dependencies.get(bid, [])
             if all(dep in completed for dep in deps):
@@ -834,7 +856,7 @@ def main() -> int:
                 raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
             if bid in active:
                 raise SystemExit(f"branch {bid} is already scheduler-active")
-            if bid in scheduler_non_pass:
+            if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
                 raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
             selected_ids.add(bid)
     elif waves and not args.wave:
@@ -854,7 +876,7 @@ def main() -> int:
                     raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
                 if bid in active:
                     raise SystemExit(f"branch {bid} is already scheduler-active")
-                if bid in scheduler_non_pass:
+                if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
                     raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
     if selected_ids is not None and len(active) + len(selected_ids) > max_active:
         raise SystemExit("selected branches plus active branches would exceed max_active_branch_agents")

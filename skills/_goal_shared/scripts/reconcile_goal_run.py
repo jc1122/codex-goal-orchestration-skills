@@ -880,6 +880,17 @@ def pre_branch_dispatch_phase(bundle_dir: Path, branch_reports: list[dict[str, A
     return True
 
 
+def scheduler_has_events(scheduler: dict[str, Any]) -> bool:
+    events = scheduler.get("events")
+    if isinstance(events, list) and bool(events):
+        return True
+    for key in ("active", "launched", "finished", "closed_or_deferred", "blocked", "deferred"):
+        values = scheduler.get(key)
+        if isinstance(values, list) and values:
+            return True
+    return False
+
+
 def suppress_pre_dispatch_issue(item: dict[str, Any]) -> bool:
     return str(item.get("code")) in {
         "missing_main_status",
@@ -899,6 +910,40 @@ def compact_issue_ref(item: dict[str, Any]) -> dict[str, Any]:
         "path": item.get("path"),
         "message": item.get("message"),
     }
+
+
+def scheduler_recovery_closeout_commands(manifest_path: Path, branch_id: str, *, reason_code: str, reason: str) -> list[str]:
+    scheduler_tick = SKILLS_ROOT / "goal-main-orchestrator" / "scripts" / "scheduler_tick.py"
+    base = (
+        f"python3 {scheduler_tick} --manifest {manifest_path.as_posix()} --scope main "
+        "--runtime-ref goal-main-orchestrator"
+    )
+    quoted_reason = CONTRACT.shell_quote(reason)
+    return [
+        f"{base} --blocked {branch_id} --reason-code {reason_code} --reason {quoted_reason}",
+        f"{base} --finish {branch_id} --status blocked",
+        f"{base} --close {branch_id}",
+    ]
+
+
+def stale_active_branch_ids(main_scheduler: dict[str, Any], branch_reports: list[dict[str, Any]]) -> list[str]:
+    branch_by_id = {
+        str(branch.get("branch_id")): branch
+        for branch in branch_reports
+        if isinstance(branch.get("branch_id"), str)
+    }
+    result: list[str] = []
+    for branch_id in main_scheduler.get("active", []):
+        if not isinstance(branch_id, str):
+            continue
+        branch = branch_by_id.get(branch_id)
+        if not isinstance(branch, dict):
+            continue
+        status_path = branch.get("status_path") if isinstance(branch.get("status_path"), dict) else {}
+        if status_path.get("exists") is True:
+            continue
+        result.append(branch_id)
+    return result
 
 
 def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, Any]:
@@ -992,6 +1037,8 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         manifest_path=manifest_path,
         require_all_launched=main_status_data is not None and main_status_data.get("status") == "pass",
     )
+    if pre_dispatch and scheduler_has_events(main_scheduler):
+        pre_dispatch = False
     if main_scheduler_defects and not pre_dispatch:
         add_issue(
             stale_or_unreconciled,
@@ -1001,6 +1048,32 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             owner="main",
             message=f"main scheduler has {len(main_scheduler_defects)} validation defect(s)",
         )
+
+    recovery_commands: list[str] = []
+    if not pre_dispatch:
+        for branch_id in stale_active_branch_ids(main_scheduler, branch_reports):
+            add_issue(
+                stale_or_unreconciled,
+                code="stale_active_branch_launch",
+                path=main_scheduler_rel,
+                kind="scheduler",
+                owner=branch_id,
+                message=(
+                    f"branch {branch_id} is scheduler-active but no terminal branch status exists; "
+                    "close stale launch evidence before relaunching"
+                ),
+            )
+            recovery_commands.extend(
+                scheduler_recovery_closeout_commands(
+                    manifest_path,
+                    branch_id,
+                    reason_code="stale_active",
+                    reason=(
+                        f"{branch_id} branch launch was still scheduler-active after resume, "
+                        "but no terminal branch artifact or live branch process was available."
+                    ),
+                )
+            )
 
     if not main_status_path.exists():
         next_commands.append(
@@ -1183,7 +1256,7 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             "branches": branch_reuse,
             "interpretation": "artifact reuse safety only; inspect goal_complete and blocked_work_remaining for completion state",
         },
-        "next_commands": sorted(dict.fromkeys(next_commands)),
+        "next_commands": list(dict.fromkeys([*recovery_commands, *next_commands])),
         "final_state_validation": {
             "status": final_state_status,
             "defects": [] if pre_dispatch else validation_defects,
