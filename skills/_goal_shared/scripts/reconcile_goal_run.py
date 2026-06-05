@@ -612,6 +612,7 @@ def branch_summary(
             manifest=manifest,
             manifest_path=manifest_path,
             status_path=status_path,
+            allow_archived_manifest_hashes=True,
         )
         if validation_defects:
             add_issue(
@@ -680,7 +681,7 @@ def branch_summary(
     if status_path.exists():
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'validate_branch_status.py'} "
-            f"--manifest {manifest_path.as_posix()} --status {status_path.as_posix()}"
+            f"--manifest {manifest_path.as_posix()} --status {status_path.as_posix()} --allow-archived-manifest-hashes"
         )
     elif branch_id and not dependency_failed_terminal:
         canonical_audit_path = bundle_dir / "audit" / "prompt-audit.json"

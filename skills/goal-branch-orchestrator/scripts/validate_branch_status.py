@@ -1295,6 +1295,7 @@ def validate_worktree_freshness_artifact(
     manifest_path: Path,
     branch_id: str,
     branch_status: dict,
+    require_current_snapshot: bool,
 ) -> None:
     rel_path = worktree_freshness_path(branch_id)
     semantic_hashes = gate.get("semantic_input_hashes") if isinstance(gate.get("semantic_input_hashes"), dict) else {}
@@ -1308,6 +1309,34 @@ def validate_worktree_freshness_artifact(
     manifest_root = require_object(defects, manifest, "manifest")
     base_ref = require_string(defects, manifest_root.get("base_ref"), "manifest.base_ref")
     worktree_value = require_string(defects, branch_status.get("worktree"), "$.worktree")
+    expected_static = {
+        "schema_version": 1,
+        "branch_id": branch_id,
+        "worktree": worktree_value,
+        "base_ref": base_ref,
+    }
+    for key, expected_value in expected_static.items():
+        if artifact.get(key) != expected_value:
+            defect(defects, f"{path}.{key}", "must match the archived branch worktree freshness snapshot identity")
+    require_string(defects, artifact.get("worktree_head"), f"{path}.worktree_head")
+    require_string(defects, artifact.get("merge_base"), f"{path}.merge_base")
+    digest = artifact.get("diff_name_status_sha256")
+    if not isinstance(digest, str) or not STATUS_VALIDATION.SHA256_RE.fullmatch(digest):
+        defect(defects, f"{path}.diff_name_status_sha256", "must be sha256:<64 lowercase hex chars>")
+    for key in ["base_range_changed_files", "current_changed_files"]:
+        validate_path_list(defects, artifact.get(key), f"{path}.{key}")
+    current_hashes = require_object(defects, artifact.get("current_file_hashes"), f"{path}.current_file_hashes")
+    for rel_path, digest_value in current_hashes.items():
+        if not isinstance(rel_path, str) or not is_repo_relative_path(rel_path):
+            defect(defects, f"{path}.current_file_hashes", "keys must be repo-relative paths without traversal")
+        if not isinstance(digest_value, str) or (
+            digest_value not in {"missing", "non-file", "outside-worktree"}
+            and not digest_value.startswith("symlink:")
+            and not STATUS_VALIDATION.SHA256_RE.fullmatch(digest_value)
+        ):
+            defect(defects, f"{path}.current_file_hashes.{rel_path}", "must be a sha256 digest or a supported file-state marker")
+    if not require_current_snapshot:
+        return
     if not base_ref or not worktree_value:
         return
     expected = expected_worktree_freshness(
@@ -1705,6 +1734,7 @@ def validate_review_artifact_for_branch(
     manifest: object,
     manifest_path: Path,
     allow_archived_manifest_hashes: bool = False,
+    require_current_worktree_freshness: bool = True,
 ) -> None:
     review_path = branch_entry.get("review_path")
     if not isinstance(review_path, str) or not review_path.strip():
@@ -1749,6 +1779,7 @@ def validate_review_artifact_for_branch(
             manifest_path=manifest_path,
             branch_id=branch_id,
             branch_status=branch_status_root,
+            require_current_snapshot=require_current_worktree_freshness,
         )
         if isinstance(gate.get("semantic_input_hashes"), dict):
             expected_semantic_hashes = {
@@ -1912,6 +1943,7 @@ def validate_branch_status(
     manifest_path: Path,
     status_path: Path,
     allow_archived_manifest_hashes: bool = False,
+    require_current_worktree_freshness: bool | None = None,
 ) -> list[str]:
     defects: list[str] = []
     root = require_object(defects, data, "$")
@@ -2021,6 +2053,8 @@ def validate_branch_status(
     if status == "pass" and review_status != "mergeable":
         defect(defects, "$.review_status", "must be mergeable when branch status is pass")
     if branch_entry:
+        if require_current_worktree_freshness is None:
+            require_current_worktree_freshness = worktree is not None and not allow_archived_manifest_hashes
         validate_review_artifact_for_branch(
             defects,
             branch_entry,
@@ -2030,6 +2064,7 @@ def validate_branch_status(
             manifest=manifest,
             manifest_path=manifest_path,
             allow_archived_manifest_hashes=allow_archived_manifest_hashes,
+            require_current_worktree_freshness=require_current_worktree_freshness,
         )
         if root_branch_id:
             validate_review_waiver_artifact(

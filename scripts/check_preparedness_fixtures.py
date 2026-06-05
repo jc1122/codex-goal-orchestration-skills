@@ -3782,6 +3782,125 @@ def test_route_health_skipped_attempt_prefix() -> None:
         raise SystemExit("ordinary uncalled attempts must preserve the configured selected_ladder")
 
 
+def test_archived_worktree_freshness_validation(tmp_path: Path) -> None:
+    module = load_validate_branch_status_module()
+    repo = tmp_path / "archived-freshness-repo"
+    branch_worktree = tmp_path / "archived-freshness-branch"
+    bundle = tmp_path / "archived-freshness-bundle"
+    (bundle / "branches").mkdir(parents=True)
+    run(["git", "init", "-b", "main", repo.as_posix()])
+    run(["git", "-C", repo.as_posix(), "config", "user.email", "fixture@example.com"])
+    run(["git", "-C", repo.as_posix(), "config", "user.name", "Fixture"])
+    (repo / "README.md").write_text("base\n", encoding="utf-8")
+    run(["git", "-C", repo.as_posix(), "add", "README.md"])
+    run(["git", "-C", repo.as_posix(), "commit", "-m", "base"])
+    run(["git", "-C", repo.as_posix(), "branch", "integration", "main"])
+    run(["git", "-C", repo.as_posix(), "worktree", "add", "-b", "feature", branch_worktree.as_posix(), "integration"])
+    (branch_worktree / "README.md").write_text("feature\n", encoding="utf-8")
+    run(["git", "-C", branch_worktree.as_posix(), "commit", "-am", "feature"])
+
+    manifest = {"base_ref": "integration"}
+    manifest_path = bundle / "job.manifest.json"
+    write_json(manifest_path, manifest)
+    branch_status = {"worktree": branch_worktree.as_posix(), "changed_files": ["README.md"]}
+    snapshot_defects: list[str] = []
+    snapshot = module.expected_worktree_freshness(
+        snapshot_defects,
+        worktree=branch_worktree,
+        base_ref="integration",
+        branch_id="B01",
+        branch_status=branch_status,
+        path="$.freshness",
+    )
+    if snapshot_defects:
+        raise SystemExit(f"freshness fixture could not capture initial snapshot: {snapshot_defects!r}")
+    freshness_path = bundle / "branches" / "B01.worktree_freshness.json"
+    write_json(freshness_path, snapshot)
+    gate = {
+        "semantic_input_hashes": {
+            "branches/B01.worktree_freshness.json": sha256_file(freshness_path),
+        }
+    }
+
+    archived_defects: list[str] = []
+    module.validate_worktree_freshness_artifact(
+        archived_defects,
+        gate,
+        "$.freshness",
+        manifest=manifest,
+        manifest_path=manifest_path,
+        branch_id="B01",
+        branch_status=branch_status,
+        require_current_snapshot=False,
+    )
+    if archived_defects:
+        raise SystemExit(f"archived freshness validation should accept the recorded snapshot: {archived_defects!r}")
+
+    run(["git", "-C", repo.as_posix(), "branch", "-f", "integration", "feature"])
+    module.clear_git_stdout_cache()
+    live_defects: list[str] = []
+    module.validate_worktree_freshness_artifact(
+        live_defects,
+        gate,
+        "$.freshness",
+        manifest=manifest,
+        manifest_path=manifest_path,
+        branch_id="B01",
+        branch_status=branch_status,
+        require_current_snapshot=True,
+    )
+    if not any("current branch worktree freshness snapshot" in item for item in live_defects):
+        raise SystemExit(f"live freshness validation should reject a moved base ref: {live_defects!r}")
+    archived_after_merge: list[str] = []
+    module.validate_worktree_freshness_artifact(
+        archived_after_merge,
+        gate,
+        "$.freshness",
+        manifest=manifest,
+        manifest_path=manifest_path,
+        branch_id="B01",
+        branch_status=branch_status,
+        require_current_snapshot=False,
+    )
+    if archived_after_merge:
+        raise SystemExit(f"archived freshness validation should survive base-ref movement: {archived_after_merge!r}")
+
+
+def test_read_only_packet_tmpdir(tmp_path: Path) -> None:
+    module = load_script_module(
+        "preparedness_runtime_packet_runner_tmpdir",
+        "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+    )
+    packet_dir = tmp_path / "read-only-reviewer-tmpdir"
+    packet_dir.mkdir()
+    stdout_path = packet_dir / "events-reviewer.jsonl"
+    execution = module.run_with_timeout(
+        command=[
+            "python3",
+            "-c",
+            (
+                "import pathlib, tempfile; "
+                "tmp = pathlib.Path(tempfile.gettempdir()); "
+                "(tmp / 'fixture-write-probe').write_text('ok', encoding='utf-8'); "
+                "print(tmp.as_posix())"
+            ),
+        ],
+        timeout_seconds=20,
+        kill_after_seconds=5,
+        role="reviewer",
+        cwd=ROOT.as_posix(),
+        stdin_data=None,
+        stdout_path=stdout_path,
+    )
+    if execution.get("returncode") != 0:
+        raise SystemExit(f"read-only reviewer tempdir fixture should run successfully: {execution!r}")
+    tempdir = stdout_path.read_text(encoding="utf-8").strip()
+    if not tempdir:
+        raise SystemExit("read-only reviewer tempdir fixture did not print tempfile.gettempdir()")
+    if Path("/dev/shm").is_dir() and os.access("/dev/shm", os.W_OK | os.X_OK) and not tempdir.startswith("/dev/shm/"):
+        raise SystemExit(f"read-only reviewer tempdir should prefer /dev/shm when available: {tempdir!r}")
+
+
 def test_configured_reviewer_route_policy() -> None:
     module = load_validate_branch_status_module()
     review_policy = {
@@ -8777,6 +8896,8 @@ def main() -> int:
         tmp_path = Path(tmp)
         test_launcher_state_classifier(tmp_path)
         test_route_health_skipped_attempt_prefix()
+        test_archived_worktree_freshness_validation(tmp_path)
+        test_read_only_packet_tmpdir(tmp_path)
         test_configured_reviewer_route_policy()
         bundle = create_goal_fixture_bundle(tmp_path)
         run_repair_gate_fixture(bundle)

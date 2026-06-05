@@ -211,7 +211,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "validate_collect",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json --allow-archived-manifest-hashes",
                 "agent_does": "accept only validated terminal branch artifacts",
             },
             {
@@ -294,7 +294,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "assemble_validate",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/assemble_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --worktree /abs/branch-worktree --allow-pass --replace && python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/assemble_branch_status.py --manifest /abs/bundle/job.manifest.json --branch-id Bxx --worktree /abs/branch-worktree --allow-pass --replace && python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/validate_branch_status.py --manifest /abs/bundle/job.manifest.json --status /abs/bundle/branches/Bxx.status.json --branch-id Bxx --worktree /abs/branch-worktree",
                 "pass": "validated branch status",
             },
         ],

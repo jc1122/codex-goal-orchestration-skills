@@ -1110,6 +1110,46 @@ def event_label(attempt: dict[str, Any], fallback: str) -> str:
     return fallback
 
 
+def read_only_attempt(command: list[str], role: str) -> bool:
+    if role in {"reviewer", "research-worker"}:
+        return True
+    for index, item in enumerate(command):
+        if item == "-s" and index + 1 < len(command) and command[index + 1] == "read-only":
+            return True
+        if item.startswith("--sandbox=") and item.split("=", 1)[1] == "read-only":
+            return True
+    return False
+
+
+def _writable_dir(path: Path) -> bool:
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        probe = path / ".codex-goal-write-probe"
+        probe.write_text("ok\n", encoding="utf-8")
+        probe.unlink()
+    except Exception:
+        return False
+    return True
+
+
+def runtime_env_roots(packet_dir: Path, *, command: list[str], role: str) -> tuple[Path, Path, Path | None]:
+    packet_cache = packet_dir / ".runtime-cache"
+    packet_tmp = packet_cache / "tmp"
+    packet_xdg_cache = packet_cache / "xdg-cache"
+    if read_only_attempt(command, role):
+        shm = Path("/dev/shm")
+        if shm.is_dir() and os.access(shm, os.W_OK | os.X_OK):
+            digest = hashlib.sha256(packet_dir.as_posix().encode("utf-8")).hexdigest()[:16]
+            shm_root = shm / f"codex-goal-{digest}"
+            shm_tmp = shm_root / "tmp"
+            shm_xdg_cache = shm_root / "xdg-cache"
+            if _writable_dir(shm_tmp) and _writable_dir(shm_xdg_cache):
+                return shm_tmp, shm_xdg_cache, shm_root
+    packet_tmp.mkdir(parents=True, exist_ok=True)
+    packet_xdg_cache.mkdir(parents=True, exist_ok=True)
+    return packet_tmp, packet_xdg_cache, None
+
+
 def run_with_timeout(
     *,
     command: list[str],
@@ -1135,11 +1175,7 @@ def run_with_timeout(
             "started_at": started_at,
             "completed_at": started_at,
         }
-    cache_root = stdout_path.parent / ".runtime-cache"
-    tmp_root = cache_root / "tmp"
-    xdg_cache = cache_root / "xdg-cache"
-    tmp_root.mkdir(parents=True, exist_ok=True)
-    xdg_cache.mkdir(parents=True, exist_ok=True)
+    tmp_root, xdg_cache, external_cache_root = runtime_env_roots(stdout_path.parent, command=command, role=role)
     env = os.environ.copy()
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     env["TEMP"] = tmp_root.as_posix()
@@ -1174,6 +1210,8 @@ def run_with_timeout(
     finally:
         elapsed_ms = int(round((time.perf_counter() - start) * 1000))
         completed_at = datetime.now(timezone.utc).isoformat()
+        if external_cache_root is not None:
+            shutil.rmtree(external_cache_root, ignore_errors=True)
     stdout_data = stdout_data or b""
     stderr_data = stderr_data or b""
     stdout_path.write_bytes(stdout_data)
