@@ -1,6 +1,6 @@
 ---
 name: goal-branch-orchestrator
-version: 0.2.102
+version: 0.2.103
 description: Runtime-only branch orchestrator for an audited branch prompt and existing branch worktree. Use when goal-main-orchestrator has passed prompt audit, created a branch integration worktree, and launched a branch session that must run skill/CLI bootstrap, optionally use CLI-only Lite advisors for packet planning/context packing/completed-worker summaries/blocked triage, create path-safe worker/research-worker/reviewer packets with telemetry, choose allowed per-worker routes from the Gemini Pro -> Gemini Flash -> Codex Spark -> Codex mini ladder for normal workers, keep worker launcher slots saturated with ready workers, integrate results, dispatch a read-only heavy-model reviewer, and return only when the branch prompt's falsifiable Definition of Done is satisfied or blocked.
 ---
 

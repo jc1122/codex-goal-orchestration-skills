@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:6dcf2caeff962b2ad681f8ceeb919cde51e95fc0c5f77e0767b253b74e5ba01f"
+    "source_fingerprint": "sha256:d559dea2ca97998197f10b2ce1419f211729a9ede9c30d2a36c4b8a36568d1ca"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -322,6 +322,7 @@
         "skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py",
         "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
         "skills/goal-branch-orchestrator/scripts/extract_telemetry.py",
+        "skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py",
         "skills/goal-branch-orchestrator/scripts/reconcile_goal_run.py",
         "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py",
         "skills/goal-branch-orchestrator/scripts/runtime_lite_runner.py",
