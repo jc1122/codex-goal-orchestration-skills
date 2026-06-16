@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -19,6 +18,15 @@ from typing import Any
 CONFIG_NAME = "launch-config.json"
 SHA256_RE = re.compile(r"sha256:[0-9a-f]{64}")
 TIMEOUT_NOT_FOUND = "timeout command not found; refusing unbounded Lite advisor attempt.\n"
+# Bridge adapter (opencode-worker-bridge): the Lite route delegates a deepseek
+# launch through scripts/opencode_worker.py under permission-profile read-only
+# and maps the file-backed goal-delegator-* artifacts onto telemetry. No USD.
+BRIDGE_JOB_ENVELOPE_NAME = "job_envelope.json"
+BRIDGE_WORKER_STATUS_NAME = "worker.status.json"
+BRIDGE_SUPERVISOR_VERDICT_NAME = "supervisor_verdict.json"
+BRIDGE_WORKER_STATE_NAME = "opencode-worker-state.json"
+BRIDGE_PASS_STATUSES = frozenset({"passed", "completed", "done", "success"})
+BRIDGE_DEFAULT_POOL_MAX_WORKERS = 4
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -100,14 +108,24 @@ def command_string(config: dict[str, Any], inputs: dict[str, Any] | None = None)
     value = attempt.get("command")
     if isinstance(value, str) and value:
         return value
-    gemini_path = ""
-    if inputs is not None and isinstance(inputs.get("gemini_path"), str):
-        gemini_path = str(inputs.get("gemini_path"))
-    command = gemini_path if gemini_path else "gemini"
+    control_script = ""
+    if inputs is not None and isinstance(inputs.get("bridge_control_script"), str):
+        control_script = str(inputs.get("bridge_control_script"))
+    if not control_script:
+        control_script = optional_string_value(config, "bridge_control_script")
+    control = control_script if control_script else "opencode_worker.py"
     return (
-        f"{command} --model {string_value(config, 'model')} "
-        f"--approval-mode {string_value(config, 'approval_mode')} --skip-trust --output-format text"
+        f"python3 {control} delegate "
+        f"--provider {string_value(attempt, 'provider_id') if attempt.get('provider_id') else 'deepseek'} "
+        f"--model {string_value(config, 'model')} "
+        f"--variant {string_value(config, 'variant')} "
+        f"--permission-profile {string_value(config, 'permission_profile')}"
     )
+
+
+def optional_string_value(data: dict[str, Any], key: str) -> str:
+    value = data.get(key, "")
+    return value if isinstance(value, str) else ""
 
 
 def terminal_message(config: dict[str, Any], key: str) -> str:
@@ -117,12 +135,12 @@ def terminal_message(config: dict[str, Any], key: str) -> str:
         if isinstance(value, str) and value:
             return value
     defaults = {
-        "gemini_unavailable": "Gemini CLI command unavailable at packet creation path: ",
+        "bridge_unavailable": "opencode-worker-bridge control script unavailable at packet creation path: ",
         "inputs_stale": "Lite advisor input files changed or became unavailable after packet creation.",
         "prompt_stale": "Lite advisor prompt.md changed or became unavailable after packet creation.",
         "task_stale": "Lite advisor task.md changed or became unavailable after packet creation.",
-        "gemini_stale": "Gemini CLI binary or version changed or could not be verified after packet creation.",
-        "command_failed": "Lite advisor command failed. Inspect advice.raw.txt for CLI, quota, auth, or model errors.",
+        "bridge_stale": "opencode-worker-bridge control script changed or could not be verified after packet creation.",
+        "command_failed": "Lite advisor bridge delegate failed. Inspect the bridge run-dir artifacts for transport, model, permission, or validation errors.",
         "invalid_output": "Lite advisor did not produce valid advice JSON.",
     }
     return defaults[key]
@@ -213,54 +231,47 @@ def verify_file_hash(path: Path, expected: object, label: str) -> tuple[bool, st
     return True, ""
 
 
-def verify_gemini_binary(inputs: dict[str, Any]) -> tuple[bool, str]:
-    gemini_path = inputs.get("gemini_path")
-    if not isinstance(gemini_path, str) or not gemini_path.strip():
-        return False, f"Gemini CLI command unavailable at packet creation path: {gemini_path or ''}"
-    path = Path(gemini_path)
-    if not path.is_absolute() or not path.exists() or not os.access(path, os.X_OK):
-        return False, f"Gemini CLI command unavailable at packet creation path: {gemini_path}"
-    expected_sha = inputs.get("gemini_sha256")
-    if not isinstance(expected_sha, str) or not SHA256_RE.fullmatch(expected_sha):
-        return False, "missing captured Gemini sha256 in input-files.json"
-    actual_sha = sha256_file(path)
-    if actual_sha != expected_sha:
-        return False, f"Gemini CLI binary changed: expected {expected_sha} got {actual_sha}"
-    expected_version = inputs.get("gemini_version")
+def verify_bridge_control(config: dict[str, Any], inputs: dict[str, Any]) -> tuple[bool, str]:
+    control_script = inputs.get("bridge_control_script")
+    if not isinstance(control_script, str) or not control_script.strip():
+        return False, f"opencode-worker-bridge control script unavailable at packet creation path: {control_script or ''}"
+    path = Path(control_script)
+    if not path.is_absolute() or not path.exists() or path.name != "opencode_worker.py":
+        return False, f"opencode-worker-bridge control script unavailable at packet creation path: {control_script}"
+    expected_version = inputs.get("bridge_control_version")
     if not isinstance(expected_version, str) or not expected_version.strip() or expected_version == "unavailable":
-        return False, "missing captured Gemini version in input-files.json"
-    try:
-        completed = subprocess.run(
-            [path.as_posix(), "--version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return False, f"could not recheck Gemini version: {exc}"
-    version_lines = (completed.stdout or completed.stderr).strip().splitlines()
-    actual_version = version_lines[0] if version_lines else "version-unavailable"
-    if actual_version != expected_version:
-        return False, f"Gemini CLI version changed: expected {expected_version!r} got {actual_version!r}"
+        return False, "missing captured bridge control-script version in input-files.json"
     return True, ""
 
 
-def run_with_timeout(config: dict[str, Any], command: list[str], *, cwd: Path, stdin_path: Path, stdout_path: Path) -> int:
+def resolve_bridge_control_path(config: dict[str, Any], inputs: dict[str, Any]) -> Path:
+    control_script = inputs.get("bridge_control_script") or config.get("bridge_control_script")
+    return Path(str(control_script))
+
+
+def run_bridge_subcommand(
+    config: dict[str, Any],
+    control_path: Path,
+    subcommand: str,
+    extra_args: list[str],
+    *,
+    cwd: Path,
+    stdout_path: Path,
+) -> int:
     if shutil.which("timeout") is None:
         stdout_path.write_text(TIMEOUT_NOT_FOUND, encoding="utf-8")
         return 127
+    command = ["python3", control_path.as_posix(), subcommand, *extra_args]
     full_command = [
         "timeout",
         "--foreground",
         f"--kill-after={int_value(config, 'timeout_kill_after_seconds')}s",
         f"{int_value(config, 'attempt_timeout_seconds')}s",
     ] + command
-    with stdin_path.open("rb") as stdin, stdout_path.open("wb") as stdout:
+    with stdout_path.open("wb") as stdout:
         result = subprocess.run(
             full_command,
             cwd=cwd,
-            stdin=stdin,
             stdout=stdout,
             stderr=subprocess.STDOUT,
             check=False,
@@ -295,6 +306,201 @@ def extract_advice_json(raw_path: Path, output_path: Path, config: dict[str, Any
         return False
     write_json(output_path, data)
     return True
+
+
+def read_optional_json(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _elapsed_ms_from_timestamps(timestamps: Any) -> int | None:
+    if not isinstance(timestamps, dict):
+        return None
+    start = timestamps.get("started_at") or timestamps.get("created_at") or timestamps.get("start")
+    end = timestamps.get("completed_at") or timestamps.get("finished_at") or timestamps.get("end") or timestamps.get("updated_at")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    delta_ms = int(round((end_dt - start_dt).total_seconds() * 1000))
+    return delta_ms if delta_ms >= 0 else None
+
+
+def _bridge_usage(*sources: Any) -> dict[str, Any] | None:
+    """Token-only usage passthrough from any bridge artifact. NEVER emits USD."""
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        usage = source.get("usage") or source.get("tokens") or source.get("token_usage")
+        if isinstance(usage, dict) and usage:
+            return {
+                key: value
+                for key, value in usage.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            } or None
+    return None
+
+
+def _bridge_assistant_text(*sources: Any) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("assistant_text", "output_text", "summary", "message", "final_message"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+
+def map_bridge_artifacts(run_dir: Path) -> dict[str, Any]:
+    """Map bridge goal-delegator-* artifacts onto the Lite runner contract.
+
+    Mirrors B4's mapping: reads job_envelope.json / worker.status.json /
+    supervisor_verdict.json and returns returncode + status + elapsed_ms +
+    token usage (NEVER USD) + assistant text + route metadata.
+    """
+    job = read_optional_json(run_dir / BRIDGE_JOB_ENVELOPE_NAME)
+    worker_status = read_optional_json(run_dir / BRIDGE_WORKER_STATUS_NAME)
+    verdict = read_optional_json(run_dir / BRIDGE_SUPERVISOR_VERDICT_NAME)
+    report = read_optional_json(run_dir / "delegation-report.json")
+
+    status = None
+    for source, key in ((verdict, "status"), (job, "status"), (worker_status, "lifecycle")):
+        value = source.get(key) if isinstance(source, dict) else None
+        if isinstance(value, str) and value.strip():
+            status = value.strip()
+            break
+    if status is None:
+        status = "unknown"
+    passed = status.lower() in BRIDGE_PASS_STATUSES
+    returncode = 0 if passed else 1
+
+    route = job.get("route") if isinstance(job.get("route"), dict) else {}
+    provider = route.get("provider") if isinstance(route.get("provider"), str) else None
+    model = route.get("model") if isinstance(route.get("model"), str) else None
+    variant = route.get("variant") if isinstance(route.get("variant"), str) else None
+    elapsed_ms = _elapsed_ms_from_timestamps(job.get("timestamps"))
+    usage = _bridge_usage(verdict, job, worker_status, report, route)
+    assistant_text = _bridge_assistant_text(verdict, report, job, worker_status)
+    return {
+        "returncode": returncode,
+        "status": status,
+        "passed": passed,
+        "elapsed_ms": elapsed_ms,
+        "usage": usage,
+        "assistant_text": assistant_text,
+        "provider": provider,
+        "model": model,
+        "variant": variant,
+    }
+
+
+def write_bridge_telemetry_artifacts(packet_dir: Path, label: str, mapped: dict[str, Any]) -> Path:
+    """Write the synthetic events-<label>.jsonl that extract_telemetry consumes.
+
+    No USD/price keys are ever written; only token usage + timing + route.
+    """
+    event_path = packet_dir / f"events-{label}.jsonl"
+    event_record: dict[str, Any] = {
+        "elapsed_ms": mapped.get("elapsed_ms"),
+        "output_nonempty": bool(str(mapped.get("assistant_text") or "").strip()),
+        "usage": mapped.get("usage"),
+        "provider": mapped.get("provider"),
+        "model": mapped.get("model"),
+        "variant": mapped.get("variant"),
+        "status": mapped.get("status"),
+    }
+    event_path.write_text(json.dumps(event_record, separators=(",", ":")) + "\n", encoding="utf-8")
+    return event_path
+
+
+def run_bridge_delegate(
+    config: dict[str, Any],
+    inputs: dict[str, Any],
+    *,
+    packet_dir: Path,
+    prompt_path: Path,
+    raw_path: Path,
+    label: str,
+) -> tuple[int, dict[str, Any]]:
+    """Drive pool-acquire -> start -> delegate -> stop -> pool-release on the bridge.
+
+    Read-only (permission-profile read-only), single attempt, no worker
+    status.json gate: a Lite advisor only routes context and can never satisfy a
+    gate. The delegate's assistant text is written to advice.raw.txt for the
+    existing marker parser. Returns (returncode, mapped_artifacts).
+    """
+    control_path = resolve_bridge_control_path(config, inputs)
+    cwd = Path(string_value(config, "base_dir"))
+    run_dir_rel = optional_string_value(config, "event_label") or label
+    run_dir = packet_dir / "bridge" / run_dir_rel
+    pool_dir = packet_dir / "bridge" / "pool"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    pool_dir.mkdir(parents=True, exist_ok=True)
+    state_path = run_dir / BRIDGE_WORKER_STATE_NAME
+    task_path = run_dir / "task.md"
+    task_path.write_text(prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else "", encoding="utf-8")
+
+    provider = optional_string_value(config, "provider") or "deepseek"
+    model = string_value(config, "model")
+    variant = string_value(config, "variant")
+    profile = string_value(config, "permission_profile")
+    worker_id = string_value(config, "packet_id")
+    max_workers = BRIDGE_DEFAULT_POOL_MAX_WORKERS
+
+    acquired = False
+    rc = 1
+    try:
+        acquire_rc = run_bridge_subcommand(
+            config, control_path, "pool-acquire",
+            ["--pool-dir", pool_dir.as_posix(), "--max-workers", str(max_workers), "--worker-id", worker_id],
+            cwd=cwd, stdout_path=run_dir / "pool-acquire.log",
+        )
+        if acquire_rc != 0:
+            raw_path.write_text("bridge pool capacity limit reached; scheduler should refill later\n", encoding="utf-8")
+            return acquire_rc, {"status": "blocked", "passed": False, "assistant_text": ""}
+        acquired = True
+        run_bridge_subcommand(
+            config, control_path, "start",
+            ["--state", state_path.as_posix(), "--cwd", cwd.as_posix(),
+             "--pool-dir", pool_dir.as_posix(), "--pool-worker-id", worker_id],
+            cwd=cwd, stdout_path=run_dir / "start.log",
+        )
+        rc = run_bridge_subcommand(
+            config, control_path, "delegate",
+            ["--state", state_path.as_posix(), "--run-dir", run_dir.as_posix(), "--job-id", worker_id,
+             "--prompt-file", task_path.as_posix(), "--provider", provider, "--model", model,
+             "--variant", variant, "--permission-profile", profile,
+             "--report", (run_dir / "delegation-report.json").as_posix()],
+            cwd=cwd, stdout_path=run_dir / "delegate.log",
+        )
+        run_bridge_subcommand(
+            config, control_path, "stop",
+            ["--state", state_path.as_posix(), "--run-dir", run_dir.as_posix()],
+            cwd=cwd, stdout_path=run_dir / "stop.log",
+        )
+    finally:
+        if acquired:
+            run_bridge_subcommand(
+                config, control_path, "pool-release",
+                ["--pool-dir", pool_dir.as_posix(), "--worker-id", worker_id],
+                cwd=cwd, stdout_path=run_dir / "pool-release.log",
+            )
+
+    mapped = map_bridge_artifacts(run_dir)
+    write_bridge_telemetry_artifacts(packet_dir, label, mapped)
+    assistant_text = str(mapped.get("assistant_text") or "")
+    raw_path.write_text(assistant_text, encoding="utf-8")
+    effective_rc = rc if rc != 0 else (0 if mapped.get("passed") else 1)
+    return effective_rc, mapped
 
 
 def validate_advice(packet_dir: Path, config: dict[str, Any]) -> bool:
@@ -344,15 +550,15 @@ def run_packet(packet_dir: Path) -> int:
         except FileNotFoundError:
             pass
 
-    gemini_path_value = inputs.get("gemini_path")
-    gemini_message_key = "gemini_stale"
-    if not isinstance(gemini_path_value, str) or not gemini_path_value.strip():
-        gemini_message_key = "gemini_unavailable"
+    control_value = inputs.get("bridge_control_script")
+    bridge_message_key = "bridge_stale"
+    if not isinstance(control_value, str) or not control_value.strip():
+        bridge_message_key = "bridge_unavailable"
     checks = [
         (verify_inputs_current(config, inputs), terminal_message(config, "inputs_stale")),
         (verify_file_hash(prompt_path, inputs.get("prompt_sha256"), "prompt"), terminal_message(config, "prompt_stale")),
         (verify_file_hash(task_path, inputs.get("task_sha256"), "task"), terminal_message(config, "task_stale")),
-        (verify_gemini_binary(inputs), terminal_message(config, gemini_message_key)),
+        (verify_bridge_control(config, inputs), terminal_message(config, bridge_message_key)),
     ]
     for (ok, detail), message in checks:
         if not ok:
@@ -361,20 +567,15 @@ def run_packet(packet_dir: Path) -> int:
             write_telemetry(packet_dir, config)
             return 0
 
-    gemini_path = string_value(inputs, "gemini_path")
-    command = [
-        gemini_path,
-        "--model",
-        string_value(config, "model"),
-        "--approval-mode",
-        string_value(config, "approval_mode"),
-        "--skip-trust",
-        "--output-format",
-        "text",
-        "-p",
-        string_value(config, "runner_prompt"),
-    ]
-    rc = run_with_timeout(config, command, cwd=Path(string_value(config, "base_dir")), stdin_path=prompt_path, stdout_path=raw_path)
+    label = optional_string_value(config, "event_label") or "ds-flash-max"
+    rc, _mapped = run_bridge_delegate(
+        config,
+        inputs,
+        packet_dir=packet_dir,
+        prompt_path=prompt_path,
+        raw_path=raw_path,
+        label=label,
+    )
     if rc != 0:
         write_terminal_advice(
             packet_dir,

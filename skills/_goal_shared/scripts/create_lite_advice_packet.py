@@ -10,19 +10,16 @@ import json
 import os
 import re
 import shutil
-import subprocess
 from pathlib import Path
 
 
 BRANCH_LITE_PACKET_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*-L[A-Za-z0-9_.-]+$")
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
-LITE_MODEL = "gemini-3.1-flash-lite-preview"
-GEMINI_COMMAND = "gemini"
-GEMINI_APPROVAL_MODE = "plan"
+# Lite route alias on the bridge deepseek ladder; resolved to the deepseek model
+# id and variant through the shared contract (no hardcoded model strings).
+LITE_ROUTE_ALIAS = "ds-flash-max"
 LITE_ATTEMPT_TIMEOUT_SECONDS = 600
 TIMEOUT_KILL_AFTER_SECONDS = 30
-LITE_STATUS_BEGIN = "BEGIN_LITE_ADVICE_JSON"
-LITE_STATUS_END = "END_LITE_ADVICE_JSON"
 SKILL_NAME_OVERRIDE: str | None = None
 SCRIPT_DIR_OVERRIDE: Path | None = None
 SKILL_PURPOSES = {
@@ -65,12 +62,40 @@ def _load_path_rules():
     return module
 
 
+def _load_lite_prompt():
+    # Always resolved next to this shared module (Path(__file__) points at the
+    # _goal_shared copy even when invoked through a generated per-skill wrapper),
+    # so create and validate import the SAME prompt builder and cannot drift.
+    path = Path(__file__).resolve().parent / "lite_prompt.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared lite prompt builder: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_lite_prompt", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared lite prompt builder: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 CONTRACT = _load_contract()
 PATH_RULES = _load_path_rules()
+LITE_PROMPT = _load_lite_prompt()
 require_safe_label = PATH_RULES.require_safe_packet_label
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 repo_relative_path = PATH_RULES.repo_relative_path
 shell_quote = CONTRACT.shell_quote
+build_lite_prompt = LITE_PROMPT.build_lite_prompt
+bridge_advice_command = LITE_PROMPT.bridge_advice_command
+LITE_STATUS_BEGIN = LITE_PROMPT.LITE_STATUS_BEGIN
+LITE_STATUS_END = LITE_PROMPT.LITE_STATUS_END
+# Bridge/deepseek route descriptors consumed from the shared contract.
+BRIDGE_PROVIDER_ID = CONTRACT.BRIDGE_PROVIDER_ID
+BRIDGE_HARNESS_KIND = CONTRACT.BRIDGE_HARNESS_KIND
+LITE_MODEL = CONTRACT.bridge_model(LITE_ROUTE_ALIAS)
+LITE_VARIANT = CONTRACT.bridge_variant(LITE_ROUTE_ALIAS)
+LITE_APPROVAL_MODE = CONTRACT.LITE_APPROVAL_MODE
+LITE_PERMISSION_PROFILE = "read-only"
+LITE_EVENT_LABEL = CONTRACT.bridge_event_label(LITE_ROUTE_ALIAS)
 
 
 def current_skill_name() -> str:
@@ -107,57 +132,90 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def offline_gemini_metadata_from_env() -> tuple[str, str, str] | None:
-    if os.environ.get("GOAL_LITE_OFFLINE_GEMINI_METADATA") != "1":
+def resolve_bridge_root() -> Path | None:
+    """Resolve the opencode-worker-bridge skill root that holds the control script.
+
+    Order mirrors the B4 runtime pattern: env override -> source checkout under
+    CWD -> $CODEX_HOME skills -> $HOME/.agents skills.
+    """
+    env_root = os.environ.get("OPENCODE_WORKER_BRIDGE_ROOT")
+    candidates: list[Path] = []
+    if env_root and env_root.strip():
+        candidates.append(Path(env_root).expanduser())
+    candidates.append(Path.cwd() / "skills" / "opencode-worker-bridge")
+    codex_home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    candidates.append(Path(codex_home).expanduser() / "skills" / "opencode-worker-bridge")
+    candidates.append(Path(os.path.expanduser("~")) / ".agents" / "skills" / "opencode-worker-bridge")
+    for candidate in candidates:
+        if (candidate / "scripts" / "opencode_worker.py").exists():
+            return candidate
+    return None
+
+
+def offline_bridge_metadata_from_env() -> tuple[str, str] | None:
+    """Offline capture of the bridge control-script path/version for fixtures.
+
+    Returns (control_script_path, control_version) or None when not in offline
+    mode. The live deepseek delegate is never invoked at packet creation.
+    """
+    if os.environ.get("GOAL_LITE_OFFLINE_BRIDGE_METADATA") != "1":
         return None
-    gemini_path = os.environ.get("GOAL_LITE_GEMINI_PATH", "").strip()
-    gemini_version = os.environ.get("GOAL_LITE_GEMINI_VERSION", "").strip()
-    gemini_sha256 = os.environ.get("GOAL_LITE_GEMINI_SHA256", "").strip()
+    control_script = os.environ.get("GOAL_LITE_BRIDGE_CONTROL_SCRIPT", "").strip()
+    control_version = os.environ.get("GOAL_LITE_BRIDGE_CONTROL_VERSION", "").strip()
     missing = [
         name
         for name, value in (
-            ("GOAL_LITE_GEMINI_PATH", gemini_path),
-            ("GOAL_LITE_GEMINI_VERSION", gemini_version),
-            ("GOAL_LITE_GEMINI_SHA256", gemini_sha256),
+            ("GOAL_LITE_BRIDGE_CONTROL_SCRIPT", control_script),
+            ("GOAL_LITE_BRIDGE_CONTROL_VERSION", control_version),
         )
         if not value
     ]
     if missing:
-        raise SystemExit(f"offline Gemini metadata mode missing: {', '.join(missing)}")
-    path = Path(gemini_path)
-    if "\\" in gemini_path or not path.is_absolute() or ".." in path.parts:
-        raise SystemExit("GOAL_LITE_GEMINI_PATH must be an absolute path without traversal")
-    if gemini_version == "unavailable":
-        raise SystemExit("GOAL_LITE_GEMINI_VERSION must be a captured fixture version")
-    if not SHA256_RE.fullmatch(gemini_sha256):
-        raise SystemExit("GOAL_LITE_GEMINI_SHA256 must match sha256:<64 lowercase hex chars>")
-    return gemini_path, gemini_version, gemini_sha256
+        raise SystemExit(f"offline bridge metadata mode missing: {', '.join(missing)}")
+    path = Path(control_script)
+    if "\\" in control_script or not path.is_absolute() or ".." in path.parts:
+        raise SystemExit("GOAL_LITE_BRIDGE_CONTROL_SCRIPT must be an absolute path without traversal")
+    if control_version == "unavailable":
+        raise SystemExit("GOAL_LITE_BRIDGE_CONTROL_VERSION must be a captured fixture version")
+    return control_script, control_version
 
 
-def resolve_gemini() -> tuple[str, str, str]:
-    offline_metadata = offline_gemini_metadata_from_env()
+def bridge_control_version(control_path: Path) -> str:
+    """Best-effort deterministic control-script version (schema version).
+
+    Reports the bridge contracts SCHEMA_VERSION when discoverable, else the
+    control-script sha256. No live delegate call is made.
+    """
+    contracts_path = control_path.parent / "contracts.py"
+    if contracts_path.exists():
+        try:
+            text = contracts_path.read_text(encoding="utf-8")
+        except Exception:  # noqa: BLE001
+            text = ""
+        match = re.search(r"SCHEMA_VERSION\s*=\s*(\d+)", text)
+        if match:
+            return f"schema_version:{match.group(1)}"
+    try:
+        return sha256_file(control_path)
+    except Exception as exc:  # noqa: BLE001
+        return f"version-unavailable: {exc}"
+
+
+def resolve_bridge_control() -> tuple[str, str]:
+    """Resolve the bridge control-script path + version for the Lite envelope.
+
+    Returns (control_script_path, control_version). Both are "unavailable" when
+    the bridge control script cannot be located, which produces a blocked Lite
+    packet at runtime (the route is unusable, never silently degraded).
+    """
+    offline_metadata = offline_bridge_metadata_from_env()
     if offline_metadata is not None:
         return offline_metadata
-    executable = shutil.which(GEMINI_COMMAND)
-    if executable is None:
-        return "", "unavailable", "unavailable"
-    path = Path(executable).resolve()
-    try:
-        gemini_sha256 = sha256_file(path)
-    except Exception as exc:  # noqa: BLE001
-        gemini_sha256 = f"sha256-unavailable: {exc}"
-    try:
-        completed = subprocess.run(
-            [path.as_posix(), "--version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return path.as_posix(), f"version-unavailable: {exc}", gemini_sha256
-    version = (completed.stdout or completed.stderr).strip().splitlines()
-    return path.as_posix(), version[0] if version else "version-unavailable", gemini_sha256
+    bridge_root = resolve_bridge_root()
+    if bridge_root is None:
+        return "", "unavailable"
+    control_path = (bridge_root / "scripts" / "opencode_worker.py").resolve()
+    return control_path.as_posix(), bridge_control_version(control_path)
 
 
 def source_metadata(path: Path, base_dir: Path) -> dict:
@@ -169,22 +227,41 @@ def source_metadata(path: Path, base_dir: Path) -> dict:
     }
 
 
-def advice_command(gemini_path: str) -> str:
-    command = gemini_path if gemini_path else GEMINI_COMMAND
-    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
+def advice_command(control_script: str) -> str:
+    return bridge_advice_command(
+        control_script=control_script,
+        provider=BRIDGE_PROVIDER_ID,
+        model=LITE_MODEL,
+        variant=LITE_VARIANT,
+        permission_profile=LITE_PERMISSION_PROFILE,
+    )
 
 
-def lite_telemetry_attempts(gemini_path: str) -> list[dict]:
+def lite_telemetry_attempts(control_script: str) -> list[dict]:
     return [
         {
-            "alias": "gemini-lite",
-            "provider": "gemini",
+            "alias": LITE_ROUTE_ALIAS,
+            "provider": BRIDGE_HARNESS_KIND,
+            "provider_id": BRIDGE_PROVIDER_ID,
             "model": LITE_MODEL,
+            "variant": LITE_VARIANT,
+            "harness": BRIDGE_HARNESS_KIND,
+            "harness_kind": BRIDGE_HARNESS_KIND,
             "effort": "",
-            "command": advice_command(gemini_path),
+            "command": advice_command(control_script),
             "timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
-            "event_logs": ["advice.raw.txt"],
+            "event_logs": [f"events-{LITE_EVENT_LABEL}.jsonl"],
             "probe_logs": [],
+            "bridge": {
+                "provider": BRIDGE_PROVIDER_ID,
+                "model": LITE_MODEL,
+                "variant": LITE_VARIANT,
+                "permission_profile": LITE_PERMISSION_PROFILE,
+                "run_dir": f"bridge/{LITE_EVENT_LABEL}",
+                "pool_dir": "bridge/pool",
+                "prompt_file": "prompt.md",
+                "supervisor": False,
+            },
         }
     ]
 
@@ -230,7 +307,7 @@ def load_optional_manifest(base_dir: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path: str, *, avoids_action: str, expected_savings_reason: str, manifest: dict | None = None) -> dict:
+def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, control_script: str, control_version: str, *, avoids_action: str, expected_savings_reason: str, manifest: dict | None = None) -> dict:
     return {
         "schema_version": 1,
         "role": "lite_advisor",
@@ -239,8 +316,15 @@ def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path
         "avoids_action": avoids_action,
         "expected_savings_reason": expected_savings_reason,
         "base_dir": base_dir.as_posix(),
+        "alias": LITE_ROUTE_ALIAS,
+        "provider": BRIDGE_PROVIDER_ID,
         "model": LITE_MODEL,
-        "approval_mode": GEMINI_APPROVAL_MODE,
+        "variant": LITE_VARIANT,
+        "permission_profile": LITE_PERMISSION_PROFILE,
+        "approval_mode": LITE_APPROVAL_MODE,
+        "bridge_control_script": control_script,
+        "bridge_control_version": control_version,
+        "event_label": LITE_EVENT_LABEL,
         "attempt_timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
         "timeout_kill_after_seconds": TIMEOUT_KILL_AFTER_SECONDS,
         "inputs_name": "input-files.json",
@@ -255,14 +339,14 @@ def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path
         "runner_prompt": "Follow the complete Lite advisory packet instructions provided on stdin.",
         "validation_script": (current_script_dir() / "validate_lite_advice.py").as_posix(),
         "telemetry_script": (current_script_dir() / "extract_telemetry.py").as_posix(),
-        "attempts": lite_telemetry_attempts(gemini_path),
+        "attempts": lite_telemetry_attempts(control_script),
         "terminal_messages": {
-            "gemini_unavailable": f"Gemini CLI command unavailable at packet creation path: {gemini_path}",
+            "bridge_unavailable": f"opencode-worker-bridge control script unavailable at packet creation path: {control_script}",
             "inputs_stale": "Lite advisor input files changed or became unavailable after packet creation.",
             "prompt_stale": "Lite advisor prompt.md changed or became unavailable after packet creation.",
             "task_stale": "Lite advisor task.md changed or became unavailable after packet creation.",
-            "gemini_stale": "Gemini CLI binary or version changed or could not be verified after packet creation.",
-            "command_failed": "Lite advisor command failed. Inspect advice.raw.txt for CLI, quota, auth, or model errors.",
+            "bridge_stale": "opencode-worker-bridge control script changed or could not be verified after packet creation.",
+            "command_failed": "Lite advisor bridge delegate failed. Inspect the bridge run-dir artifacts for transport, model, permission, or validation errors.",
             "invalid_output": "Lite advisor did not produce valid advice JSON.",
         },
     }
@@ -271,81 +355,43 @@ def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, gemini_path
 def prompt_for(
     packet_id: str,
     purpose: str,
-    base_dir: Path,
+    base_dir,
     sources: list[dict],
     extra: str,
     *,
     skill: str,
     model: str,
-    gemini_path: str,
-    gemini_version: str,
-    gemini_sha256: str,
+    provider: str,
+    variant: str,
+    control_script: str,
+    control_version: str,
+    permission_profile: str,
     task_sha256: str,
     avoids_action: str,
     expected_savings_reason: str,
 ) -> str:
-    source_lines = "\n".join(
-        f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
-        for item in sources
+    # Thin pass-through to the single shared builder so create and validate
+    # cannot drift; see skills/_goal_shared/scripts/lite_prompt.py.
+    return build_lite_prompt(
+        packet_id,
+        purpose,
+        base_dir,
+        sources,
+        extra,
+        skill=skill,
+        model=model,
+        provider=provider,
+        variant=variant,
+        control_script=control_script,
+        control_version=control_version,
+        permission_profile=permission_profile,
+        task_sha256=task_sha256,
+        avoids_action=avoids_action,
+        expected_savings_reason=expected_savings_reason,
     )
-    example_sources = json.dumps(sources, indent=2, sort_keys=True)
-    command = advice_command(gemini_path)
-    return f"""# Lite Advisory Packet {packet_id}
-
-You are a CLI-only Lite advisor. Do not edit files, create branches, create worktrees, run tests, or decide pass/fail. Your job is to route context cheaply for heavier agents.
-
-Purpose: {purpose}
-Avoids action: {avoids_action}
-Expected savings reason: {expected_savings_reason}
-Base directory: {base_dir}
-
-Deterministic envelope:
-- Skill: {skill}
-- Model: {model}
-- Gemini path: {gemini_path if gemini_path else "unavailable"}
-- Gemini version: {gemini_version}
-- Gemini sha256: {gemini_sha256}
-- Task guidance sha256: {task_sha256}
-
-Read only these explicit input files:
-{source_lines if source_lines else "- none"}
-
-Policy:
-- Lite output is advisory only.
-- If you cannot actually reduce the declared avoided action, return `status: "blocked"` and explain why in blockers.
-- Do not decide mergeability, prompt-audit pass/fail, scientific claim support, or Definition-of-Done satisfaction.
-- Preserve labels exactly when present: `unsupported`, `unresolved`, `negative`, `weakened`, `probe-only`, `blocked`.
-- Recommend targeted original reads with path, anchor, and reason. Do not tell heavy agents to reread every source file by default.
-- For any purpose other than `preflight-decomposition`, `recommended_reads` may cite only the explicit input files listed above.
-- Use focused context. Do not broaden beyond the listed files unless the purpose is `preflight-decomposition`; even then, only recommend additional paths rather than reading the whole repository.
-- If an input file is missing, unreadable, stale, or insufficient, return `status: "blocked"` or `status: "partial"` with blockers.
-
-Additional task guidance:
-{extra.strip() if extra.strip() else "- No extra guidance."}
-
-Return exactly one JSON object between these marker lines. Do not print any other JSON object between them. The `source_files` array must echo this exact metadata for every listed input file:
-
-{LITE_STATUS_BEGIN}
-{{
-  "packet_id": "{packet_id}",
-  "role": "lite_advisor",
-  "purpose": "{purpose}",
-  "avoids_action": {json.dumps(avoids_action)},
-  "expected_savings_reason": {json.dumps(expected_savings_reason)},
-  "status": "ok",
-  "source_files": {example_sources},
-  "recommended_reads": [],
-  "risk_flags": [],
-  "advice": {{}},
-  "summary": "replace with concise advisory summary",
-  "blockers": [],
-  "commands_run": [{json.dumps(command)}]
-}}
-{LITE_STATUS_END}
-"""
 
 
-def launch_for(packet_id: str, purpose: str, base_dir: Path, gemini_path: str) -> str:
+def launch_for(packet_id: str, purpose: str, base_dir: Path, control_script: str) -> str:
     return compact_launch_script()
 
 
@@ -397,7 +443,7 @@ def main() -> int:
     packet_dir.mkdir(parents=True, exist_ok=True)
     extra = task_file.read_text(encoding="utf-8") if task_file else ""
     task_sha256 = sha256_text(extra)
-    gemini_path, gemini_version, gemini_sha256 = resolve_gemini()
+    control_script, control_version = resolve_bridge_control()
     prompt_text = prompt_for(
         packet_id,
         args.purpose,
@@ -406,9 +452,11 @@ def main() -> int:
         extra,
         skill=skill,
         model=LITE_MODEL,
-        gemini_path=gemini_path,
-        gemini_version=gemini_version,
-        gemini_sha256=gemini_sha256,
+        provider=BRIDGE_PROVIDER_ID,
+        variant=LITE_VARIANT,
+        control_script=control_script,
+        control_version=control_version,
+        permission_profile=LITE_PERMISSION_PROFILE,
         task_sha256=task_sha256,
         avoids_action=avoids_action,
         expected_savings_reason=expected_savings_reason,
@@ -420,10 +468,14 @@ def main() -> int:
         "expected_savings_reason": expected_savings_reason,
         "skill": skill,
         "base_dir": base_dir.as_posix(),
+        "alias": LITE_ROUTE_ALIAS,
+        "provider": BRIDGE_PROVIDER_ID,
+        "harness_kind": BRIDGE_HARNESS_KIND,
         "model": LITE_MODEL,
-        "gemini_path": gemini_path,
-        "gemini_version": gemini_version,
-        "gemini_sha256": gemini_sha256,
+        "variant": LITE_VARIANT,
+        "permission_profile": LITE_PERMISSION_PROFILE,
+        "bridge_control_script": control_script,
+        "bridge_control_version": control_version,
         "task_sha256": task_sha256,
         "prompt_sha256": sha256_text(prompt_text),
         "source_files": sources,
@@ -441,7 +493,8 @@ def main() -> int:
                 packet_id,
                 args.purpose,
                 base_dir,
-                gemini_path,
+                control_script,
+                control_version,
                 avoids_action=avoids_action,
                 expected_savings_reason=expected_savings_reason,
                 manifest=manifest,
@@ -453,7 +506,7 @@ def main() -> int:
         encoding="utf-8",
     )
     launch_path = packet_dir / "launch.sh"
-    launch_path.write_text(launch_for(packet_id, args.purpose, base_dir, gemini_path), encoding="utf-8")
+    launch_path.write_text(launch_for(packet_id, args.purpose, base_dir, control_script), encoding="utf-8")
     os.chmod(launch_path, 0o755)
     print(packet_dir)
     return 0

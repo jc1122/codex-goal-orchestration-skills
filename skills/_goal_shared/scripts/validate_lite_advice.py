@@ -7,17 +7,12 @@ import argparse
 import hashlib
 import importlib.util
 import json
-import os
 import re
-import subprocess
 from pathlib import Path
 
 
-LITE_MODEL = "gemini-3.1-flash-lite-preview"
-GEMINI_APPROVAL_MODE = "plan"
-GEMINI_COMMAND = "gemini"
-LITE_STATUS_BEGIN = "BEGIN_LITE_ADVICE_JSON"
-LITE_STATUS_END = "END_LITE_ADVICE_JSON"
+LITE_ROUTE_ALIAS = "ds-flash-max"
+LITE_PERMISSION_PROFILE = "read-only"
 SKILL_NAME_OVERRIDE: str | None = None
 SCRIPT_DIR_OVERRIDE: Path | None = None
 STATUSES = {"ok", "partial", "blocked"}
@@ -48,22 +43,47 @@ RISK_LABELS = {"unsupported", "unresolved", "negative", "weakened", "probe-only"
 SHA256_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def _load_path_rules():
-    path = Path(__file__).resolve().parent / "path_rules.py"
+def _load_shared_module(filename: str, module_name: str, label: str):
+    path = Path(__file__).resolve().parent / filename
     if not path.exists():
-        raise SystemExit(f"missing shared path rules: {path}")
-    spec = importlib.util.spec_from_file_location("goal_shared_path_rules", path)
+        raise SystemExit(f"missing {label}: {path}")
+    spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:
-        raise SystemExit(f"could not load shared path rules: {path}")
+        raise SystemExit(f"could not load {label}: {path}")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
+def _load_path_rules():
+    return _load_shared_module("path_rules.py", "goal_shared_path_rules", "shared path rules")
+
+
+def _load_contract():
+    return _load_shared_module("orchestration_contract.py", "goal_shared_orchestration_contract", "shared orchestration contract")
+
+
+def _load_lite_prompt():
+    # Resolved next to this shared module so create and validate share ONE prompt
+    # builder (Path(__file__) points at _goal_shared even through a wrapper).
+    return _load_shared_module("lite_prompt.py", "goal_shared_lite_prompt", "shared lite prompt builder")
+
+
 PATH_RULES = _load_path_rules()
+CONTRACT = _load_contract()
+LITE_PROMPT = _load_lite_prompt()
 SAFE_LABEL_RE = PATH_RULES.SAFE_PACKET_LABEL_RE
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 is_relative_path = PATH_RULES.is_repo_relative_path
+build_lite_prompt = LITE_PROMPT.build_lite_prompt
+bridge_advice_command = LITE_PROMPT.bridge_advice_command
+LITE_STATUS_BEGIN = LITE_PROMPT.LITE_STATUS_BEGIN
+LITE_STATUS_END = LITE_PROMPT.LITE_STATUS_END
+BRIDGE_PROVIDER_ID = CONTRACT.BRIDGE_PROVIDER_ID
+BRIDGE_HARNESS_KIND = CONTRACT.BRIDGE_HARNESS_KIND
+LITE_MODEL = CONTRACT.bridge_model(LITE_ROUTE_ALIAS)
+LITE_VARIANT = CONTRACT.bridge_variant(LITE_ROUTE_ALIAS)
+LITE_APPROVAL_MODE = CONTRACT.LITE_APPROVAL_MODE
 
 
 def current_skill_name() -> str:
@@ -94,86 +114,14 @@ def sha256_text(text: str) -> str:
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def advice_command(gemini_path: str) -> str:
-    command = gemini_path if gemini_path else GEMINI_COMMAND
-    return f"{command} --model {LITE_MODEL} --approval-mode {GEMINI_APPROVAL_MODE} --skip-trust --output-format text"
-
-
-def prompt_for(
-    packet_id: str,
-    purpose: str,
-    base_dir: str,
-    sources: list[dict],
-    extra: str,
-    *,
-    skill: str,
-    model: str,
-    gemini_path: str,
-    gemini_version: str,
-    gemini_sha256: str,
-    task_sha256: str,
-    avoids_action: str,
-    expected_savings_reason: str,
-) -> str:
-    source_lines = "\n".join(
-        f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
-        for item in sources
+def advice_command(control_script: str) -> str:
+    return bridge_advice_command(
+        control_script=control_script,
+        provider=BRIDGE_PROVIDER_ID,
+        model=LITE_MODEL,
+        variant=LITE_VARIANT,
+        permission_profile=LITE_PERMISSION_PROFILE,
     )
-    example_sources = json.dumps(sources, indent=2, sort_keys=True)
-    command = advice_command(gemini_path)
-    return f"""# Lite Advisory Packet {packet_id}
-
-You are a CLI-only Lite advisor. Do not edit files, create branches, create worktrees, run tests, or decide pass/fail. Your job is to route context cheaply for heavier agents.
-
-Purpose: {purpose}
-Avoids action: {avoids_action}
-Expected savings reason: {expected_savings_reason}
-Base directory: {base_dir}
-
-Deterministic envelope:
-- Skill: {skill}
-- Model: {model}
-- Gemini path: {gemini_path if gemini_path else "unavailable"}
-- Gemini version: {gemini_version}
-- Gemini sha256: {gemini_sha256}
-- Task guidance sha256: {task_sha256}
-
-Read only these explicit input files:
-{source_lines if source_lines else "- none"}
-
-Policy:
-- Lite output is advisory only.
-- If you cannot actually reduce the declared avoided action, return `status: "blocked"` and explain why in blockers.
-- Do not decide mergeability, prompt-audit pass/fail, scientific claim support, or Definition-of-Done satisfaction.
-- Preserve labels exactly when present: `unsupported`, `unresolved`, `negative`, `weakened`, `probe-only`, `blocked`.
-- Recommend targeted original reads with path, anchor, and reason. Do not tell heavy agents to reread every source file by default.
-- For any purpose other than `preflight-decomposition`, `recommended_reads` may cite only the explicit input files listed above.
-- Use focused context. Do not broaden beyond the listed files unless the purpose is `preflight-decomposition`; even then, only recommend additional paths rather than reading the whole repository.
-- If an input file is missing, unreadable, stale, or insufficient, return `status: "blocked"` or `status: "partial"` with blockers.
-
-Additional task guidance:
-{extra.strip() if extra.strip() else "- No extra guidance."}
-
-Return exactly one JSON object between these marker lines. Do not print any other JSON object between them. The `source_files` array must echo this exact metadata for every listed input file:
-
-{LITE_STATUS_BEGIN}
-{{
-  "packet_id": "{packet_id}",
-  "role": "lite_advisor",
-  "purpose": "{purpose}",
-  "avoids_action": {json.dumps(avoids_action)},
-  "expected_savings_reason": {json.dumps(expected_savings_reason)},
-  "status": "ok",
-  "source_files": {example_sources},
-  "recommended_reads": [],
-  "risk_flags": [],
-  "advice": {{}},
-  "summary": "replace with concise advisory summary",
-  "blockers": [],
-  "commands_run": [{json.dumps(command)}]
-}}
-{LITE_STATUS_END}
-"""
 
 
 def load_json(path: Path) -> object:
@@ -255,12 +203,14 @@ def validate_telemetry(defects: list[str], inputs_path: Path | None, *, packet_i
         defect(defects, "telemetry.json.attempts", "must contain exactly one Lite attempt")
         return
     attempt = require_object(defects, attempts[0], "telemetry.json.attempts[0]")
-    if attempt.get("alias") != "gemini-lite":
-        defect(defects, "telemetry.json.attempts[0].alias", "must be 'gemini-lite'")
-    if attempt.get("provider") != "gemini":
-        defect(defects, "telemetry.json.attempts[0].provider", "must be 'gemini'")
+    if attempt.get("alias") != LITE_ROUTE_ALIAS:
+        defect(defects, "telemetry.json.attempts[0].alias", f"must be {LITE_ROUTE_ALIAS!r}")
+    if attempt.get("provider") != BRIDGE_HARNESS_KIND:
+        defect(defects, "telemetry.json.attempts[0].provider", f"must be {BRIDGE_HARNESS_KIND!r}")
     if attempt.get("model") != LITE_MODEL:
         defect(defects, "telemetry.json.attempts[0].model", f"must be {LITE_MODEL!r}")
+    if attempt.get("variant") not in (None, LITE_VARIANT):
+        defect(defects, "telemetry.json.attempts[0].variant", f"must be {LITE_VARIANT!r}")
     if not isinstance(attempt.get("called"), bool):
         defect(defects, "telemetry.json.attempts[0].called", "must be a boolean")
     if not isinstance(attempt.get("accepted"), bool):
@@ -314,49 +264,45 @@ def validate_live_sources(defects: list[str], inputs: dict | None) -> None:
             )
 
 
-def validate_gemini_envelope(defects: list[str], inputs: dict, *, lite_status: object) -> None:
-    gemini_path_value = inputs.get("gemini_path")
-    gemini_version = inputs.get("gemini_version")
-    gemini_sha256 = inputs.get("gemini_sha256")
+def validate_bridge_envelope(defects: list[str], inputs: dict, *, lite_status: object) -> None:
+    """Validate the recorded opencode-worker-bridge / deepseek invocation envelope.
+
+    No live deepseek delegate is invoked here (mirrors B4's no-network telemetry
+    handling); the validator checks shape + that the control script still exists
+    when it was recorded as available. A blocked Lite packet may legitimately
+    record an unavailable bridge control script.
+    """
+    control_script = inputs.get("bridge_control_script")
+    control_version = inputs.get("bridge_control_version")
+    provider = inputs.get("provider")
+    variant = inputs.get("variant")
+    permission_profile = inputs.get("permission_profile")
     blocked = lite_status == "blocked"
-    if gemini_path_value == "" and gemini_version == "unavailable" and gemini_sha256 == "unavailable":
+    if provider != BRIDGE_PROVIDER_ID:
+        defect(defects, "input-files.json.provider", f"must be {BRIDGE_PROVIDER_ID!r}")
+    if variant != LITE_VARIANT:
+        defect(defects, "input-files.json.variant", f"must be {LITE_VARIANT!r}")
+    if permission_profile != LITE_PERMISSION_PROFILE:
+        defect(defects, "input-files.json.permission_profile", f"must be {LITE_PERMISSION_PROFILE!r}")
+    if control_script == "" and control_version == "unavailable":
         if not blocked:
-            defect(defects, "input-files.json.gemini_path", "may be unavailable only for blocked Lite advice")
+            defect(defects, "input-files.json.bridge_control_script", "may be unavailable only for blocked Lite advice")
         return
-    if not isinstance(gemini_path_value, str) or not gemini_path_value.strip():
-        defect(defects, "input-files.json.gemini_path", "must be a non-empty absolute path or unavailable for blocked advice")
+    if not isinstance(control_script, str) or not control_script.strip():
+        defect(defects, "input-files.json.bridge_control_script", "must be a non-empty absolute path or unavailable for blocked advice")
         return
-    gemini_path = Path(gemini_path_value)
-    if "\\" in gemini_path_value or not gemini_path.is_absolute() or ".." in gemini_path.parts:
-        defect(defects, "input-files.json.gemini_path", "must be an absolute path without traversal")
+    control_path = Path(control_script)
+    if "\\" in control_script or not control_path.is_absolute() or ".." in control_path.parts:
+        defect(defects, "input-files.json.bridge_control_script", "must be an absolute path without traversal")
         return
-    if not isinstance(gemini_sha256, str) or not SHA256_RE.fullmatch(gemini_sha256):
-        defect(defects, "input-files.json.gemini_sha256", "must be sha256:<64 lowercase hex chars>")
-    if not isinstance(gemini_version, str) or not gemini_version.strip() or gemini_version == "unavailable":
-        defect(defects, "input-files.json.gemini_version", "must be the captured Gemini CLI version")
+    if control_path.name != "opencode_worker.py":
+        defect(defects, "input-files.json.bridge_control_script", "must point at the bridge control script opencode_worker.py")
+    if not isinstance(control_version, str) or not control_version.strip() or control_version == "unavailable":
+        defect(defects, "input-files.json.bridge_control_version", "must be the captured bridge control-script version")
     if blocked:
         return
-    if not gemini_path.exists() or not os.access(gemini_path, os.X_OK):
-        defect(defects, "input-files.json.gemini_path", f"must exist and be executable: {gemini_path}")
-        return
-    actual_hash = sha256_file(gemini_path)
-    if actual_hash != gemini_sha256:
-        defect(defects, "input-files.json.gemini_sha256", f"stale Gemini binary metadata: expected {gemini_sha256}, got {actual_hash}")
-    try:
-        completed = subprocess.run(
-            [gemini_path.as_posix(), "--version"],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except Exception as exc:  # noqa: BLE001
-        defect(defects, "input-files.json.gemini_version", f"could not recheck Gemini version: {exc}")
-        return
-    version_lines = (completed.stdout or completed.stderr).strip().splitlines()
-    actual_version = version_lines[0] if version_lines else "version-unavailable"
-    if actual_version != gemini_version:
-        defect(defects, "input-files.json.gemini_version", f"stale Gemini version metadata: expected {gemini_version!r}, got {actual_version!r}")
+    if not control_path.exists():
+        defect(defects, "input-files.json.bridge_control_script", f"must exist: {control_path}")
 
 
 def validate_inputs_envelope(
@@ -386,10 +332,12 @@ def validate_inputs_envelope(
         defect(defects, "input-files.json.skill", f"must be {current_skill_name()!r}")
     if inputs.get("model") != LITE_MODEL:
         defect(defects, "input-files.json.model", f"must be {LITE_MODEL!r}")
+    if inputs.get("alias") not in (None, LITE_ROUTE_ALIAS):
+        defect(defects, "input-files.json.alias", f"must be {LITE_ROUTE_ALIAS!r}")
     task_sha256 = inputs.get("task_sha256")
     if not isinstance(task_sha256, str) or not SHA256_RE.fullmatch(task_sha256):
         defect(defects, "input-files.json.task_sha256", "must be sha256:<64 lowercase hex chars>")
-    validate_gemini_envelope(defects, inputs, lite_status=lite_status)
+    validate_bridge_envelope(defects, inputs, lite_status=lite_status)
 
 
 def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: Path | None) -> None:
@@ -419,7 +367,9 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
     source_files = inputs.get("source_files")
     if not isinstance(source_files, list):
         source_files = []
-    regenerated = prompt_for(
+    # Regenerate with the SAME shared builder create used, fed from the recorded
+    # envelope, then compare hashes. This is the determinism guarantee P1 fixes.
+    regenerated = build_lite_prompt(
         str(inputs.get("packet_id", "")),
         str(inputs.get("purpose", "")),
         str(inputs.get("base_dir", "")),
@@ -427,9 +377,11 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
         task_text,
         skill=str(inputs.get("skill", "")),
         model=str(inputs.get("model", "")),
-        gemini_path=str(inputs.get("gemini_path", "")),
-        gemini_version=str(inputs.get("gemini_version", "")),
-        gemini_sha256=str(inputs.get("gemini_sha256", "")),
+        provider=str(inputs.get("provider", "")),
+        variant=str(inputs.get("variant", "")),
+        control_script=str(inputs.get("bridge_control_script", "")),
+        control_version=str(inputs.get("bridge_control_version", "")),
+        permission_profile=str(inputs.get("permission_profile", "")),
         task_sha256=str(inputs.get("task_sha256", "")),
         avoids_action=str(inputs.get("avoids_action", "")),
         expected_savings_reason=str(inputs.get("expected_savings_reason", "")),
@@ -605,11 +557,14 @@ def validate(
         defect(defects, "$.blockers", "must explain non-ok Lite advice")
     validate_telemetry(defects, inputs_path, packet_id=actual_packet_id, lite_status=status)
     if inputs is not None:
-        expected_command = advice_command(str(inputs.get("gemini_path", "")))
+        expected_command = advice_command(str(inputs.get("bridge_control_script", "")))
         if commands and expected_command not in commands:
             defect(defects, "$.commands_run", f"must record exact Lite command {expected_command!r}")
-    elif commands and not any(LITE_MODEL in command and f"--approval-mode {GEMINI_APPROVAL_MODE}" in command for command in commands):
-        defect(defects, "$.commands_run", "must record the fixed Lite model and approval mode")
+    elif commands and not any(
+        LITE_MODEL in command and f"--permission-profile {LITE_PERMISSION_PROFILE}" in command
+        for command in commands
+    ):
+        defect(defects, "$.commands_run", "must record the fixed Lite deepseek model and read-only permission profile")
     return defects
 
 
