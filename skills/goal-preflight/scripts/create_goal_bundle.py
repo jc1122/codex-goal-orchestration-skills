@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import NamedTuple
 
 from render_goal_bootloader import render_bootloader
 
@@ -507,10 +508,7 @@ def source_attachment_by_path(attachments: list[dict]) -> dict[str, str]:
     return result
 
 
-def promote_repeated_context_attachments(brief: dict, *, repo_root: Path | None) -> dict:
-    attachments = list(brief.get("source_attachments", [])) if isinstance(brief.get("source_attachments"), list) else []
-    used_labels = {str(item.get("label")) for item in attachments if isinstance(item, dict) and item.get("label")}
-    attachment_paths = source_attachment_by_path(attachments)
+def _context_file_use_counts(brief: dict) -> dict[str, int]:
     context_counts: dict[str, int] = {}
     for branch in brief.get("branches", []):
         if not isinstance(branch, dict):
@@ -521,6 +519,42 @@ def promote_repeated_context_attachments(brief: dict, *, repo_root: Path | None)
             for path in item.get("context_files", []):
                 if isinstance(path, str) and path:
                     context_counts[path] = context_counts.get(path, 0) + 1
+    return context_counts
+
+
+def _rewrite_work_items_for_promotions(brief: dict, promoted: dict[str, str]) -> None:
+    for branch in brief.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        for item in branch.get("work_items", []):
+            if not isinstance(item, dict):
+                continue
+            kept_context: list[str] = []
+            refs = (
+                [ref for ref in item.get("source_attachment_refs", []) if isinstance(ref, str) and ref.strip()]
+                if isinstance(item.get("source_attachment_refs"), list)
+                else []
+            )
+            seen_refs = set(refs)
+            for path in item.get("context_files", []):
+                if not isinstance(path, str) or not path:
+                    continue
+                label = promoted.get(path)
+                if label is None:
+                    kept_context.append(path)
+                    continue
+                if label not in seen_refs:
+                    refs.append(label)
+                    seen_refs.add(label)
+            item["context_files"] = kept_context
+            item["source_attachment_refs"] = refs
+
+
+def promote_repeated_context_attachments(brief: dict, *, repo_root: Path | None) -> dict:
+    attachments = list(brief.get("source_attachments", [])) if isinstance(brief.get("source_attachments"), list) else []
+    used_labels = {str(item.get("label")) for item in attachments if isinstance(item, dict) and item.get("label")}
+    attachment_paths = source_attachment_by_path(attachments)
+    context_counts = _context_file_use_counts(brief)
 
     promoted: dict[str, str] = {}
     promotions: list[dict] = []
@@ -554,31 +588,7 @@ def promote_repeated_context_attachments(brief: dict, *, repo_root: Path | None)
         brief["source_attachments"] = attachments
         return brief
 
-    for branch in brief.get("branches", []):
-        if not isinstance(branch, dict):
-            continue
-        for item in branch.get("work_items", []):
-            if not isinstance(item, dict):
-                continue
-            kept_context: list[str] = []
-            refs = (
-                [ref for ref in item.get("source_attachment_refs", []) if isinstance(ref, str) and ref.strip()]
-                if isinstance(item.get("source_attachment_refs"), list)
-                else []
-            )
-            seen_refs = set(refs)
-            for path in item.get("context_files", []):
-                if not isinstance(path, str) or not path:
-                    continue
-                label = promoted.get(path)
-                if label is None:
-                    kept_context.append(path)
-                    continue
-                if label not in seen_refs:
-                    refs.append(label)
-                    seen_refs.add(label)
-            item["context_files"] = kept_context
-            item["source_attachment_refs"] = refs
+    _rewrite_work_items_for_promotions(brief, promoted)
 
     brief["source_attachments"] = attachments
     brief["source_attachment_promotions"] = promotions
@@ -819,6 +829,35 @@ def has_any_term(text: str, terms: tuple[str, ...]) -> bool:
     return any(term in text for term in terms)
 
 
+def _route_class_inference_signals(item: dict, branch_context: dict) -> dict:
+    owned_paths = item.get("owned_paths", [])
+    item_text = " ".join(
+        str(value)
+        for value in [
+            item.get("objective", ""),
+            " ".join(item.get("verification", [])),
+            " ".join(item.get("dod", [])),
+        ]
+    ).lower()
+    all_text = " ".join(
+        str(value)
+        for value in [
+            branch_context.get("objective", ""),
+            branch_context.get("scope", ""),
+            branch_context.get("branch_risk", ""),
+            item_text,
+        ]
+    ).lower()
+    return {
+        "owned_buckets": [path_bucket(path) for path in owned_paths if isinstance(path, str)],
+        "has_complex": has_any_term(all_text, COMPLEX_TERMS),
+        "has_mechanical": has_any_term(item_text, MECHANICAL_TERMS),
+        "changed_surface": {top_level(path) for path in owned_paths if isinstance(path, str) and path.strip()},
+        "has_dependencies": bool(item.get("depends_on")) or bool(branch_context.get("depends_on")),
+        "path_count": len(owned_paths),
+    }
+
+
 def infer_route_class(
     item: dict,
     *,
@@ -840,30 +879,13 @@ def infer_route_class(
             f"branch {branch_context['id']} work item {item_id} route_class_reason",
         )
 
-    owned_paths = item.get("owned_paths", [])
-    owned_buckets = [path_bucket(path) for path in owned_paths if isinstance(path, str)]
-    item_text = " ".join(
-        str(value)
-        for value in [
-            item.get("objective", ""),
-            " ".join(item.get("verification", [])),
-            " ".join(item.get("dod", [])),
-        ]
-    ).lower()
-    all_text = " ".join(
-        str(value)
-        for value in [
-            branch_context.get("objective", ""),
-            branch_context.get("scope", ""),
-            branch_context.get("branch_risk", ""),
-            item_text,
-        ]
-    ).lower()
-    has_complex = has_any_term(all_text, COMPLEX_TERMS)
-    has_mechanical = has_any_term(item_text, MECHANICAL_TERMS)
-    changed_surface = {top_level(path) for path in owned_paths if isinstance(path, str) and path.strip()}
-    has_dependencies = bool(item.get("depends_on")) or bool(branch_context.get("depends_on"))
-    path_count = len(owned_paths)
+    signals = _route_class_inference_signals(item, branch_context)
+    owned_buckets = signals["owned_buckets"]
+    has_complex = signals["has_complex"]
+    has_mechanical = signals["has_mechanical"]
+    changed_surface = signals["changed_surface"]
+    has_dependencies = signals["has_dependencies"]
+    path_count = signals["path_count"]
 
     if owned_buckets and all(bucket == "docs" for bucket in owned_buckets) and not has_complex:
         return "docs", "inferred_docs_only"
@@ -1038,6 +1060,21 @@ def deterministic_route_class_ladders(worker_policy: dict) -> dict[str, list[str
     }
 
 
+def _valid_route_class_ladder(
+    ladder: object, *, default_aliases: list[str], allowed_set: set[str]
+) -> list[str] | None:
+    if not isinstance(ladder, list) or not ladder:
+        return None
+    aliases = [alias for alias in ladder if isinstance(alias, str) and alias]
+    if len(aliases) != len(ladder):
+        return None
+    if any(alias not in allowed_set for alias in aliases):
+        return None
+    if [alias for alias in default_aliases if alias in aliases] != aliases:
+        return None
+    return aliases
+
+
 def valid_route_class_ladders(worker_policy: dict, route_classes: object) -> dict[str, list[str]] | None:
     default_ladder = worker_policy.get("default_ladder")
     allowed_routes = worker_policy.get("allowed_routes")
@@ -1052,15 +1089,10 @@ def valid_route_class_ladders(worker_policy: dict, route_classes: object) -> dic
     allowed_set = set(allowed_aliases)
     normalized: dict[str, list[str]] = {}
     for route_class in MANIFEST_WORKER_ROUTE_CLASSES:
-        ladder = route_classes.get(route_class)
-        if not isinstance(ladder, list) or not ladder:
-            return None
-        aliases = [alias for alias in ladder if isinstance(alias, str) and alias]
-        if len(aliases) != len(ladder):
-            return None
-        if any(alias not in allowed_set for alias in aliases):
-            return None
-        if [alias for alias in default_aliases if alias in aliases] != aliases:
+        aliases = _valid_route_class_ladder(
+            route_classes.get(route_class), default_aliases=default_aliases, allowed_set=allowed_set
+        )
+        if aliases is None:
             return None
         normalized[route_class] = aliases
     return normalized
@@ -1631,177 +1663,53 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
             seen_paths[value] = label
 
 
-def normalize_brief(
-    brief: dict, *, default_base_ref: str = "main", validate_base_ref: bool = True, repo_root: Path | None = None
-) -> dict:
-    if "job_id" not in brief:
-        raise SystemExit("brief must include job_id")
-    if not brief.get("branches"):
-        raise SystemExit("brief must include synthesized branches before bundle generation")
-
-    job_id = slug(brief["job_id"])
-    base_ref = require_branch_name(str(brief.get("base_ref") or default_base_ref), "base_ref")
-    if (
-        validate_base_ref
-        and repo_root is not None
-        and _is_git_repo(repo_root)
-        and not _git_ref_exists(repo_root, base_ref)
-    ):
-        raise SystemExit(f"base_ref does not exist in repository refs: {base_ref!r}")
-    max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
-    serial_reason = nonempty_text(brief.get("serial_reason"))
-    serial_reasons = normalize_reason_list(brief.get("serial_reasons"), serial_reason)
-    parallelization_rationale = nonempty_text(brief.get("parallelization_rationale"))
-    branches = []
-    branch_dependency_reasons: dict[str, list[str]] = {}
-    for idx, original in enumerate(brief["branches"], start=1):
-        bid = original.get("id") or branch_id(idx)
-        bid = require_safe_id(str(bid).upper(), "branch id")
-        branch_name = require_branch_name(original.get("branch_name") or f"{job_id}-{bid.lower()}")
-        worktree_path = require_relative_path(
-            original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path"
-        )
-        max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
-        original_worker_parallelism = (
-            original.get("worker_parallelism") if isinstance(original.get("worker_parallelism"), dict) else {}
-        )
-        worker_serial_reason = nonempty_text(original.get("worker_serial_reason"))
-        worker_serial_reasons = normalize_reason_list(
-            original.get("worker_serial_reasons", original_worker_parallelism.get("serial_reasons")),
-            worker_serial_reason,
-        )
-        worker_parallelization_rationale = nonempty_text(
-            original.get("worker_parallelization_rationale")
-        ) or nonempty_text(original_worker_parallelism.get("parallelization_rationale"))
-        branch_context = {
-            "id": bid,
-            "objective": nonempty_text(original.get("objective")),
-            "scope": nonempty_text(original.get("scope")),
-            "branch_risk": nonempty_text(original.get("branch_risk")),
-            "depends_on": original.get("depends_on", []) if isinstance(original.get("depends_on"), list) else [],
-            "contention_risk": any(
-                isinstance(original.get(key), str) and original.get(key, "").strip()
-                for key in ["contention_reason", "worker_contention_reason"]
-            ),
-        }
-        work_items = normalize_work_items(
-            original.get("work_items", []),
-            bid,
-            branch_context=branch_context,
-            repo_root=repo_root,
-        )
-        owned_paths = derived_owned_paths(work_items)
-        if max_workers < MAX_WORKER_PACKETS_PER_BRANCH:
-            append_reason_once(
-                worker_serial_reasons,
-                f"Branch {bid} caps worker concurrency at {max_workers}, below the package maximum of {MAX_WORKER_PACKETS_PER_BRANCH}.",
-            )
-        branch = {
-            **original,
-            "work_items": work_items,
-            "id": bid,
-            "branch_name": branch_name,
-            "worktree_path": worktree_path,
-            "owned_paths": owned_paths,
-            "prompt": require_relative_path(original.get("prompt") or f"branches/{bid}.prompt.md", "prompt"),
-            "status_path": require_relative_path(
-                original.get("status_path") or f"branches/{bid}.status.json", "status_path"
-            ),
-            "review_path": require_relative_path(
-                original.get("review_path") or f"branches/{bid}.review.json", "review_path"
-            ),
-            "pre_review_gate_path": require_relative_path(
-                original.get("pre_review_gate_path") or CONTRACT.pre_review_gate_path(bid), "pre_review_gate_path"
-            ),
-            "max_active_worker_packets": max_workers,
-            "worker_parallelism": {
-                "parallelism_default": True,
-                "scheduling_mode": "rolling",
-                "scheduler_path": CONTRACT.worker_scheduler_path(bid),
-                "max_active_worker_packets": max_workers,
-                "max_worker_packets_per_branch": MAX_WORKER_PACKETS_PER_BRANCH,
-                "serial_reasons": worker_serial_reasons,
-                "parallelization_rationale": worker_parallelization_rationale
-                or f"Launch independent worker packets as a rolling saturated pool up to {max_workers} active worker packets.",
-                "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
-                "dependency_policy": "Work item depends_on entries are explicit prior-worker dependencies; workers without unresolved depends_on entries are eligible whenever capacity is available.",
-                "slot_refill": "After a worker launcher exits, collect and integrate its status/diff, remove it from the active set, then launch the next eligible worker immediately if capacity is available.",
-            },
-        }
-        branch_dependency_reasons[bid] = []
-        branches.append(branch)
-
-    ensure_unique_branch_values(branches)
-    for branch in branches:
-        optimize_worker_dependencies(
-            branch,
-            repo_root=repo_root,
-            branch_worker_reasons=branch["worker_parallelism"]["serial_reasons"],
-        )
-    for branch in branches:
-        worker_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
-        worker_max_ready_width = max_ready_width(worker_items)
-        worker_parallelism = branch["worker_parallelism"]
-        worker_serial_reasons = worker_parallelism["serial_reasons"]
-        worker_capacity = branch.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH)
-        if len(worker_items) == 1 and worker_capacity > 1:
-            append_reason_once(
-                worker_serial_reasons,
-                f"Branch {branch['id']} declares one worker item, so no additional independent worker packet exists to fill capacity.",
-            )
-        elif worker_max_ready_width < min(worker_capacity, len(worker_items)):
-            append_reason_once(
-                worker_serial_reasons,
-                f"Branch {branch['id']} worker DAG limits initial and maximal ready parallelism below worker capacity.",
-            )
-        if len(worker_items) > 2 and longest_work_item_chain(worker_items) >= len(worker_items) - 1:
-            append_reason_once(
-                worker_serial_reasons,
-                f"Branch {branch['id']} worker dependency chain serializes most work by explicit depends_on topology.",
-            )
-        ready_meta = ready_width_metadata(
-            len(worker_items),
-            worker_max_ready_width,
-            worker_capacity,
-            scope="worker",
-            identifier=branch["id"],
-        )
-        worker_parallelism["ready_width_metadata"] = ready_meta
-        underutilization_reason = ready_meta["underutilization_reason"]
-        if isinstance(underutilization_reason, str):
-            append_reason_once(worker_serial_reasons, underutilization_reason)
-        if branch_dependency_reasons.get(branch["id"]):
-            for reason in branch_dependency_reasons[branch["id"]]:
-                append_reason_once(serial_reasons, reason)
-
-    if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
-        raise SystemExit(
-            f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}"
-        )
-    if len(branches) == 1:
+def _annotate_worker_parallelism(
+    branch: dict, branch_dependency_reasons: dict[str, list[str]], serial_reasons: list[str]
+) -> None:
+    worker_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
+    worker_max_ready_width = max_ready_width(worker_items)
+    worker_parallelism = branch["worker_parallelism"]
+    worker_serial_reasons = worker_parallelism["serial_reasons"]
+    worker_capacity = branch.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH)
+    if len(worker_items) == 1 and worker_capacity > 1:
         append_reason_once(
-            serial_reasons, "Only one branch is declared, so branch orchestration cannot fill multiple branch slots."
+            worker_serial_reasons,
+            f"Branch {branch['id']} declares one worker item, so no additional independent worker packet exists to fill capacity.",
         )
-    if max_active < MAX_ACTIVE_BRANCH_AGENTS:
+    elif worker_max_ready_width < min(worker_capacity, len(worker_items)):
         append_reason_once(
-            serial_reasons,
-            f"max_active_branch_agents is {max_active}, below the package maximum of {MAX_ACTIVE_BRANCH_AGENTS}.",
+            worker_serial_reasons,
+            f"Branch {branch['id']} worker DAG limits initial and maximal ready parallelism below worker capacity.",
         )
-    preflight_lite_advice = brief.get("preflight_lite_advice", [])
-    if not isinstance(preflight_lite_advice, list):
-        raise SystemExit("preflight_lite_advice must be an array when supplied")
-    telemetry_policy = normalize_brief_telemetry_policy(brief)
-    degraded_telemetry_waiver = normalize_route_policy_degraded_telemetry_waiver(
-        brief.get("route_policy_degraded_telemetry_waiver")
+    if len(worker_items) > 2 and longest_work_item_chain(worker_items) >= len(worker_items) - 1:
+        append_reason_once(
+            worker_serial_reasons,
+            f"Branch {branch['id']} worker dependency chain serializes most work by explicit depends_on topology.",
+        )
+    ready_meta = ready_width_metadata(
+        len(worker_items),
+        worker_max_ready_width,
+        worker_capacity,
+        scope="worker",
+        identifier=branch["id"],
     )
+    worker_parallelism["ready_width_metadata"] = ready_meta
+    underutilization_reason = ready_meta["underutilization_reason"]
+    if isinstance(underutilization_reason, str):
+        append_reason_once(worker_serial_reasons, underutilization_reason)
+    if branch_dependency_reasons.get(branch["id"]):
+        for reason in branch_dependency_reasons[branch["id"]]:
+            append_reason_once(serial_reasons, reason)
 
+
+def _resolve_waves(brief: dict, branches: list[dict], max_active: int) -> tuple[list[dict], dict[str, str]]:
     waves = brief.get("waves") or dependency_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
         raise SystemExit(f"waves must not exceed {MAX_WAVES}")
     branch_ids = {branch["id"] for branch in branches}
     seen_wave_ids = set()
     seen_wave_branches = []
-    wave_by_branch = {}
+    wave_by_branch: dict[str, str] = {}
     for wave in waves:
         wid = require_safe_label(str(wave["id"]), "wave id")
         if wid in seen_wave_ids:
@@ -1822,21 +1730,12 @@ def normalize_brief(
             seen_wave_branches.append(bid)
     if set(seen_wave_branches) != branch_ids:
         raise SystemExit("waves must cover every branch exactly once")
-    for branch in branches:
-        branch["wave"] = wave_by_branch[branch["id"]]
-    normalize_branch_dependencies(branches)
-    for branch in branches:
-        work_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
-        has_context = any(
-            isinstance(item, dict) and isinstance(item.get("context_files"), list) and bool(item.get("context_files"))
-            for item in work_items
-        )
-        if branch.get("depends_on") and not has_context:
-            branch["dependency_context_reason"] = (
-                nonempty_text(branch.get("dependency_context_reason"))
-                or "No direct context_files declared; runtime must inspect completed dependency branch status/review artifacts before launching this branch."
-            )
+    return waves, wave_by_branch
 
+
+def _annotate_branch_parallelism(
+    branches: list[dict], max_active: int, serial_reasons: list[str]
+) -> tuple[int, dict[str, object]]:
     initial_ready = len([branch for branch in branches if not branch.get("depends_on")])
     branch_max_ready_width = max_ready_width(branches)
     parallelization_meta = ready_width_metadata(len(branches), branch_max_ready_width, max_active, scope="branch")
@@ -1861,6 +1760,161 @@ def normalize_brief(
         append_reason_once(
             serial_reasons, "Branch dependency chain serializes most work by explicit branch depends_on topology."
         )
+    return branch_max_ready_width, parallelization_meta
+
+
+def _build_branch_record(original: dict, idx: int, *, job_id: str, repo_root: Path | None) -> dict:
+    bid = original.get("id") or branch_id(idx)
+    bid = require_safe_id(str(bid).upper(), "branch id")
+    branch_name = require_branch_name(original.get("branch_name") or f"{job_id}-{bid.lower()}")
+    worktree_path = require_relative_path(
+        original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path"
+    )
+    max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
+    original_worker_parallelism = (
+        original.get("worker_parallelism") if isinstance(original.get("worker_parallelism"), dict) else {}
+    )
+    worker_serial_reason = nonempty_text(original.get("worker_serial_reason"))
+    worker_serial_reasons = normalize_reason_list(
+        original.get("worker_serial_reasons", original_worker_parallelism.get("serial_reasons")),
+        worker_serial_reason,
+    )
+    worker_parallelization_rationale = nonempty_text(
+        original.get("worker_parallelization_rationale")
+    ) or nonempty_text(original_worker_parallelism.get("parallelization_rationale"))
+    branch_context = {
+        "id": bid,
+        "objective": nonempty_text(original.get("objective")),
+        "scope": nonempty_text(original.get("scope")),
+        "branch_risk": nonempty_text(original.get("branch_risk")),
+        "depends_on": original.get("depends_on", []) if isinstance(original.get("depends_on"), list) else [],
+        "contention_risk": any(
+            isinstance(original.get(key), str) and original.get(key, "").strip()
+            for key in ["contention_reason", "worker_contention_reason"]
+        ),
+    }
+    work_items = normalize_work_items(
+        original.get("work_items", []),
+        bid,
+        branch_context=branch_context,
+        repo_root=repo_root,
+    )
+    owned_paths = derived_owned_paths(work_items)
+    if max_workers < MAX_WORKER_PACKETS_PER_BRANCH:
+        append_reason_once(
+            worker_serial_reasons,
+            f"Branch {bid} caps worker concurrency at {max_workers}, below the package maximum of {MAX_WORKER_PACKETS_PER_BRANCH}.",
+        )
+    return {
+        **original,
+        "work_items": work_items,
+        "id": bid,
+        "branch_name": branch_name,
+        "worktree_path": worktree_path,
+        "owned_paths": owned_paths,
+        "prompt": require_relative_path(original.get("prompt") or f"branches/{bid}.prompt.md", "prompt"),
+        "status_path": require_relative_path(
+            original.get("status_path") or f"branches/{bid}.status.json", "status_path"
+        ),
+        "review_path": require_relative_path(
+            original.get("review_path") or f"branches/{bid}.review.json", "review_path"
+        ),
+        "pre_review_gate_path": require_relative_path(
+            original.get("pre_review_gate_path") or CONTRACT.pre_review_gate_path(bid), "pre_review_gate_path"
+        ),
+        "max_active_worker_packets": max_workers,
+        "worker_parallelism": {
+            "parallelism_default": True,
+            "scheduling_mode": "rolling",
+            "scheduler_path": CONTRACT.worker_scheduler_path(bid),
+            "max_active_worker_packets": max_workers,
+            "max_worker_packets_per_branch": MAX_WORKER_PACKETS_PER_BRANCH,
+            "serial_reasons": worker_serial_reasons,
+            "parallelization_rationale": worker_parallelization_rationale
+            or f"Launch independent worker packets as a rolling saturated pool up to {max_workers} active worker packets.",
+            "wave_execution": "Use work items as an ordered ready queue. Keep worker slots saturated up to max_active_worker_packets; when a worker finishes and capacity is freed, launch the next eligible worker whose depends_on work item ids are complete.",
+            "dependency_policy": "Work item depends_on entries are explicit prior-worker dependencies; workers without unresolved depends_on entries are eligible whenever capacity is available.",
+            "slot_refill": "After a worker launcher exits, collect and integrate its status/diff, remove it from the active set, then launch the next eligible worker immediately if capacity is available.",
+        },
+    }
+
+
+def normalize_brief(
+    brief: dict, *, default_base_ref: str = "main", validate_base_ref: bool = True, repo_root: Path | None = None
+) -> dict:
+    if "job_id" not in brief:
+        raise SystemExit("brief must include job_id")
+    if not brief.get("branches"):
+        raise SystemExit("brief must include synthesized branches before bundle generation")
+
+    job_id = slug(brief["job_id"])
+    base_ref = require_branch_name(str(brief.get("base_ref") or default_base_ref), "base_ref")
+    if (
+        validate_base_ref
+        and repo_root is not None
+        and _is_git_repo(repo_root)
+        and not _git_ref_exists(repo_root, base_ref)
+    ):
+        raise SystemExit(f"base_ref does not exist in repository refs: {base_ref!r}")
+    max_active = require_agent_limit(brief.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS))
+    serial_reason = nonempty_text(brief.get("serial_reason"))
+    serial_reasons = normalize_reason_list(brief.get("serial_reasons"), serial_reason)
+    parallelization_rationale = nonempty_text(brief.get("parallelization_rationale"))
+    branches = []
+    branch_dependency_reasons: dict[str, list[str]] = {}
+    for idx, original in enumerate(brief["branches"], start=1):
+        branch = _build_branch_record(original, idx, job_id=job_id, repo_root=repo_root)
+        branch_dependency_reasons[branch["id"]] = []
+        branches.append(branch)
+
+    ensure_unique_branch_values(branches)
+    for branch in branches:
+        optimize_worker_dependencies(
+            branch,
+            repo_root=repo_root,
+            branch_worker_reasons=branch["worker_parallelism"]["serial_reasons"],
+        )
+    for branch in branches:
+        _annotate_worker_parallelism(branch, branch_dependency_reasons, serial_reasons)
+
+    if len(branches) > DEFAULT_TOTAL_BRANCH_CAP:
+        raise SystemExit(
+            f"brief has more than {DEFAULT_TOTAL_BRANCH_CAP} branches; max is {MAX_WAVES} waves of {MAX_ACTIVE_BRANCH_AGENTS}"
+        )
+    if len(branches) == 1:
+        append_reason_once(
+            serial_reasons, "Only one branch is declared, so branch orchestration cannot fill multiple branch slots."
+        )
+    if max_active < MAX_ACTIVE_BRANCH_AGENTS:
+        append_reason_once(
+            serial_reasons,
+            f"max_active_branch_agents is {max_active}, below the package maximum of {MAX_ACTIVE_BRANCH_AGENTS}.",
+        )
+    preflight_lite_advice = brief.get("preflight_lite_advice", [])
+    if not isinstance(preflight_lite_advice, list):
+        raise SystemExit("preflight_lite_advice must be an array when supplied")
+    telemetry_policy = normalize_brief_telemetry_policy(brief)
+    degraded_telemetry_waiver = normalize_route_policy_degraded_telemetry_waiver(
+        brief.get("route_policy_degraded_telemetry_waiver")
+    )
+
+    waves, wave_by_branch = _resolve_waves(brief, branches, max_active)
+    for branch in branches:
+        branch["wave"] = wave_by_branch[branch["id"]]
+    normalize_branch_dependencies(branches)
+    for branch in branches:
+        work_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
+        has_context = any(
+            isinstance(item, dict) and isinstance(item.get("context_files"), list) and bool(item.get("context_files"))
+            for item in work_items
+        )
+        if branch.get("depends_on") and not has_context:
+            branch["dependency_context_reason"] = (
+                nonempty_text(branch.get("dependency_context_reason"))
+                or "No direct context_files declared; runtime must inspect completed dependency branch status/review artifacts before launching this branch."
+            )
+
+    branch_max_ready_width, parallelization_meta = _annotate_branch_parallelism(branches, max_active, serial_reasons)
 
     return {
         **brief,
@@ -1937,36 +1991,25 @@ def sanitized_runtime_goal_config(config: dict) -> dict:
     return sanitized
 
 
-def preflight_compatibility_summary(config: dict | None, check: dict | None) -> dict:
-    if config is None:
-        return {"status": "not_configured", "defects": []}
+def _is_int_in_range(value: object, low: int, high: int) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
+
+
+def _compatibility_cap_defects(branch_cap: object, worker_cap: object) -> list[str]:
     defects: list[str] = []
-    aggressiveness = config.get("aggressiveness") if isinstance(config.get("aggressiveness"), dict) else {}
-    branch_cap = aggressiveness.get("max_active_branch_agents")
-    worker_cap = aggressiveness.get("max_active_worker_packets")
-    if (
-        not isinstance(branch_cap, int)
-        or isinstance(branch_cap, bool)
-        or branch_cap < 1
-        or branch_cap > MAX_ACTIVE_BRANCH_AGENTS
-    ):
+    if not _is_int_in_range(branch_cap, 1, MAX_ACTIVE_BRANCH_AGENTS):
         defects.append(
             f"aggressiveness.max_active_branch_agents must be an integer from 1 to {MAX_ACTIVE_BRANCH_AGENTS}; got {branch_cap!r}"
         )
-    if (
-        not isinstance(worker_cap, int)
-        or isinstance(worker_cap, bool)
-        or worker_cap < 1
-        or worker_cap > MAX_WORKER_PACKETS_PER_BRANCH
-    ):
+    if not _is_int_in_range(worker_cap, 1, MAX_WORKER_PACKETS_PER_BRANCH):
         defects.append(
             f"aggressiveness.max_active_worker_packets must be an integer from 1 to {MAX_WORKER_PACKETS_PER_BRANCH}; got {worker_cap!r}"
         )
+    return defects
 
-    validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
-    config_validation_mode = validation.get("mode")
-    check_mode = check.get("mode") if isinstance(check, dict) else None
-    check_status = check.get("status") if isinstance(check, dict) else None
+
+def _compatibility_check_defects(config_validation_mode: object, check_mode: object, check_status: object, check: dict | None) -> list[str]:
+    defects: list[str] = []
     if check is None:
         defects.append("goal_config_check is required when goal_config is supplied")
     elif check_status != "pass":
@@ -1975,6 +2018,22 @@ def preflight_compatibility_summary(config: dict | None, check: dict | None) -> 
         defects.append(
             f"config validation mode {config_validation_mode!r} requires a smoke/discovery check report; got check mode {check_mode!r}"
         )
+    return defects
+
+
+def preflight_compatibility_summary(config: dict | None, check: dict | None) -> dict:
+    if config is None:
+        return {"status": "not_configured", "defects": []}
+    aggressiveness = config.get("aggressiveness") if isinstance(config.get("aggressiveness"), dict) else {}
+    branch_cap = aggressiveness.get("max_active_branch_agents")
+    worker_cap = aggressiveness.get("max_active_worker_packets")
+    defects = _compatibility_cap_defects(branch_cap, worker_cap)
+
+    validation = config.get("validation") if isinstance(config.get("validation"), dict) else {}
+    config_validation_mode = validation.get("mode")
+    check_mode = check.get("mode") if isinstance(check, dict) else None
+    check_status = check.get("status") if isinstance(check, dict) else None
+    defects.extend(_compatibility_check_defects(config_validation_mode, check_mode, check_status, check))
 
     policies = config.get("model_policies") if isinstance(config.get("model_policies"), dict) else {}
     worker_policy = normalize_worker_model_policy(policies.get("worker_model_policy", WORKER_MODEL_POLICY))
@@ -2288,6 +2347,85 @@ def infer_execution_strategy(repo_root: Path, branches: list[dict]) -> dict:
     }
 
 
+class _BranchOwnership(NamedTuple):
+    branch_id: str
+    branch_paths: list[str]
+    dependency_paths: list[str]
+    other_branch_paths: dict[str, list[str]]
+
+
+def _owning_branch_candidates(
+    uncovered_paths: list[str],
+    ownership: _BranchOwnership,
+    work_item_id: object,
+    dependency_recommendations: list[dict],
+) -> list[dict]:
+    owning_branch_candidates: list[dict] = []
+    for path in uncovered_paths:
+        owners = [
+            other_id
+            for other_id, paths in ownership.other_branch_paths.items()
+            if any(path_is_covered(path, owner) for owner in paths)
+        ]
+        if owners:
+            owning_branch_candidates.append({"path": path, "owners": owners})
+            dependency_recommendations.append(
+                {
+                    "branch_id": ownership.branch_id,
+                    "work_item_id": work_item_id,
+                    "path": path,
+                    "recommended_depends_on": owners,
+                    "reason": "verification command requires a path owned by a sibling branch",
+                }
+            )
+    return owning_branch_candidates
+
+
+def _ownership_command_record(
+    command: str,
+    *,
+    work_item_id: object,
+    ownership: _BranchOwnership,
+    repo_root: Path | None,
+    dependency_recommendations: list[dict],
+) -> dict:
+    required_paths, modules = command_required_paths(command, repo_root)
+    outside_paths = [
+        path for path in required_paths if not any(path_is_covered(path, owner) for owner in ownership.branch_paths)
+    ]
+    dependency_covered = [
+        path for path in outside_paths if any(path_is_covered(path, owner) for owner in ownership.dependency_paths)
+    ]
+    uncovered_paths = [path for path in outside_paths if path not in dependency_covered]
+    owning_branch_candidates = _owning_branch_candidates(
+        uncovered_paths, ownership, work_item_id, dependency_recommendations
+    )
+    missing_owned_paths = [
+        path
+        for path in uncovered_paths
+        if not any(path == item["path"] for item in owning_branch_candidates)
+    ]
+    status = "pass" if not uncovered_paths else "needs_review"
+    return {
+        "branch_id": ownership.branch_id,
+        "work_item_id": work_item_id,
+        "command": command,
+        "status": status,
+        "module_entrypoints": modules,
+        "required_paths": required_paths,
+        "branch_owned_paths": ownership.branch_paths,
+        "dependency_covered_paths": dependency_covered,
+        "uncovered_paths": uncovered_paths,
+        "owning_branch_candidates": owning_branch_candidates,
+        "missing_owned_paths": missing_owned_paths,
+        "recommended_action": (
+            "none"
+            if status == "pass"
+            else "co-locate required paths in this branch or add explicit depends_on and merge sequencing before dispatch"
+        ),
+    }
+
+
 def build_ownership_feasibility(branches: list[dict], repo_root: Path | None) -> dict:
     branch_owned = {
         branch["id"]: [path for path in branch.get("owned_paths", []) if isinstance(path, str)]
@@ -2298,13 +2436,16 @@ def build_ownership_feasibility(branches: list[dict], repo_root: Path | None) ->
     dependency_recommendations = []
     for branch in branches:
         branch_id = branch["id"]
-        branch_paths = branch_owned.get(branch_id, [])
-        dependency_paths = [path for dep_id in branch.get("depends_on", []) for path in branch_owned.get(dep_id, [])]
-        other_branch_paths = {
-            other_id: paths
-            for other_id, paths in branch_owned.items()
-            if other_id != branch_id and other_id not in set(branch.get("depends_on", []))
-        }
+        ownership = _BranchOwnership(
+            branch_id=branch_id,
+            branch_paths=branch_owned.get(branch_id, []),
+            dependency_paths=[path for dep_id in branch.get("depends_on", []) for path in branch_owned.get(dep_id, [])],
+            other_branch_paths={
+                other_id: paths
+                for other_id, paths in branch_owned.items()
+                if other_id != branch_id and other_id not in set(branch.get("depends_on", []))
+            },
+        )
         for item in branch.get("work_items", []):
             if not isinstance(item, dict):
                 continue
@@ -2312,57 +2453,14 @@ def build_ownership_feasibility(branches: list[dict], repo_root: Path | None) ->
             for command in item.get("verification", []):
                 if not isinstance(command, str) or not command.strip():
                     continue
-                required_paths, modules = command_required_paths(command, repo_root)
-                outside_paths = [
-                    path for path in required_paths if not any(path_is_covered(path, owner) for owner in branch_paths)
-                ]
-                dependency_covered = [
-                    path for path in outside_paths if any(path_is_covered(path, owner) for owner in dependency_paths)
-                ]
-                uncovered_paths = [path for path in outside_paths if path not in dependency_covered]
-                owning_branch_candidates = []
-                for path in uncovered_paths:
-                    owners = [
-                        other_id
-                        for other_id, paths in other_branch_paths.items()
-                        if any(path_is_covered(path, owner) for owner in paths)
-                    ]
-                    if owners:
-                        owning_branch_candidates.append({"path": path, "owners": owners})
-                        dependency_recommendations.append(
-                            {
-                                "branch_id": branch_id,
-                                "work_item_id": work_item_id,
-                                "path": path,
-                                "recommended_depends_on": owners,
-                                "reason": "verification command requires a path owned by a sibling branch",
-                            }
-                        )
-                missing_owned_paths = [
-                    path
-                    for path in uncovered_paths
-                    if not any(path == item["path"] for item in owning_branch_candidates)
-                ]
-                status = "pass" if not uncovered_paths else "needs_review"
                 records.append(
-                    {
-                        "branch_id": branch_id,
-                        "work_item_id": work_item_id,
-                        "command": command,
-                        "status": status,
-                        "module_entrypoints": modules,
-                        "required_paths": required_paths,
-                        "branch_owned_paths": branch_paths,
-                        "dependency_covered_paths": dependency_covered,
-                        "uncovered_paths": uncovered_paths,
-                        "owning_branch_candidates": owning_branch_candidates,
-                        "missing_owned_paths": missing_owned_paths,
-                        "recommended_action": (
-                            "none"
-                            if status == "pass"
-                            else "co-locate required paths in this branch or add explicit depends_on and merge sequencing before dispatch"
-                        ),
-                    }
+                    _ownership_command_record(
+                        command,
+                        work_item_id=work_item_id,
+                        ownership=ownership,
+                        repo_root=repo_root,
+                        dependency_recommendations=dependency_recommendations,
+                    )
                 )
     needs_review = [record for record in records if record.get("status") != "pass"]
     return {
@@ -2916,56 +3014,73 @@ def manifest_from_normalized_brief(brief: dict, bundle_dir: Path | None = None) 
             else {}
         ),
         "branches": [
-            {
-                "id": branch["id"],
-                "objective": branch.get("objective", ""),
-                "scope": branch_scope_text(branch),
-                "wave": branch["wave"],
-                "prompt": branch["prompt"],
-                "branch_name": branch["branch_name"],
-                "worktree_path": branch["worktree_path"],
-                "status_path": branch["status_path"],
-                "review_path": branch["review_path"],
-                "pre_review_gate_path": branch["pre_review_gate_path"],
-                "depends_on": branch["depends_on"],
-                "owned_paths": branch["owned_paths"],
-                "work_items": add_route_ladder_recommendations(
-                    branch["work_items"],
-                    worker_model_policy,
-                    recommendations_enabled=worker_route_recommendations_enabled,
-                ),
-                "execution_strategy_ref": execution_strategy.get("id"),
-                "route_contract_sha256": sha256_json(route_contract),
-                "max_active_worker_packets": branch["max_active_worker_packets"],
-                "worker_parallelism": branch["worker_parallelism"],
-                **(
-                    {"dependency_context_reason": branch["dependency_context_reason"]}
-                    if isinstance(branch.get("dependency_context_reason"), str)
-                    and branch["dependency_context_reason"].strip()
-                    else {}
-                ),
-                **({"recovers_from": branch["recovers_from"]} if isinstance(branch.get("recovers_from"), list) else {}),
-                **({"supersedes": branch["supersedes"]} if isinstance(branch.get("supersedes"), list) else {}),
-                **(
-                    {"recovery_mode": branch["recovery_mode"]}
-                    if isinstance(branch.get("recovery_mode"), str) and branch["recovery_mode"].strip()
-                    else {}
-                ),
-                **(
-                    {"contention_reason": branch["contention_reason"]}
-                    if isinstance(branch.get("contention_reason"), str) and branch["contention_reason"].strip()
-                    else {}
-                ),
-                **(
-                    {"worker_contention_reason": branch["worker_contention_reason"]}
-                    if isinstance(branch.get("worker_contention_reason"), str)
-                    and branch["worker_contention_reason"].strip()
-                    else {}
-                ),
-            }
+            _manifest_branch_entry(
+                branch,
+                worker_model_policy=worker_model_policy,
+                worker_route_recommendations_enabled=worker_route_recommendations_enabled,
+                execution_strategy=execution_strategy,
+                route_contract=route_contract,
+            )
             for branch in brief["branches"]
         ],
         "waves": brief["waves"],
+    }
+
+
+def _manifest_branch_entry(
+    branch: dict,
+    *,
+    worker_model_policy: dict,
+    worker_route_recommendations_enabled: bool,
+    execution_strategy: dict,
+    route_contract: dict,
+) -> dict:
+    return {
+        "id": branch["id"],
+        "objective": branch.get("objective", ""),
+        "scope": branch_scope_text(branch),
+        "wave": branch["wave"],
+        "prompt": branch["prompt"],
+        "branch_name": branch["branch_name"],
+        "worktree_path": branch["worktree_path"],
+        "status_path": branch["status_path"],
+        "review_path": branch["review_path"],
+        "pre_review_gate_path": branch["pre_review_gate_path"],
+        "depends_on": branch["depends_on"],
+        "owned_paths": branch["owned_paths"],
+        "work_items": add_route_ladder_recommendations(
+            branch["work_items"],
+            worker_model_policy,
+            recommendations_enabled=worker_route_recommendations_enabled,
+        ),
+        "execution_strategy_ref": execution_strategy.get("id"),
+        "route_contract_sha256": sha256_json(route_contract),
+        "max_active_worker_packets": branch["max_active_worker_packets"],
+        "worker_parallelism": branch["worker_parallelism"],
+        **(
+            {"dependency_context_reason": branch["dependency_context_reason"]}
+            if isinstance(branch.get("dependency_context_reason"), str)
+            and branch["dependency_context_reason"].strip()
+            else {}
+        ),
+        **({"recovers_from": branch["recovers_from"]} if isinstance(branch.get("recovers_from"), list) else {}),
+        **({"supersedes": branch["supersedes"]} if isinstance(branch.get("supersedes"), list) else {}),
+        **(
+            {"recovery_mode": branch["recovery_mode"]}
+            if isinstance(branch.get("recovery_mode"), str) and branch["recovery_mode"].strip()
+            else {}
+        ),
+        **(
+            {"contention_reason": branch["contention_reason"]}
+            if isinstance(branch.get("contention_reason"), str) and branch["contention_reason"].strip()
+            else {}
+        ),
+        **(
+            {"worker_contention_reason": branch["worker_contention_reason"]}
+            if isinstance(branch.get("worker_contention_reason"), str)
+            and branch["worker_contention_reason"].strip()
+            else {}
+        ),
     }
 
 
@@ -3149,16 +3264,98 @@ def lint_bundle(bundle_dir: Path, *, write_output: bool = True) -> dict:
     return data
 
 
+class GoalConfigInputs(NamedTuple):
+    config: dict | None = None
+    check: dict | None = None
+    config_source: Path | None = None
+    check_source: Path | None = None
+
+
+def _goal_config_provenance(config_source: Path | None, check_source: Path | None, bundle_dir: Path) -> dict:
+    provenance: dict[str, dict] = {}
+    if config_source is not None:
+        provenance["config"] = {
+            **provenance_path(config_source, bundle_dir),
+            "copied_path": "goal.config.json",
+            "sanitized_runtime_copy": True,
+            "sanitized_fields": ["telemetry.raw_text"],
+        }
+    else:
+        provenance["config"] = {
+            "source_path": "inline",
+            "source_path_type": "inline",
+            "copied_path": "goal.config.json",
+            "sanitized_runtime_copy": True,
+            "sanitized_fields": ["telemetry.raw_text"],
+        }
+    if check_source is not None:
+        provenance["check"] = {
+            **provenance_path(check_source, bundle_dir),
+            "copied_path": "goal-config.check.json",
+        }
+    else:
+        provenance["check"] = {
+            "source_path": "inline",
+            "source_path_type": "inline",
+            "copied_path": "goal-config.check.json",
+        }
+    return provenance
+
+
+def _render_preflight_report(
+    brief: dict,
+    manifest: dict,
+    bundle_dir: Path,
+    goal_config_inputs: GoalConfigInputs,
+    git_ignore_warning: str,
+) -> str:
+    goal_config = goal_config_inputs.config
+    goal_config_check = goal_config_inputs.check
+    return "\n".join(
+        [
+            f"# Preflight Report: {brief['job_id']}",
+            "",
+            f"Bundle: {bundle_dir.resolve()}",
+            f"Branches: {len(brief['branches'])}",
+            f"Waves: {len(brief['waves'])}",
+            f"Runtime rules appendix: {RUNTIME_RULES_PATH} sha256={brief.get('runtime_rules_sha256')}",
+            f"Runtime index: runtime.index.json sha256={manifest.get('runtime_index_sha256')}",
+            f"Execution strategy: {manifest['execution_strategy']['id']} ({manifest['execution_strategy']['reason']})",
+            f"Route contract: sha256={manifest['route_contract_sha256']} catalog_refresh_required={manifest['route_contract']['catalog_refresh_required']}",
+            f"Ownership feasibility: {manifest['ownership_feasibility']['status']} ({manifest['ownership_feasibility']['needs_review_count']} command(s) need review)",
+            f"Max active branch agents: {brief['max_active_branch_agents']}",
+            f"Runtime readiness gate: {repo_runtime_gate_summary(brief['repo_status'])}",
+            f"Config precedence: {brief['preflight_input_precedence']['note']}",
+            f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
+            f"Scheduling: rolling; runtime branch scheduler ledger path is {CONTRACT.MAIN_SCHEDULER_PATH}; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
+            "Waves are dependency-aware scheduling/order groups; dependencies are explicit via depends_on and runtime readiness still gates launch eligibility.",
+            f"Worker model policy: {CONTRACT.format_worker_ladder(manifest['worker_model_policy']['default_ladder'])}; branches may choose an ordered subsequence with a recorded reason.",
+            *goal_config_report_lines(goal_config, goal_config_check, manifest),
+            *([git_ignore_warning] if git_ignore_warning else []),
+            "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
+            f"Artifact policy: {brief['artifact_policy']}",
+            f"Cleanup policy: {brief['cleanup_policy']}",
+            "",
+            "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
+            "Lite: optional advisory packets may route context but never satisfy audit, review, mergeability, or DoD evidence; preflight Lite provenance lives in job.manifest.json preflight_lite_advice.",
+            "Launch gate: run bundle lint and readiness; launch only when readiness reports `launch_allowed=true`.",
+            "",
+        ]
+    )
+
+
 def create_bundle(
     brief: dict,
     repo_root: Path,
     out_dir: Path | None,
     *,
-    goal_config: dict | None = None,
-    goal_config_check: dict | None = None,
-    goal_config_source: Path | None = None,
-    goal_config_check_source: Path | None = None,
+    goal_config_inputs: GoalConfigInputs | None = None,
 ) -> Path:
+    goal_config_inputs = goal_config_inputs or GoalConfigInputs()
+    goal_config = goal_config_inputs.config
+    goal_config_check = goal_config_inputs.check
+    goal_config_source = goal_config_inputs.config_source
+    goal_config_check_source = goal_config_inputs.check_source
     if goal_config is not None and goal_config_check is None:
         raise SystemExit("--goal-config requires --goal-config-check with status=pass")
     original_brief = dict(brief)
@@ -3218,34 +3415,9 @@ def create_bundle(
 
     manifest = manifest_from_normalized_brief(brief, bundle_dir)
     if runtime_goal_config is not None:
-        provenance = {}
-        if goal_config_source is not None:
-            provenance["config"] = {
-                **provenance_path(goal_config_source, bundle_dir),
-                "copied_path": "goal.config.json",
-                "sanitized_runtime_copy": True,
-                "sanitized_fields": ["telemetry.raw_text"],
-            }
-        else:
-            provenance["config"] = {
-                "source_path": "inline",
-                "source_path_type": "inline",
-                "copied_path": "goal.config.json",
-                "sanitized_runtime_copy": True,
-                "sanitized_fields": ["telemetry.raw_text"],
-            }
-        if goal_config_check_source is not None:
-            provenance["check"] = {
-                **provenance_path(goal_config_check_source, bundle_dir),
-                "copied_path": "goal-config.check.json",
-            }
-        else:
-            provenance["check"] = {
-                "source_path": "inline",
-                "source_path_type": "inline",
-                "copied_path": "goal-config.check.json",
-            }
-        manifest["goal_config_provenance"] = provenance
+        manifest["goal_config_provenance"] = _goal_config_provenance(
+            goal_config_source, goal_config_check_source, bundle_dir
+        )
     manifest["runtime_index_path"] = "runtime.index.json"
     runtime_index = build_runtime_index(manifest)
     write(bundle_dir / "runtime.index.json", canonical_json_text(runtime_index))
@@ -3262,37 +3434,7 @@ def create_bundle(
     bootloader = render_bootloader(bundle_dir.resolve(), repo_root.resolve())
     write(bundle_dir / "goal-bootloader.md", bootloader)
     git_ignore_warning = git_ignore_warning_record.get("message", "") if git_ignore_warning_record else ""
-    report = "\n".join(
-        [
-            f"# Preflight Report: {brief['job_id']}",
-            "",
-            f"Bundle: {bundle_dir.resolve()}",
-            f"Branches: {len(brief['branches'])}",
-            f"Waves: {len(brief['waves'])}",
-            f"Runtime rules appendix: {RUNTIME_RULES_PATH} sha256={brief.get('runtime_rules_sha256')}",
-            f"Runtime index: runtime.index.json sha256={manifest.get('runtime_index_sha256')}",
-            f"Execution strategy: {manifest['execution_strategy']['id']} ({manifest['execution_strategy']['reason']})",
-            f"Route contract: sha256={manifest['route_contract_sha256']} catalog_refresh_required={manifest['route_contract']['catalog_refresh_required']}",
-            f"Ownership feasibility: {manifest['ownership_feasibility']['status']} ({manifest['ownership_feasibility']['needs_review_count']} command(s) need review)",
-            f"Max active branch agents: {brief['max_active_branch_agents']}",
-            f"Runtime readiness gate: {repo_runtime_gate_summary(brief['repo_status'])}",
-            f"Config precedence: {brief['preflight_input_precedence']['note']}",
-            f"Parallelization: {brief['parallelization']['parallelization_rationale']}",
-            f"Scheduling: rolling; runtime branch scheduler ledger path is {CONTRACT.MAIN_SCHEDULER_PATH}; saturate active branch orchestrators up to max_active_branch_agents and defer only branches with incomplete depends_on branch ids.",
-            "Waves are dependency-aware scheduling/order groups; dependencies are explicit via depends_on and runtime readiness still gates launch eligibility.",
-            f"Worker model policy: {CONTRACT.format_worker_ladder(manifest['worker_model_policy']['default_ladder'])}; branches may choose an ordered subsequence with a recorded reason.",
-            *goal_config_report_lines(goal_config, goal_config_check, manifest),
-            *([git_ignore_warning] if git_ignore_warning else []),
-            "Research worker policy: use research-worker packets for outside information gathering; launcher uses Codex native web search with user config loaded and read-only sandboxing, allowing configured read-only CLI/MCP/connector/browser/search tools plus shell/network inspection commands while prohibiting file edits and state-changing actions.",
-            f"Artifact policy: {brief['artifact_policy']}",
-            f"Cleanup policy: {brief['cleanup_policy']}",
-            "",
-            "Bootstrap: generated bootloaders require runtime skill availability checks before prompt audit.",
-            "Lite: optional advisory packets may route context but never satisfy audit, review, mergeability, or DoD evidence; preflight Lite provenance lives in job.manifest.json preflight_lite_advice.",
-            "Launch gate: run bundle lint and readiness; launch only when readiness reports `launch_allowed=true`.",
-            "",
-        ]
-    )
+    report = _render_preflight_report(brief, manifest, bundle_dir, goal_config_inputs, git_ignore_warning)
     write(bundle_dir / "PREFLIGHT_REPORT.md", report)
     return bundle_dir
 
@@ -3359,10 +3501,12 @@ def main() -> int:
         load_json(brief_path),
         repo_root,
         out_dir,
-        goal_config=goal_config,
-        goal_config_check=goal_config_check,
-        goal_config_source=goal_config_path,
-        goal_config_check_source=goal_config_check_path,
+        goal_config_inputs=GoalConfigInputs(
+            config=goal_config,
+            check=goal_config_check,
+            config_source=goal_config_path,
+            check_source=goal_config_check_path,
+        ),
     )
     result = {
         "status": "pass",
