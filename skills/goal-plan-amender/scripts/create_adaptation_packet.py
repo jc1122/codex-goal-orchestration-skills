@@ -9,6 +9,7 @@ from pathlib import Path
 
 from amendment_lib import (
     CONTRACT,
+    add_if_exists,
     amender_model_policy,
     amender_telemetry_attempts,
     ensure_amendment_id,
@@ -18,26 +19,13 @@ from amendment_lib import (
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
+    source_record,
     validate_amender_model_policy,
     write_json,
 )
 
 
 AMENDER_OUTPUT_NAME = "../{amendment_id}.proposal.json"
-
-
-def source_record(path: Path, label: str) -> dict:
-    return {
-        "label": label,
-        "path": path.as_posix(),
-        "sha256": sha256_file(path),
-        "size_bytes": path.stat().st_size,
-    }
-
-
-def add_if_exists(records: list[dict], path: Path, label: str) -> None:
-    if path.exists() and path.is_file():
-        records.append(source_record(path, label))
 
 
 def proposal_schema(amendment_id: str, job_id: str) -> dict:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from amendment_lib import (
     CONTRACT,
+    add_if_exists,
     branch_map,
     add_lineage_stage,
     amender_model_policy,
@@ -22,6 +23,7 @@ from amendment_lib import (
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
+    source_record,
     validate_amender_model_policy,
     write_json,
 )
@@ -39,20 +41,6 @@ MISSING_WORD_RE = re.compile(
 TEST_FAIL_RE = re.compile(r"((?:tests)/[A-Za-z0-9_./+-]+\.py).*?fail(?:s|ed)? to collect", re.I)
 ALLOWED_PREFIXES = ("src/", "tests/", "scripts/", "plans/", "docs/", ".github/")
 DETERMINISTIC_MODE = "deterministic_blocker_repair"
-
-
-def source_record(path: Path, label: str) -> dict:
-    return {
-        "label": label,
-        "path": path.as_posix(),
-        "sha256": sha256_file(path),
-        "size_bytes": path.stat().st_size,
-    }
-
-
-def add_if_exists(records: list[dict], path: Path, label: str) -> None:
-    if path.exists() and path.is_file():
-        records.append(source_record(path, label))
 
 
 def safe_path(value: str) -> str | None:
