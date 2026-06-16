@@ -835,6 +835,7 @@ def write_mergeable_reviewer_packet(bundle: Path, packet_id: str, semantic_hashe
                 "usage": None,
             }
         )
+    bundle_base_ref = read_json(bundle / "job.manifest.json").get("base_ref", "main")
     write_json(
         packet_dir / "review.json",
         {
@@ -843,7 +844,7 @@ def write_mergeable_reviewer_packet(bundle: Path, packet_id: str, semantic_hashe
             "verdict": "mergeable",
             "findings": [],
             "finding_classes": ["no_issue"],
-            "commands_run": ["git diff --check main...HEAD"],
+            "commands_run": [f"git diff --check {bundle_base_ref}...HEAD"],
             "verification_gaps": [],
             "residual_risks": [],
             "semantic_input_hashes": semantic_hashes,
