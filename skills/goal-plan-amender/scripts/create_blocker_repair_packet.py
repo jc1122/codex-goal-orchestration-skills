@@ -25,6 +25,7 @@ from amendment_lib import (
     validate_amender_model_policy,
     write_json,
 )
+import contextlib
 
 
 FILE_RE = re.compile(
@@ -52,13 +53,6 @@ def source_record(path: Path, label: str) -> dict:
 def add_if_exists(records: list[dict], path: Path, label: str) -> None:
     if path.exists() and path.is_file():
         records.append(source_record(path, label))
-
-
-def repo_relative(path: Path, repo_root: Path) -> str | None:
-    try:
-        return path.resolve().relative_to(repo_root.resolve()).as_posix()
-    except ValueError:
-        return None
 
 
 def safe_path(value: str) -> str | None:
@@ -674,10 +668,8 @@ def create_packet(args: argparse.Namespace) -> Path:
             }
         )
         write_json(decision_path, updated_decision)
-        try:
+        with contextlib.suppress(OSError):
             packet_dir.rmdir()
-        except OSError:
-            pass
         return no_op_path
     write_json(packet_dir / "input-files.json", packet)
     write_json(packet_dir / "route.json", route)

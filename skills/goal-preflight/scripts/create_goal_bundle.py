@@ -412,10 +412,7 @@ def git_repo_status(repo_root: Path, *, base_ref: str | None = None, branch_path
     used_for_runtime = _is_root_required_for_runtime(branch_paths or [])
     dirty = bool(tracked_changes or untracked_changes)
     if dirty:
-        if used_for_runtime:
-            decision = "warning"
-        else:
-            decision = "ignored_because_isolated_worktrees"
+        decision = "warning" if used_for_runtime else "ignored_because_isolated_worktrees"
     else:
         decision = "clean"
     status = {
@@ -1442,10 +1439,6 @@ def max_ready_width(items: list[dict], *, id_field: str = "id", depends_on_field
     return max(widths.values(), default=0)
 
 
-def branch_ready_width(branches: list[dict]) -> int:
-    return len([branch for branch in branches if not branch.get("depends_on")])
-
-
 def ready_width_metadata(
     item_count: int, current_ready_width: int, capacity: int, *, scope: str, identifier: str | None = None
 ) -> dict[str, object]:
@@ -1496,15 +1489,12 @@ def item_dependency_profile(item: dict, repo_root: Path | None) -> dict[str, set
 
 
 def _has_concrete_path_dependency(dep_profile: dict[str, set[str]], item_profile: dict[str, set[str]]) -> bool:
-    if _path_sets_overlap(dep_profile["owned_paths"], item_profile["owned_paths"]):
-        return True
-    if _path_sets_overlap(dep_profile["owned_paths"], item_profile["context_files"]):
-        return True
-    if _path_sets_overlap(dep_profile["owned_paths"], item_profile["required_paths"]):
-        return True
-    if _path_sets_overlap(dep_profile["required_paths"], item_profile["owned_paths"]):
-        return True
-    return False
+    return (
+        _path_sets_overlap(dep_profile["owned_paths"], item_profile["owned_paths"])
+        or _path_sets_overlap(dep_profile["owned_paths"], item_profile["context_files"])
+        or _path_sets_overlap(dep_profile["owned_paths"], item_profile["required_paths"])
+        or _path_sets_overlap(dep_profile["required_paths"], item_profile["owned_paths"])
+    )
 
 
 def optimize_worker_dependencies(branch: dict, *, repo_root: Path | None, branch_worker_reasons: list[str]) -> None:
@@ -1546,75 +1536,6 @@ def optimize_worker_dependencies(branch: dict, *, repo_root: Path | None, branch
         )
 
 
-def optimize_branch_dependencies(
-    branches: list[dict],
-    *,
-    repo_root: Path | None,
-    serial_reasons: list[str],
-    branch_dependency_reasons: dict[str, list[str]],
-) -> None:
-    if len(branches) <= 1:
-        return
-    branch_profiles = {}
-    for branch in branches:
-        owned = _path_value_set(branch.get("owned_paths", []))
-        context: set[str] = set()
-        required: set[str] = set()
-        for item in branch.get("work_items", []):
-            if not isinstance(item, dict):
-                continue
-            context.update(_path_value_set(item.get("context_files", [])))
-            for command in item.get("verification", []):
-                if not isinstance(command, str) or not command.strip():
-                    continue
-                required.update(command_required_paths(command, repo_root)[0])
-        branch_profiles[branch["id"]] = {
-            "owned_paths": owned,
-            "context_files": context,
-            "required_paths": required,
-        }
-
-    removed_edges: list[tuple[str, str]] = []
-    for branch in branches:
-        deps = list(branch.get("depends_on", []))
-        if not deps:
-            continue
-        bid = branch.get("id")
-        if not isinstance(bid, str):
-            continue
-        profile = branch_profiles.get(bid)
-        if profile is None:
-            continue
-        kept: list[str] = []
-        for dependency in deps:
-            dep_profile = branch_profiles.get(str(dependency))
-            if dep_profile is None:
-                kept.append(dependency)
-                continue
-            if _path_sets_overlap(dep_profile["owned_paths"], profile["owned_paths"]):
-                kept.append(dependency)
-                continue
-            if _path_sets_overlap(dep_profile["owned_paths"], profile["context_files"]):
-                kept.append(dependency)
-                continue
-            if _path_sets_overlap(dep_profile["owned_paths"], profile["required_paths"]):
-                kept.append(dependency)
-                continue
-            removed_edges.append((str(dependency), bid))
-        if len(kept) != len(deps):
-            branch["depends_on"] = kept
-
-    for dependency, branch_id in removed_edges:
-        append_reason_once(
-            branch_dependency_reasons.setdefault(branch_id, []),
-            f"Removed branch dependency {dependency}->{branch_id} after path/verification evidence indicated no direct data dependency.",
-        )
-        append_reason_once(
-            serial_reasons,
-            "Dependency optimizer removed non-data branch dependency edges to improve ready-width where local contracts permit it.",
-        )
-
-
 def longest_work_item_chain(items: list[dict]) -> int:
     lengths: dict[str, int] = {}
     for item in items:
@@ -1648,19 +1569,6 @@ def normalize_branch_dependencies(branches: list[dict]) -> None:
             seen.add(dep_id)
             deps.append(dep_id)
         branch["depends_on"] = deps
-
-
-def chunk_waves(branches: list[dict], wave_size: int) -> list[dict]:
-    waves = []
-    for offset in range(0, len(branches), wave_size):
-        wave_branches = branches[offset : offset + wave_size]
-        waves.append(
-            {
-                "id": wave_id(len(waves) + 1),
-                "branches": [branch["id"] for branch in wave_branches],
-            }
-        )
-    return waves
 
 
 def dependency_waves(branches: list[dict], wave_size: int) -> list[dict]:
@@ -1894,7 +1802,7 @@ def normalize_brief(
     seen_wave_ids = set()
     seen_wave_branches = []
     wave_by_branch = {}
-    for idx, wave in enumerate(waves):
+    for wave in waves:
         wid = require_safe_label(str(wave["id"]), "wave id")
         if wid in seen_wave_ids:
             raise SystemExit(f"duplicate wave id: {wid}")
@@ -2645,11 +2553,6 @@ def repo_runtime_gate_summary(repo_status: dict) -> str:
     if repo_status.get("base_ref_status") == "missing":
         return f"blocked - base_ref does not exist: {repo_status.get('base_ref')}"
     return "pass - git runtime gate is satisfied"
-
-
-def bundle_git_ignore_warning(repo_root: Path, bundle_dir: Path) -> str:
-    warning = bundle_git_ignore_warning_record(repo_root, bundle_dir)
-    return str(warning.get("message", "")) if warning else ""
 
 
 def bundle_git_ignore_warning_record(repo_root: Path, bundle_dir: Path) -> dict:

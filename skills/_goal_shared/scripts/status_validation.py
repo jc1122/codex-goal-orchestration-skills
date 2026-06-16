@@ -403,9 +403,8 @@ def validate_pre_review_volatile_inputs(defects: list[str], value: object, path:
         return
     data = require_object(defects, value, path)
     head = data.get("worktree_head")
-    if head is not None:
-        if not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head):
-            defect(defects, f"{path}.worktree_head", "must be a 40- or 64-character git commit hash")
+    if head is not None and (not isinstance(head, str) or not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", head)):
+        defect(defects, f"{path}.worktree_head", "must be a 40- or 64-character git commit hash")
     for key in ["diff_name_status_sha256", "diff_binary_sha256"]:
         digest = data.get(key)
         if digest is not None and (not isinstance(digest, str) or not SHA256_RE.fullmatch(digest)):
@@ -531,9 +530,8 @@ def validate_scheduler_ledger(
         for item_id in expected_ids:
             if item_id in active:
                 continue
-            if item_id in launched:
-                if not relaunch_candidate(item_id):
-                    continue
+            if item_id in launched and not relaunch_candidate(item_id):
+                continue
             deps = dependencies.get(item_id, [])
             if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
                 eligible.append(item_id)

@@ -188,13 +188,6 @@ def branch_entry(manifest: dict, branch_id: str) -> dict:
     return matches[0]
 
 
-def bundle_relative(bundle_dir: Path, path: Path) -> str:
-    try:
-        return path.resolve().relative_to(bundle_dir.resolve()).as_posix()
-    except ValueError as exc:
-        raise SystemExit(f"path must be inside bundle directory: {path}") from exc
-
-
 def safe_status_path(bundle_dir: Path, value: object, field: str) -> Path:
     if not isinstance(value, str) or not value.strip() or not is_repo_relative_path(value):
         raise SystemExit(f"{field} must be a safe bundle-relative path")
@@ -202,10 +195,7 @@ def safe_status_path(bundle_dir: Path, value: object, field: str) -> Path:
 
 
 def path_is_owned(path: str, owned_paths: list[str]) -> bool:
-    for owned in owned_paths:
-        if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
-            return True
-    return False
+    return any(path == owned or path.startswith(f"{owned.rstrip('/')}/") for owned in owned_paths)
 
 
 def ownership_check(branch: dict, branch_status: dict) -> dict:

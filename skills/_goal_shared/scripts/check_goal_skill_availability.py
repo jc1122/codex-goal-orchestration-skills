@@ -9,6 +9,7 @@ import os
 import re
 import shutil
 from pathlib import Path
+import contextlib
 
 
 REQUIRED_FILES = {
@@ -173,13 +174,11 @@ def candidate_roots(cli_roots: list[str], allow_fallback_roots: bool) -> list[Pa
     add_unique(
         roots, normalize_absolute_root(Path.home() / ".agents" / "skills", "~/.agents/skills", fail_on_relative=False)
     )
-    try:
+    with contextlib.suppress(IndexError):
         add_unique(
             roots,
             normalize_absolute_root(Path(__file__).resolve().parents[2], "script skill root", fail_on_relative=False),
         )
-    except IndexError:
-        pass
     return roots
 
 

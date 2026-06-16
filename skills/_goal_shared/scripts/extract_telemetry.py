@@ -356,10 +356,7 @@ def _packet_debug_timing(packet_dir: Path) -> dict[str, Any] | None:
     if elapsed_seconds is None:
         elapsed_seconds = _elapsed_seconds_from_timestamps(start_at, completed_at)
     if timed_out is None:
-        if exit_status == 0:
-            timed_out = False
-        else:
-            timed_out = None
+        timed_out = False if exit_status == 0 else None
     return {
         "started_at": start_at,
         "completed_at": completed_at,

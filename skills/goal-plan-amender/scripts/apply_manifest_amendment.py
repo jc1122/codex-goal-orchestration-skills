@@ -29,6 +29,7 @@ from amendment_lib import (
     write_runtime_index,
 )
 from validate_amender_packet import validate_packet
+import contextlib
 
 
 def atomic_write_json(path: Path, data: object) -> None:
@@ -224,17 +225,13 @@ def main() -> int:
             manifest_path.write_text(archive_path.read_text(encoding="utf-8"), encoding="utf-8")
         restore_prompt_backups(prompt_backups)
         if report_backup is None:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 report_path.unlink()
-            except FileNotFoundError:
-                pass
         else:
             report_path.write_text(report_backup, encoding="utf-8")
         if runtime_index_backup is None:
-            try:
+            with contextlib.suppress(FileNotFoundError):
                 runtime_index_path.unlink()
-            except FileNotFoundError:
-                pass
         else:
             runtime_index_path.write_text(runtime_index_backup, encoding="utf-8")
         raise

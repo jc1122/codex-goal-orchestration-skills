@@ -327,9 +327,10 @@ def replay(
             raise SystemExit(f"scheduler events[{index}] must be an object")
         name = event.get("event")
         event_id = event.get("id")
-        if name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
-            if not isinstance(event_id, str) or event_id not in known:
-                raise SystemExit(f"scheduler events[{index}].id must be a manifest scheduler id")
+        if name in {"ready", "launch", "finish", "close", "defer", "blocked"} and (
+            not isinstance(event_id, str) or event_id not in known
+        ):
+            raise SystemExit(f"scheduler events[{index}].id must be a manifest scheduler id")
         if name == "ready":
             ready.add(str(event_id))
         elif name == "launch":
@@ -402,9 +403,10 @@ def replay(
         for item_id in item_ids:
             if item_id in active:
                 continue
-            if item_id in launched:
-                if item_id not in closed or finished_status.get(item_id) == "pass" or not is_repair_relaunch(item_id):
-                    continue
+            if item_id in launched and (
+                item_id not in closed or finished_status.get(item_id) == "pass" or not is_repair_relaunch(item_id)
+            ):
+                continue
             deps = dependencies.get(item_id, [])
             if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
                 eligible.append(item_id)

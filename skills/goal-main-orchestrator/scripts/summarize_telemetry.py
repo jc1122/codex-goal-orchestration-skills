@@ -168,7 +168,9 @@ def read_packet_debug_end_event(path: Path) -> tuple[float | None, int | None, s
             if event.get("event") != "end":
                 continue
             value = event.get("elapsed_ms")
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0 or isinstance(value, float) and value >= 0.0:
+            if (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
+                isinstance(value, float) and value >= 0.0
+            ):
                 elapsed_seconds = value / 1000
             if isinstance(event.get("exit_status"), int) and not isinstance(event.get("exit_status"), bool):
                 exit_status = event.get("exit_status")
@@ -205,7 +207,9 @@ def read_debug_event_timing(path: Path) -> tuple[dict[int, float], dict[int, int
                 continue
             value = event.get("elapsed_ms")
             elapsed_seconds: float | None = None
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0 or isinstance(value, float) and value >= 0.0:
+            if (isinstance(value, int) and not isinstance(value, bool) and value >= 0) or (
+                isinstance(value, float) and value >= 0.0
+            ):
                 elapsed_seconds = value / 1000
             if elapsed_seconds is not None:
                 attempt_elapsed[attempt_index] = elapsed_seconds
@@ -218,10 +222,6 @@ def read_debug_event_timing(path: Path) -> tuple[dict[int, float], dict[int, int
     except Exception:
         return {}, {}, {}
     return attempt_elapsed, attempt_exit_status, attempt_status
-
-
-def is_number(value: object) -> bool:
-    return isinstance(value, int) and not isinstance(value, bool) or isinstance(value, float)
 
 
 def normalize_text_reason(value: object) -> str:
@@ -264,12 +264,15 @@ def attempt_elapsed_seconds(
             return float(debug_elapsed), "debug_event"
     timing_source = normalize_text_reason(timing.get("timing_source"))
     if (
-        called
-        and timing_source in {"packet_debug_events", "debug.events", "debug_events", "debug"}
-        and called_attempt_count == 1
+        (
+            called
+            and timing_source in {"packet_debug_events", "debug.events", "debug_events", "debug"}
+            and called_attempt_count == 1
+        )
+        and packet_elapse is not None
+        and packet_elapse >= 0
     ):
-        if packet_elapse is not None and packet_elapse >= 0:
-            return float(packet_elapse), timing_source
+        return float(packet_elapse), timing_source
     if (
         called
         and timing_source == "packet_debug_events"
@@ -281,10 +284,6 @@ def attempt_elapsed_seconds(
     if called and called_attempt_count == 1 and isinstance(packet_elapse, (int, float)) and packet_elapse >= 0:
         return float(packet_elapse), "packet"
     return None, None
-
-
-def attempt_is_called(attempt: dict[str, Any]) -> bool:
-    return attempt.get("called") is True
 
 
 def attempt_provenance_level(attempt: dict[str, Any], launch_event: dict[str, Any] | None) -> str:
@@ -1134,10 +1133,7 @@ def build_run_trace(bundle_dir: Path) -> list[dict[str, Any]]:
 
     def sort_key(event: dict[str, Any]) -> tuple[float, int, str, int]:
         event_wall_clock = event.get("event_wall_clock")
-        if isinstance(event_wall_clock, str):
-            wall_clock_sort = iso_timestamp(event_wall_clock) or 0.0
-        else:
-            wall_clock_sort = 0.0
+        wall_clock_sort = (iso_timestamp(event_wall_clock) or 0.0) if isinstance(event_wall_clock, str) else 0.0
         backfilled = 1 if event.get("backfilled") is True else 0
         source = event.get("source") if isinstance(event.get("source"), str) else ""
         source_seq = (

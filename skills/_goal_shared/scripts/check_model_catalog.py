@@ -35,8 +35,7 @@ def run_catalog(*, bundled: bool) -> tuple[dict[str, Any] | None, str]:
         result = subprocess.run(
             command,
             text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             check=False,
             timeout=CATALOG_TIMEOUT_SECONDS,
         )

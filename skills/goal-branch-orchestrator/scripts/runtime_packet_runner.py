@@ -14,9 +14,10 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
+import contextlib
 
 
 TIMEOUT_NOT_FOUND = "timeout command not found; refusing unbounded {role} attempt.\n"
@@ -295,10 +296,8 @@ def check_worktree(worktree: str) -> None:
 
 
 def remove_if_exists(path: Path) -> None:
-    try:
+    with contextlib.suppress(FileNotFoundError):
         path.unlink()
-    except FileNotFoundError:
-        pass
 
 
 def clear_invalid_output_for_fallback(output_path: Path) -> None:
@@ -582,9 +581,12 @@ def attempt_failure_subclass(
         provider_error_code = str(parse_report["provider_error_code"])
         if provider_error_code in CAPACITY_ERROR_CODES and attempt_state in {"fail-clean", "fail-dirty", "timeout"}:
             return "provider_capacity_exhausted"
-    if attempt_state in {"fail-clean", "fail-dirty", "timeout"}:
-        if _normalize_route_health(route_health).get("capacity_exhausted") and parse_report.get("provider_error_code"):
-            return "provider_capacity_exhausted"
+    if (
+        attempt_state in {"fail-clean", "fail-dirty", "timeout"}
+        and _normalize_route_health(route_health).get("capacity_exhausted")
+        and parse_report.get("provider_error_code")
+    ):
+        return "provider_capacity_exhausted"
     if _normalize_route_health(route_health).get("transport_disconnect_count", 0):
         return "transport_disconnect"
     if message:
@@ -1369,10 +1371,7 @@ def packet_delta_changed_files(worktree: str, baseline: dict[str, str]) -> list[
 
 
 def path_is_owned(path: str, owned_paths: list[str]) -> bool:
-    for owned in owned_paths:
-        if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
-            return True
-    return False
+    return any(path == owned or path.startswith(f"{owned.rstrip('/')}/") for owned in owned_paths)
 
 
 def worker_ownership_violations(config: dict[str, Any], changed_files: list[str]) -> list[str]:
@@ -1450,8 +1449,7 @@ def summarize_dirty_stop_salvage(
         completed = subprocess.run(
             ["git", "-C", worktree, "diff", "--no-color", "--", *diff_paths],
             check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
         diff_text = completed.stdout
@@ -2636,7 +2634,7 @@ def extract_status_json(
         jsonl_parts.extend(collect_strings(data))
     if jsonl_parts:
         sources.append(("decoded JSONL strings", "\n".join(jsonl_parts)))
-    for source_name, source_text in sources:
+    for _source_name, source_text in sources:
         evidence_lines.extend(source_text.splitlines())
     parse_report["provider_error_code"] = detect_provider_error_code(evidence_lines)
 
@@ -2931,10 +2929,9 @@ def run_packet(packet_dir: Path) -> int:
                 cleanup_runtime_cache_evidence(packet_dir, config)
                 write_telemetry(packet_dir, config)
                 return 2
-            if _parse_failure_detected(parse_report):
-                if index < len(attempts) - 1:
-                    clear_invalid_output_for_fallback(output_path)
-                    continue
+            if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
+                clear_invalid_output_for_fallback(output_path)
+                continue
             if output_nonempty:
                 message = string_value(config, "terminal_message")
                 if failure_message:

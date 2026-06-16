@@ -110,10 +110,7 @@ def changed_files_from_git(worktree: Path, base_ref: str) -> list[str]:
 
 
 def path_is_owned(path: str, owned_paths: list[str]) -> bool:
-    for owned in owned_paths:
-        if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
-            return True
-    return False
+    return any(path == owned or path.startswith(f"{owned.rstrip('/')}/") for owned in owned_paths)
 
 
 def evidence_commands(evidence: dict) -> tuple[list[str], list[str]]:

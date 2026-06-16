@@ -228,10 +228,7 @@ def validate_reviewer_policy_tiers(defects: list[str], policy: dict, path: str, 
 
 
 def path_is_owned(path: str, owned_paths: list[str]) -> bool:
-    for owned in owned_paths:
-        if path == owned or path.startswith(f"{owned.rstrip('/')}/"):
-            return True
-    return False
+    return any(path == owned or path.startswith(f"{owned.rstrip('/')}/") for owned in owned_paths)
 
 
 def is_runtime_cache_path(path: str) -> bool:
@@ -1770,11 +1767,12 @@ def validate_worker_scheduler(
             )
             expected_refill_events = []
         actual_refill_events = runtime_parallelism.get("refill_events")
-        if isinstance(actual_refill_events, list) and all(isinstance(item, str) for item in actual_refill_events):
-            if actual_refill_events != expected_refill_events:
-                defect(
-                    defects, "$.worker_parallelism.refill_events", "must match scheduler ledger refill events exactly"
-                )
+        if (
+            isinstance(actual_refill_events, list)
+            and all(isinstance(item, str) for item in actual_refill_events)
+            and actual_refill_events != expected_refill_events
+        ):
+            defect(defects, "$.worker_parallelism.refill_events", "must match scheduler ledger refill events exactly")
     finished_status = summary.get("finished_status") if isinstance(summary.get("finished_status"), dict) else {}
     worker_statuses = root.get("worker_statuses")
     if isinstance(worker_statuses, list):

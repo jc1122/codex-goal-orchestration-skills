@@ -897,7 +897,7 @@ def main() -> int:
     if len(manifest_branch_ids) != len(set(manifest_branch_ids)):
         raise SystemExit("manifest branch ids must be unique")
     wave_branch_ids = []
-    for idx, wave in enumerate(waves):
+    for wave in waves:
         branch_ids = wave.get("branches", [])
         if not isinstance(branch_ids, list) or not branch_ids:
             raise SystemExit(f"wave {wave.get('id')} must list at least one branch")
@@ -1030,25 +1030,22 @@ def main() -> int:
             selected_ids.add(bid)
     elif waves and not args.wave:
         raise SystemExit("manifest has waves; pass --branch <branch-id>, --list-ready, or --wave <wave-id>")
-    if waves:
-        if args.wave:
-            matches = [wave for wave in waves if wave.get("id") == args.wave]
-            if not matches:
-                raise SystemExit(f"unknown wave: {args.wave}")
-            selected_ids = set(matches[0].get("branches", []))
-            for bid in sorted(selected_ids):
-                deps = branch_dependencies.get(bid, [])
-                unresolved = [dep for dep in deps if dep not in completed]
-                if unresolved:
-                    raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
-                if bid in completed:
-                    raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
-                if bid in active:
-                    raise SystemExit(f"branch {bid} is already scheduler-active")
-                if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
-                    raise SystemExit(
-                        f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree"
-                    )
+    if waves and args.wave:
+        matches = [wave for wave in waves if wave.get("id") == args.wave]
+        if not matches:
+            raise SystemExit(f"unknown wave: {args.wave}")
+        selected_ids = set(matches[0].get("branches", []))
+        for bid in sorted(selected_ids):
+            deps = branch_dependencies.get(bid, [])
+            unresolved = [dep for dep in deps if dep not in completed]
+            if unresolved:
+                raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
+            if bid in completed:
+                raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
+            if bid in active:
+                raise SystemExit(f"branch {bid} is already scheduler-active")
+            if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
+                raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
     if selected_ids is not None and len(active) + len(selected_ids) > max_active:
         raise SystemExit("selected branches plus active branches would exceed max_active_branch_agents")
 

@@ -593,9 +593,9 @@ def _manifest_warning_still_applies(warning: dict[str, object], *, bundle_dir: P
         relative = Path(candidate) if candidate else bundle_dir.resolve().relative_to(repo_root.resolve())
     except ValueError:
         return True
-    if _git_path_is_ignored(repo_root, relative) or _git_path_is_ignored(repo_root, relative / "job.manifest.json"):
-        return False
-    return True
+    return not (
+        _git_path_is_ignored(repo_root, relative) or _git_path_is_ignored(repo_root, relative / "job.manifest.json")
+    )
 
 
 def _git_path_is_ignored(repo_root: Path, relative_path: Path) -> bool:

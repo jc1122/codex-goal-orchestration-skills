@@ -10,9 +10,10 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone, UTC
+from datetime import datetime, UTC
 from pathlib import Path
 from typing import Any
+import contextlib
 
 
 CONFIG_NAME = "launch-config.json"
@@ -587,15 +588,11 @@ def run_packet(packet_dir: Path) -> int:
 
     debug_name = config.get("telemetry_debug_name")
     if isinstance(debug_name, str) and debug_name.strip():
-        try:
+        with contextlib.suppress(FileNotFoundError):
             (packet_dir / debug_name).unlink()
-        except FileNotFoundError:
-            pass
     for path in [output_path, raw_path, telemetry_path]:
-        try:
+        with contextlib.suppress(FileNotFoundError):
             path.unlink()
-        except FileNotFoundError:
-            pass
 
     control_value = inputs.get("bridge_control_script")
     bridge_message_key = "bridge_stale"

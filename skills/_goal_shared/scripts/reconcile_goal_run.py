@@ -546,16 +546,15 @@ def branch_summary(
     if status_value is None and dependency_failed_terminal:
         status_value = "blocked"
         review_status = "missing"
-    if not status_path.exists():
-        if not dependency_failed_terminal:
-            add_issue(
-                missing_artifacts,
-                code="missing_branch_status",
-                path=rel_path(bundle_dir, status_path),
-                kind="branch_status",
-                owner=branch_id,
-                message=f"manifest branch {branch_id} has no status artifact",
-            )
+    if not status_path.exists() and not dependency_failed_terminal:
+        add_issue(
+            missing_artifacts,
+            code="missing_branch_status",
+            path=rel_path(bundle_dir, status_path),
+            kind="branch_status",
+            owner=branch_id,
+            message=f"manifest branch {branch_id} has no status artifact",
+        )
     if not prompt_path.exists():
         add_issue(
             missing_artifacts,

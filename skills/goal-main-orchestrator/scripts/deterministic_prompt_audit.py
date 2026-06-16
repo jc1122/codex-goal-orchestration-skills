@@ -134,10 +134,7 @@ def root_worktree_state_from_manifest(
 
     dirty = bool(parsed["tracked"] or parsed["untracked"])
     if dirty:
-        if used_for_runtime:
-            decision = "warning"
-        else:
-            decision = "ignored_because_isolated_worktrees"
+        decision = "warning" if used_for_runtime else "ignored_because_isolated_worktrees"
     else:
         decision = "clean"
 

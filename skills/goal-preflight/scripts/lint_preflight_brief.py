@@ -11,6 +11,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+import contextlib
 
 
 def _load_module(name: str, path: Path):
@@ -24,10 +25,8 @@ def _load_module(name: str, path: Path):
     try:
         spec.loader.exec_module(module)
     finally:
-        try:
+        with contextlib.suppress(ValueError):
             sys.path.remove(path.parent.as_posix())
-        except ValueError:
-            pass
     return module
 
 

@@ -188,7 +188,7 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    return subprocess.run(command, text=True, capture_output=True, check=False)
 
 
 def command_hash(command: list[str] | None) -> str | None:
@@ -1058,7 +1058,7 @@ def main() -> int:
         "--output",
         readiness.as_posix(),
     ]
-    readiness_result, record = run_tracked_phase("readiness", readiness_command, out_dir, readiness)
+    _readiness_result, record = run_tracked_phase("readiness", readiness_command, out_dir, readiness)
     commands.append(record)
     readiness_data = read_json(readiness) if readiness.exists() else {"status": "missing"}
 

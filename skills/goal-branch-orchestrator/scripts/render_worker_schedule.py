@@ -235,11 +235,12 @@ def scheduler_state_from_ledger(
             raise SystemExit(f"worker scheduler events[{index}] must be an object: {scheduler_path}")
         name = event.get("event")
         event_id = event.get("id")
-        if name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
-            if not isinstance(event_id, str) or event_id not in known:
-                raise SystemExit(
-                    f"worker scheduler events[{index}].id is not a manifest worker packet id: {scheduler_path}"
-                )
+        if name in {"ready", "launch", "finish", "close", "defer", "blocked"} and (
+            not isinstance(event_id, str) or event_id not in known
+        ):
+            raise SystemExit(
+                f"worker scheduler events[{index}].id is not a manifest worker packet id: {scheduler_path}"
+            )
         if name == "launch":
             if event_id in active:
                 raise SystemExit(f"worker scheduler events[{index}] duplicates active launch for {event_id}")

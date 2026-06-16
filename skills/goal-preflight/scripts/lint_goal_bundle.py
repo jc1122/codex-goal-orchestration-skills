@@ -503,10 +503,7 @@ def lint_validator_command_snippets(defect, path: str, text: str, expected_statu
                 continue
             actual_target = status_target_from_line(script_name, line)
             if actual_target != expected_target:
-                if actual_target:
-                    action = f"use {expected_target} as status target"
-                else:
-                    action = f"include {status_hint}"
+                action = f"use {expected_target} as status target" if actual_target else f"include {status_hint}"
                 defect(
                     path,
                     "major",
@@ -1722,7 +1719,7 @@ def lint(bundle_dir: Path) -> dict:
     wave_ids = []
     if len(waves) > MAX_WAVES:
         defect("job.manifest.json", "critical", "more than 5 waves is not allowed")
-    for idx, wave in enumerate(waves):
+    for wave in waves:
         wid = wave.get("id")
         wave_ids.append(wid)
         if not isinstance(wid, str) or not SAFE_LABEL_RE.fullmatch(wid):
@@ -2358,13 +2355,12 @@ def lint(bundle_dir: Path) -> dict:
             "all worker route classes fell back to default normal-code; check whether docs, mechanical, small-edit, complex-code, or research-worker routing should apply",
         )
 
-    if has_research_work_item:
-        if research_worker_policy is None:
-            defect(
-                "job.manifest.json",
-                "critical",
-                "research_worker_policy is required when any work item uses worker_type='research-worker'",
-            )
+    if has_research_work_item and research_worker_policy is None:
+        defect(
+            "job.manifest.json",
+            "critical",
+            "research_worker_policy is required when any work item uses worker_type='research-worker'",
+        )
 
     branch_owned_paths: dict[str, list[str]] = {}
     branch_deps: dict[str, list[str]] = {}
