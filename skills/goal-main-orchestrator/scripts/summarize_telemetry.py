@@ -5,11 +5,27 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+
+def _load_contract():
+    path = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "orchestration_contract.py"
+    if not path.exists():
+        raise SystemExit(f"missing shared orchestration contract: {path}")
+    spec = importlib.util.spec_from_file_location("goal_shared_orchestration_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load shared orchestration contract: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+CONTRACT = _load_contract()
+is_bridge_alias = CONTRACT.is_bridge_alias
 
 USAGE_KEYS = (
     "input_tokens",
@@ -22,14 +38,26 @@ TELEMETRY_ROOTS = ("audit", "workers", "research", "reviewers", "lite", "amendme
 APPROX_CHARS_PER_TOKEN = 4
 TOKEN_PRESSURE_INPUT_WARN_MIN = 20_000
 TOKEN_PRESSURE_INPUT_WARN_RATIO = 8
-PREMIUM_ALIASES = {
-    "gpt-5.5",
-    "gemini-pro",
-    "gemini-flash",
-    "copilot-gpt-5.4",
-    "codex-research",
-}
-MINI_SPARK_ALIASES = ("codex-mini", "codex-spark")
+# Alias classification consumes the post-migration route surface from the
+# shared contract: native codex (gpt-5.5/gpt-5.4/codex-spark/codex-mini/research)
+# plus the opencode-bridge deepseek aliases (ds-pro-max=TOUGH, ds-flash-max=LIGHT).
+# Legacy non-codex provider aliases were dropped in the worker migration.
+#
+# PREMIUM (demanding/heavy) aliases: the bridge "pro-max" deepseek route and the
+# native heavy/standard codex routes plus research.
+PREMIUM_ALIASES = frozenset(
+    {"ds-pro-max", "gpt-5.5", "gpt-5.4", "codex-research"}
+    | {alias for alias in CONTRACT.BRIDGE_ROUTE_ALIASES if CONTRACT.bridge_variant(alias) == "max" and "pro" in alias}
+)
+# LIGHT (cheap/mini) aliases: the bridge "flash-max" deepseek route and the native
+# bounded codex routes (spark, mini, research-mini).
+LIGHT_ALIASES = frozenset(
+    {"ds-flash-max", "codex-spark", "codex-mini", "codex-research-mini"}
+    | {alias for alias in CONTRACT.BRIDGE_ROUTE_ALIASES if "flash" in alias}
+)
+# Per-alias mini/light buckets retained in the cost summary. Kept stable for the
+# main-status telemetry-summary validator, extended with the bridge light route.
+MINI_SPARK_ALIASES = ("codex-mini", "codex-spark", "ds-flash-max")
 DEBUG_TELEMETRY_FILENAME = "telemetry.debug.json"
 DEBUG_EVENTS_FILENAME = "debug.events.jsonl"
 RUN_TRACE_FILENAME = "run.trace.jsonl"
@@ -1329,6 +1357,10 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
     premium_aliases_called: dict[str, int] = {}
     premium_aliases_accepted: dict[str, int] = {}
     premium_aliases_avoided: dict[str, int] = {}
+    tier_usage = {
+        tier: {"attempts_declared": 0, "attempts_called": 0, "accepted_attempts": 0, "bridge_attempts": 0}
+        for tier in ("premium", "light", "other")
+    }
     fallback_count = 0
     failed_same_class_attempts = 0
     packets = []
@@ -1394,6 +1426,15 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
             declared_aliases[alias] = declared_aliases.get(alias, 0) + 1
             if alias in PREMIUM_ALIASES:
                 premium_aliases_declared[alias] = premium_aliases_declared.get(alias, 0) + 1
+            tier = "premium" if alias in PREMIUM_ALIASES else "light" if alias in LIGHT_ALIASES else "other"
+            tier_bucket = tier_usage[tier]
+            tier_bucket["attempts_declared"] += 1
+            if is_bridge_alias(alias):
+                tier_bucket["bridge_attempts"] += 1
+            if attempt.get("called") is True:
+                tier_bucket["attempts_called"] += 1
+            if attempt.get("accepted") is True:
+                tier_bucket["accepted_attempts"] += 1
             key = attempt_group_key(role, attempt, scope)
             bucket = ensure_bucket(by_attempt, key)
             bucket["packet_count"] += 1
@@ -1571,6 +1612,7 @@ def summarize_standard(bundle_dir: Path) -> dict[str, Any]:
             alias: compact_bucket(mini_spark_usage[alias])
             for alias in MINI_SPARK_ALIASES
         },
+        "tier_usage": {tier: dict(tier_usage[tier]) for tier in ("premium", "light", "other")},
         "prompt_bytes": totals["prompt_bytes"],
         "output_bytes": totals["output_bytes"],
         "fallback_count": fallback_count,
