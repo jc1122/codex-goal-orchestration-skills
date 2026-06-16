@@ -397,6 +397,131 @@ def offline_bridge_env(env: dict[str, str] | None = None) -> dict[str, str]:
     return merged
 
 
+def build_fake_opencode_bridge_driver(
+    bridge_root: Path,
+    *,
+    review: dict | None = None,
+    generated_cache_dirs: list[str] | None = None,
+    usage: dict | None = None,
+    fail_issue_id: str | None = None,
+) -> Path:
+    """Write a FAKE opencode-worker-bridge driver under ``bridge_root``.
+
+    After the bridge migration, reviewer/worker packets whose route is a bridge
+    alias (e.g. ``ds-pro-max``) launch ``opencode_worker.py delegate`` through the
+    runtime seam (runtime_packet_runner.run_opencode_bridge_model), NOT ``codex``.
+    A fake ``codex`` on PATH is therefore never called. This driver replaces that
+    fake-codex mechanism: point ``OPENCODE_WORKER_BRIDGE_ROOT`` at ``bridge_root``
+    (which gets ``scripts/opencode_worker.py``) and the runner drives the real
+    command sequence against this offline stand-in.
+
+    The driver honors exactly the subcommands the runner emits
+    (``pool-acquire`` / ``pool-recover`` / ``start`` / ``delegate`` /
+    ``supervisor`` / ``stop`` / ``pool-release``) and, on the delegate/supervisor
+    step, emits the goal-delegator-* PASS artifacts the runner maps back
+    (``job_envelope.json`` with a passed status + token-only usage,
+    ``worker.status.json`` with a completed lifecycle, ``supervisor_verdict.json``
+    with a passed verdict), generates the requested ``generated_cache_dirs`` in the
+    worktree so the runner's cleanup is genuinely exercised, and (for reviewer
+    packets) writes ``review.json`` into the packet directory so the runner's
+    output-nonempty + promotion path runs honestly. Token-only usage is emitted;
+    never any USD/price field.
+
+    When ``fail_issue_id`` is set the delegate/supervisor step instead emits
+    ``status: failed`` goal-delegator artifacts carrying that issue id and exits
+    nonzero, so the runner maps a failed bridge lifecycle (and propagates the
+    issue id as the attempt ``provider_error_code``). Used to exercise the
+    bridge-harness-failure -> native-Codex-fallback path.
+
+    Returns the path to the written ``opencode_worker.py``.
+    """
+    review = review or {}
+    generated_cache_dirs = generated_cache_dirs or []
+    usage = usage or {"input_tokens": 222, "cached_input_tokens": 0, "output_tokens": 33}
+    scripts_dir = bridge_root / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    driver = scripts_dir / "opencode_worker.py"
+    # Embed the JSON payloads as base64 so the generated module never has to inline
+    # JSON literals (false/null/true) into Python source, and so review summaries
+    # carrying quotes/backslashes round-trip byte-exactly.
+    import base64
+
+    def _b64(value: object) -> str:
+        return base64.b64encode(json.dumps(value).encode("utf-8")).decode("ascii")
+
+    driver.write_text(
+        "#!/usr/bin/env python3\n"
+        "import base64, json, sys\n"
+        "from pathlib import Path\n"
+        "\n"
+        f"REVIEW = json.loads(base64.b64decode('{_b64(review)}').decode('utf-8'))\n"
+        f"GENERATED_CACHE_DIRS = json.loads(base64.b64decode('{_b64(generated_cache_dirs)}').decode('utf-8'))\n"
+        f"USAGE = json.loads(base64.b64decode('{_b64(usage)}').decode('utf-8'))\n"
+        f"FAIL_ISSUE_ID = {fail_issue_id!r}\n"
+        "\n"
+        "def _opt(args, name):\n"
+        "    return args[args.index(name) + 1] if name in args and args.index(name) + 1 < len(args) else None\n"
+        "\n"
+        "def main():\n"
+        "    sub = sys.argv[1] if len(sys.argv) > 1 else ''\n"
+        "    args = sys.argv[2:]\n"
+        "    if sub == 'start':\n"
+        "        state = _opt(args, '--state')\n"
+        "        cwd = _opt(args, '--cwd')\n"
+        "        if state and cwd:\n"
+        "            sidecar = Path(state).parent / 'bridge-fake-cwd.txt'\n"
+        "            sidecar.parent.mkdir(parents=True, exist_ok=True)\n"
+        "            sidecar.write_text(cwd, encoding='utf-8')\n"
+        "        return 0\n"
+        "    if sub in ('delegate', 'supervisor'):\n"
+        "        run_dir = Path(_opt(args, '--run-dir'))\n"
+        "        run_dir.mkdir(parents=True, exist_ok=True)\n"
+        "        # The runner lays run_dir out as <packet_dir>/bridge/<alias>.\n"
+        "        packet_dir = run_dir.parent.parent\n"
+        "        route = {'provider': _opt(args, '--provider'), 'model': _opt(args, '--model'), 'variant': _opt(args, '--variant')}\n"
+        "        if FAIL_ISSUE_ID:\n"
+        "            job = {'status': 'failed', 'issue_id': FAIL_ISSUE_ID, 'route': route, 'usage': USAGE,\n"
+        "                   'timestamps': {'started_at': '2026-06-16T00:00:00Z', 'completed_at': '2026-06-16T00:00:01Z'}}\n"
+        "            (run_dir / 'job_envelope.json').write_text(json.dumps(job), encoding='utf-8')\n"
+        "            (run_dir / 'worker.status.json').write_text(json.dumps({'lifecycle': 'failed', 'issue_id': FAIL_ISSUE_ID, 'usage': USAGE}), encoding='utf-8')\n"
+        "            (run_dir / 'supervisor_verdict.json').write_text(json.dumps({'status': 'failed', 'issue_id': FAIL_ISSUE_ID, 'usage': USAGE}), encoding='utf-8')\n"
+        "            report = _opt(args, '--report')\n"
+        "            if report:\n"
+        "                Path(report).write_text(json.dumps({'status': 'failed', 'issue_id': FAIL_ISSUE_ID}), encoding='utf-8')\n"
+        "            return 1\n"
+        "        sidecar = run_dir / 'bridge-fake-cwd.txt'\n"
+        "        worktree = Path(sidecar.read_text(encoding='utf-8').strip()) if sidecar.exists() else packet_dir\n"
+        "        for rel in GENERATED_CACHE_DIRS:\n"
+        "            cache = worktree / rel\n"
+        "            cache.mkdir(parents=True, exist_ok=True)\n"
+        "            (cache / 'module.cpython-312.pyc').write_bytes(b'generated pyc')\n"
+        "        if REVIEW:\n"
+        "            (packet_dir / 'review.json').write_text(json.dumps(REVIEW), encoding='utf-8')\n"
+        "        job = {\n"
+        "            'status': 'passed',\n"
+        "            'route': route,\n"
+        "            'usage': USAGE,\n"
+        "            'timestamps': {'started_at': '2026-06-16T00:00:00Z', 'completed_at': '2026-06-16T00:00:01Z'},\n"
+        "            'assistant_text': REVIEW.get('summary', 'fake bridge delegate passed'),\n"
+        "        }\n"
+        "        (run_dir / 'job_envelope.json').write_text(json.dumps(job), encoding='utf-8')\n"
+        "        (run_dir / 'worker.status.json').write_text(json.dumps({'lifecycle': 'completed', 'usage': USAGE}), encoding='utf-8')\n"
+        "        (run_dir / 'supervisor_verdict.json').write_text(json.dumps({'status': 'passed', 'usage': USAGE}), encoding='utf-8')\n"
+        "        report = _opt(args, '--report')\n"
+        "        if report:\n"
+        "            Path(report).write_text(json.dumps({'status': 'passed'}), encoding='utf-8')\n"
+        "        return 0\n"
+        "    # pool-acquire / pool-recover / pool-release / stop and any other lifecycle step.\n"
+        "    return 0\n"
+        "\n"
+        "if __name__ == '__main__':\n"
+        "    raise SystemExit(main())\n",
+        encoding="utf-8",
+    )
+    driver.chmod(0o755)
+    return driver
+
+
 def make_scheduler_event(runtime_ref: str) -> Callable[..., dict]:
     def scheduler_event(seq: int, event: str, **kwargs) -> dict:
         return {

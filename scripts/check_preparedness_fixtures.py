@@ -27,6 +27,7 @@ from fixture_support import (
     assert_openai_strict_schema,
     assert_research_worker_preserves_user_config,
     assert_shell_syntax,
+    build_fake_opencode_bridge_driver,
     make_scheduler_event,
     offline_bridge_env,
     read_json,
@@ -869,6 +870,21 @@ def assert_reviewer_route(packet_root: Path, packet_id: str, expected: list[str]
     actual = route.get("selected_ladder")
     if actual != expected:
         raise SystemExit(f"{packet_id} route mismatch: expected {expected}, got {actual}")
+
+
+def assert_reviewer_bridge_then_codex(attempts: list, label: str) -> None:
+    """Reviewer attempts after the bridge migration: a leading opencode-bridge
+    attempt (ds-pro-max, read-only, carrying a bridge block) followed by a lean
+    native Codex fallback. Replaces the all-lean-Codex reviewer assertion."""
+    if not attempts or attempts[0].get("harness_kind") != "opencode-bridge":
+        raise SystemExit(f"{label} should lead with an opencode-bridge attempt: {attempts!r}")
+    bridge_block = attempts[0].get("bridge")
+    if not isinstance(bridge_block, dict) or bridge_block.get("provider") != "deepseek":
+        raise SystemExit(f"{label} leading bridge attempt must carry a deepseek bridge block: {attempts[0]!r}")
+    if bridge_block.get("permission_profile") != "read-only":
+        raise SystemExit(f"{label} reviewer bridge attempt must be read-only: {bridge_block!r}")
+    codex_attempts = [a for a in attempts if a.get("provider") == "codex"]
+    assert_lean_codex_attempts(codex_attempts, f"{label} Codex fallback")
 
 
 def create_runtime_packet(
@@ -5568,41 +5584,47 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         task_file=bundle / "branches" / "B01.prompt.md",
     )
     reviewer_cache_packet = reviewer_cache_bundle / "reviewers" / "B01-R09"
-    reviewer_cache_fake_dir = tmp_path / "fake-codex-reviewer-cache-cleanup"
-    reviewer_cache_fake_dir.mkdir()
-    reviewer_cache_fake = reviewer_cache_fake_dir / "codex"
+    # The default reviewer route is now the BRIDGE alias ds-pro-max, so launch.sh
+    # drives runtime_packet_runner.run_opencode_bridge_model (opencode_worker.py
+    # delegate) rather than `codex`. A fake codex on PATH would never be called;
+    # inject a FAKE opencode-worker-bridge DRIVER via OPENCODE_WORKER_BRIDGE_ROOT
+    # instead. The driver writes review.json + the goal-delegator-* PASS artifacts
+    # and re-generates the two __pycache__ dirs so the runner's cleanup/freshness/
+    # promotion path is exercised for real (honest regression test).
+    reviewer_cache_bridge_root = tmp_path / "fake-bridge-reviewer-cache-cleanup"
     reviewer_semantic_hashes = read_json(reviewer_cache_bundle / "branches" / "B01.pre_review_gate.json").get("semantic_input_hashes", {})
-    reviewer_cache_fake.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, pathlib, sys\n"
-        "args = sys.argv[1:]\n"
-        "worktree = pathlib.Path(args[args.index('-C') + 1])\n"
-        "out = pathlib.Path(args[args.index('-o') + 1])\n"
-        "for rel in ['src/ft10_solver/__pycache__', 'tests/__pycache__']:\n"
-        "    cache = worktree / rel\n"
-        "    cache.mkdir(parents=True, exist_ok=True)\n"
-        "    (cache / 'module.cpython-312.pyc').write_bytes(b'generated pyc')\n"
-        "review = {\n"
-        "  'packet_id': 'B01-R09',\n"
-        "  'role': 'reviewer',\n"
-        "  'verdict': 'mergeable',\n"
-        "  'findings': [],\n"
-        "  'finding_classes': ['no_issue'],\n"
-        "  'commands_run': ['python3 -m unittest fixture', 'git diff --check main...HEAD'],\n"
-        "  'verification_gaps': [],\n"
-        "  'residual_risks': [],\n"
-        f"  'semantic_input_hashes': {json.dumps(reviewer_semantic_hashes)},\n"
-        "  'reuse_policy': {'mode': 'new', 'accepted': False, 'semantic_hashes_match': False, 'source_review_path': None, 'source_telemetry_path': None},\n"
-        "  'summary': 'Reviewer cache cleanup fixture.'\n"
-        "}\n"
-        "out.write_text(json.dumps(review), encoding='utf-8')\n"
-        "print(json.dumps({'usage': {'input_tokens': 222, 'cached_input_tokens': 0, 'output_tokens': 33}}))\n",
-        encoding="utf-8",
+    reviewer_cache_base_ref = read_json(reviewer_cache_bundle / "job.manifest.json").get("base_ref", "main")
+    reviewer_cache_generated_dirs = ["src/ft10_solver/__pycache__", "tests/__pycache__"]
+    build_fake_opencode_bridge_driver(
+        reviewer_cache_bridge_root,
+        review={
+            "packet_id": "B01-R09",
+            "role": "reviewer",
+            "verdict": "mergeable",
+            "findings": [],
+            "finding_classes": ["no_issue"],
+            "commands_run": [
+                "python3 -m unittest fixture",
+                f"git diff --check {reviewer_cache_base_ref}...HEAD",
+            ],
+            "verification_gaps": [],
+            "residual_risks": [],
+            "semantic_input_hashes": reviewer_semantic_hashes,
+            "reuse_policy": {
+                "mode": "new",
+                "accepted": False,
+                "semantic_hashes_match": False,
+                "source_review_path": None,
+                "source_telemetry_path": None,
+            },
+            "summary": "Reviewer cache cleanup fixture.",
+        },
+        generated_cache_dirs=reviewer_cache_generated_dirs,
+        usage={"input_tokens": 222, "cached_input_tokens": 0, "output_tokens": 33},
     )
-    reviewer_cache_fake.chmod(0o755)
     run(
         [(reviewer_cache_packet / "launch.sh").as_posix()],
-        env={**os.environ, "PATH": reviewer_cache_fake_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+        env={**os.environ, "OPENCODE_WORKER_BRIDGE_ROOT": reviewer_cache_bridge_root.as_posix()},
     )
     reviewer_launcher = read_json(reviewer_cache_packet / "launcher-state.json")
     if reviewer_launcher.get("terminal_state") != "pass":
@@ -5811,6 +5833,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
                         "objective": "Write outside owned paths to trigger launcher ownership block.",
                         "owned_paths": ["owned.txt"],
                         "context_files": [],
+                        # Pin small-edit so the native codex-mini route this
+                        # ownership fixture exercises stays allowed after the bridge
+                        # migration: docs/mechanical now ladder to bridge-only
+                        # (ds-flash-max), but small-edit keeps codex-mini. The test
+                        # asserts ownership-violation handling, not route class.
+                        "route_class": "small-edit",
                         "verification": ["python3 -c 'print(\"ownership fixture\")'"],
                         "dod": ["Ownership violation is preserved as blocked evidence."],
                     }
@@ -5845,7 +5873,14 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         task_file=ownership_bundle / "branches" / "B01.prompt.md",
         manifest=ownership_bundle / "job.manifest.json",
         worker_route=["codex-mini"],
-        selection_reason="Fixture intentionally writes outside owned paths.",
+        # Prune to the single native codex-mini rung (an operator choice) so this
+        # ownership fixture keeps exercising the native worker path; the small-edit
+        # ladder otherwise leads with the bridge rung ds-flash-max after migration.
+        selection_reason=(
+            "Fixture intentionally writes outside owned paths; operator pins the native "
+            "codex-mini route to keep ownership handling on the deterministic Codex path."
+        ),
+        extra_args=["--allow-route-pruning"],
     )
     ownership_packet = ownership_bundle / "workers" / "B01-W01"
     ownership_fake_dir = tmp_path / "fake-codex-ownership-blocked"
@@ -6005,6 +6040,13 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
 
 
 def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
+    # B4 removed the legacy direct-opencode harness (kind "opencode"); deepseek work
+    # now delegates through the opencode-worker-bridge. This fixture is migrated to the
+    # modern equivalent: a BRIDGE harness failure (ds-flash-max) must fall back to the
+    # native Codex route (codex-mini) and still pass. The bridge driver fails the
+    # delegate with a goal-delegator issue id that the runner propagates as the
+    # attempt provider_error_code; the second pass exercises route-health degradation
+    # (the degraded bridge route is skipped before the codex fallback runs).
     fallback_bundle = tmp_path / "opencode-wal-fallback-bundle"
     fallback_root = fallback_bundle / "workers"
     fallback_root.mkdir(parents=True)
@@ -6012,7 +6054,7 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
     fallback_worktree.mkdir()
     run(["git", "init", fallback_worktree.as_posix()])
     fallback_task = tmp_path / "opencode-wal-fallback-task.md"
-    fallback_task.write_text("Synthetic task for opencode WAL fallback fixture.\n", encoding="utf-8")
+    fallback_task.write_text("Synthetic task for bridge-harness fallback fixture.\n", encoding="utf-8")
     create_runtime_packet(
         role="worker",
         packet_id="B01-W01",
@@ -6020,59 +6062,26 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
         out_dir=fallback_root,
         worktree=fallback_worktree,
         task_file=fallback_task,
-        worker_route=["codex-mini"],
-        selection_reason="Fixture validates opencode WAL failure is treated as harness_unavailable and fallback to codex route.",
+        # normal-code leads with the bridge route ds-flash-max and keeps a native
+        # codex-spark fallback; pin the explicit bridge->codex ladder.
+        worker_route=["ds-flash-max", "codex-mini"],
+        selection_reason=(
+            "Fixture validates a bridge harness failure (provider/harness unavailable) "
+            "falls back to the native Codex route."
+        ),
+        extra_args=["--allow-route-pruning"],
     )
     packet_dir = fallback_root / "B01-W01"
     launch_config = read_json(packet_dir / "launch-config.json")
-    if not isinstance(launch_config, dict):
-        raise SystemExit(f"opencode WAL fixture should create launch-config: {launch_config!r}")
     attempts = launch_config.get("attempts")
-    if not isinstance(attempts, list) or not attempts:
-        raise SystemExit(f"opencode WAL fixture launch-config should include attempts: {launch_config!r}")
-    codex_attempt = attempts[0]
-    if not isinstance(codex_attempt, dict):
-        raise SystemExit(f"opencode WAL fixture codex attempt should be a mapping: {attempts!r}")
-    opencode_attempt = dict(codex_attempt)
-    opencode_attempt.update(
-        {
-            "alias": "wal_opencode",
-            "provider": "opencode",
-            "provider_id": "deepseek",
-            "harness": "opencode",
-            "harness_kind": "opencode",
-            "command": "opencode run --pure --format json --model deepseek/opencode-wal-fixture --dir <worktree> <prompt>",
-            "command_binary": "opencode",
-            "event_logs": ["events-wal_opencode.jsonl"],
-            "run_args": ["run", "--pure", "--format", "json", "--model", "{model}", "--dir", "{worktree}", "{prompt}"],
-            "run_readback": "opencode_session_db",
-            "probe_logs": [],
-            "telemetry_capability": {
-                "source": "provider_or_harness_output",
-                "token_usage": "best_effort",
-            },
-            "model": "deepseek/unsupported",
-            "event": "attempt",
-            "attempt": codex_attempt.get("alias", "codex-mini"),
-        }
-    )
-    launch_config["attempts"] = [opencode_attempt, codex_attempt]
-    launch_config["selected_commands"] = [
-        opencode_attempt["command"],
-        codex_attempt.get("command", ""),
-    ]
-    write_json(packet_dir / "launch-config.json", launch_config)
-    fake_bin_dir = tmp_path / "fake-opencode-fallback-bins"
+    if not isinstance(attempts, list) or len(attempts) != 2:
+        raise SystemExit(f"bridge fallback fixture should build a bridge+codex ladder: {launch_config!r}")
+    if attempts[0].get("harness_kind") != "opencode-bridge" or attempts[1].get("provider") != "codex":
+        raise SystemExit(f"bridge fallback fixture expected bridge then codex attempts: {attempts!r}")
+    bridge_root = tmp_path / "fake-bridge-fallback"
+    build_fake_opencode_bridge_driver(bridge_root, fail_issue_id="opencode_sqlite_wal_failure")
+    fake_bin_dir = tmp_path / "fake-codex-fallback-bins"
     fake_bin_dir.mkdir()
-    fake_opencode = fake_bin_dir / "opencode"
-    fake_opencode.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "sys.stderr.write(\"Failed to run the query \'PRAGMA journal_mode = WAL\\'\\n\")\n"
-        "sys.exit(1)\n",
-        encoding="utf-8",
-    )
-    fake_opencode.chmod(0o755)
     fake_codex = fake_bin_dir / "codex"
     fake_codex.write_text(
         "#!/usr/bin/env python3\n"
@@ -6096,23 +6105,28 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
         "  'manifest_epoch': cfg['manifest_epoch'],\n"
         "  'worktree_path': cfg['worktree_path'],\n"
         "  'route_id': cfg['route_id'],\n"
-        "  'evidence_summary': 'Fake codex route passed after opencode infrastructure failure',\n"
+        "  'evidence_summary': 'Fake codex route passed after bridge harness failure',\n"
         "  'branch': cfg['branch'],\n"
         "  'worktree': cfg['worktree'],\n"
         "  'route_class': cfg['route_class'],\n"
         "  'selected_ladder': cfg['selected_ladder'],\n"
         "  'selection_reason': cfg['selection_reason'],\n"
         "  'changed_files': [],\n"
-        "  'commands_run': ['codex pass after fallback'],\n"
+        "  'commands_run': ['codex pass after bridge fallback'],\n"
         "  'tests': ['fixture fake codex fallback passed'],\n"
         "  'blockers': [],\n"
-        "  'handoff': 'fake codex passed after opencode fallback',\n"
+        "  'handoff': 'fake codex passed after bridge fallback',\n"
         "}\n"
         "out.write_text(json.dumps(status) + '\\n', encoding='utf-8')\n"
         "print(json.dumps({'usage': {'input_tokens': 111, 'cached_input_tokens': 22, 'output_tokens': 9}}))\n",
         encoding="utf-8",
     )
     fake_codex.chmod(0o755)
+    fallback_env = {
+        **os.environ,
+        "PATH": fake_bin_dir.as_posix() + os.pathsep + os.environ.get("PATH", ""),
+        "OPENCODE_WORKER_BRIDGE_ROOT": bridge_root.as_posix(),
+    }
     run(
         [
             "python3",
@@ -6120,40 +6134,38 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
             "--packet-dir",
             packet_dir.as_posix(),
         ],
-        env={**os.environ, "PATH": fake_bin_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+        env=fallback_env,
     )
     summary = read_json(packet_dir / "packet.summary.json")
     if summary.get("terminal_state") != "pass":
-        raise SystemExit(f"opencode WAL fallback fixture should pass after codex fallback: {summary!r}")
-    attempts = summary.get("attempts")
-    if not isinstance(attempts, list) or len(attempts) < 2:
-        raise SystemExit(f"opencode WAL fallback fixture should report both attempts: {summary!r}")
-    if attempts[0].get("failure_class") != "harness_unavailable":
-        raise SystemExit(f"opencode WAL failing attempt should be harness_unavailable: {summary!r}")
-    if attempts[1].get("state") != "pass":
-        raise SystemExit(f"fallback codex attempt should pass in opencode WAL fixture: {summary!r}")
+        raise SystemExit(f"bridge fallback fixture should pass after codex fallback: {summary!r}")
+    summary_attempts = summary.get("attempts")
+    if not isinstance(summary_attempts, list) or len(summary_attempts) < 2:
+        raise SystemExit(f"bridge fallback fixture should report both attempts: {summary!r}")
+    if summary_attempts[0].get("state") not in {"fail-clean", "fail-dirty"}:
+        raise SystemExit(f"bridge attempt should fail cleanly before fallback: {summary!r}")
+    if summary_attempts[0].get("provider_error_code") != "opencode_sqlite_wal_failure":
+        raise SystemExit(f"failed bridge attempt should propagate the bridge issue id: {summary!r}")
+    if summary_attempts[1].get("state") != "pass":
+        raise SystemExit(f"fallback codex attempt should pass in bridge fallback fixture: {summary!r}")
     launcher = read_json(packet_dir / "launcher-state.json")
-    failed_opencode_events = [
+    failed_bridge_events = [
         event for event in launcher.get("events", []) if isinstance(event, dict) and event.get("attempt_index") == 0
     ]
-    if not any(
-        event.get("failure_class") == "harness_unavailable"
-        or event.get("failure_subclass") == "opencode_sqlite_wal_failure"
-        for event in failed_opencode_events
-    ):
-        raise SystemExit(f"opencode WAL attempt should be classified as harness_unavailable: {launcher!r}")
+    if not any(event.get("provider_error_code") == "opencode_sqlite_wal_failure" for event in failed_bridge_events):
+        raise SystemExit(f"failed bridge attempt should record the bridge issue id: {launcher!r}")
     write_json(
         fallback_bundle / "route-health.json",
         {
             "schema_version": 1,
             "routes": {
-                "wal_opencode": {
-                    "alias": "wal_opencode",
-                    "provider": "opencode",
-                    "model": "deepseek/unsupported",
-                    "failures": {"opencode_empty_assistant_output": 2},
+                "ds-flash-max": {
+                    "alias": "ds-flash-max",
+                    "provider": "opencode-bridge",
+                    "model": "deepseek-v4-flash",
+                    "failures": {"bridge_lifecycle_failed": 2},
                     "degraded": True,
-                    "degraded_reason": "opencode_empty_assistant_output",
+                    "degraded_reason": "bridge_lifecycle_failed",
                     "degraded_after_count": 2,
                 }
             },
@@ -6166,7 +6178,7 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
             "--packet-dir",
             packet_dir.as_posix(),
         ],
-        env={**os.environ, "PATH": fake_bin_dir.as_posix() + os.pathsep + os.environ.get("PATH", "")},
+        env=fallback_env,
     )
     degraded_summary = read_json(packet_dir / "packet.summary.json")
     degraded_attempts = degraded_summary.get("attempts")
@@ -6175,9 +6187,9 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
         or not degraded_attempts
         or degraded_attempts[0].get("failure_subclass") != "route_degraded"
     ):
-        raise SystemExit(f"degraded opencode route should be skipped before fallback: {degraded_summary!r}")
+        raise SystemExit(f"degraded bridge route should be skipped before fallback: {degraded_summary!r}")
     if degraded_summary.get("terminal_state") != "pass":
-        raise SystemExit(f"degraded opencode route should still allow codex fallback pass: {degraded_summary!r}")
+        raise SystemExit(f"degraded bridge route should still allow codex fallback pass: {degraded_summary!r}")
 
 
 def create_goal_fixture_bundle(tmp_path: Path) -> Path:
@@ -8741,18 +8753,26 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
         raise SystemExit("reviewer prompt should embed compact_reviewer_context for restricted CLI harnesses")
     if '"kind": "compact_reviewer_context"' not in reviewer_prompt:
         raise SystemExit("reviewer prompt should include inline compact_reviewer_context JSON")
-    reviewer_attempts = assert_lean_codex_attempts(reviewer_config.get("attempts"), "reviewer Codex attempts")
+    # After the bridge migration the deterministic reviewer routes lead with the
+    # bridge alias ds-pro-max (heavy/standard) and keep a native Codex fallback
+    # (gpt-5.5) only on the heavy tier. Assert the bridge attempt carries a bridge
+    # block and the native fallback keeps lean Codex flags, rather than requiring
+    # every attempt to be lean Codex.
+    reviewer_attempts = reviewer_config.get("attempts")
+    if not isinstance(reviewer_attempts, list) or not reviewer_attempts:
+        raise SystemExit(f"reviewer launch-config should include attempts: {reviewer_attempts!r}")
     reviewer_aliases = [attempt.get("alias") for attempt in reviewer_attempts if isinstance(attempt, dict)]
-    if reviewer_aliases != ["gpt-5.5", "gpt-5.4"]:
+    if reviewer_aliases != ["ds-pro-max", "gpt-5.5"]:
         raise SystemExit(f"reviewer launch-config route mismatch: {reviewer_aliases!r}")
+    assert_reviewer_bridge_then_codex(reviewer_attempts, "reviewer attempts")
     if not reviewer_config.get("semantic_input_hashes"):
         raise SystemExit("reviewer launch-config omitted semantic_input_hashes")
     if not reviewer_config.get("reuse_policy"):
         raise SystemExit("reviewer launch-config omitted reuse_policy")
-    assert_reviewer_route(packet_root, "B01-R01", ["gpt-5.5", "gpt-5.4"])
+    assert_reviewer_route(packet_root, "B01-R01", ["ds-pro-max", "gpt-5.5"])
     for packet_id, tier, expected in [
-        ("B01-R02", "standard", ["gpt-5.4", "gpt-5.5"]),
-        ("B01-R03", "heavy", ["gpt-5.5", "gpt-5.4"]),
+        ("B01-R02", "standard", ["ds-pro-max"]),
+        ("B01-R03", "heavy", ["ds-pro-max", "gpt-5.5"]),
     ]:
         gate_path = write_review_gate_variant(bundle, packet_id, tier=tier)
         create_runtime_packet(
@@ -8777,7 +8797,7 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
         context_files=[bundle / "branches" / "B01.prompt.md"],
         task_file=task_file,
     )
-    assert_reviewer_route(packet_root, "B01-R04", ["gpt-5.5", "gpt-5.4"])
+    assert_reviewer_route(packet_root, "B01-R04", ["ds-pro-max", "gpt-5.5"])
     failed_gate = json.loads((bundle / "branches" / "B01.pre_review_gate.json").read_text(encoding="utf-8"))
     failed_gate["status"] = "failed"
     failed_gate["checks"]["tests"] = {"status": "failed", "reason": "Negative fixture blocks reviewer launch."}
@@ -8939,6 +8959,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     )
     semantic_hashes = gate.get("semantic_input_hashes") if isinstance(gate.get("semantic_input_hashes"), dict) else {}
     write_mergeable_reviewer_packet(stale_canonical_bundle, "B01-R02", semantic_hashes)
+    stale_canonical_base_ref = read_json(stale_canonical_bundle / "job.manifest.json").get("base_ref", "main")
     write_json(
         stale_canonical_bundle / "branches" / "B01.review.json",
         {
@@ -8947,7 +8968,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             "verdict": "blocked",
             "findings": ["stale canonical review fixture"],
             "finding_classes": ["orchestration_bug"],
-            "commands_run": ["git diff --check main...HEAD"],
+            "commands_run": [f"git diff --check {stale_canonical_base_ref}...HEAD"],
             "verification_gaps": ["stale canonical artifact"],
             "residual_risks": [],
             "semantic_input_hashes": {"branches/B01.prompt.md": "sha256:" + "3" * 64},
@@ -9007,13 +9028,14 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         context_files=[same_hash_stale_bundle / "branches" / "B01.prompt.md"],
         task_file=task_file,
     )
+    same_hash_base_ref = read_json(same_hash_stale_bundle / "job.manifest.json").get("base_ref", "main")
     current_review = {
         "packet_id": "B01-R01",
         "role": "reviewer",
         "verdict": "mergeable_after_fixes",
         "findings": ["current reviewer output fixture"],
         "finding_classes": ["orchestration_bug"],
-        "commands_run": ["git diff --check main...HEAD"],
+        "commands_run": [f"git diff --check {same_hash_base_ref}...HEAD"],
         "verification_gaps": ["fixture intentionally non-mergeable"],
         "residual_risks": [],
         "semantic_input_hashes": same_hashes,
@@ -9134,6 +9156,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(f"branch validator should distinguish valid artifact from non-pass runtime outcome: {branch_validation!r}")
     if branch_validation.get("dod_complete") is not False or branch_validation.get("review_complete") is not False:
         raise SystemExit(f"branch validator should expose incomplete DoD/review lanes: {branch_validation!r}")
+    stale_ignored_base_ref = read_json(bundle / "job.manifest.json").get("base_ref", "main")
     write_json(
         bundle / "branches" / "B01.review.json",
         {
@@ -9142,7 +9165,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             "verdict": "blocked",
             "findings": ["Stale review fixture should be ignored when branch review_status is missing."],
             "finding_classes": ["verification_gap"],
-            "commands_run": ["git diff --check main...HEAD"],
+            "commands_run": [f"git diff --check {stale_ignored_base_ref}...HEAD"],
             "verification_gaps": ["stale fixture"],
             "residual_risks": [],
             "semantic_input_hashes": {"branches/B01.pre_review_evidence.json": "sha256:" + "0" * 64},

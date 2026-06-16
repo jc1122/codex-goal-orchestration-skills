@@ -644,6 +644,50 @@ def bridge_telemetry_attempt(
     }
 
 
+def _harness_variant(harness: dict, default: str = "max") -> str:
+    """Extract the ``--variant`` value from a harness ``run_args`` template.
+
+    The goal-config opencode-bridge harness encodes the launch variant inline in
+    ``run_args`` (``--variant max``). When absent we fall back to ``max`` -- the
+    bridge launch contract used by the contract-alias builder.
+    """
+    run_args = harness.get("run_args")
+    if isinstance(run_args, list):
+        for index, item in enumerate(run_args):
+            if item == "--variant" and index + 1 < len(run_args):
+                candidate = run_args[index + 1]
+                if isinstance(candidate, str) and candidate.strip() and "{" not in candidate:
+                    return candidate.strip()
+    return default
+
+
+def configured_bridge_block(
+    *,
+    model: dict,
+    harness: dict,
+    role: str,
+    alias: str,
+) -> dict:
+    """Build a ``bridge`` block for a configured opencode-bridge role.
+
+    Mirrors the contract-alias bridge block (``bridge_telemetry_attempt``) but
+    sources model/variant/provider from the goal-config model+harness rather than
+    the contract route tables, so non-contract aliases (e.g. ``lite_agent``) carry
+    the bridge block the launch-config adapter requires.
+    """
+    return {
+        "provider": BRIDGE_PROVIDER_ID,
+        "model": model.get("model"),
+        "variant": _harness_variant(harness),
+        "permission_profile": bridge_permission_profile(role),
+        "run_dir": bridge_run_dir_rel(alias),
+        "pool_dir": BRIDGE_POOL_DIR,
+        "pool_max_workers": BRIDGE_POOL_MAX_WORKERS,
+        "prompt_file": "prompt.md",
+        "supervisor": False,
+    }
+
+
 def configured_telemetry_attempts(
     selected_ladder: list[str],
     goal_config: dict,
@@ -714,6 +758,22 @@ def configured_telemetry_attempts(
                 "codex exec --ephemeral "
                 + CODEX_LEAN_EXEC_FLAGS_TEXT
                 + f" -m {model.get('model')} -s {sandbox}"
+            )
+        elif kind == BRIDGE_HARNESS_KIND:
+            # A configured opencode-bridge role (e.g. lite_agent / demanding_agent)
+            # is launched through the same bridge runtime seam as the contract
+            # bridge aliases. Attach the bridge block the launch-config adapter
+            # requires, sourcing model/variant/provider from the goal-config role
+            # + harness so non-contract aliases are accepted just like contract
+            # aliases. Without this the adapter rejects "attempts[*].bridge must be
+            # an object".
+            attempt["variant"] = _harness_variant(harness)
+            attempt["run_readback"] = harness.get("run_readback", "bridge_run_dir")
+            attempt["bridge"] = configured_bridge_block(
+                model=model,
+                harness=harness,
+                role=role,
+                alias=alias,
             )
         attempts.append(attempt)
     return attempts
