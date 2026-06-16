@@ -261,6 +261,48 @@ def amender_event_label(alias: str) -> str:
     return label or "configured"
 
 
+def bridge_amender_attempt(alias: str, *, timeout_seconds: int) -> dict:
+    """Bridge (opencode-worker-bridge) plan-amender attempt for a deepseek route.
+
+    The amender proposal is read-only (proposal-only): the bridge delegates a
+    deepseek launch through scripts/opencode_worker.py under permission-profile
+    read-only and we map the file-backed goal-delegator-* artifacts onto the
+    telemetry schema. Token usage flows through events-<label>.jsonl; no USD.
+    """
+    model = CONTRACT.bridge_model(alias)
+    variant = CONTRACT.bridge_variant(alias)
+    label = CONTRACT.bridge_event_label(alias)
+    permission_profile = "read-only"
+    command = (
+        "opencode_worker.py delegate "
+        f"--provider {CONTRACT.BRIDGE_PROVIDER_ID} "
+        f"--model {model} --variant {variant} "
+        f"--permission-profile {permission_profile}"
+    )
+    return {
+        "alias": alias,
+        "provider": CONTRACT.BRIDGE_HARNESS_KIND,
+        "provider_id": CONTRACT.BRIDGE_PROVIDER_ID,
+        "model": model,
+        "variant": variant,
+        "harness": CONTRACT.BRIDGE_HARNESS_KIND,
+        "harness_kind": CONTRACT.BRIDGE_HARNESS_KIND,
+        "permission_profile": permission_profile,
+        "command": command,
+        "effort": variant,
+        "sandbox": "read-only",
+        "timeout_seconds": timeout_seconds,
+        "event_logs": [f"events-{label}.jsonl"],
+        "probe_logs": [],
+        "bridge": {
+            "provider": CONTRACT.BRIDGE_PROVIDER_ID,
+            "model": model,
+            "variant": variant,
+            "permission_profile": permission_profile,
+        },
+    }
+
+
 def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None, selected_ladder: list[str]) -> list[dict]:
     policy = amender_model_policy(manifest, manifest_path)
     timeout = policy.get("timeout_seconds")
@@ -268,9 +310,18 @@ def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None
     specs = amender_model_specs(manifest, manifest_path)
     harnesses = amender_harnesses(manifest, manifest_path)
     if not specs:
-        return CONTRACT.codex_telemetry_attempts(selected_ladder, timeout_seconds=timeout_seconds, sandbox="read-only")
-    attempts: list[dict] = []
+        attempts: list[dict] = []
+        for alias in selected_ladder:
+            if CONTRACT.is_bridge_alias(alias):
+                attempts.append(bridge_amender_attempt(alias, timeout_seconds=timeout_seconds))
+                continue
+            attempts.extend(CONTRACT.codex_telemetry_attempts([alias], timeout_seconds=timeout_seconds, sandbox="read-only"))
+        return attempts
+    attempts = []
     for alias in selected_ladder:
+        if CONTRACT.is_bridge_alias(alias) and not isinstance(specs.get(alias), dict):
+            attempts.append(bridge_amender_attempt(alias, timeout_seconds=timeout_seconds))
+            continue
         spec = specs.get(alias)
         if not isinstance(spec, dict):
             if alias in CONTRACT.ALLOWED_AMENDER_ROUTES:
@@ -866,13 +917,22 @@ def apply_operations_to_manifest(
             continue
 
         if op == "mark_unstarted_branch_obsolete":
-            downstream = [
-                branch.get("id")
-                for branch in branches
-                if isinstance(branch, dict) and branch_id in (branch.get("depends_on") if isinstance(branch.get("depends_on"), list) else [])
-            ]
-            if downstream:
-                defects.append(f"{path} cannot mark {branch_id} obsolete while downstream branches depend on it: {', '.join(str(item) for item in downstream)}")
+            referencing: list[str] = []
+            for branch in branches:
+                if not isinstance(branch, dict):
+                    continue
+                if branch.get("id") == branch_id:
+                    continue
+                for field in ("depends_on", "recovers_from", "supersedes"):
+                    refs = branch.get(field)
+                    if isinstance(refs, list) and branch_id in refs:
+                        referencing.append(f"{branch.get('id')} ({field})")
+                        break
+            if referencing:
+                defects.append(
+                    f"{path} cannot mark {branch_id} obsolete while other branches reference it via "
+                    f"depends_on/recovers_from/supersedes: {', '.join(str(item) for item in referencing)}"
+                )
                 continue
             removed = branches.pop(target_index)
             obsolete_entries.append(

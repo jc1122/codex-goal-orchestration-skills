@@ -170,11 +170,6 @@ def _configured_attempt_command(attempt: dict, *, amendment_id: str, repo_root: 
             f"--title {CONTRACT.shell_quote(amendment_id + '-' + alias)} "
             '"$(cat "$packet_dir/prompt.md")"'
         )
-    if kind == "gemini":
-        return (
-            f"gemini --model {CONTRACT.shell_quote(model)} "
-            '--approval-mode yolo -p "$(cat "$packet_dir/prompt.md")"'
-        )
     return None
 
 
@@ -194,7 +189,14 @@ def launch_script(
         alias = str(attempt.get("alias") or "")
         label = _attempt_label(attempt)
         kind = attempt.get("harness_kind") or attempt.get("provider")
-        if kind == "codex":
+        if kind == CONTRACT.BRIDGE_HARNESS_KIND:
+            model = str(attempt.get("model") or "")
+            variant = str(attempt.get("variant") or "max")
+            runner = (
+                f"run_bridge_model {CONTRACT.shell_quote(label)} {CONTRACT.shell_quote(model)} "
+                f"{CONTRACT.shell_quote(variant)}"
+            )
+        elif kind == "codex":
             model = str(attempt.get("model") or "")
             runner = f"run_codex_model {CONTRACT.shell_quote(label)} {CONTRACT.shell_quote(model)}"
         else:
@@ -232,7 +234,32 @@ packet_dir="$(pwd)"
 proposal_path="$packet_dir/../{amendment_id}.proposal.json"
 attempt_timeout_seconds={CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS}
 timeout_kill_after_seconds={CONTRACT.TIMEOUT_KILL_AFTER_SECONDS}
+bridge_provider={CONTRACT.shell_quote(CONTRACT.BRIDGE_PROVIDER_ID)}
+bridge_pool_max_workers=4
+repo_root={CONTRACT.shell_quote(repo_root.as_posix())}
 rm -f "$proposal_path" "$packet_dir"/events-*.jsonl "$packet_dir/telemetry.json"
+rm -rf "$packet_dir/bridge"
+
+resolve_bridge_control() {{
+  # Resolve the opencode-worker-bridge control script.
+  # Order: env override -> source checkout under repo root -> $CODEX_HOME skills
+  # -> $HOME/.agents skills (mirrors the runtime runner resolution).
+  local candidates=()
+  if [ -n "${{OPENCODE_WORKER_BRIDGE_ROOT:-}}" ]; then
+    candidates+=("${{OPENCODE_WORKER_BRIDGE_ROOT}}/scripts/opencode_worker.py")
+  fi
+  candidates+=("$repo_root/skills/opencode-worker-bridge/scripts/opencode_worker.py")
+  candidates+=("${{CODEX_HOME:-$HOME/.codex}}/skills/opencode-worker-bridge/scripts/opencode_worker.py")
+  candidates+=("$HOME/.agents/skills/opencode-worker-bridge/scripts/opencode_worker.py")
+  local candidate
+  for candidate in "${{candidates[@]}}"; do
+    if [ -f "$candidate" ]; then
+      printf '%s\\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}}
 
 run_with_timeout() {{
   local seconds="$1"
@@ -312,6 +339,149 @@ run_configured_model() {{
   shift
   run_with_timeout "$attempt_timeout_seconds" "$@" > "$packet_dir/${{event_name}}" 2>&1
   extract_stdout_proposal "$packet_dir/${{event_name}}"
+}}
+
+map_bridge_run() {{
+  # Map bridge goal-delegator-* artifacts (job_envelope.json / worker.status.json
+  # / supervisor_verdict.json / delegation-report.json) in $run_dir onto a
+  # synthetic events-<label>.jsonl (token usage only; NEVER USD) and emit the
+  # assistant text on stdout for proposal extraction.
+  local run_dir="$1"
+  local event_path="$2"
+  python3 - "$run_dir" "$event_path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+run_dir = Path(sys.argv[1])
+event_path = Path(sys.argv[2])
+PASS = {{"passed", "completed", "done", "success"}}
+
+
+def read(name):
+    path = run_dir / name
+    if not path.exists():
+        return {{}}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {{}}
+    return data if isinstance(data, dict) else {{}}
+
+
+job = read("job_envelope.json")
+worker_status = read("worker.status.json")
+verdict = read("supervisor_verdict.json")
+report = read("delegation-report.json")
+
+status = "unknown"
+for source, key in ((verdict, "status"), (job, "status"), (worker_status, "lifecycle")):
+    value = source.get(key)
+    if isinstance(value, str) and value.strip():
+        status = value.strip()
+        break
+passed = status.lower() in PASS
+
+route = job.get("route") if isinstance(job.get("route"), dict) else {{}}
+
+
+def usage():
+    for source in (verdict, job, worker_status, report, route):
+        if not isinstance(source, dict):
+            continue
+        found = source.get("usage") or source.get("tokens") or source.get("token_usage")
+        if isinstance(found, dict) and found:
+            cleaned = {{
+                k: v
+                for k, v in found.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)
+            }}
+            if cleaned:
+                return cleaned
+    return None
+
+
+def assistant_text():
+    for source in (verdict, report, job, worker_status):
+        if not isinstance(source, dict):
+            continue
+        for key in ("assistant_text", "output_text", "summary", "message", "final_message"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+
+text = assistant_text()
+event = {{
+    "output_nonempty": bool(text.strip()),
+    "usage": usage(),
+    "provider": route.get("provider") if isinstance(route.get("provider"), str) else None,
+    "model": route.get("model") if isinstance(route.get("model"), str) else None,
+    "variant": route.get("variant") if isinstance(route.get("variant"), str) else None,
+    "status": status,
+}}
+event_path.write_text(json.dumps(event, separators=(",", ":")) + "\\n", encoding="utf-8")
+sys.stdout.write(text)
+sys.exit(0 if passed else 1)
+PY
+}}
+
+run_bridge_model() {{
+  # Read-only deepseek amender route delegated through opencode-worker-bridge.
+  # The amender proposal is proposal-only; permission-profile is read-only.
+  local label="$1"
+  local model="$2"
+  local variant="$3"
+  local control
+  if ! control="$(resolve_bridge_control)"; then
+    echo "opencode-worker-bridge control script not found (set OPENCODE_WORKER_BRIDGE_ROOT)." \\
+      > "$packet_dir/events-${{label}}.jsonl"
+    return 127
+  fi
+  local run_dir="$packet_dir/bridge/${{label}}"
+  local pool_dir="$packet_dir/bridge/pool"
+  local event_path="$packet_dir/events-${{label}}.jsonl"
+  mkdir -p "$run_dir" "$pool_dir"
+  local state_path="$run_dir/opencode-worker-state.json"
+  local worker_id={CONTRACT.shell_quote(amendment_id)}
+  cp "$packet_dir/prompt.md" "$run_dir/task.md"
+
+  if ! run_with_timeout "$attempt_timeout_seconds" python3 "$control" pool-acquire \\
+      --pool-dir "$pool_dir" --max-workers "$bridge_pool_max_workers" --worker-id "$worker_id" \\
+      > "$run_dir/pool-acquire.log" 2>&1; then
+    echo "bridge pool capacity limit reached; scheduler should refill later." > "$event_path"
+    return 1
+  fi
+
+  local rc=1
+  (
+    run_with_timeout "$attempt_timeout_seconds" python3 "$control" start \\
+      --state "$state_path" --cwd "$repo_root" \\
+      --pool-dir "$pool_dir" --pool-worker-id "$worker_id" \\
+      > "$run_dir/start.log" 2>&1 || true
+    run_with_timeout "$attempt_timeout_seconds" python3 "$control" delegate \\
+      --state "$state_path" --run-dir "$run_dir" --job-id "$worker_id" \\
+      --prompt-file "$run_dir/task.md" \\
+      --provider "$bridge_provider" --model "$model" --variant "$variant" \\
+      --permission-profile read-only \\
+      --report "$run_dir/delegation-report.json" \\
+      > "$run_dir/delegate.log" 2>&1 || true
+    run_with_timeout "$attempt_timeout_seconds" python3 "$control" stop \\
+      --state "$state_path" --run-dir "$run_dir" \\
+      > "$run_dir/stop.log" 2>&1 || true
+  )
+  run_with_timeout "$attempt_timeout_seconds" python3 "$control" pool-release \\
+    --pool-dir "$pool_dir" --worker-id "$worker_id" \\
+    > "$run_dir/pool-release.log" 2>&1 || true
+
+  if map_bridge_run "$run_dir" "$event_path" > "$run_dir/assistant.txt"; then
+    rc=0
+  else
+    rc=1
+  fi
+  extract_stdout_proposal "$run_dir/assistant.txt" || return 1
+  return "$rc"
 }}
 
 unsupported_attempt() {{

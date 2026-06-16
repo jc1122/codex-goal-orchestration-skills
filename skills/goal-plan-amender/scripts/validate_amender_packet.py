@@ -177,6 +177,17 @@ def validate_telemetry(
     if not isinstance(attempts, list):
         defect(defects, "$.telemetry.attempts", "must be an array")
         return
+    allowed_telemetry_aliases = set(CONTRACT.ALLOWED_AMENDER_TELEMETRY_ALIASES)
+    for index, item in enumerate(attempts):
+        if not isinstance(item, dict):
+            continue
+        alias = item.get("alias")
+        if isinstance(alias, str) and alias not in allowed_telemetry_aliases:
+            defect(
+                defects,
+                f"$.telemetry.attempts[{index}].alias",
+                f"must be one of {sorted(allowed_telemetry_aliases)}",
+            )
     if deterministic_mode(route):
         if len(attempts) != 1:
             defect(defects, "$.telemetry.attempts", "must contain exactly one deterministic blocker-repair attempt")
