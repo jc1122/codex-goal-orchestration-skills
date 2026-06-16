@@ -75,10 +75,27 @@ CODEX_ROUTE_EVENT_LABELS = {
     "codex-research": "primary",
     "codex-research-mini": "fallback",
 }
+# Bridge aliases delegate deepseek launches through the opencode-worker-bridge
+# (harness kind "opencode-bridge"). ds-pro-max = TOUGH, ds-flash-max = LIGHT.
+BRIDGE_HARNESS_KIND = "opencode-bridge"
+BRIDGE_PROVIDER_ID = "deepseek"
+BRIDGE_ROUTE_MODELS = {
+    "ds-pro-max": "deepseek-v4-pro",
+    "ds-flash-max": "deepseek-v4-flash",
+}
+BRIDGE_ROUTE_VARIANTS = {
+    "ds-pro-max": "max",
+    "ds-flash-max": "max",
+}
+BRIDGE_ROUTE_EVENT_LABELS = {
+    "ds-pro-max": "ds-pro-max",
+    "ds-flash-max": "ds-flash-max",
+}
+BRIDGE_ROUTE_ALIASES = tuple(BRIDGE_ROUTE_MODELS)
 REVIEW_MODEL_ROUTES = {
-    "light": ("gpt-5.4-mini", "gpt-5.4"),
-    "standard": ("gpt-5.4", "gpt-5.5"),
-    "heavy": ("gpt-5.5", "gpt-5.4"),
+    "light": ("ds-flash-max",),
+    "standard": ("ds-pro-max",),
+    "heavy": ("ds-pro-max", "gpt-5.5"),
 }
 REVIEW_HEAVY_TRIGGER_PATTERNS = (
     "api",
@@ -155,9 +172,11 @@ ADAPTATION_POLICY = {
     "allowed_operations": list(ADAPTATION_ALLOWED_OPERATIONS),
 }
 
+# Global worker ladder order: bridge deepseek leads, native codex provides
+# provider-diversity fallback. Selected ladders must be an ordered subsequence.
 DEFAULT_WORKER_LADDER = (
-    "gemini-pro",
-    "gemini-flash",
+    "ds-pro-max",
+    "ds-flash-max",
     "codex-spark",
     "codex-mini",
 )
@@ -173,35 +192,34 @@ WORKER_ROUTE_CLASSES = (
 )
 MANIFEST_WORKER_ROUTE_CLASSES = tuple(route_class for route_class in WORKER_ROUTE_CLASSES if route_class != "custom")
 WORKER_ROUTE_CLASS_LADDERS = {
-    "mechanical": ("codex-mini",),
-    "docs": ("codex-mini",),
-    "small-edit": ("codex-spark", "codex-mini"),
-    "normal-code": ("codex-spark", "codex-mini"),
-    "complex-code": DEFAULT_WORKER_LADDER,
+    "mechanical": ("ds-flash-max",),
+    "docs": ("ds-flash-max",),
+    "small-edit": ("ds-flash-max", "codex-mini"),
+    "normal-code": ("ds-flash-max", "codex-spark"),
+    "complex-code": ("ds-pro-max", "codex-spark"),
     "custom": DEFAULT_WORKER_LADDER,
 }
 WORKER_ROUTE_CLASS_REASONS = {
-    "mechanical": "Mechanical route class selected: use the cheapest Codex mini route for bounded deterministic edits.",
-    "docs": "Docs route class selected: use the cheapest Codex mini route for documentation-only work.",
-    "small-edit": "Small-edit route class selected: use Codex Spark with Codex mini fallback for bounded low-risk code changes.",
-    "normal-code": "Normal-code route class selected: use Codex Spark with Codex mini fallback for ordinary bounded implementation work.",
-    "complex-code": "Complex-code route class selected: full worker ladder is allowed for high-risk or cross-module implementation work.",
+    "mechanical": "Mechanical route class selected: use the cheapest bridge deepseek-flash route for bounded deterministic edits.",
+    "docs": "Docs route class selected: use the cheapest bridge deepseek-flash route for documentation-only work.",
+    "small-edit": "Small-edit route class selected: lead with bridge deepseek-flash and fall back to native Codex mini for provider diversity on bounded low-risk code changes.",
+    "normal-code": "Normal-code route class selected: lead with bridge deepseek-flash and fall back to native Codex Spark for ordinary bounded implementation work.",
+    "complex-code": "Complex-code route class selected: lead with bridge deepseek-pro and fall back to native Codex Spark for high-risk or cross-module implementation work.",
     "custom": "Custom worker route selected by the branch orchestrator with an explicit selection reason.",
 }
 RESEARCH_ALIASES = ("codex-research", "codex-research-mini")
-DEFAULT_LITE_LADDER = ("gemini-lite",)
+DEFAULT_LITE_LADDER = ("ds-flash-max",)
 ALLOWED_LITE_ROUTES = DEFAULT_LITE_LADDER
-LITE_MODEL = "gemini-3.1-flash-lite-preview"
+LITE_MODEL = BRIDGE_ROUTE_MODELS["ds-flash-max"]
 LITE_APPROVAL_MODE = "plan"
 AMENDER_ROLE = "plan_amender"
 DEFAULT_AMENDER_LADDER = (
-    "gpt-5.4",
-    "gpt-5.4-mini",
+    "ds-pro-max",
+    "ds-flash-max",
 )
 ALLOWED_AMENDER_ROUTES = (
-    "gpt-5.5",
-    "gpt-5.4",
-    "gpt-5.4-mini",
+    "ds-pro-max",
+    "ds-flash-max",
 )
 DETERMINISTIC_AMENDER_ALIAS = "deterministic-blocker-repair"
 ALLOWED_AMENDER_TELEMETRY_ALIASES = ALLOWED_AMENDER_ROUTES + (DETERMINISTIC_AMENDER_ALIAS,)
@@ -230,10 +248,10 @@ AMENDER_MODEL_POLICY = {
 LITE_MODEL_POLICY = {
     "default_ladder": list(DEFAULT_LITE_LADDER),
     "allowed_routes": list(ALLOWED_LITE_ROUTES),
-    "model_map": {"gemini-lite": LITE_MODEL},
+    "model_map": {"ds-flash-max": LITE_MODEL},
     "launcher": "create_lite_advice_packet.py",
     "selection_reason_required": False,
-    "ordering_rule": "Lite advisors use the fixed gemini-lite route; no runtime route broadening is allowed.",
+    "ordering_rule": "Lite advisors use the fixed ds-flash-max bridge route; no runtime route broadening is allowed.",
     "approval_mode": LITE_APPROVAL_MODE,
     "timeout_seconds": LITE_ATTEMPT_TIMEOUT_SECONDS,
 }
@@ -540,6 +558,28 @@ def codex_command(alias: str, *, sandbox: str, search: bool = False, lean: bool 
     prefix = "codex --search exec" if search else "codex exec"
     lean_flags = "" if not lean else " " + " ".join(CODEX_LEAN_EXEC_FLAGS)
     return f"{prefix} --ephemeral{lean_flags} -m {codex_model(alias)} -s {sandbox}"
+
+
+def is_bridge_alias(alias: str) -> bool:
+    return alias in BRIDGE_ROUTE_MODELS
+
+
+def bridge_model(alias: str) -> str:
+    try:
+        return BRIDGE_ROUTE_MODELS[alias]
+    except KeyError as exc:
+        raise ValueError(f"unsupported bridge route alias: {alias!r}") from exc
+
+
+def bridge_variant(alias: str) -> str:
+    try:
+        return BRIDGE_ROUTE_VARIANTS[alias]
+    except KeyError as exc:
+        raise ValueError(f"unsupported bridge route alias: {alias!r}") from exc
+
+
+def bridge_event_label(alias: str) -> str:
+    return BRIDGE_ROUTE_EVENT_LABELS.get(alias, alias.replace(".", "-"))
 
 
 def codex_telemetry_attempts(
