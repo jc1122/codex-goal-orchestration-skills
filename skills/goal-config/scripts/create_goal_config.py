@@ -39,6 +39,7 @@ def bridge_worker_script() -> str:
             return candidate.as_posix()
     return candidates[0].as_posix()
 
+
 EFFORT_PROFILES: dict[str, dict[str, int]] = {
     "lean": {
         "max_active_branch_agents": 2,
@@ -386,13 +387,16 @@ def apply_numeric_overrides(config: dict[str, Any], args: argparse.Namespace, co
         aggressiveness["total_branch_cap"] = int(aggressiveness["max_active_branch_agents"]) * int(
             aggressiveness["max_waves"]
         )
-    if any(getattr(args, name) is not None for name in (
-        "max_active_branch_agents",
-        "max_active_worker_packets",
-        "max_waves",
-        "lite_timeout_seconds",
-        "demanding_timeout_seconds",
-    )):
+    if any(
+        getattr(args, name) is not None
+        for name in (
+            "max_active_branch_agents",
+            "max_active_worker_packets",
+            "max_waves",
+            "lite_timeout_seconds",
+            "demanding_timeout_seconds",
+        )
+    ):
         config["effort_profile"] = "custom"
 
 
@@ -469,10 +473,7 @@ def load_discovery_report(path: Path) -> dict[str, Any]:
 
 
 def route_selector_text(route: dict[str, Any]) -> str:
-    return " ".join(
-        str(route.get(key, ""))
-        for key in ("role", "alias", "harness", "provider", "model")
-    ).lower()
+    return " ".join(str(route.get(key, "")) for key in ("role", "alias", "harness", "provider", "model")).lower()
 
 
 def route_score(route: dict[str, Any], *, purpose: str) -> tuple[int, str]:
@@ -509,7 +510,9 @@ def select_route(routes: list[dict[str, Any]], *, purpose: str) -> dict[str, Any
     return sorted(routes, key=lambda route: route_score(route, purpose=purpose))[0]
 
 
-def route_model_entry(role: str, route: dict[str, Any], *, alias: str | None = None, purpose: str | None = None) -> dict[str, Any]:
+def route_model_entry(
+    role: str, route: dict[str, Any], *, alias: str | None = None, purpose: str | None = None
+) -> dict[str, Any]:
     for key in ("harness", "provider", "model"):
         if not isinstance(route.get(key), str) or not route.get(key):
             raise SystemExit(f"accepted route missing {key}: {route}")
@@ -572,7 +575,11 @@ def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None,
         extra_roles: list[str] = []
         seen_route_keys = {
             (models["lite_agent"]["harness"], models["lite_agent"]["provider"], models["lite_agent"]["model"]),
-            (models["demanding_agent"]["harness"], models["demanding_agent"]["provider"], models["demanding_agent"]["model"]),
+            (
+                models["demanding_agent"]["harness"],
+                models["demanding_agent"]["provider"],
+                models["demanding_agent"]["model"],
+            ),
         }
         for route in routes:
             key = (route.get("harness"), route.get("provider"), route.get("model"))
@@ -588,8 +595,7 @@ def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None,
         if not isinstance(data, dict) or not data:
             raise SystemExit(f"discovery mapping must be a non-empty JSON object: {mapping_path}")
         models = {
-            role: route_model_entry(role, find_route(routes, selector), alias=role)
-            for role, selector in data.items()
+            role: route_model_entry(role, find_route(routes, selector), alias=role) for role, selector in data.items()
         }
         extra_roles = [role for role in models if role not in {"lite_agent", "demanding_agent"}]
 
@@ -643,11 +649,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
 
     def cheaper_worker_ladder(values: list[str]) -> list[str]:
         premium_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
-        cheap = [
-            alias
-            for alias in values
-            if not any(marker in str(alias).lower() for marker in premium_markers)
-        ]
+        cheap = [alias for alias in values if not any(marker in str(alias).lower() for marker in premium_markers)]
         if cheap:
             return cheap[-2:]
         return values[-1:]
@@ -655,11 +657,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
     def cheaper_review_ladder(*candidate_ladders: list[str]) -> list[str]:
         premium_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
         candidates = unique([alias for ladder in candidate_ladders for alias in ladder])
-        cheap = [
-            alias
-            for alias in candidates
-            if not any(marker in str(alias).lower() for marker in premium_markers)
-        ]
+        cheap = [alias for alias in candidates if not any(marker in str(alias).lower() for marker in premium_markers)]
         if cheap:
             return cheap[-2:]
         return candidates[-1:] if candidates else reviewer[-1:]
@@ -733,20 +731,21 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             "selection_reason_required": True,
             "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
             "sandbox": "read-only",
-            "timeout_seconds": int(config.get("effort", {}).get("amender_timeout_seconds") or contract.AMENDER_ATTEMPT_TIMEOUT_SECONDS),
+            "timeout_seconds": int(
+                config.get("effort", {}).get("amender_timeout_seconds") or contract.AMENDER_ATTEMPT_TIMEOUT_SECONDS
+            ),
         },
         "lite_model_policy": {
             "source": "goal_config",
             "default_ladder": lite,
             "allowed_routes": unique(lite),
-            "model_map": {
-                role: config["models"][role]["model"]
-                for role in lite
-            },
+            "model_map": {role: config["models"][role]["model"] for role in lite},
             "launcher": "create_lite_advice_packet.py",
             "selection_reason_required": False,
             "ordering_rule": "Lite advisors use configured goal_config routes only.",
-            "timeout_seconds": int(config.get("effort", {}).get("lite_timeout_seconds") or contract.LITE_ATTEMPT_TIMEOUT_SECONDS),
+            "timeout_seconds": int(
+                config.get("effort", {}).get("lite_timeout_seconds") or contract.LITE_ATTEMPT_TIMEOUT_SECONDS
+            ),
         },
     }
 
@@ -861,9 +860,7 @@ def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict
     provider-diversity fallback, native research (``codex --search`` read-only),
     and native prompt-audit (``gpt-5.x``)."""
     config = base_config(contract)
-    lite_provider, lite_model = normalize_role_model_for_harness(
-        args.lite_model, "opencode-bridge", args.provider
-    )
+    lite_provider, lite_model = normalize_role_model_for_harness(args.lite_model, "opencode-bridge", args.provider)
     demanding_provider, demanding_model = normalize_role_model_for_harness(
         args.demanding_model,
         "opencode-bridge",
@@ -980,7 +977,9 @@ def main() -> int:
     )
     parser.add_argument("--output", type=Path, help="Write goal.config.json to this path; use - for stdout.")
     parser.add_argument("--provider", help="Provider id override for provider/model strings.")
-    parser.add_argument("--from-discovery", type=Path, help="Build an explicit config from a goal-config discovery report.")
+    parser.add_argument(
+        "--from-discovery", type=Path, help="Build an explicit config from a goal-config discovery report."
+    )
     parser.add_argument("--mapping", help="Discovery mapping mode: auto or path to role-selector JSON.")
     parser.add_argument(
         "--effort-profile",
@@ -996,7 +995,9 @@ def main() -> int:
     )
     parser.add_argument("--state-output", type=Path, help="Write goal-config-state.json for UX/state handoff.")
     parser.add_argument("--lite-model", default="deepseek/deepseek-v4-flash", help="Lite opencode provider/model.")
-    parser.add_argument("--demanding-model", default="deepseek/deepseek-v4-pro", help="Demanding opencode provider/model.")
+    parser.add_argument(
+        "--demanding-model", default="deepseek/deepseek-v4-pro", help="Demanding opencode provider/model."
+    )
     parser.add_argument("--max-active-branch-agents", type=int)
     parser.add_argument("--max-active-worker-packets", type=int)
     parser.add_argument("--max-waves", type=int)

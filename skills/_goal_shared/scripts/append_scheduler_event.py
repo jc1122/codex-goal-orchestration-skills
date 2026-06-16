@@ -52,7 +52,9 @@ def load_ledger(path: Path) -> dict:
 
 
 def deterministic_timestamp(seq: int) -> str:
-    return (datetime(2000, 1, 1, tzinfo=UTC) + timedelta(seconds=seq)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return (
+        (datetime(2000, 1, 1, tzinfo=UTC) + timedelta(seconds=seq)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
 
 
 def atomic_write_json(path: Path, data: dict) -> None:
@@ -86,7 +88,9 @@ def main() -> int:
     parser.add_argument("--reason-code", choices=sorted(REASON_CODES))
     parser.add_argument("--reason")
     parser.add_argument("--runtime-ref", required=True)
-    parser.add_argument("--timestamp", help="Defaults to a deterministic synthetic ISO timestamp derived from the event sequence.")
+    parser.add_argument(
+        "--timestamp", help="Defaults to a deterministic synthetic ISO timestamp derived from the event sequence."
+    )
     args = parser.parse_args()
 
     ledger_path = Path(args.ledger).resolve()

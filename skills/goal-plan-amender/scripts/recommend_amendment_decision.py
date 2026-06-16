@@ -94,7 +94,9 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
     unknown_active = sorted(active - set(branch_ids))
     unknown_terminal = sorted(terminal - set(branch_ids))
     if unknown_active or unknown_terminal:
-        raise SystemExit(f"protected ids are not manifest branches: active={unknown_active}, terminal={unknown_terminal}")
+        raise SystemExit(
+            f"protected ids are not manifest branches: active={unknown_active}, terminal={unknown_terminal}"
+        )
     if not terminal:
         raise SystemExit("at least one terminal branch checkpoint is required")
 
@@ -105,15 +107,9 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
         if branch_id in branch_ids and status in {"partial", "blocked", "failed"}
     }
     unstarted = [branch_id for branch_id in branch_ids if branch_id not in terminal and branch_id not in active]
-    eligible = [
-        branch_id
-        for branch_id in unstarted
-        if all(dep in pass_ids for dep in deps.get(branch_id, []))
-    ]
+    eligible = [branch_id for branch_id in unstarted if all(dep in pass_ids for dep in deps.get(branch_id, []))]
     stalled_by_nonpass = [
-        branch_id
-        for branch_id in unstarted
-        if any(dep in nonpass_ids for dep in deps.get(branch_id, []))
+        branch_id for branch_id in unstarted if any(dep in nonpass_ids for dep in deps.get(branch_id, []))
     ]
     pending_on_active = [
         branch_id
@@ -124,7 +120,9 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
     if stalled_by_nonpass:
         decision = "launch"
         reason_code = "blocker_stalls_downstream"
-        reason = "Non-pass terminal branch dependency stalls downstream unstarted branch ids: " + ", ".join(stalled_by_nonpass)
+        reason = "Non-pass terminal branch dependency stalls downstream unstarted branch ids: " + ", ".join(
+            stalled_by_nonpass
+        )
     elif eligible:
         decision = "skip"
         reason_code = "eligible_work_remains"
@@ -156,7 +154,9 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
     }
 
 
-def write_decision(manifest_path: Path, manifest: dict, amendment_id: str, rec: dict, *, scheduler_event_seq: int | None, replace: bool) -> Path:
+def write_decision(
+    manifest_path: Path, manifest: dict, amendment_id: str, rec: dict, *, scheduler_event_seq: int | None, replace: bool
+) -> Path:
     if manifest.get("adaptation_policy") != CONTRACT.ADAPTATION_POLICY:
         raise SystemExit("manifest adaptation_policy does not match the shared amendment proposal policy")
     try:
@@ -169,17 +169,29 @@ def write_decision(manifest_path: Path, manifest: dict, amendment_id: str, rec: 
     if decision == "launch" and reason_code not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
         raise SystemExit("recommended reason_code is not valid for a launch decision")
     if decision == "skip" and reason_code in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
-        raise SystemExit("recommended reason_code describes a launch-required condition and is not valid for a skip decision")
+        raise SystemExit(
+            "recommended reason_code describes a launch-required condition and is not valid for a skip decision"
+        )
     overlap = sorted(set(rec["active_branch_ids"]) & set(rec["terminal_branch_ids"]))
     if overlap:
-        raise SystemExit("branch ids cannot be both active and terminal in an amendment decision: " + ", ".join(overlap))
+        raise SystemExit(
+            "branch ids cannot be both active and terminal in an amendment decision: " + ", ".join(overlap)
+        )
     bundle_dir = manifest_path.parent
     amendments_dir = bundle_dir / "amendments"
     decision_path = amendments_dir / f"{amendment_id}.decision.json"
     if decision_path.exists() and not replace:
         raise SystemExit(f"amendment decision already exists; pass --replace to recreate: {decision_path}")
-    scheduler_path = manifest.get("parallelization", {}).get("scheduler_path") if isinstance(manifest.get("parallelization"), dict) else None
-    scheduler_rel = scheduler_path if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path") else CONTRACT.MAIN_SCHEDULER_PATH
+    scheduler_path = (
+        manifest.get("parallelization", {}).get("scheduler_path")
+        if isinstance(manifest.get("parallelization"), dict)
+        else None
+    )
+    scheduler_rel = (
+        scheduler_path
+        if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path")
+        else CONTRACT.MAIN_SCHEDULER_PATH
+    )
     data = {
         "schema_version": 1,
         "amendment_id": amendment_id,
@@ -195,9 +207,15 @@ def write_decision(manifest_path: Path, manifest: dict, amendment_id: str, rec: 
         "terminal_branch_ids": rec["terminal_branch_ids"],
         "terminal_branch_statuses": rec["terminal_branch_statuses"],
         "packet_path": (amendments_dir / f"{amendment_id}.packet").as_posix() if decision == "launch" else None,
-        "proposal_path": (amendments_dir / f"{amendment_id}.proposal.json").as_posix() if decision == "launch" else None,
-        "validation_path": (amendments_dir / f"{amendment_id}.validation.json").as_posix() if decision == "launch" else None,
-        "accepted_path": (amendments_dir / f"{amendment_id}.accepted.json").as_posix() if decision == "launch" else None,
+        "proposal_path": (amendments_dir / f"{amendment_id}.proposal.json").as_posix()
+        if decision == "launch"
+        else None,
+        "validation_path": (amendments_dir / f"{amendment_id}.validation.json").as_posix()
+        if decision == "launch"
+        else None,
+        "accepted_path": (amendments_dir / f"{amendment_id}.accepted.json").as_posix()
+        if decision == "launch"
+        else None,
     }
     write_json(decision_path, data)
     return decision_path

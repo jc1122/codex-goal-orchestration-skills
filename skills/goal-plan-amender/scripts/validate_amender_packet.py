@@ -84,7 +84,9 @@ def deterministic_mode(route: dict) -> bool:
     return route.get("mode") == "deterministic_blocker_repair"
 
 
-def validate_route(defects: list[str], route: dict, *, amendment_id: str, manifest: dict, manifest_path: Path) -> list[str]:
+def validate_route(
+    defects: list[str], route: dict, *, amendment_id: str, manifest: dict, manifest_path: Path
+) -> list[str]:
     if route.get("schema_version") != 1:
         defect(defects, "$.route.schema_version", "must be 1")
     if route.get("packet_id") != amendment_id:
@@ -242,7 +244,9 @@ def validate_telemetry(
             defect(defects, f"$.telemetry.attempts[{index}].alias", "must be declared by manifest amender_model_policy")
             continue
         if attempt.get("timeout_seconds") != expected.get("timeout_seconds"):
-            defect(defects, f"$.telemetry.attempts[{index}].timeout_seconds", f"must be {expected.get('timeout_seconds')}")
+            defect(
+                defects, f"$.telemetry.attempts[{index}].timeout_seconds", f"must be {expected.get('timeout_seconds')}"
+            )
         if attempt.get("model") != expected.get("model"):
             defect(defects, f"$.telemetry.attempts[{index}].model", f"must be {expected.get('model')!r}")
         if attempt.get("provider") != expected.get("provider"):
@@ -330,7 +334,9 @@ def main() -> int:
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     amendment_id = ensure_amendment_id(args.amendment_id)
     default_packet = manifest_path.parent / "amendments" / f"{amendment_id}.packet"
-    packet_dir = resolve_absolute_path(args.packet_dir, "--packet-dir", must_exist=True) if args.packet_dir else default_packet
+    packet_dir = (
+        resolve_absolute_path(args.packet_dir, "--packet-dir", must_exist=True) if args.packet_dir else default_packet
+    )
     result = validate_packet(manifest_path=manifest_path, amendment_id=amendment_id, packet_dir=packet_dir)
     output_path = Path(args.output).resolve() if args.output else packet_dir / "packet.validation.json"
     write_json(output_path, result)

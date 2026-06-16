@@ -70,12 +70,18 @@ def validate_telemetry(defects: list[str], audit_path: Path, *, audit_status: st
     aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
     if aliases not in AUDIT_LADDERS:
         defect(defects, "$.telemetry.attempts", f"must declare one audit ladder: {AUDIT_LADDERS!r}")
-    called = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict) and attempt.get("called") is True]
+    called = [
+        attempt.get("alias") for attempt in attempts if isinstance(attempt, dict) and attempt.get("called") is True
+    ]
     if called and not any(called == ladder[: len(called)] for ladder in AUDIT_LADDERS):
         defect(defects, "$.telemetry.attempts", "called attempts must be a non-empty prefix of the audit ladder")
-    accepted = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict) and attempt.get("accepted") is True]
+    accepted = [
+        attempt.get("alias") for attempt in attempts if isinstance(attempt, dict) and attempt.get("accepted") is True
+    ]
     if audit_status == "pass" and len(accepted) != 1:
-        defect(defects, "$.telemetry.attempts", "passing prompt audit telemetry must identify exactly one accepted model")
+        defect(
+            defects, "$.telemetry.attempts", "passing prompt audit telemetry must identify exactly one accepted model"
+        )
 
 
 def validate_prompt_audit(audit_path: Path, manifest_path: Path, repo_root: Path, *, require_pass: bool) -> list[str]:
@@ -108,7 +114,9 @@ def validate_prompt_audit(audit_path: Path, manifest_path: Path, repo_root: Path
             defect(defects, "$.missing_dod_items", "must be empty when status is pass")
         for index, item in enumerate(audit.get("defects", []) if isinstance(audit.get("defects"), list) else []):
             if isinstance(item, dict) and item.get("severity") in {"critical", "major"}:
-                defect(defects, f"$.defects[{index}].severity", "passing audit must not contain critical or major defects")
+                defect(
+                    defects, f"$.defects[{index}].severity", "passing audit must not contain critical or major defects"
+                )
     else:
         if audit.get("can_start") is True:
             defect(defects, "$.can_start", "must be false unless status is pass")

@@ -124,7 +124,11 @@ def require_launch_packet_validation(manifest_path: Path, proposal_path: Path, a
     )
     if fresh_packet_validation.get("status") != "pass":
         defects = fresh_packet_validation.get("defects")
-        detail = "; ".join(str(item) for item in defects) if isinstance(defects, list) else "unknown packet validation defect"
+        detail = (
+            "; ".join(str(item) for item in defects)
+            if isinstance(defects, list)
+            else "unknown packet validation defect"
+        )
         raise SystemExit(f"fresh amender packet validation failed; live manifest was not changed: {detail}")
     for key in ["manifest_sha256", "proposal_sha256", "packet_dir", "decision", "route", "telemetry", "proposal"]:
         if packet_validation.get(key) != fresh_packet_validation.get(key):
@@ -158,7 +162,9 @@ def main() -> int:
     require_launch_packet_validation(manifest_path, proposal_path, amendment_id)
 
     active_ids = validation.get("active_branch_ids") if isinstance(validation.get("active_branch_ids"), list) else []
-    terminal_ids = validation.get("terminal_branch_ids") if isinstance(validation.get("terminal_branch_ids"), list) else []
+    terminal_ids = (
+        validation.get("terminal_branch_ids") if isinstance(validation.get("terminal_branch_ids"), list) else []
+    )
     fresh_validation, candidate, normalized_brief = validate_proposal(
         manifest_path=manifest_path,
         proposal_path=proposal_path,
@@ -190,7 +196,9 @@ def main() -> int:
     archive_path.parent.mkdir(parents=True, exist_ok=True)
     archive_path.write_text(manifest_path.read_text(encoding="utf-8"), encoding="utf-8")
 
-    protected_branch_ids = set(str(item) for item in fresh_validation.get("protected_branch_ids", []) if isinstance(item, str))
+    protected_branch_ids = set(
+        str(item) for item in fresh_validation.get("protected_branch_ids", []) if isinstance(item, str)
+    )
     regenerated_branch_ids = set(prompt_regeneration_branch_ids(candidate, protected_branch_ids))
     prompt_backups = {
         path: path.read_text(encoding="utf-8") if path.exists() else None
@@ -262,7 +270,9 @@ def main() -> int:
         "regenerated_prompts": [
             branch["prompt"]
             for branch in candidate.get("branches", [])
-            if isinstance(branch, dict) and branch.get("id") in regenerated_branch_ids and isinstance(branch.get("prompt"), str)
+            if isinstance(branch, dict)
+            and branch.get("id") in regenerated_branch_ids
+            and isinstance(branch.get("prompt"), str)
         ],
         "lint_status": lint.get("status"),
         "lineage_path": lineage_path.as_posix(),

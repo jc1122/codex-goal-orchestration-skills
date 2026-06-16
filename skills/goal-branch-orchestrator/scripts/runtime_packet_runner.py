@@ -47,7 +47,17 @@ BRIDGE_WORKER_STATE_NAME = "opencode-worker-state.json"
 BRIDGE_PASS_STATUSES = frozenset({"passed", "completed", "done", "success"})
 # Bridge issue taxonomy ids (provider_error_code on failure).
 BRIDGE_ISSUE_IDS = frozenset(
-    {"transport", "model_output", "validation", "permission", "timeout", "cleanup", "orchestrator_policy", "harness_bug", "unknown"}
+    {
+        "transport",
+        "model_output",
+        "validation",
+        "permission",
+        "timeout",
+        "cleanup",
+        "orchestrator_policy",
+        "harness_bug",
+        "unknown",
+    }
 )
 CACHE_PATH_PARTS = (
     "__pycache__",
@@ -66,9 +76,7 @@ PACKET_CACHE_PATH_PARTS = (
     ".ruff_cache",
     "xdg-cache",
 )
-KNOWN_PACKET_CACHE_FILES = (
-    "unleash-repo-schema-v1-codeium-language-server.json",
-)
+KNOWN_PACKET_CACHE_FILES = ("unleash-repo-schema-v1-codeium-language-server.json",)
 KNOWN_PACKET_CACHE_ROOT_NAMES = (
     ".runtime-cache",
     ".cache",
@@ -341,7 +349,7 @@ def packet_runtime_cache_candidates(packet_dir: Path) -> list[Path]:
                 part = rel_candidate.parts[index]
                 parent = rel_candidate.parts[index - 1]
                 if part in KNOWN_PACKET_CACHE_RELATIVE and parent in KNOWN_PACKET_CACHE_ROOT_NAMES:
-                    root = packet_dir / Path(*rel_candidate.parts[:index + 1])
+                    root = packet_dir / Path(*rel_candidate.parts[: index + 1])
                     break
         if root.is_relative_to(packet_dir):
             if root in seen:
@@ -400,7 +408,9 @@ def cleanup_packet_runtime_cache(packet_dir: Path, *, keep: bool = False) -> dic
     }
 
 
-def clean_outputs(packet_dir: Path, output_name: str, attempts: list[dict[str, Any]], config: dict[str, Any] | None = None) -> None:
+def clean_outputs(
+    packet_dir: Path, output_name: str, attempts: list[dict[str, Any]], config: dict[str, Any] | None = None
+) -> None:
     remove_if_exists(packet_dir / output_name)
     remove_if_exists(packet_dir / "telemetry.json")
     remove_if_exists(packet_dir / "packet.summary.json")
@@ -611,7 +621,9 @@ def _finalize_attempt_observation(
         provider_error_code = parse_report.get("provider_error_code")
         if not provider_error_code:
             provider_error_code = detect_provider_error_code(lines)
-        provider_error_code = str(provider_error_code) if isinstance(provider_error_code, str) and provider_error_code else None
+        provider_error_code = (
+            str(provider_error_code) if isinstance(provider_error_code, str) and provider_error_code else None
+        )
         parse_report["provider_error_code"] = provider_error_code
         if provider_error_code:
             attempt["provider_error_code"] = provider_error_code
@@ -932,11 +944,14 @@ def write_packet_summary(packet_dir: Path, config: dict[str, Any]) -> None:
     attempts: list[dict[str, Any]] = []
     for index, attempt in enumerate(list_value(config, "attempts")):
         attempt_events = [
-            event for event in launcher_events
-            if isinstance(event, dict) and event.get("attempt_index") == index
+            event for event in launcher_events if isinstance(event, dict) and event.get("attempt_index") == index
         ]
         last_event = attempt_events[-1] if attempt_events else {}
-        telemetry_attempt = telemetry_attempts[index] if index < len(telemetry_attempts) and isinstance(telemetry_attempts[index], dict) else {}
+        telemetry_attempt = (
+            telemetry_attempts[index]
+            if index < len(telemetry_attempts) and isinstance(telemetry_attempts[index], dict)
+            else {}
+        )
         attempts.append(
             {
                 "attempt_index": index,
@@ -958,7 +973,8 @@ def write_packet_summary(packet_dir: Path, config: dict[str, Any]) -> None:
                 "provider_error_code": last_event.get("provider_error_code") or attempt.get("provider_error_code"),
                 "route_health": _normalize_route_health(last_event.get("route_health")),
                 "owned_path_violation": attempt.get("owned_path_violation"),
-                "generated_artifact_cleanup": attempt.get("generated_artifact_cleanup") or last_event.get("generated_artifact_cleanup"),
+                "generated_artifact_cleanup": attempt.get("generated_artifact_cleanup")
+                or last_event.get("generated_artifact_cleanup"),
                 "generated_artifact_cleanup_path": attempt.get("generated_artifact_cleanup_path")
                 or last_event.get("generated_artifact_cleanup_path"),
                 "called": telemetry_attempt.get("called"),
@@ -1083,7 +1099,9 @@ def run_with_timeout(
         env.update(extra_env)
     pytest_addopts = env.get("PYTEST_ADDOPTS", "").strip()
     cache_opt = "-p no:cacheprovider"
-    env["PYTEST_ADDOPTS"] = (pytest_addopts + " " + cache_opt).strip() if cache_opt not in pytest_addopts else pytest_addopts
+    env["PYTEST_ADDOPTS"] = (
+        (pytest_addopts + " " + cache_opt).strip() if cache_opt not in pytest_addopts else pytest_addopts
+    )
     full_command = [
         "timeout",
         "--foreground",
@@ -1280,20 +1298,10 @@ def record_generated_artifact_cleanup(packet_dir: Path, attempt: dict[str, Any],
     records = data.get("attempts") if isinstance(data.get("attempts"), list) else []
     records.append(cleanup)
     candidates_count = sum(
-        int(record.get("candidates_count", 0) or 0)
-        for record in records
-        if isinstance(record, dict)
+        int(record.get("candidates_count", 0) or 0) for record in records if isinstance(record, dict)
     )
-    removed_count = sum(
-        int(record.get("removed_count", 0) or 0)
-        for record in records
-        if isinstance(record, dict)
-    )
-    failed_count = sum(
-        int(record.get("failed_count", 0) or 0)
-        for record in records
-        if isinstance(record, dict)
-    )
+    removed_count = sum(int(record.get("removed_count", 0) or 0) for record in records if isinstance(record, dict))
+    failed_count = sum(int(record.get("failed_count", 0) or 0) for record in records if isinstance(record, dict))
     aggregate = {
         "schema_version": 1,
         "status": _cleanup_status(candidates_count, failed_count, removed_count),
@@ -1309,15 +1317,13 @@ def record_generated_artifact_cleanup(packet_dir: Path, attempt: dict[str, Any],
 
 
 def actionable_worktree_status_lines(worktree: str) -> list[str]:
-    return [
-        line
-        for line in worktree_status_lines(worktree)
-        if not is_runtime_cache_path(porcelain_status_path(line))
-    ]
+    return [line for line in worktree_status_lines(worktree) if not is_runtime_cache_path(porcelain_status_path(line))]
 
 
 def is_worktree_dirty(worktree: str, *, ignore_runtime_cache: bool = False) -> bool:
-    status_lines = actionable_worktree_status_lines(worktree) if ignore_runtime_cache else worktree_status_lines(worktree)
+    status_lines = (
+        actionable_worktree_status_lines(worktree) if ignore_runtime_cache else worktree_status_lines(worktree)
+    )
     return bool(status_lines)
 
 
@@ -1349,10 +1355,7 @@ def file_fingerprint(worktree: str, path: str) -> str:
 
 
 def changed_file_fingerprints(worktree: str) -> dict[str, str]:
-    return {
-        path: file_fingerprint(worktree, path)
-        for path in extract_changed_files(worktree)
-    }
+    return {path: file_fingerprint(worktree, path) for path in extract_changed_files(worktree)}
 
 
 def packet_delta_changed_files(worktree: str, baseline: dict[str, str]) -> list[str]:
@@ -1373,11 +1376,11 @@ def path_is_owned(path: str, owned_paths: list[str]) -> bool:
 
 
 def worker_ownership_violations(config: dict[str, Any], changed_files: list[str]) -> list[str]:
-    owned_files = [
-        item
-        for item in config.get("owned_files", [])
-        if isinstance(item, str) and item.strip()
-    ] if isinstance(config.get("owned_files"), list) else []
+    owned_files = (
+        [item for item in config.get("owned_files", []) if isinstance(item, str) and item.strip()]
+        if isinstance(config.get("owned_files"), list)
+        else []
+    )
     if not owned_files:
         return []
     violations: list[str] = []
@@ -1425,11 +1428,11 @@ def summarize_dirty_stop_salvage(
     if not packet_changed_files:
         return {}
     status_map = worktree_status_map(worktree)
-    owned_files = [
-        item
-        for item in config.get("owned_files", [])
-        if isinstance(item, str) and item.strip()
-    ] if isinstance(config.get("owned_files"), list) else []
+    owned_files = (
+        [item for item in config.get("owned_files", []) if isinstance(item, str) and item.strip()]
+        if isinstance(config.get("owned_files"), list)
+        else []
+    )
     owned_changes = [item for item in packet_changed_files if path_is_owned(item, owned_files)] if owned_files else []
     external_changes = [item for item in packet_changed_files if item not in owned_changes]
     tracked_changes: list[str] = []
@@ -1473,10 +1476,14 @@ def summarize_dirty_stop_salvage(
             skipped_untracked.append({"path": relative_path, "reason": f"stat failed: {exc.__class__.__name__}"})
             continue
         if size > MAX_UNTRACKED_SALVAGE_FILE_BYTES:
-            skipped_untracked.append({"path": relative_path, "reason": "file exceeds per-file salvage limit", "bytes": size})
+            skipped_untracked.append(
+                {"path": relative_path, "reason": "file exceeds per-file salvage limit", "bytes": size}
+            )
             continue
         if total_salvaged_bytes + size > MAX_UNTRACKED_SALVAGE_TOTAL_BYTES:
-            skipped_untracked.append({"path": relative_path, "reason": "total salvage byte limit exceeded", "bytes": size})
+            skipped_untracked.append(
+                {"path": relative_path, "reason": "total salvage byte limit exceeded", "bytes": size}
+            )
             continue
         destination = untracked_salvage_dir / relative_path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -1571,7 +1578,9 @@ def write_terminal_worker(
         "route_class": string_value(config, "route_class"),
         "selected_ladder": config.get("selected_ladder", []),
         "selection_reason": config.get("selection_reason", ""),
-        "changed_files": changed_files if changed_files is not None else extract_changed_files(string_value(config, "worktree")),
+        "changed_files": changed_files
+        if changed_files is not None
+        else extract_changed_files(string_value(config, "worktree")),
         "commands_run": effective_commands,
         "tests": [],
         "blockers": [
@@ -1611,7 +1620,8 @@ def write_terminal_research(
             message,
             "Inspect research-worker event logs in this packet directory for the underlying CLI or schema error.",
         ],
-        "handoff": message + " Inspect research-worker event logs in this packet directory for the underlying CLI or schema error.",
+        "handoff": message
+        + " Inspect research-worker event logs in this packet directory for the underlying CLI or schema error.",
     }
     write_json(output_path, data)
 
@@ -1725,7 +1735,12 @@ def _elapsed_ms_from_timestamps(timestamps: Any) -> int | None:
     if not isinstance(timestamps, dict):
         return None
     start = timestamps.get("started_at") or timestamps.get("created_at") or timestamps.get("start")
-    end = timestamps.get("completed_at") or timestamps.get("finished_at") or timestamps.get("end") or timestamps.get("updated_at")
+    end = (
+        timestamps.get("completed_at")
+        or timestamps.get("finished_at")
+        or timestamps.get("end")
+        or timestamps.get("updated_at")
+    )
     if not isinstance(start, str) or not isinstance(end, str):
         return None
     try:
@@ -1748,7 +1763,11 @@ def _bridge_usage(*sources: Any) -> dict[str, Any] | None:
             continue
         usage = source.get("usage") or source.get("tokens") or source.get("token_usage")
         if isinstance(usage, dict) and usage:
-            return {key: value for key, value in usage.items() if isinstance(value, (int, float)) and not isinstance(value, bool)} or None
+            return {
+                key: value
+                for key, value in usage.items()
+                if isinstance(value, (int, float)) and not isinstance(value, bool)
+            } or None
     return None
 
 
@@ -2024,7 +2043,14 @@ def run_opencode_bridge_model(
             acquire = _run_bridge_command(
                 bridge_root=bridge_root,
                 subcommand="pool-acquire",
-                extra_args=["--pool-dir", pool_dir.as_posix(), "--max-workers", str(max_workers), "--worker-id", worker_id],
+                extra_args=[
+                    "--pool-dir",
+                    pool_dir.as_posix(),
+                    "--max-workers",
+                    str(max_workers),
+                    "--worker-id",
+                    worker_id,
+                ],
                 timeout_seconds=timeout_seconds,
                 kill_after_seconds=kill_after_seconds,
                 role=role,
@@ -2040,7 +2066,9 @@ def run_opencode_bridge_model(
                 "messages": [message],
             }
             append_attempt_execution(attempt, acquire, phase=f"attempt-{label}")
-            write_bridge_telemetry_artifacts(packet_dir, label, {"status": "blocked", "provider_error_code": "BRIDGE_POOL_CAPACITY"})
+            write_bridge_telemetry_artifacts(
+                packet_dir, label, {"status": "blocked", "provider_error_code": "BRIDGE_POOL_CAPACITY"}
+            )
             return int(acquire.get("returncode", 1)), acquire, event_path
         acquired = True
 
@@ -2164,12 +2192,23 @@ def run_opencode_bridge_model(
     # in the packet; enforce the same ensure_status_json gate as native routes.
     if role == "worker":
         assistant_log = packet_dir / f"events-{label}-assistant.log"
-        if not ensure_status_json(packet_dir, schema_path, output_path, assistant_log, config, parse_report=parse_report):
+        if not ensure_status_json(
+            packet_dir, schema_path, output_path, assistant_log, config, parse_report=parse_report
+        ):
             return 1, last_execution, event_path
     return 0, last_execution, event_path
 
 
-def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
+def run_codex_model(
+    attempt: dict[str, Any],
+    *,
+    packet_dir: Path,
+    config: dict[str, Any],
+    schema_name: str,
+    output_name: str,
+    worktree: str,
+    label: str,
+) -> tuple[int, dict[str, Any], Path]:
     role = string_value(config, "role")
     schema_path = packet_dir / schema_name
     output_path = packet_dir / output_name
@@ -2205,7 +2244,24 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
         "-",
     ]
     if role == "research-worker":
-        command = ["codex", "--search", "exec", "--ephemeral", "-m", model, "-C", worktree, "-s", string_value(config, "sandbox"), "--json", "--output-schema", schema_path.as_posix(), "-o", output_path.as_posix(), "-"]
+        command = [
+            "codex",
+            "--search",
+            "exec",
+            "--ephemeral",
+            "-m",
+            model,
+            "-C",
+            worktree,
+            "-s",
+            string_value(config, "sandbox"),
+            "--json",
+            "--output-schema",
+            schema_path.as_posix(),
+            "-o",
+            output_path.as_posix(),
+            "-",
+        ]
     record_executed_command(attempt, command)
     execution = run_with_timeout(
         command=command,
@@ -2221,17 +2277,32 @@ def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[s
     attempt["_parse_report"] = parse_report
     if execution.get("returncode", 1) != 0:
         output_nonempty = output_path.exists() and output_path.stat().st_size > 0
-        if role == "worker" and output_nonempty and ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report):
+        if (
+            role == "worker"
+            and output_nonempty
+            and ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report)
+        ):
             parse_report["status"] = "schema_success_nonzero_exit"
             parse_report["nonzero_returncode"] = int(execution.get("returncode", 1))
             return 0, execution, event_path
         return int(execution.get("returncode", 1)), execution, event_path
-    if role == "worker" and not ensure_status_json(packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report):
+    if role == "worker" and not ensure_status_json(
+        packet_dir, schema_path, output_path, event_path, config, parse_report=parse_report
+    ):
         return 1, execution, event_path
     return 0, execution, event_path
 
 
-def render_runtime_args(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], prompt_text: str, worktree: str, schema_path: Path, output_path: Path) -> list[str]:
+def render_runtime_args(
+    attempt: dict[str, Any],
+    *,
+    packet_dir: Path,
+    config: dict[str, Any],
+    prompt_text: str,
+    worktree: str,
+    schema_path: Path,
+    output_path: Path,
+) -> list[str]:
     args = attempt.get("run_args")
     if not isinstance(args, list):
         return []
@@ -2255,7 +2326,16 @@ def render_runtime_args(attempt: dict[str, Any], *, packet_dir: Path, config: di
     return rendered
 
 
-def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
+def run_generic_cli_model(
+    attempt: dict[str, Any],
+    *,
+    packet_dir: Path,
+    config: dict[str, Any],
+    schema_name: str,
+    output_name: str,
+    worktree: str,
+    label: str,
+) -> tuple[int, dict[str, Any], Path]:
     schema_path = packet_dir / schema_name
     output_path = packet_dir / output_name
     prompt_path = packet_dir / "prompt.md"
@@ -2269,7 +2349,15 @@ def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: 
         event_path.write_text("generic CLI attempt missing command_binary\n", encoding="utf-8")
         return (
             127,
-            {"returncode": 127, "elapsed_ms": 0, "timed_out": False, "stdout_bytes": 0, "stderr_bytes": 0, "command": "", "command_parts": []},
+            {
+                "returncode": 127,
+                "elapsed_ms": 0,
+                "timed_out": False,
+                "stdout_bytes": 0,
+                "stderr_bytes": 0,
+                "command": "",
+                "command_parts": [],
+            },
             event_path,
         )
     resolved = shutil.which(binary) if not os.path.isabs(binary) else binary
@@ -2278,7 +2366,15 @@ def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: 
         event_path.write_text(f"generic CLI binary not found: {binary}\n", encoding="utf-8")
         return (
             127,
-            {"returncode": 127, "elapsed_ms": 0, "timed_out": False, "stdout_bytes": 0, "stderr_bytes": 0, "command": binary, "command_parts": [binary]},
+            {
+                "returncode": 127,
+                "elapsed_ms": 0,
+                "timed_out": False,
+                "stdout_bytes": 0,
+                "stderr_bytes": 0,
+                "command": binary,
+                "command_parts": [binary],
+            },
             event_path,
         )
     args = render_runtime_args(
@@ -2409,8 +2505,14 @@ def validate_packet_post_constraints(data: dict[str, Any], config: dict[str, Any
     if isinstance(expected_ladder, list) and data.get("selected_ladder") != expected_ladder:
         raise ValueError("selected_ladder must match launch-config selected_ladder exactly")
     changed_files = data.get("changed_files")
-    has_changed_files = isinstance(changed_files, list) and any(isinstance(item, str) and item.strip() for item in changed_files)
-    if data.get("status") == "pass" and has_changed_files and not commands_include_diff_check_head(data.get("commands_run")):
+    has_changed_files = isinstance(changed_files, list) and any(
+        isinstance(item, str) and item.strip() for item in changed_files
+    )
+    if (
+        data.get("status") == "pass"
+        and has_changed_files
+        and not commands_include_diff_check_head(data.get("commands_run"))
+    ):
         raise ValueError("passing worker status commands_run must include git diff --check HEAD")
 
 
@@ -2422,10 +2524,18 @@ def normalize_status_before_validation(data: Any, config: dict[str, Any]) -> lis
     messages: list[str] = []
     worktree = data.get("worktree")
     worktree_path = data.get("worktree_path")
-    if (not isinstance(worktree, str) or not worktree.strip()) and isinstance(worktree_path, str) and worktree_path.strip():
+    if (
+        (not isinstance(worktree, str) or not worktree.strip())
+        and isinstance(worktree_path, str)
+        and worktree_path.strip()
+    ):
         data["worktree"] = worktree_path.strip()
         messages.append("normalized missing worktree from worktree_path")
-    elif (not isinstance(worktree_path, str) or not worktree_path.strip()) and isinstance(worktree, str) and worktree.strip():
+    elif (
+        (not isinstance(worktree_path, str) or not worktree_path.strip())
+        and isinstance(worktree, str)
+        and worktree.strip()
+    ):
         data["worktree_path"] = worktree.strip()
         messages.append("normalized missing worktree_path from worktree")
     evidence = data.get("evidence_summary")
@@ -2491,8 +2601,16 @@ def extract_status_json(
     parse_report.setdefault("provider_error_code", None)
     parse_report["messages"] = parse_report.get("messages", [])
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    marker_block = string_value(config.get("status_markers", {}), "begin") if isinstance(config.get("status_markers"), dict) else WORKER_STATUS_BEGIN
-    marker_end = string_value(config.get("status_markers", {}), "end") if isinstance(config.get("status_markers"), dict) else WORKER_STATUS_END
+    marker_block = (
+        string_value(config.get("status_markers", {}), "begin")
+        if isinstance(config.get("status_markers"), dict)
+        else WORKER_STATUS_BEGIN
+    )
+    marker_end = (
+        string_value(config.get("status_markers", {}), "end")
+        if isinstance(config.get("status_markers"), dict)
+        else WORKER_STATUS_END
+    )
     output_path = packet_dir / string_value(config, "output_name")
     raw_paths = raw_path if isinstance(raw_path, list) else [raw_path]
     sources: list[tuple[str, str]] = []
@@ -2750,7 +2868,9 @@ def run_packet(packet_dir: Path) -> int:
                     attempt["owned_path_violation"] = ownership_violations
                     parse_report["failure_subclass"] = "owned_path_violation"
                     (packet_dir / "ownership.blocked.txt").write_text(message + "\n", encoding="utf-8")
-                    write_terminal(packet_dir, config, message, changed_files=packet_changed_files, commands_run=command_lines)
+                    write_terminal(
+                        packet_dir, config, message, changed_files=packet_changed_files, commands_run=command_lines
+                    )
                     write_launcher_state(
                         packet_dir,
                         config,
@@ -2975,7 +3095,9 @@ def run_packet(packet_dir: Path) -> int:
             stop_reason=stop_reason,
         )
         if rc == 0 and dirty:
-            message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(packet_changed_files)
+            message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(
+                packet_changed_files
+            )
             attempt["failure_class"] = "dirty_worktree"
             attempt["failure_subclass"] = "read_only_attempt_left_dirty_worktree"
             (packet_dir / "dirty-worktree.blocked.txt").write_text(message + "\n", encoding="utf-8")
@@ -3054,6 +3176,7 @@ def run_packet(packet_dir: Path) -> int:
     cleanup_runtime_cache_evidence(packet_dir, config)
     write_telemetry(packet_dir, config)
     return 1
+
 
 def main() -> int:
     parser = argparse.ArgumentParser()

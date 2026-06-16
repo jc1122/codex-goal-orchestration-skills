@@ -13,8 +13,22 @@ from datetime import datetime
 
 
 TOKEN_KEYS = {
-    "input_tokens": {"input_tokens", "prompt_tokens", "inputTokens", "promptTokens", "inputTokenCount", "promptTokenCount"},
-    "output_tokens": {"output_tokens", "completion_tokens", "outputTokens", "completionTokens", "outputTokenCount", "completionTokenCount"},
+    "input_tokens": {
+        "input_tokens",
+        "prompt_tokens",
+        "inputTokens",
+        "promptTokens",
+        "inputTokenCount",
+        "promptTokenCount",
+    },
+    "output_tokens": {
+        "output_tokens",
+        "completion_tokens",
+        "outputTokens",
+        "completionTokens",
+        "outputTokenCount",
+        "completionTokenCount",
+    },
     "reasoning_tokens": {"reasoning_tokens", "reasoningTokens", "reasoningTokenCount"},
     "cached_input_tokens": {"cached_input_tokens", "cachedInputTokens", "cachedInputTokenCount"},
     "total_tokens": {"total_tokens", "totalTokens", "totalTokenCount"},
@@ -173,7 +187,11 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
             return None
     if role == "prompt-auditor" and output.get("status") == "blocked" and not output.get("checked_files"):
         return None
-    if role == "reviewer" and output.get("role") == "reviewer" and output.get("findings") == ["Reviewer primary and fallback failed without producing review.json."]:
+    if (
+        role == "reviewer"
+        and output.get("role") == "reviewer"
+        and output.get("findings") == ["Reviewer primary and fallback failed without producing review.json."]
+    ):
         return None
     if (
         role == "research-worker"
@@ -361,16 +379,18 @@ def _stable_attempt_id(
     index: int,
     retry_ordinal: str = "",
 ) -> str:
-    key = "|".join([
-        packet_id or "-",
-        retry_ordinal or "current",
-        role or "-",
-        str(index),
-        alias or "-",
-        provider or "-",
-        model or "-",
-        command or "-",
-    ])
+    key = "|".join(
+        [
+            packet_id or "-",
+            retry_ordinal or "current",
+            role or "-",
+            str(index),
+            alias or "-",
+            provider or "-",
+            model or "-",
+            command or "-",
+        ]
+    )
     digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
     retry_segment = f":{retry_ordinal}" if retry_ordinal else ""
     return f"{packet_id}{retry_segment}:{role}:{index + 1:03d}:{digest}"
@@ -428,7 +448,11 @@ def build_telemetry(
     prompt = file_stats(prompt_path)
     output_stats = file_stats(output_path)
     output_json = read_json(output_path)
-    route_class = output_json.get("route_class") if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str) else None
+    route_class = (
+        output_json.get("route_class")
+        if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str)
+        else None
+    )
     attempts = []
     for index, spec in enumerate(attempt_specs):
         event_logs = [file_stats(packet_dir / str(path)) for path in spec.get("event_logs", [])]
@@ -526,7 +550,11 @@ def build_debug_telemetry(
     prompt_stats: dict[str, Any],
     telemetry: dict[str, Any],
 ) -> dict[str, Any]:
-    route_class = output_json.get("route_class") if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str) else None
+    route_class = (
+        output_json.get("route_class")
+        if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str)
+        else None
+    )
     attempts: list[dict[str, Any]] = []
     packet_timing = _packet_debug_timing(packet_dir)
     determinism_artifacts: list[dict[str, Any]] = [
@@ -578,7 +606,11 @@ def build_debug_telemetry(
             timing_unsupported_reason = None
         if attempt_timing.get("timed_out") is None and timed_out is not None:
             attempt_timing["timed_out"] = timed_out
-        if attempt_timing.get("timed_out") is None and packet_timing is not None and packet_timing.get("timed_out") is not None:
+        if (
+            attempt_timing.get("timed_out") is None
+            and packet_timing is not None
+            and packet_timing.get("timed_out") is not None
+        ):
             attempt_timing["timed_out"] = packet_timing.get("timed_out")
         if timing_unsupported_reason is None and called and attempt_timing.get("timed_out") is None:
             timing_unsupported_reason = "timing_unsupported_or_missing"
@@ -665,7 +697,7 @@ def build_debug_telemetry(
         "determinism": {
             "artifacts": determinism_artifacts,
         },
-    "success_metrics": {
+        "success_metrics": {
             "attempts_declared": len(attempts),
             "attempts_called": sum(1 for attempt in attempts if attempt.get("called") is True),
             "candidate_attempts": len(attempts),
@@ -682,12 +714,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--packet-dir", required=True)
     parser.add_argument("--packet-id", required=True)
-    parser.add_argument("--role", choices=["worker", "research-worker", "reviewer", "prompt-auditor", "plan_amender", "lite_advisor"], required=True)
+    parser.add_argument(
+        "--role",
+        choices=["worker", "research-worker", "reviewer", "prompt-auditor", "plan_amender", "lite_advisor"],
+        required=True,
+    )
     parser.add_argument("--output-name", required=True)
     parser.add_argument("--prompt-name", default="prompt.md")
     parser.add_argument("--attempt-json", action="append", default=[])
     parser.add_argument("--output", default="telemetry.json")
-    parser.add_argument("--debug", action="store_true", help="Write packet-level telemetry.debug.json with detailed timing/provenance diagnostics.")
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Write packet-level telemetry.debug.json with detailed timing/provenance diagnostics.",
+    )
     parser.add_argument("--debug-output", default="telemetry.debug.json")
     args = parser.parse_args()
 

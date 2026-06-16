@@ -206,7 +206,9 @@ def main() -> int:
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--audit-dir", required=True)
     parser.add_argument("--replace", action="store_true")
-    parser.add_argument("--require-pass", action="store_true", help="Return success only when prompt audit can start branches.")
+    parser.add_argument(
+        "--require-pass", action="store_true", help="Return success only when prompt audit can start branches."
+    )
     parser.add_argument(
         "--deterministic",
         action="store_true",
@@ -244,7 +246,9 @@ def main() -> int:
 
     if audit_path.exists() and not args.replace:
         basic_validation = run_command(validation_command(audit_path, manifest_path, repo_root, require_pass=False))
-        require_pass_validation = run_command(validation_command(audit_path, manifest_path, repo_root, require_pass=True))
+        require_pass_validation = run_command(
+            validation_command(audit_path, manifest_path, repo_root, require_pass=True)
+        )
         audit = audit_snapshot(audit_path)
         telemetry = telemetry_snapshot(telemetry_path)
         status = phase_status(
@@ -329,7 +333,9 @@ def main() -> int:
         commands["deterministic_audit"] = deterministic_result
         commands["launch"] = None
     elif commands["create"]["returncode"] == 0 and launch_path.exists():
-        launch_result = run_command([launch_path.as_posix()], cwd=audit_dir, timeout_seconds=args.launch_timeout_seconds)
+        launch_result = run_command(
+            [launch_path.as_posix()], cwd=audit_dir, timeout_seconds=args.launch_timeout_seconds
+        )
         commands["launch"] = launch_result
     else:
         commands["deterministic_audit"] = None
@@ -338,7 +344,9 @@ def main() -> int:
     if audit_path.exists():
         basic_validation = run_command(validation_command(audit_path, manifest_path, repo_root, require_pass=False))
         commands["validate"] = basic_validation
-        require_pass_validation = run_command(validation_command(audit_path, manifest_path, repo_root, require_pass=True))
+        require_pass_validation = run_command(
+            validation_command(audit_path, manifest_path, repo_root, require_pass=True)
+        )
         commands["validate_require_pass"] = require_pass_validation
     else:
         commands["validate"] = None

@@ -394,7 +394,9 @@ def markdown(data: dict[str, Any], *, compact: bool = False) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--skill", default=current_skill_name(), help="Skill name; defaults to current installed skill wrapper.")
+    parser.add_argument(
+        "--skill", default=current_skill_name(), help="Skill name; defaults to current installed skill wrapper."
+    )
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--markdown", action="store_true")
     parser.add_argument(

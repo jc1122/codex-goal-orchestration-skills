@@ -81,16 +81,30 @@ EXACT_SOURCE_RE = re.compile(
     re.IGNORECASE,
 )
 INLINE_SOURCE_TUPLE_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
-RUNTIME_CAP_RE = re.compile(r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE)
-PATH_TOKEN_EXTENSIONS = (".py", ".js", ".jsx", ".ts", ".tsx", ".json", ".toml", ".yaml", ".yml", ".md", ".txt", ".csv", ".sh")
+RUNTIME_CAP_RE = re.compile(
+    r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE
+)
+PATH_TOKEN_EXTENSIONS = (
+    ".py",
+    ".js",
+    ".jsx",
+    ".ts",
+    ".tsx",
+    ".json",
+    ".toml",
+    ".yaml",
+    ".yml",
+    ".md",
+    ".txt",
+    ".csv",
+    ".sh",
+)
 PYTHON_BINS = {"python", "python3", "py"}
 
 
 def cheaper_worker_ladder(default_ladder: list[str]) -> list[str]:
     cheap = [
-        alias
-        for alias in default_ladder
-        if not any(marker in str(alias).lower() for marker in PREMIUM_ROUTE_MARKERS)
+        alias for alias in default_ladder if not any(marker in str(alias).lower() for marker in PREMIUM_ROUTE_MARKERS)
     ]
     if cheap:
         return cheap[-2:]
@@ -455,7 +469,7 @@ def canonical_status_target(value: str) -> str:
     target = value.strip().strip("`'\"").rstrip(".,;)")
     for prefix in STATUS_TARGET_PREFIXES:
         if target.startswith(prefix):
-            target = target[len(prefix):]
+            target = target[len(prefix) :]
             break
     if target.startswith("branches/"):
         return target
@@ -533,7 +547,9 @@ def lint_generated_prompt_text(defect, path: str, text: str, *, is_branch_prompt
 
 
 def branch_prompt_required_phrases(branch_id: object) -> tuple[str, ...]:
-    scheduler_path = CONTRACT.worker_scheduler_path(str(branch_id)) if isinstance(branch_id, str) else "worker scheduler"
+    scheduler_path = (
+        CONTRACT.worker_scheduler_path(str(branch_id)) if isinstance(branch_id, str) else "worker scheduler"
+    )
     return (
         *BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER,
         scheduler_path,
@@ -560,14 +576,16 @@ def load_json_artifact(path: Path) -> object:
 
 def lite_validation_command(advice_path: Path, inputs_path: Path) -> str:
     validator_path = Path(__file__).resolve().parent / "validate_lite_advice.py"
-    return shlex.join([
-        "python3",
-        validator_path.as_posix(),
-        "--advice",
-        advice_path.as_posix(),
-        "--inputs",
-        inputs_path.as_posix(),
-    ])
+    return shlex.join(
+        [
+            "python3",
+            validator_path.as_posix(),
+            "--advice",
+            advice_path.as_posix(),
+            "--inputs",
+            inputs_path.as_posix(),
+        ]
+    )
 
 
 def paths_overlap(left: str, right: str) -> bool:
@@ -698,7 +716,12 @@ def command_references(command: str) -> list[dict[str, object]]:
     tokens = command_tokens(command)
     refs: list[dict[str, object]] = []
     for index, token in enumerate(tokens):
-        if token in {"-m", "--module"} and index > 0 and index + 1 < len(tokens) and Path(tokens[index - 1]).name in PYTHON_BINS:
+        if (
+            token in {"-m", "--module"}
+            and index > 0
+            and index + 1 < len(tokens)
+            and Path(tokens[index - 1]).name in PYTHON_BINS
+        ):
             module = tokens[index + 1]
             if module != "pytest":
                 refs.append({"kind": "python_module", "value": module, "candidates": python_module_candidates(module)})
@@ -733,7 +756,11 @@ def longest_branch_chain(branches: list[dict]) -> int:
 
 def branch_dependency_levels(branches: list[dict]) -> dict[str, int]:
     levels: dict[str, int] = {}
-    remaining = {str(branch.get("id")): branch for branch in branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)}
+    remaining = {
+        str(branch.get("id")): branch
+        for branch in branches
+        if isinstance(branch, dict) and isinstance(branch.get("id"), str)
+    }
     while remaining:
         progressed = False
         for branch_id, branch in list(remaining.items()):
@@ -817,7 +844,10 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
             defect("job.manifest.json", "critical", f"{path}.purpose must be one of {sorted(PREFLIGHT_LITE_PURPOSES)}")
         if not isinstance(record.get("avoids_action"), str) or not record.get("avoids_action", "").strip():
             defect("job.manifest.json", "critical", f"{path}.avoids_action must be a non-empty string")
-        if not isinstance(record.get("expected_savings_reason"), str) or not record.get("expected_savings_reason", "").strip():
+        if (
+            not isinstance(record.get("expected_savings_reason"), str)
+            or not record.get("expected_savings_reason", "").strip()
+        ):
             defect("job.manifest.json", "critical", f"{path}.expected_savings_reason must be a non-empty string")
         if record.get("status") not in LITE_STATUSES:
             defect("job.manifest.json", "critical", f"{path}.status must be one of {sorted(LITE_STATUSES)}")
@@ -834,12 +864,22 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         validation_status = record.get("validation_status")
         validation_defects = record.get("validation_defects")
         if validation_status not in LITE_VALIDATION_STATUSES:
-            defect("job.manifest.json", "critical", f"{path}.validation_status must be one of {sorted(LITE_VALIDATION_STATUSES)}")
-        if not isinstance(validation_defects, list) or any(not isinstance(item, str) or not item.strip() for item in validation_defects):
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"{path}.validation_status must be one of {sorted(LITE_VALIDATION_STATUSES)}",
+            )
+        if not isinstance(validation_defects, list) or any(
+            not isinstance(item, str) or not item.strip() for item in validation_defects
+        ):
             defect("job.manifest.json", "critical", f"{path}.validation_defects must be an array of non-empty strings")
             validation_defects = []
         if validation_status == "pass" and validation_defects:
-            defect("job.manifest.json", "critical", f"{path}.validation_defects must be empty when validation_status is pass")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"{path}.validation_defects must be empty when validation_status is pass",
+            )
         if validation_status == "failed" and not validation_defects:
             defect("job.manifest.json", "critical", f"{path}.validation_defects must explain failed Lite validation")
         validation_command = record.get("validation_command")
@@ -862,7 +902,11 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         except Exception as exc:  # noqa: BLE001
             defect("job.manifest.json", "critical", f"{path} Lite artifacts must be readable JSON: {exc}")
             continue
-        expected_sources = inputs_data.get("source_files") if isinstance(inputs_data, dict) and isinstance(inputs_data.get("source_files"), list) else []
+        expected_sources = (
+            inputs_data.get("source_files")
+            if isinstance(inputs_data, dict) and isinstance(inputs_data.get("source_files"), list)
+            else []
+        )
         expected_min = [
             {
                 "path": source.get("path"),
@@ -874,7 +918,11 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
             if isinstance(source, dict)
         ]
         if record.get("source_files") != expected_min:
-            defect("job.manifest.json", "critical", f"{path}.source_files must match input-files.json source metadata exactly")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"{path}.source_files must match input-files.json source metadata exactly",
+            )
         if record.get("avoids_action") != inputs_data.get("avoids_action"):
             defect("job.manifest.json", "critical", f"{path}.avoids_action must match input-files.json")
         if record.get("expected_savings_reason") != inputs_data.get("expected_savings_reason"):
@@ -889,9 +937,17 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
         )
         actual_validation_status = "pass" if not lite_defects else "failed"
         if validation_status in LITE_VALIDATION_STATUSES and validation_status != actual_validation_status:
-            defect("job.manifest.json", "critical", f"{path}.validation_status must match actual Lite validation status {actual_validation_status!r}")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"{path}.validation_status must match actual Lite validation status {actual_validation_status!r}",
+            )
         if validation_status == "failed" and validation_defects != lite_defects:
-            defect("job.manifest.json", "critical", f"{path}.validation_defects must match actual Lite validation defects exactly")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"{path}.validation_defects must match actual Lite validation defects exactly",
+            )
         if record.get("disposition") == "used" and lite_defects:
             defect("job.manifest.json", "critical", f"{path} used Lite advice must pass validation")
 
@@ -906,10 +962,18 @@ def validate_preflight_lite_records(defect, bundle_dir: Path, manifest: dict) ->
             try:
                 inputs_data = load_json_artifact(inputs_path)
             except Exception as exc:  # noqa: BLE001
-                defect("job.manifest.json", "critical", f"lite/{packet_dir.name}/input-files.json must be readable JSON: {exc}")
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"lite/{packet_dir.name}/input-files.json must be readable JSON: {exc}",
+                )
                 continue
         elif advice_path.exists() and packet_dir.name.startswith("P"):
-            defect("job.manifest.json", "critical", f"unrecorded malformed preflight Lite packet without input-files.json: {packet_dir}")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"unrecorded malformed preflight Lite packet without input-files.json: {packet_dir}",
+            )
             continue
         if not isinstance(inputs_data, dict):
             continue
@@ -932,7 +996,7 @@ def validate_telemetry_policy(defect, manifest: dict) -> None:
         defect(
             "job.manifest.json",
             "warning",
-            "telemetry_policy is missing; assuming {\"schema_version\": 1, \"mode\": \"standard\", \"raw_text\": false, \"collect\": []}",
+            'telemetry_policy is missing; assuming {"schema_version": 1, "mode": "standard", "raw_text": false, "collect": []}',
         )
         return
     if not isinstance(policy, dict):
@@ -941,7 +1005,11 @@ def validate_telemetry_policy(defect, manifest: dict) -> None:
 
     schema_version = policy.get("schema_version", TELEMETRY_POLICY_SCHEMA_VERSION)
     if not isinstance(schema_version, int) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
-        defect("job.manifest.json", "critical", f"telemetry_policy.schema_version must be {TELEMETRY_POLICY_SCHEMA_VERSION}")
+        defect(
+            "job.manifest.json",
+            "critical",
+            f"telemetry_policy.schema_version must be {TELEMETRY_POLICY_SCHEMA_VERSION}",
+        )
 
     mode = policy.get("mode")
     if mode not in TELEMETRY_POLICY_MODES:
@@ -993,14 +1061,24 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
         return None, "not_configured"
     status = "pass"
     if "goal_config" in manifest:
-        defect("job.manifest.json", "critical", "goal_config must not embed full config; use goal_config_path plus summary/hash")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "goal_config must not embed full config; use goal_config_path plus summary/hash",
+        )
         status = "failed"
     if "goal_config_check" in manifest:
-        defect("job.manifest.json", "critical", "goal_config_check must not embed full check report; use goal_config_check_path plus summary/hash")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "goal_config_check must not embed full check report; use goal_config_check_path plus summary/hash",
+        )
         status = "failed"
 
     if config_path != "goal.config.json":
-        defect("job.manifest.json", "critical", "goal_config_path must be 'goal.config.json' when goal_config is present")
+        defect(
+            "job.manifest.json", "critical", "goal_config_path must be 'goal.config.json' when goal_config is present"
+        )
         return None, "failed"
     config = load_bundle_json(defect, bundle_dir, "goal.config.json", "goal_config")
     if config is None:
@@ -1013,16 +1091,24 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
         defect("job.manifest.json", "critical", "goal_config_sha256 does not match goal.config.json")
         status = "failed"
     if not isinstance(manifest.get("goal_config_summary"), dict):
-        defect("job.manifest.json", "critical", "goal_config_summary must be an object when goal_config_path is present")
+        defect(
+            "job.manifest.json", "critical", "goal_config_summary must be an object when goal_config_path is present"
+        )
         status = "failed"
 
     serialized = json.dumps(config, sort_keys=True).lower()
     for forbidden in ("usd", "dollar", "pricing", "price"):
         if forbidden in serialized:
-            defect("job.manifest.json", "critical", f"goal_config contains unsupported billing field or unit: {forbidden}")
+            defect(
+                "job.manifest.json", "critical", f"goal_config contains unsupported billing field or unit: {forbidden}"
+            )
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
     if telemetry.get("raw_text") is not False:
-        defect("goal.config.json", "critical", "bundled goal.config.json telemetry.raw_text must be false; runtime config copies must be sanitized")
+        defect(
+            "goal.config.json",
+            "critical",
+            "bundled goal.config.json telemetry.raw_text must be false; runtime config copies must be sanitized",
+        )
     if config.get("schema_version") != 1:
         defect("job.manifest.json", "critical", "goal_config.schema_version must be 1")
     models = config.get("models")
@@ -1038,11 +1124,17 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
         ladders = {}
     for ladder_name, ladder in ladders.items():
         if not isinstance(ladder, list) or not ladder:
-            defect("job.manifest.json", "critical", f"goal_config.model_ladders.{ladder_name} must be a non-empty array")
+            defect(
+                "job.manifest.json", "critical", f"goal_config.model_ladders.{ladder_name} must be a non-empty array"
+            )
             continue
         for role in ladder:
             if role not in models:
-                defect("job.manifest.json", "critical", f"goal_config.model_ladders.{ladder_name} references unknown role: {role}")
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"goal_config.model_ladders.{ladder_name} references unknown role: {role}",
+                )
     policies = config.get("model_policies")
     if not isinstance(policies, dict):
         defect("job.manifest.json", "critical", "goal_config.model_policies must be present")
@@ -1052,20 +1144,32 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
             defect("job.manifest.json", "critical", f"goal_config.model_policies.{key} must be an object")
 
     if not isinstance(check_path, str) or check_path != "goal-config.check.json":
-        defect("job.manifest.json", "critical", "goal_config_check_path must be 'goal-config.check.json' when goal_config_path is present")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "goal_config_check_path must be 'goal-config.check.json' when goal_config_path is present",
+        )
         return config, "failed"
     check = load_bundle_json(defect, bundle_dir, "goal-config.check.json", "goal_config_check")
     if check is None:
         return config, "failed"
     check_hash = manifest.get("goal_config_check_sha256")
     if not isinstance(check_hash, str) or not check_hash:
-        defect("job.manifest.json", "critical", "goal_config_check_sha256 must be present when goal_config_check_path is present")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "goal_config_check_sha256 must be present when goal_config_check_path is present",
+        )
         status = "failed"
     elif sha256_file(bundle_dir / "goal-config.check.json") != check_hash:
         defect("job.manifest.json", "critical", "goal_config_check_sha256 does not match goal-config.check.json")
         status = "failed"
     if not isinstance(manifest.get("goal_config_check_summary"), dict):
-        defect("job.manifest.json", "critical", "goal_config_check_summary must be an object when goal_config_check_path is present")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "goal_config_check_summary must be an object when goal_config_check_path is present",
+        )
         status = "failed"
     if check.get("status") != "pass":
         defect("job.manifest.json", "critical", "goal_config_check.status must be pass")
@@ -1089,11 +1193,22 @@ def validate_runtime_metadata(defect, bundle_dir: Path, manifest: dict) -> dict 
         defect("job.manifest.json", "critical", "route_contract.catalog_refresh_required must be boolean")
     if not isinstance(route_contract.get("route_recommendations_enabled"), bool):
         defect("job.manifest.json", "critical", "route_contract.route_recommendations_enabled must be boolean")
-    if route_contract.get("goal_config_check_path") is not None and route_contract.get("goal_config_check_path") != "goal-config.check.json":
-        defect("job.manifest.json", "critical", "route_contract.goal_config_check_path must be goal-config.check.json when present")
+    if (
+        route_contract.get("goal_config_check_path") is not None
+        and route_contract.get("goal_config_check_path") != "goal-config.check.json"
+    ):
+        defect(
+            "job.manifest.json",
+            "critical",
+            "route_contract.goal_config_check_path must be goal-config.check.json when present",
+        )
     route_check_hash = route_contract.get("goal_config_check_sha256")
     if route_check_hash is not None and route_check_hash != manifest.get("goal_config_check_sha256"):
-        defect("job.manifest.json", "critical", "route_contract.goal_config_check_sha256 must match manifest goal_config_check_sha256")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "route_contract.goal_config_check_sha256 must match manifest goal_config_check_sha256",
+        )
 
     execution_strategy = manifest.get("execution_strategy")
     if not isinstance(execution_strategy, dict):
@@ -1105,10 +1220,14 @@ def validate_runtime_metadata(defect, bundle_dir: Path, manifest: dict) -> dict 
         if not isinstance(execution_strategy.get(key), str) or not execution_strategy.get(key, "").strip():
             defect("job.manifest.json", "critical", f"execution_strategy.{key} must be a non-empty string")
     setup_commands = execution_strategy.get("setup_commands")
-    if not isinstance(setup_commands, list) or any(not isinstance(item, str) or not item.strip() for item in setup_commands):
+    if not isinstance(setup_commands, list) or any(
+        not isinstance(item, str) or not item.strip() for item in setup_commands
+    ):
         defect("job.manifest.json", "critical", "execution_strategy.setup_commands must be an array of strings")
     validation_env = execution_strategy.get("validation_env")
-    if not isinstance(validation_env, dict) or any(not isinstance(key, str) or not isinstance(value, str) for key, value in validation_env.items()):
+    if not isinstance(validation_env, dict) or any(
+        not isinstance(key, str) or not isinstance(value, str) for key, value in validation_env.items()
+    ):
         defect("job.manifest.json", "critical", "execution_strategy.validation_env must be an object of string values")
 
     ownership = manifest.get("ownership_feasibility")
@@ -1133,13 +1252,21 @@ def validate_runtime_metadata(defect, bundle_dir: Path, manifest: dict) -> dict 
         for key in ("branch_id", "work_item_id", "command", "recommended_action"):
             if not isinstance(record.get(key), str) or not record.get(key, "").strip():
                 defect("job.manifest.json", "critical", f"{path}.{key} must be a non-empty string")
-        for key in ("required_paths", "branch_owned_paths", "dependency_covered_paths", "uncovered_paths", "missing_owned_paths"):
+        for key in (
+            "required_paths",
+            "branch_owned_paths",
+            "dependency_covered_paths",
+            "uncovered_paths",
+            "missing_owned_paths",
+        ):
             values = record.get(key)
             if not isinstance(values, list) or any(not isinstance(item, str) or not item.strip() for item in values):
                 defect("job.manifest.json", "critical", f"{path}.{key} must be an array of strings")
     needs_review_count = ownership.get("needs_review_count")
     if not is_strict_int(needs_review_count) or needs_review_count < 0:
-        defect("job.manifest.json", "critical", "ownership_feasibility.needs_review_count must be a non-negative integer")
+        defect(
+            "job.manifest.json", "critical", "ownership_feasibility.needs_review_count must be a non-negative integer"
+        )
 
     runtime_index_value = manifest.get("runtime_index_path")
     runtime_index_error = relative_path_defect(runtime_index_value, "runtime_index_path")
@@ -1164,21 +1291,37 @@ def validate_runtime_metadata(defect, bundle_dir: Path, manifest: dict) -> dict 
     if runtime_index.get("manifest_path") != "job.manifest.json":
         defect("runtime.index.json", "critical", "runtime index manifest_path must be job.manifest.json")
     runtime_rules = runtime_index.get("runtime_rules") if isinstance(runtime_index.get("runtime_rules"), dict) else {}
-    if runtime_rules.get("path") != manifest.get("runtime_rules_path") or runtime_rules.get("sha256") != manifest.get("runtime_rules_sha256"):
-        defect("runtime.index.json", "critical", "runtime index runtime_rules must match manifest runtime rules path/hash")
-    index_route_contract = runtime_index.get("route_contract") if isinstance(runtime_index.get("route_contract"), dict) else {}
+    if runtime_rules.get("path") != manifest.get("runtime_rules_path") or runtime_rules.get("sha256") != manifest.get(
+        "runtime_rules_sha256"
+    ):
+        defect(
+            "runtime.index.json", "critical", "runtime index runtime_rules must match manifest runtime rules path/hash"
+        )
+    index_route_contract = (
+        runtime_index.get("route_contract") if isinstance(runtime_index.get("route_contract"), dict) else {}
+    )
     if index_route_contract.get("sha256") != manifest.get("route_contract_sha256"):
         defect("runtime.index.json", "critical", "runtime index route_contract.sha256 must match manifest")
-    index_execution = runtime_index.get("execution_strategy") if isinstance(runtime_index.get("execution_strategy"), dict) else {}
+    index_execution = (
+        runtime_index.get("execution_strategy") if isinstance(runtime_index.get("execution_strategy"), dict) else {}
+    )
     if index_execution.get("id") != execution_strategy.get("id"):
         defect("runtime.index.json", "critical", "runtime index execution_strategy.id must match manifest")
-    index_ownership = runtime_index.get("ownership_feasibility") if isinstance(runtime_index.get("ownership_feasibility"), dict) else {}
+    index_ownership = (
+        runtime_index.get("ownership_feasibility")
+        if isinstance(runtime_index.get("ownership_feasibility"), dict)
+        else {}
+    )
     if index_ownership.get("status") != ownership.get("status"):
         defect("runtime.index.json", "critical", "runtime index ownership_feasibility.status must match manifest")
     index_counts = runtime_index.get("counts") if isinstance(runtime_index.get("counts"), dict) else {}
     branch_count = len(manifest.get("branches", [])) if isinstance(manifest.get("branches"), list) else 0
     if index_counts.get("branch_count") != branch_count:
-        defect("runtime.index.json", "warning", "runtime index branch_count differs from current manifest; regenerate after topology amendments")
+        defect(
+            "runtime.index.json",
+            "warning",
+            "runtime index branch_count differs from current manifest; regenerate after topology amendments",
+        )
     return runtime_index
 
 
@@ -1235,7 +1378,9 @@ def lint(bundle_dir: Path) -> dict:
     validate_telemetry_policy(defect, manifest)
     goal_config, config_check_status = validate_goal_config_manifest(defect, bundle_dir, manifest)
     runtime_index = validate_runtime_metadata(defect, bundle_dir, manifest)
-    check_summary = manifest.get("goal_config_check_summary") if isinstance(manifest.get("goal_config_check_summary"), dict) else {}
+    check_summary = (
+        manifest.get("goal_config_check_summary") if isinstance(manifest.get("goal_config_check_summary"), dict) else {}
+    )
     if check_summary.get("status") == "pass":
         accepted_routes = check_summary.get("accepted_route_count")
         if not (isinstance(accepted_routes, int) and not isinstance(accepted_routes, bool) and accepted_routes > 0):
@@ -1257,12 +1402,20 @@ def lint(bundle_dir: Path) -> dict:
             defect("job.manifest.json", "critical", f"{key} must be a non-empty string")
     for key in ["required_evidence", "final_dod"]:
         values = manifest.get(key)
-        if not isinstance(values, list) or not values or any(not isinstance(item, str) or not item.strip() for item in values):
+        if (
+            not isinstance(values, list)
+            or not values
+            or any(not isinstance(item, str) or not item.strip() for item in values)
+        ):
             defect("job.manifest.json", "critical", f"{key} must be a non-empty array of strings")
     if not isinstance(manifest.get("preflight_input_precedence"), dict):
         defect("job.manifest.json", "critical", "preflight_input_precedence must be an object")
     manifest_text = collect_manifest_text(manifest)
-    if EXACT_SOURCE_RE.search(manifest_text) and not has_source_attachment(manifest) and not has_inline_source_payload(manifest_text):
+    if (
+        EXACT_SOURCE_RE.search(manifest_text)
+        and not has_source_attachment(manifest)
+        and not has_inline_source_payload(manifest_text)
+    ):
         defect(
             "job.manifest.json",
             "critical",
@@ -1292,7 +1445,11 @@ def lint(bundle_dir: Path) -> dict:
                 else:
                     source_attachment_paths.add(path)
                 if attachment.get("promoted_from_context_files") is True and attachment.get("bytes", 0) < 8192:
-                    defect("job.manifest.json", "major", f"source_attachments[{index}] was promoted from context_files but is below the large-source threshold")
+                    defect(
+                        "job.manifest.json",
+                        "major",
+                        f"source_attachments[{index}] was promoted from context_files but is below the large-source threshold",
+                    )
     if RUNTIME_CAP_RE.search(manifest_text) and not concrete_runtime_cap(manifest.get("runtime_cap")):
         defect(
             "job.manifest.json",
@@ -1317,16 +1474,31 @@ def lint(bundle_dir: Path) -> dict:
     if parallelization.get("scheduling_mode") != "rolling":
         defect("job.manifest.json", "critical", "parallelization.scheduling_mode must be rolling")
     if parallelization.get("scheduler_path") != CONTRACT.MAIN_SCHEDULER_PATH:
-        defect("job.manifest.json", "critical", f"parallelization.scheduler_path must be {CONTRACT.MAIN_SCHEDULER_PATH!r}")
-    if not isinstance(parallelization.get("dependency_policy"), str) or not parallelization.get("dependency_policy", "").strip():
+        defect(
+            "job.manifest.json", "critical", f"parallelization.scheduler_path must be {CONTRACT.MAIN_SCHEDULER_PATH!r}"
+        )
+    if (
+        not isinstance(parallelization.get("dependency_policy"), str)
+        or not parallelization.get("dependency_policy", "").strip()
+    ):
         defect("job.manifest.json", "critical", "parallelization.dependency_policy must be non-empty")
     wave_execution = parallelization.get("wave_execution", "")
-    if not isinstance(wave_execution, str) or "saturat" not in wave_execution.lower() or "depends_on" not in wave_execution:
-        defect("job.manifest.json", "critical", "parallelization.wave_execution must describe rolling saturation and depends_on deferral")
+    if (
+        not isinstance(wave_execution, str)
+        or "saturat" not in wave_execution.lower()
+        or "depends_on" not in wave_execution
+    ):
+        defect(
+            "job.manifest.json",
+            "critical",
+            "parallelization.wave_execution must describe rolling saturation and depends_on deferral",
+        )
     if "serial_reason" in parallelization:
         defect("job.manifest.json", "critical", "parallelization.serial_reason is obsolete; use serial_reasons")
     serial_reasons = parallelization.get("serial_reasons", [])
-    if not isinstance(serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in serial_reasons):
+    if not isinstance(serial_reasons, list) or any(
+        not isinstance(item, str) or not item.strip() for item in serial_reasons
+    ):
         defect("job.manifest.json", "critical", "parallelization.serial_reasons must be an array of non-empty strings")
         serial_reasons = []
     has_serial_reason = bool(serial_reasons)
@@ -1342,14 +1514,20 @@ def lint(bundle_dir: Path) -> dict:
     if len(branches) == 1 and not serial_reasons:
         defect("job.manifest.json", "critical", "single-branch bundles require parallelization.serial_reasons")
     if is_strict_int(max_active) and max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_serial_reason:
-        defect("job.manifest.json", "critical", "max_active_branch_agents below 4 requires parallelization.serial_reasons")
+        defect(
+            "job.manifest.json", "critical", "max_active_branch_agents below 4 requires parallelization.serial_reasons"
+        )
     if (
         is_strict_int(max_active)
         and isinstance(branches, list)
         and ready_branch_count(branches) < min(max_active, len(branches))
         and not has_serial_reason
     ):
-        defect("job.manifest.json", "critical", "too few initially eligible branches under max_active_branch_agents requires parallelization.serial_reasons")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "too few initially eligible branches under max_active_branch_agents requires parallelization.serial_reasons",
+        )
     if is_strict_int(max_active) and isinstance(branches, list) and branches:
         usable_cap = min(max_active, len(branches))
         max_ready_width = max_branch_ready_width(branches)
@@ -1377,52 +1555,97 @@ def lint(bundle_dir: Path) -> dict:
         defect("job.manifest.json", "critical", "worker_model_policy must be an object")
         worker_model_policy = {}
     if goal_config is not None:
-        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        expected_policies = (
+            goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        )
         if worker_model_policy != normalized_worker_policy(expected_policies.get("worker_model_policy")):
-            defect("job.manifest.json", "critical", "worker_model_policy must match deterministic preflight-normalized goal_config.model_policies.worker_model_policy")
+            defect(
+                "job.manifest.json",
+                "critical",
+                "worker_model_policy must match deterministic preflight-normalized goal_config.model_policies.worker_model_policy",
+            )
             compatibility_status = "failed"
     else:
         if worker_model_policy.get("default_ladder") != DEFAULT_WORKER_LADDER:
-            defect("job.manifest.json", "critical", f"worker_model_policy.default_ladder must be {DEFAULT_WORKER_LADDER!r}")
+            defect(
+                "job.manifest.json", "critical", f"worker_model_policy.default_ladder must be {DEFAULT_WORKER_LADDER!r}"
+            )
         if worker_model_policy.get("allowed_routes") != DEFAULT_WORKER_LADDER:
-            defect("job.manifest.json", "critical", f"worker_model_policy.allowed_routes must be {DEFAULT_WORKER_LADDER!r}")
+            defect(
+                "job.manifest.json", "critical", f"worker_model_policy.allowed_routes must be {DEFAULT_WORKER_LADDER!r}"
+            )
         if worker_model_policy.get("branch_may_select_worker_route") is not True:
             defect("job.manifest.json", "critical", "worker_model_policy.branch_may_select_worker_route must be true")
         if worker_model_policy.get("selection_reason_required") is not True:
             defect("job.manifest.json", "critical", "worker_model_policy.selection_reason_required must be true")
-        if not isinstance(worker_model_policy.get("ordering_rule"), str) or not worker_model_policy.get("ordering_rule", "").strip():
+        if (
+            not isinstance(worker_model_policy.get("ordering_rule"), str)
+            or not worker_model_policy.get("ordering_rule", "").strip()
+        ):
             defect("job.manifest.json", "critical", "worker_model_policy.ordering_rule must be non-empty")
 
     review_model_policy = manifest.get("review_model_policy", {})
     if goal_config is not None:
-        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        expected_policies = (
+            goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        )
         if review_model_policy != expected_policies.get("review_model_policy"):
-            defect("job.manifest.json", "critical", "review_model_policy must match goal_config.model_policies.review_model_policy")
+            defect(
+                "job.manifest.json",
+                "critical",
+                "review_model_policy must match goal_config.model_policies.review_model_policy",
+            )
             compatibility_status = "failed"
     elif review_model_policy != REVIEW_MODEL_POLICY:
-        defect("job.manifest.json", "critical", "review_model_policy must match the shared deterministic review router policy")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "review_model_policy must match the shared deterministic review router policy",
+        )
 
     amender_model_policy = manifest.get("amender_model_policy", {})
     if goal_config is not None:
-        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        expected_policies = (
+            goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        )
         if amender_model_policy != expected_policies.get("amender_model_policy"):
-            defect("job.manifest.json", "critical", "amender_model_policy must match goal_config.model_policies.amender_model_policy")
+            defect(
+                "job.manifest.json",
+                "critical",
+                "amender_model_policy must match goal_config.model_policies.amender_model_policy",
+            )
             compatibility_status = "failed"
     elif amender_model_policy != AMENDER_MODEL_POLICY:
-        defect("job.manifest.json", "critical", "amender_model_policy must match the shared deterministic plan-amender router policy")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "amender_model_policy must match the shared deterministic plan-amender router policy",
+        )
 
     lite_model_policy = manifest.get("lite_model_policy", {})
     if goal_config is not None:
-        expected_policies = goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        expected_policies = (
+            goal_config.get("model_policies", {}) if isinstance(goal_config.get("model_policies"), dict) else {}
+        )
         if lite_model_policy != expected_policies.get("lite_model_policy"):
-            defect("job.manifest.json", "critical", "lite_model_policy must match goal_config.model_policies.lite_model_policy")
+            defect(
+                "job.manifest.json",
+                "critical",
+                "lite_model_policy must match goal_config.model_policies.lite_model_policy",
+            )
             compatibility_status = "failed"
     elif lite_model_policy != LITE_MODEL_POLICY:
-        defect("job.manifest.json", "critical", "lite_model_policy must match the shared deterministic Lite model policy")
+        defect(
+            "job.manifest.json", "critical", "lite_model_policy must match the shared deterministic Lite model policy"
+        )
 
     lite_advisor_policy = manifest.get("lite_advisor_policy", {})
     if lite_advisor_policy != LITE_ADVISOR_POLICY:
-        defect("job.manifest.json", "critical", "lite_advisor_policy must match the shared deterministic Lite advisor policy")
+        defect(
+            "job.manifest.json",
+            "critical",
+            "lite_advisor_policy must match the shared deterministic Lite advisor policy",
+        )
 
     watchdog = manifest.get("orchestration_watchdog", {})
     if watchdog != ORCHESTRATION_WATCHDOG:
@@ -1442,7 +1665,11 @@ def lint(bundle_dir: Path) -> dict:
                 defect("job.manifest.json", "critical", f"research_worker_policy.{key} must be non-empty")
         rejected_phrases, required_phrases = CONTRACT.research_policy_defects(research_worker_policy)
         for phrase in rejected_phrases:
-            defect("job.manifest.json", "critical", f"research_worker_policy contains obsolete narrow-access phrase: {phrase}")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"research_worker_policy contains obsolete narrow-access phrase: {phrase}",
+            )
         for phrase in required_phrases:
             defect("job.manifest.json", "critical", f"research_worker_policy must mention {phrase}")
 
@@ -1516,7 +1743,11 @@ def lint(bundle_dir: Path) -> dict:
     if isinstance(branches, list) and not has_serial_reason:
         chain = longest_branch_chain(branches)
         if len(branches) > 2 and chain >= len(branches) - 1:
-            defect("job.manifest.json", "critical", "long serial branch dependency chains require parallelization.serial_reasons")
+            defect(
+                "job.manifest.json",
+                "critical",
+                "long serial branch dependency chains require parallelization.serial_reasons",
+            )
 
     main_prompt_value = manifest.get("main_prompt", "main.prompt.md")
     main_path_error = relative_path_defect(main_prompt_value, "main_prompt")
@@ -1591,9 +1822,17 @@ def lint(bundle_dir: Path) -> dict:
         runtime_blocked = repo_status.get("repo_is_git") is False or repo_status.get("base_ref_status") == "missing"
         if runtime_blocked:
             if "BLOCKED READINESS" not in bootloader:
-                defect("goal-bootloader.md", "critical", "runtime blocker requires a hard blocked-readiness bootloader warning")
+                defect(
+                    "goal-bootloader.md",
+                    "critical",
+                    "runtime blocker requires a hard blocked-readiness bootloader warning",
+                )
             if "Use $goal-main-orchestrator" in bootloader or "run_prompt_audit_phase.py" in bootloader:
-                defect("goal-bootloader.md", "critical", "blocked-readiness bootloader must not render launch-looking main-orchestrator handoff commands")
+                defect(
+                    "goal-bootloader.md",
+                    "critical",
+                    "blocked-readiness bootloader must not render launch-looking main-orchestrator handoff commands",
+                )
         else:
             require_text_phrases(
                 defect,
@@ -1608,9 +1847,17 @@ def lint(bundle_dir: Path) -> dict:
         if report_path.exists():
             report_text = report_path.read_text(encoding="utf-8")
             if repo_status.get("repo_is_git") is False and "Runtime readiness gate: blocked" not in report_text:
-                defect("PREFLIGHT_REPORT.md", "major", "preflight report must surface the non-git runtime readiness blocker")
+                defect(
+                    "PREFLIGHT_REPORT.md",
+                    "major",
+                    "preflight report must surface the non-git runtime readiness blocker",
+                )
             if "harness check status is pass" in report_text:
-                defect("PREFLIGHT_REPORT.md", "major", "preflight report must not label config compatibility as harness/route availability pass")
+                defect(
+                    "PREFLIGHT_REPORT.md",
+                    "major",
+                    "preflight report must not label config compatibility as harness/route availability pass",
+                )
 
     selection_path = bundle_dir / "goal-config-selection.json"
     if selection_path.exists():
@@ -1621,24 +1868,52 @@ def lint(bundle_dir: Path) -> dict:
             selection = {}
         candidates = selection.get("candidates") if isinstance(selection, dict) else []
         if isinstance(candidates, list) and candidates:
-            selected_candidates = [item for item in candidates if isinstance(item, dict) and item.get("selected") is True]
+            selected_candidates = [
+                item for item in candidates if isinstance(item, dict) and item.get("selected") is True
+            ]
             if selection.get("status") == "pass" and len(selected_candidates) != 1:
                 defect("goal-config-selection.json", "critical", "exactly one candidate may have selected=true")
             if "selected" in selection:
-                defect("goal-config-selection.json", "major", "top-level selected candidate must not be duplicated; use selected_index plus selected path/hash fields")
+                defect(
+                    "goal-config-selection.json",
+                    "major",
+                    "top-level selected candidate must not be duplicated; use selected_index plus selected path/hash fields",
+                )
             selected_index = selection.get("selected_index")
             if selection.get("status") == "pass":
-                if not isinstance(selected_index, int) or isinstance(selected_index, bool) or not (0 <= selected_index < len(candidates)):
-                    defect("goal-config-selection.json", "critical", "selected_index must point to the selected candidate")
+                if (
+                    not isinstance(selected_index, int)
+                    or isinstance(selected_index, bool)
+                    or not (0 <= selected_index < len(candidates))
+                ):
+                    defect(
+                        "goal-config-selection.json", "critical", "selected_index must point to the selected candidate"
+                    )
                 elif selected_candidates and candidates[selected_index] is not selected_candidates[0]:
-                    defect("goal-config-selection.json", "critical", "selected_index must match the candidate with selected=true")
+                    defect(
+                        "goal-config-selection.json",
+                        "critical",
+                        "selected_index must match the candidate with selected=true",
+                    )
             for index, item in enumerate(candidates):
                 if not isinstance(item, dict):
                     continue
                 if item.get("selected") is True and item.get("eligible") is not True:
-                    defect("goal-config-selection.json", "critical", f"candidates[{index}] selected=true requires eligible=true")
-                if "remediation" in item and isinstance(item.get("remediation"), dict) and "remediated_config" in item["remediation"]:
-                    defect("goal-config-selection.json", "major", f"candidates[{index}] remediation must be compact; full remediated config payload is not allowed")
+                    defect(
+                        "goal-config-selection.json",
+                        "critical",
+                        f"candidates[{index}] selected=true requires eligible=true",
+                    )
+                if (
+                    "remediation" in item
+                    and isinstance(item.get("remediation"), dict)
+                    and "remediated_config" in item["remediation"]
+                ):
+                    defect(
+                        "goal-config-selection.json",
+                        "major",
+                        f"candidates[{index}] remediation must be compact; full remediated config payload is not allowed",
+                    )
 
     has_research_work_item = False
     worker_route_class_count = 0
@@ -1658,7 +1933,11 @@ def lint(bundle_dir: Path) -> dict:
         branch_index = ids.index(branch.get("id")) if branch.get("id") in ids else -1
         for dep_index, dep in enumerate(depends_on):
             if not isinstance(dep, str) or not SAFE_ID_RE.fullmatch(dep):
-                defect("job.manifest.json", "critical", f"branch {branch.get('id')} depends_on[{dep_index}] is not a safe branch id")
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch {branch.get('id')} depends_on[{dep_index}] is not a safe branch id",
+                )
                 continue
             if dep in seen_branch_deps:
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')} depends_on repeats branch {dep}")
@@ -1668,17 +1947,35 @@ def lint(bundle_dir: Path) -> dict:
             elif dep == branch.get("id"):
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')} cannot depend on itself")
             elif ids.index(dep) >= branch_index:
-                defect("job.manifest.json", "critical", f"branch {branch.get('id')} depends_on must reference only prior branch ids; invalid dependency: {dep}")
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch {branch.get('id')} depends_on must reference only prior branch ids; invalid dependency: {dep}",
+                )
         max_workers = branch.get("max_active_worker_packets")
         if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets must be an integer from 1 to 4")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} max_active_worker_packets must be an integer from 1 to 4",
+            )
         branch_owned_paths_value = branch.get("owned_paths", [])
-        if not isinstance(branch_owned_paths_value, list) or any(not isinstance(item, str) or not item.strip() for item in branch_owned_paths_value):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} owned_paths must be a derived array of non-empty strings")
+        if not isinstance(branch_owned_paths_value, list) or any(
+            not isinstance(item, str) or not item.strip() for item in branch_owned_paths_value
+        ):
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} owned_paths must be a derived array of non-empty strings",
+            )
             branch_owned_paths_value = []
         work_items = branch.get("work_items", [])
         if not isinstance(work_items, list) or len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets",
+            )
         elif any(not isinstance(item, dict) for item in work_items):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items entries must be objects")
         else:
@@ -1693,7 +1990,11 @@ def lint(bundle_dir: Path) -> dict:
                 else:
                     seen_work_item_ids.add(item_id)
                 packet_id = item.get("packet_id")
-                expected_packet_id = f"{branch.get('id')}-{item_id}" if isinstance(branch.get("id"), str) and isinstance(item_id, str) else ""
+                expected_packet_id = (
+                    f"{branch.get('id')}-{item_id}"
+                    if isinstance(branch.get("id"), str) and isinstance(item_id, str)
+                    else ""
+                )
                 if not isinstance(packet_id, str) or not SAFE_LABEL_RE.fullmatch(packet_id):
                     defect("job.manifest.json", "critical", f"{item_path}.packet_id must match {SAFE_LABEL_RE.pattern}")
                 elif expected_packet_id and packet_id != expected_packet_id:
@@ -1702,36 +2003,71 @@ def lint(bundle_dir: Path) -> dict:
                     defect("job.manifest.json", "critical", f"{item_path}.objective must be non-empty")
                 worker_type = item.get("worker_type", "worker")
                 if worker_type not in {"worker", RESEARCH_WORKER_TYPE}:
-                    defect("job.manifest.json", "critical", f"{item_path}.worker_type must be 'worker' or 'research-worker'")
+                    defect(
+                        "job.manifest.json",
+                        "critical",
+                        f"{item_path}.worker_type must be 'worker' or 'research-worker'",
+                    )
                 if worker_type == RESEARCH_WORKER_TYPE:
                     has_research_work_item = True
                     if "route_class" in item:
-                        defect("job.manifest.json", "critical", f"{item_path}.route_class must be omitted for research-worker items")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"{item_path}.route_class must be omitted for research-worker items",
+                        )
                 else:
                     worker_route_class_count += 1
                     route_class = item.get("route_class")
                     if route_class not in MANIFEST_WORKER_ROUTE_CLASSES:
-                        defect("job.manifest.json", "critical", f"{item_path}.route_class must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"{item_path}.route_class must be one of {', '.join(MANIFEST_WORKER_ROUTE_CLASSES)}",
+                        )
                     route_reason = item.get("route_class_reason")
                     if not isinstance(route_reason, str) or not route_reason.strip():
-                        defect("job.manifest.json", "critical", f"{item_path}.route_class_reason must be a non-empty string")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"{item_path}.route_class_reason must be a non-empty string",
+                        )
                     elif route_class == "normal-code" and route_reason.strip() == "inferred_normal_code_default":
                         default_normal_route_count += 1
                 if worker_type == RESEARCH_WORKER_TYPE:
                     route_reason = item.get("route_class_reason")
                     if not isinstance(route_reason, str) or not route_reason.strip():
-                        defect("job.manifest.json", "critical", f"{item_path}.route_class_reason must explain research-worker routing")
-                for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("source_attachment_refs", 0), ("depends_on", 0)]:
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"{item_path}.route_class_reason must explain research-worker routing",
+                        )
+                for key, min_items in [
+                    ("owned_paths", 1),
+                    ("verification", 1),
+                    ("dod", 1),
+                    ("context_files", 0),
+                    ("source_attachment_refs", 0),
+                    ("depends_on", 0),
+                ]:
                     values = item.get(key, [])
                     if key in {"owned_paths", "verification", "dod"} and key not in item:
                         defect("job.manifest.json", "critical", f"{item_path}.{key} is required")
                         continue
                     if not isinstance(values, list) or len(values) < min_items:
-                        defect("job.manifest.json", "critical", f"{item_path}.{key} must contain at least {min_items} item(s)")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"{item_path}.{key} must contain at least {min_items} item(s)",
+                        )
                         continue
                     for value_index, value in enumerate(values):
                         if not isinstance(value, str) or not value.strip():
-                            defect("job.manifest.json", "critical", f"{item_path}.{key}[{value_index}] must be a non-empty string")
+                            defect(
+                                "job.manifest.json",
+                                "critical",
+                                f"{item_path}.{key}[{value_index}] must be a non-empty string",
+                            )
                         elif key in {"owned_paths", "context_files"}:
                             message = relative_path_defect(value, f"{item_path}.{key}[{value_index}]")
                             if message:
@@ -1745,7 +2081,11 @@ def lint(bundle_dir: Path) -> dict:
                                         f"{item_path}.context_files[{value_index}] exists in manifest but is not tracked by git: {value}",
                                     )
                         elif key == "source_attachment_refs" and value not in source_attachment_labels:
-                            defect("job.manifest.json", "critical", f"{item_path}.source_attachment_refs[{value_index}] references unknown source attachment label: {value}")
+                            defect(
+                                "job.manifest.json",
+                                "critical",
+                                f"{item_path}.source_attachment_refs[{value_index}] references unknown source attachment label: {value}",
+                            )
             known_work_item_ids = {item.get("id") for item in work_items if isinstance(item, dict)}
             work_item_order = {
                 item.get("id"): index
@@ -1757,9 +2097,17 @@ def lint(bundle_dir: Path) -> dict:
                     continue
                 for dep in item.get("depends_on", []):
                     if dep not in known_work_item_ids:
-                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] depends on unknown work item: {dep}")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"branch {branch.get('id')} work_items[{index}] depends on unknown work item: {dep}",
+                        )
                     elif work_item_order.get(dep, index) >= index:
-                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items[{index}] depends_on must reference only prior work item ids: {dep}")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"branch {branch.get('id')} work_items[{index}] depends_on must reference only prior work item ids: {dep}",
+                        )
             for left_index, left in enumerate(work_items):
                 if not isinstance(left, dict):
                     continue
@@ -1773,7 +2121,9 @@ def lint(bundle_dir: Path) -> dict:
                         (left_path, right_path)
                         for left_path in left_paths
                         for right_path in right_paths
-                        if isinstance(left_path, str) and isinstance(right_path, str) and paths_overlap(left_path, right_path)
+                        if isinstance(left_path, str)
+                        and isinstance(right_path, str)
+                        and paths_overlap(left_path, right_path)
                     ]
                     if not overlaps:
                         continue
@@ -1794,73 +2144,166 @@ def lint(bundle_dir: Path) -> dict:
                         branch.get("worker_contention_reason"),
                     ):
                         overlap_text = ", ".join(f"{left_path} vs {right_path}" for left_path, right_path in overlaps)
-                        defect("job.manifest.json", "critical", f"branch {branch.get('id')} work item owned_paths overlap without dependency or contention_reason: {left_id} and {right_id}: {overlap_text}")
+                        defect(
+                            "job.manifest.json",
+                            "critical",
+                            f"branch {branch.get('id')} work item owned_paths overlap without dependency or contention_reason: {left_id} and {right_id}: {overlap_text}",
+                        )
             derived_branch_owned = []
             for item in work_items:
                 for value in item.get("owned_paths", []):
                     if isinstance(value, str) and value not in derived_branch_owned:
                         derived_branch_owned.append(value)
             if branch_owned_paths_value != derived_branch_owned:
-                defect("job.manifest.json", "critical", f"branch {branch.get('id')} owned_paths must equal the ordered union of work item owned_paths")
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch {branch.get('id')} owned_paths must equal the ordered union of work item owned_paths",
+                )
         worker_parallelism = branch.get("worker_parallelism", {})
         if not isinstance(worker_parallelism, dict):
             defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism must be an object")
             worker_parallelism = {}
         if worker_parallelism.get("parallelism_default") is not True:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelism_default must be true")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.parallelism_default must be true",
+            )
         if worker_parallelism.get("scheduling_mode") != "rolling":
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.scheduling_mode must be rolling")
-        expected_scheduler_path = CONTRACT.worker_scheduler_path(str(branch.get("id", ""))) if isinstance(branch.get("id"), str) else ""
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.scheduling_mode must be rolling",
+            )
+        expected_scheduler_path = (
+            CONTRACT.worker_scheduler_path(str(branch.get("id", ""))) if isinstance(branch.get("id"), str) else ""
+        )
         if worker_parallelism.get("scheduler_path") != expected_scheduler_path:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.scheduler_path must be {expected_scheduler_path!r}")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.scheduler_path must be {expected_scheduler_path!r}",
+            )
         if worker_parallelism.get("max_active_worker_packets") != max_workers:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets",
+            )
         if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.max_worker_packets_per_branch must be 4")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.max_worker_packets_per_branch must be 4",
+            )
         if "serial_reason" in worker_parallelism:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.serial_reason is obsolete; use serial_reasons")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.serial_reason is obsolete; use serial_reasons",
+            )
         worker_serial_reasons = worker_parallelism.get("serial_reasons", [])
-        if not isinstance(worker_serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in worker_serial_reasons):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.serial_reasons must be an array of non-empty strings")
+        if not isinstance(worker_serial_reasons, list) or any(
+            not isinstance(item, str) or not item.strip() for item in worker_serial_reasons
+        ):
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.serial_reasons must be an array of non-empty strings",
+            )
             worker_serial_reasons = []
-        if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism.get("parallelization_rationale", "").strip():
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.parallelization_rationale must be non-empty")
-        manifest_execution_strategy = manifest.get("execution_strategy") if isinstance(manifest.get("execution_strategy"), dict) else {}
+        if (
+            not isinstance(worker_parallelism.get("parallelization_rationale"), str)
+            or not worker_parallelism.get("parallelization_rationale", "").strip()
+        ):
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.parallelization_rationale must be non-empty",
+            )
+        manifest_execution_strategy = (
+            manifest.get("execution_strategy") if isinstance(manifest.get("execution_strategy"), dict) else {}
+        )
         if branch.get("execution_strategy_ref") != manifest_execution_strategy.get("id"):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} execution_strategy_ref must match manifest execution_strategy.id")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} execution_strategy_ref must match manifest execution_strategy.id",
+            )
         if branch.get("route_contract_sha256") != manifest.get("route_contract_sha256"):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} route_contract_sha256 must match manifest route_contract_sha256")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} route_contract_sha256 must match manifest route_contract_sha256",
+            )
         if is_strict_int(max_workers) and max_workers < MAX_WORKER_PACKETS_PER_BRANCH and not worker_serial_reasons:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} max_active_worker_packets below 4 requires worker_parallelism.serial_reasons")
-        if is_strict_int(max_workers) and isinstance(work_items, list) and len(work_items) == 1 and max_workers > 1 and not worker_serial_reasons:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} has one worker while max_active_worker_packets > 1 without worker_parallelism.serial_reasons")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} max_active_worker_packets below 4 requires worker_parallelism.serial_reasons",
+            )
+        if (
+            is_strict_int(max_workers)
+            and isinstance(work_items, list)
+            and len(work_items) == 1
+            and max_workers > 1
+            and not worker_serial_reasons
+        ):
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} has one worker while max_active_worker_packets > 1 without worker_parallelism.serial_reasons",
+            )
         if (
             is_strict_int(max_workers)
             and isinstance(work_items, list)
             and ready_worker_count(work_items) < min(max_workers, len(work_items))
             and not worker_serial_reasons
         ):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} has too few initially eligible worker items under max_active_worker_packets without worker_parallelism.serial_reasons")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} has too few initially eligible worker items under max_active_worker_packets without worker_parallelism.serial_reasons",
+            )
         if (
             isinstance(work_items, list)
             and len(work_items) > 2
             and longest_worker_chain(work_items) >= len(work_items) - 1
             and not worker_serial_reasons
         ):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker dependency chain serializes most work without worker_parallelism.serial_reasons")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker dependency chain serializes most work without worker_parallelism.serial_reasons",
+            )
         dependency_policy = worker_parallelism.get("dependency_policy", "")
         if not isinstance(dependency_policy, str) or "depends_on" not in dependency_policy:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.dependency_policy must mention depends_on")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.dependency_policy must mention depends_on",
+            )
         slot_refill = worker_parallelism.get("slot_refill", "")
         if not isinstance(slot_refill, str) or "launch" not in slot_refill.lower():
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} worker_parallelism.slot_refill must describe launching replacements")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} worker_parallelism.slot_refill must describe launching replacements",
+            )
         for key in ["prompt", "status_path", "review_path"]:
             message = relative_path_defect(branch.get(key), key)
             if message:
                 defect("job.manifest.json", "critical", f"branch {branch.get('id')}: {message}")
-        expected_gate_path = CONTRACT.pre_review_gate_path(str(branch.get("id", ""))) if isinstance(branch.get("id"), str) else ""
+        expected_gate_path = (
+            CONTRACT.pre_review_gate_path(str(branch.get("id", ""))) if isinstance(branch.get("id"), str) else ""
+        )
         if branch.get("pre_review_gate_path") != expected_gate_path:
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} pre_review_gate_path must be {expected_gate_path!r}")
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')} pre_review_gate_path must be {expected_gate_path!r}",
+            )
         message = relative_path_defect(branch.get("pre_review_gate_path"), "pre_review_gate_path")
         if message:
             defect("job.manifest.json", "critical", f"branch {branch.get('id')}: {message}")
@@ -1876,7 +2319,9 @@ def lint(bundle_dir: Path) -> dict:
             continue
         text = prompt_path.read_text(encoding="utf-8")
         lint_generated_prompt_text(defect, str(prompt_path), text, is_branch_prompt=True)
-        expected_status_path = branch.get("status_path") if isinstance(branch.get("status_path"), str) else "branches/Bxx.status.json"
+        expected_status_path = (
+            branch.get("status_path") if isinstance(branch.get("status_path"), str) else "branches/Bxx.status.json"
+        )
         lint_validator_command_snippets(
             defect,
             str(prompt_path),
@@ -1898,7 +2343,11 @@ def lint(bundle_dir: Path) -> dict:
         route_hash = manifest.get("route_contract_sha256")
         if isinstance(route_hash, str) and route_hash and route_hash not in text:
             defect(str(prompt_path), "major", f"branch {branch.get('id')} prompt must embed route_contract_sha256")
-        strategy_id = manifest.get("execution_strategy", {}).get("id") if isinstance(manifest.get("execution_strategy"), dict) else None
+        strategy_id = (
+            manifest.get("execution_strategy", {}).get("id")
+            if isinstance(manifest.get("execution_strategy"), dict)
+            else None
+        )
         if isinstance(strategy_id, str) and strategy_id and strategy_id not in text:
             defect(str(prompt_path), "major", f"branch {branch.get('id')} prompt must embed execution strategy id")
 
@@ -1911,7 +2360,11 @@ def lint(bundle_dir: Path) -> dict:
 
     if has_research_work_item:
         if research_worker_policy is None:
-            defect("job.manifest.json", "critical", "research_worker_policy is required when any work item uses worker_type='research-worker'")
+            defect(
+                "job.manifest.json",
+                "critical",
+                "research_worker_policy is required when any work item uses worker_type='research-worker'",
+            )
 
     branch_owned_paths: dict[str, list[str]] = {}
     branch_deps: dict[str, list[str]] = {}
@@ -1922,7 +2375,11 @@ def lint(bundle_dir: Path) -> dict:
         bid = branch["id"]
         branch_deps[bid] = branch.get("depends_on", []) if isinstance(branch.get("depends_on"), list) else []
         branch_contention[bid] = branch.get("contention_reason")
-        owned = [path for path in branch.get("owned_paths", []) if isinstance(path, str)] if isinstance(branch.get("owned_paths"), list) else []
+        owned = (
+            [path for path in branch.get("owned_paths", []) if isinstance(path, str)]
+            if isinstance(branch.get("owned_paths"), list)
+            else []
+        )
         branch_owned_paths[bid] = owned
     for branch in branches:
         if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
@@ -1975,7 +2432,11 @@ def lint(bundle_dir: Path) -> dict:
                     if owners:
                         owner_id, owned_path, matched_path = owners[0]
                         if owner_id not in allowed_branch_ids:
-                            ref_label = f"python module {ref.get('value')}" if ref.get("kind") == "python_module" else f"path {ref.get('value')}"
+                            ref_label = (
+                                f"python module {ref.get('value')}"
+                                if ref.get("kind") == "python_module"
+                                else f"path {ref.get('value')}"
+                            )
                             defect(
                                 "job.manifest.json",
                                 "critical",
@@ -2007,7 +2468,11 @@ def lint(bundle_dir: Path) -> dict:
                 serial_reasons,
             ):
                 overlap_text = ", ".join(f"{left_path} vs {right_path}" for left_path, right_path in overlaps)
-                defect("job.manifest.json", "critical", f"branch owned_paths overlap without dependency or contention_reason: {left_id} and {right_id}: {overlap_text}")
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch owned_paths overlap without dependency or contention_reason: {left_id} and {right_id}: {overlap_text}",
+                )
 
     return result(
         defects,
@@ -2039,7 +2504,9 @@ def result(
     runtime_launch_status = "pass"
     if git_repo_status.get("repo_is_git") is False or git_repo_status.get("status") == "not_in_repo":
         runtime_launch_status = "blocked"
-        runtime_launch_blocked_reason = "repository root is not a git work tree; runtime branch/worktree orchestration is blocked"
+        runtime_launch_blocked_reason = (
+            "repository root is not a git work tree; runtime branch/worktree orchestration is blocked"
+        )
     elif git_repo_status.get("base_ref_status") == "missing":
         runtime_launch_status = "blocked"
         runtime_launch_blocked_reason = f"base_ref does not exist: {git_repo_status.get('base_ref')}"
@@ -2075,7 +2542,9 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bundle-dir", required=True)
     parser.add_argument("--output")
-    parser.add_argument("--no-write", action="store_true", help="Print lint JSON to stdout without mutating preflight.lint.json.")
+    parser.add_argument(
+        "--no-write", action="store_true", help="Print lint JSON to stdout without mutating preflight.lint.json."
+    )
     parser.add_argument("--json", action="store_true", help="Print lint JSON to stdout instead of the output path.")
     args = parser.parse_args()
 
@@ -2087,11 +2556,7 @@ def main() -> int:
         print(json.dumps(data, indent=2, sort_keys=True))
         return 0 if data["schema_lint_status"] == "pass" else 1
     canonical_path = bundle_dir / "preflight.lint.json"
-    output_path = (
-        resolve_absolute_path(args.output, "--output", must_exist=False)
-        if args.output
-        else canonical_path
-    )
+    output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else canonical_path
     rendered = json.dumps(data, indent=2, sort_keys=True) + "\n"
     output_path.write_text(rendered, encoding="utf-8")
     if output_path.resolve() != canonical_path.resolve():

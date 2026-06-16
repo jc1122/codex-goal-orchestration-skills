@@ -52,7 +52,9 @@ def run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedP
     return subprocess.run(command, cwd=cwd, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
 
 
-def action(actions: list[dict], *, kind: str, reason: str, command: str | None = None, severity: str = "repair") -> None:
+def action(
+    actions: list[dict], *, kind: str, reason: str, command: str | None = None, severity: str = "repair"
+) -> None:
     item = {"kind": kind, "severity": severity, "reason": reason}
     if command:
         item["command"] = command
@@ -69,7 +71,12 @@ def check_context_index(actions: list[dict], checks: list[dict], repo_root: Path
     package = repo_root / "package.json"
     if not index.exists() or not package.exists():
         checks.append(
-            {"name": "context_index", "status": "skipped", "severity": "info", "reason": "repo has no maintenance context index"},
+            {
+                "name": "context_index",
+                "status": "skipped",
+                "severity": "info",
+                "reason": "repo has no maintenance context index",
+            },
         )
         return
     result = run(["npm", "run", "check:context", "--silent"], cwd=repo_root)
@@ -105,14 +112,19 @@ def check_manifest_fields(actions: list[dict], checks: list[dict], manifest: dic
             packet_id = item.get("packet_id", item.get("id", "<unknown>"))
             worker_type = item.get("worker_type", "worker")
             if worker_type in {"research", "research-worker"}:
-                if not isinstance(item.get("route_class_reason"), str) or not item.get("route_class_reason", "").strip():
+                if (
+                    not isinstance(item.get("route_class_reason"), str)
+                    or not item.get("route_class_reason", "").strip()
+                ):
                     defects.append(f"research work item {packet_id} missing route_class_reason")
                 continue
             if not isinstance(item.get("route_class"), str) or not item.get("route_class", "").strip():
                 defects.append(f"work item {packet_id} missing route_class")
             if not isinstance(item.get("route_class_reason"), str) or not item.get("route_class_reason", "").strip():
                 defects.append(f"work item {packet_id} missing route_class_reason")
-    checks.append({"name": "manifest_route_and_status_fields", "status": "pass" if not defects else "failed", "defects": defects})
+    checks.append(
+        {"name": "manifest_route_and_status_fields", "status": "pass" if not defects else "failed", "defects": defects}
+    )
     if defects:
         action(
             actions,
@@ -122,12 +134,16 @@ def check_manifest_fields(actions: list[dict], checks: list[dict], manifest: dic
         )
 
 
-def check_bundle_lint(actions: list[dict], checks: list[dict], bundle_dir: Path, lint_report_path: Path | None = None) -> None:
+def check_bundle_lint(
+    actions: list[dict], checks: list[dict], bundle_dir: Path, lint_report_path: Path | None = None
+) -> None:
     script = skills_root() / "goal-preflight" / "scripts" / "lint_goal_bundle.py"
     if lint_report_path is not None and lint_report_path.exists():
         report = load_json(lint_report_path)
         schema_status = report.get("schema_lint_status") or report.get("status") if isinstance(report, dict) else None
-        defect_count = report.get("defect_count", len(report.get("defects", []) or [])) if isinstance(report, dict) else None
+        defect_count = (
+            report.get("defect_count", len(report.get("defects", []) or [])) if isinstance(report, dict) else None
+        )
         checks.append(
             {
                 "name": "bundle_lint",
@@ -152,7 +168,9 @@ def check_bundle_lint(actions: list[dict], checks: list[dict], bundle_dir: Path,
         return
     result = run(["python3", script.as_posix(), "--bundle-dir", bundle_dir.as_posix(), "--no-write"])
     status = "pass" if result.returncode == 0 else "failed"
-    checks.append({"name": "bundle_lint", "status": status, "command": f"python3 {script} --bundle-dir {bundle_dir} --no-write"})
+    checks.append(
+        {"name": "bundle_lint", "status": status, "command": f"python3 {script} --bundle-dir {bundle_dir} --no-write"}
+    )
     if result.returncode != 0:
         action(
             actions,
@@ -162,14 +180,18 @@ def check_bundle_lint(actions: list[dict], checks: list[dict], bundle_dir: Path,
         )
 
 
-def check_scheduler(actions: list[dict], checks: list[dict], manifest: dict, bundle_dir: Path, scope: str, branch_id: str | None) -> None:
+def check_scheduler(
+    actions: list[dict], checks: list[dict], manifest: dict, bundle_dir: Path, scope: str, branch_id: str | None
+) -> None:
     paths: list[str] = []
     if scope == "main":
         paths.append("schedulers/main.scheduler.json")
     if scope == "branch" and branch_id:
         paths.append(f"schedulers/{branch_id}.worker.scheduler.json")
     if not paths:
-        checks.append({"name": "scheduler_gaps", "status": "skipped", "reason": "scope has no scheduler ledger requirement"})
+        checks.append(
+            {"name": "scheduler_gaps", "status": "skipped", "reason": "scope has no scheduler ledger requirement"}
+        )
         return
     defects = []
     for rel_path in paths:
@@ -190,7 +212,9 @@ def check_scheduler(actions: list[dict], checks: list[dict], manifest: dict, bun
         action(actions, kind="scheduler_gap", reason="scheduler ledger is missing or has no events", command=command)
 
 
-def check_telemetry_summary(actions: list[dict], checks: list[dict], bundle_dir: Path, scope: str, branch_id: str | None) -> None:
+def check_telemetry_summary(
+    actions: list[dict], checks: list[dict], bundle_dir: Path, scope: str, branch_id: str | None
+) -> None:
     if scope == "branch":
         checks.append(
             {
@@ -212,10 +236,17 @@ def check_telemetry_summary(actions: list[dict], checks: list[dict], bundle_dir:
         if summary.stat().st_mtime < newest:
             status = "failed"
             reason = "telemetry.summary.json is older than at least one telemetry.json"
-    checks.append({"name": "telemetry_summary", "status": status, "telemetry_files": len(telemetry_files), "reason": reason})
+    checks.append(
+        {"name": "telemetry_summary", "status": status, "telemetry_files": len(telemetry_files), "reason": reason}
+    )
     if status != "pass":
         script = skills_root() / "goal-main-orchestrator" / "scripts" / "summarize_telemetry.py"
-        action(actions, kind="missing_telemetry_summary", reason=reason, command=f"python3 {script} --bundle-dir {bundle_dir}")
+        action(
+            actions,
+            kind="missing_telemetry_summary",
+            reason=reason,
+            command=f"python3 {script} --bundle-dir {bundle_dir}",
+        )
 
 
 def runtime_launch_gate(manifest: dict, repo_root: Path | None) -> dict:
@@ -247,7 +278,11 @@ def runtime_launch_gate(manifest: dict, repo_root: Path | None) -> dict:
 def status_blockers(status_data: object) -> list[str]:
     if not isinstance(status_data, dict):
         return []
-    blockers = [item for item in status_data.get("blockers", []) if isinstance(item, str) and item.strip()] if isinstance(status_data.get("blockers"), list) else []
+    blockers = (
+        [item for item in status_data.get("blockers", []) if isinstance(item, str) and item.strip()]
+        if isinstance(status_data.get("blockers"), list)
+        else []
+    )
     for key in ["worker_statuses", "branch_statuses"]:
         for item in status_data.get(key, []) if isinstance(status_data.get(key), list) else []:
             if isinstance(item, dict) and isinstance(item.get("blockers"), list):
@@ -280,10 +315,18 @@ def check_amendments_and_blockers(
     blockers = status_blockers(data)
     status = data.get("status") if isinstance(data, dict) else None
     status_branch_id = data.get("branch_id") if isinstance(data, dict) else None
-    terminal_branch = branch_id or (status_branch_id if isinstance(status_branch_id, str) and status_branch_id.strip() else None)
+    terminal_branch = branch_id or (
+        status_branch_id if isinstance(status_branch_id, str) and status_branch_id.strip() else None
+    )
     if terminal_branch is None and status_path.name.endswith(".status.json"):
         terminal_branch = status_path.name.removesuffix(".status.json")
-    checks.append({"name": "amendment_and_blocker_repair", "status": "pass" if status == "pass" and not blockers else "actionable", "blocker_count": len(blockers)})
+    checks.append(
+        {
+            "name": "amendment_and_blocker_repair",
+            "status": "pass" if status == "pass" and not blockers else "actionable",
+            "blocker_count": len(blockers),
+        }
+    )
     if status in {"partial", "blocked", "failed"}:
         amend_script = skills_root() / "goal-plan-amender" / "scripts" / "recommend_amendment_decision.py"
         terminal_arg = f" --terminal-branch {terminal_branch}" if terminal_branch else ""
@@ -314,7 +357,11 @@ def check_amendments_and_blockers(
 
 def gate(args: argparse.Namespace) -> dict:
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
-    bundle_dir = resolve_absolute_path(args.bundle_dir, "--bundle-dir", must_exist=True) if args.bundle_dir else manifest_path.parent
+    bundle_dir = (
+        resolve_absolute_path(args.bundle_dir, "--bundle-dir", must_exist=True)
+        if args.bundle_dir
+        else manifest_path.parent
+    )
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True) if args.repo_root else None
     status_path = resolve_absolute_path(args.status, "--status", must_exist=True) if args.status else None
     manifest = load_json(manifest_path)
@@ -324,7 +371,11 @@ def gate(args: argparse.Namespace) -> dict:
     actions: list[dict] = []
     check_context_index(actions, checks, repo_root)
     check_manifest_fields(actions, checks, manifest)
-    lint_report_path = resolve_absolute_path(args.bundle_lint_report, "--bundle-lint-report", must_exist=True) if args.bundle_lint_report else None
+    lint_report_path = (
+        resolve_absolute_path(args.bundle_lint_report, "--bundle-lint-report", must_exist=True)
+        if args.bundle_lint_report
+        else None
+    )
     check_bundle_lint(actions, checks, bundle_dir, lint_report_path)
     check_scheduler(actions, checks, manifest, bundle_dir, args.scope, args.branch_id)
     check_telemetry_summary(actions, checks, bundle_dir, args.scope, args.branch_id)
@@ -347,7 +398,11 @@ def gate(args: argparse.Namespace) -> dict:
         "runtime_launch_allowed": runtime_launch_allowed,
         "launch_allowed": launch_allowed,
         "model_launch_allowed": launch_allowed,
-        "launch_blocked_reason": None if launch_allowed else runtime_gate.get("reason") if not runtime_launch_allowed else "script repair actions are required",
+        "launch_blocked_reason": None
+        if launch_allowed
+        else runtime_gate.get("reason")
+        if not runtime_launch_allowed
+        else "script repair actions are required",
         "action_count": len(actions),
         "check_count": len(checks),
         "runtime_gate": runtime_gate,

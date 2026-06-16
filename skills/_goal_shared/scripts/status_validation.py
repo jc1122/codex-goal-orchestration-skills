@@ -227,7 +227,9 @@ def validate_telemetry_artifact(
     elif accepted_aliases:
         defect(defects, f"{path}.accepted_alias", "must be set when an attempt is marked accepted")
     totals = require_object(defects, data.get("totals"), f"{path}.totals")
-    attempts_declared = require_nonnegative_int(defects, totals.get("attempts_declared"), f"{path}.totals.attempts_declared")
+    attempts_declared = require_nonnegative_int(
+        defects, totals.get("attempts_declared"), f"{path}.totals.attempts_declared"
+    )
     attempts_called = require_nonnegative_int(defects, totals.get("attempts_called"), f"{path}.totals.attempts_called")
     if attempts_declared != len(attempts):
         defect(defects, f"{path}.totals.attempts_declared", "must match attempts length")
@@ -367,12 +369,20 @@ def validate_reuse_policy(defects: list[str], value: object, path: str) -> None:
         if hashes_match is not True:
             defect(defects, f"{path}.semantic_hashes_match", "must be true when reviewer reuse is accepted")
         if not isinstance(source, str) or not source.strip():
-            defect(defects, f"{path}.source_review_path", "must identify the reused review artifact when accepted is true")
+            defect(
+                defects, f"{path}.source_review_path", "must identify the reused review artifact when accepted is true"
+            )
         if not isinstance(source_telemetry, str) or not source_telemetry.strip():
-            defect(defects, f"{path}.source_telemetry_path", "must identify the reused reviewer telemetry artifact when accepted is true")
+            defect(
+                defects,
+                f"{path}.source_telemetry_path",
+                "must identify the reused reviewer telemetry artifact when accepted is true",
+            )
 
 
-def validate_reuse_eligibility(defects: list[str], value: object, path: str, *, semantic_hashes: dict[str, str]) -> None:
+def validate_reuse_eligibility(
+    defects: list[str], value: object, path: str, *, semantic_hashes: dict[str, str]
+) -> None:
     data = require_object(defects, value, path)
     if not isinstance(data.get("eligible"), bool):
         defect(defects, f"{path}.eligible", "must be a boolean")
@@ -509,7 +519,12 @@ def validate_scheduler_ledger(
         return False
 
     def relaunch_candidate(item_id: str) -> bool:
-        return item_id in launched and item_id in closed and finished_status.get(item_id) != "pass" and relaunch_allowed(item_id)
+        return (
+            item_id in launched
+            and item_id in closed
+            and finished_status.get(item_id) != "pass"
+            and relaunch_allowed(item_id)
+        )
 
     def eligible_ids() -> list[str]:
         eligible = []
@@ -584,7 +599,11 @@ def validate_scheduler_ledger(
             defect(defects, f"{event_path}.schema_version", "must be an integer")
             event_schema_version = None
 
-        if has_event_schema_version and event_schema_version is not None and event_schema_version >= SCHEDULER_EVENT_SCHEMA_VERSION:
+        if (
+            has_event_schema_version
+            and event_schema_version is not None
+            and event_schema_version >= SCHEDULER_EVENT_SCHEMA_VERSION
+        ):
             event_manifest_sha = event.get("manifest_sha256")
             if not isinstance(event_manifest_sha, str) or not SHA256_RE.fullmatch(event_manifest_sha):
                 defect(defects, f"{event_path}.manifest_sha256", "must be sha256:<64 lowercase hex chars>")
@@ -601,9 +620,8 @@ def validate_scheduler_ledger(
                 addresses_idle = event_id in before_unexcused
             elif event_name in {"refill", "under_capacity"}:
                 eligible_values = event.get("eligible_ids")
-                addresses_idle = (
-                    isinstance(eligible_values, list)
-                    and any(isinstance(item, str) and item in before_unexcused for item in eligible_values)
+                addresses_idle = isinstance(eligible_values, list) and any(
+                    isinstance(item, str) and item in before_unexcused for item in eligible_values
                 )
             if not addresses_idle:
                 defect(
@@ -635,28 +653,30 @@ def validate_scheduler_ledger(
                 defect(defects, f"{event_path}.eligible_ids", "must list eligible items considered for refill")
                 eligible_values = []
             for value_index, value in enumerate(eligible_values):
-                repair_relaunch_eligible = bool(
-                    isinstance(value, str)
-                    and relaunch_candidate(value)
-                )
+                repair_relaunch_eligible = bool(isinstance(value, str) and relaunch_candidate(value))
                 if not isinstance(value, str) or (value not in before_eligible and not repair_relaunch_eligible):
-                    defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
+                    defect(
+                        defects,
+                        f"{event_path}.eligible_ids[{value_index}]",
+                        "must be currently eligible and unlaunched",
+                    )
             if len(active) >= capacity:
                 defect(defects, event_path, "refill requires free capacity")
             refill_required = False
             continue
 
         if event_name == "launch":
-            repair_relaunch = bool(
-                event_id
-                and relaunch_candidate(str(event_id))
-            )
+            repair_relaunch = bool(event_id and relaunch_candidate(str(event_id)))
             if event_id in launched and not repair_relaunch:
                 defect(defects, f"{event_path}.id", "duplicates launch event")
             if event_id and event_id not in before_eligible and not repair_relaunch:
                 failed_deps = failed_dependency_ids(str(event_id))
                 if failed_deps:
-                    defect(defects, f"{event_path}.id", "cannot launch after dependency finished non-pass: " + ", ".join(failed_deps))
+                    defect(
+                        defects,
+                        f"{event_path}.id",
+                        "cannot launch after dependency finished non-pass: " + ", ".join(failed_deps),
+                    )
                 else:
                     defect(defects, f"{event_path}.id", "cannot launch before dependencies pass")
             if len(active) >= capacity:
@@ -738,7 +758,11 @@ def validate_scheduler_ledger(
                 eligible_values = []
             for value_index, value in enumerate(eligible_values):
                 if not isinstance(value, str) or value not in before_eligible:
-                    defect(defects, f"{event_path}.eligible_ids[{value_index}]", "must be currently eligible and unlaunched")
+                    defect(
+                        defects,
+                        f"{event_path}.eligible_ids[{value_index}]",
+                        "must be currently eligible and unlaunched",
+                    )
                     continue
                 under_capacity[value] = reason
                 under_capacity_reason_codes[value] = reason_code
@@ -757,10 +781,19 @@ def validate_scheduler_ledger(
     for item_id in _ordered_subset(launched - closed, expected_ids):
         defect(defects, path, f"launched item is missing a close event: {item_id}")
     if active:
-        defect(defects, path, "final active scheduler set must be empty after validation: " + ", ".join(_ordered_subset(active, expected_ids)))
+        defect(
+            defects,
+            path,
+            "final active scheduler set must be empty after validation: "
+            + ", ".join(_ordered_subset(active, expected_ids)),
+        )
     missing_launches = [item_id for item_id in expected_ids if item_id not in launched]
     if require_all_launched and missing_launches:
-        defect(defects, path, "must launch every manifest scheduler item for pass/partial status: " + ", ".join(missing_launches))
+        defect(
+            defects,
+            path,
+            "must launch every manifest scheduler item for pass/partial status: " + ", ".join(missing_launches),
+        )
     for item_id in missing_launches:
         failed_deps = failed_dependency_ids(item_id)
         if failed_deps:
@@ -776,7 +809,11 @@ def validate_scheduler_ledger(
                     f"unlaunched item with non-pass dependency must record dependency_failed reason_code: {item_id} depends on {', '.join(failed_deps)}",
                 )
         if item_id not in deferred and item_id not in blocked and item_id not in under_capacity:
-            defect(defects, path, f"unlaunched manifest item lacks structured defer/under_capacity/blocked reason: {item_id}")
+            defect(
+                defects,
+                path,
+                f"unlaunched manifest item lacks structured defer/under_capacity/blocked reason: {item_id}",
+            )
 
     return {
         "launched": _ordered_subset(launched, expected_ids),
@@ -784,7 +821,9 @@ def validate_scheduler_ledger(
         "active": _ordered_subset(active, expected_ids),
         "blocked": _ordered_subset(set(blocked), expected_ids),
         "deferred": _ordered_subset(set(deferred) | set(under_capacity), expected_ids),
-        "finished_status": {item_id: finished_status[item_id] for item_id in expected_ids if item_id in finished_status},
+        "finished_status": {
+            item_id: finished_status[item_id] for item_id in expected_ids if item_id in finished_status
+        },
         "max_observed_active": max_observed,
     }
 
@@ -938,7 +977,9 @@ def validate_pre_review_gate_artifact(
     for rel_path in required_input_paths or []:
         if rel_path not in semantic_hashes:
             defect(defects, f"{path}.semantic_input_hashes", f"must include current semantic input hash for {rel_path}")
-    validate_reuse_eligibility(defects, gate.get("reuse_eligibility"), f"{path}.reuse_eligibility", semantic_hashes=semantic_hashes)
+    validate_reuse_eligibility(
+        defects, gate.get("reuse_eligibility"), f"{path}.reuse_eligibility", semantic_hashes=semantic_hashes
+    )
     validate_reuse_policy(defects, gate.get("reuse_policy"), f"{path}.reuse_policy")
     return gate
 
@@ -995,14 +1036,16 @@ def load_lite_validator(defects: list[str], script_dir: Path, module_name: str):
 
 def lite_validation_command(script_dir: Path, advice_path: Path, inputs_path: Path) -> str:
     validator_path = script_dir / "validate_lite_advice.py"
-    return shlex.join([
-        "python3",
-        validator_path.as_posix(),
-        "--advice",
-        advice_path.as_posix(),
-        "--inputs",
-        inputs_path.as_posix(),
-    ])
+    return shlex.join(
+        [
+            "python3",
+            validator_path.as_posix(),
+            "--advice",
+            advice_path.as_posix(),
+            "--inputs",
+            inputs_path.as_posix(),
+        ]
+    )
 
 
 def discover_unrecorded_lite_packets(
@@ -1027,7 +1070,9 @@ def discover_unrecorded_lite_packets(
         if inputs_path.exists():
             inputs_data = load_json_artifact(defects, inputs_path, f"{path}.{packet_dir.name}.inputs_path")
         elif advice_path.exists() and malformed_packet_prefix and packet_dir.name.startswith(malformed_packet_prefix):
-            defect(defects, path, f"unrecorded malformed {scope_label} Lite packet without input-files.json: {packet_dir}")
+            defect(
+                defects, path, f"unrecorded malformed {scope_label} Lite packet without input-files.json: {packet_dir}"
+            )
             continue
         if not isinstance(inputs_data, dict):
             continue
@@ -1037,17 +1082,15 @@ def discover_unrecorded_lite_packets(
         packet_id = input_packet_id if isinstance(input_packet_id, str) and input_packet_id.strip() else packet_dir.name
         prefix_relevant = bool(malformed_packet_prefix) and packet_dir.name.startswith(malformed_packet_prefix)
         prefix_scoped = bool(required_packet_prefix) and (
-            packet_dir.name.startswith(required_packet_prefix)
-            or packet_id.startswith(required_packet_prefix)
+            packet_dir.name.startswith(required_packet_prefix) or packet_id.startswith(required_packet_prefix)
         )
-        relevant = (
-            purpose in allowed_purposes
-            or skill == skill_name
-            or prefix_relevant
-            or prefix_scoped
-        )
+        relevant = purpose in allowed_purposes or skill == skill_name or prefix_relevant or prefix_scoped
         if relevant and required_packet_prefix is not None and not prefix_scoped:
-            defect(defects, path, f"{scope_label} Lite packet is not scoped to {required_packet_prefix}: {packet_id} at {packet_dir}")
+            defect(
+                defects,
+                path,
+                f"{scope_label} Lite packet is not scoped to {required_packet_prefix}: {packet_id} at {packet_dir}",
+            )
             continue
         if relevant and packet_id not in reported_ids:
             defect(defects, path, f"unrecorded manifest-owned {scope_label} Lite packet: {packet_id} at {packet_dir}")
@@ -1109,7 +1152,9 @@ def validate_runtime_lite_advice_entries(
         if purpose and purpose not in allowed_purposes:
             defect(defects, f"{item_path}.purpose", f"must be one of {sorted(allowed_purposes)}")
         avoids_action = require_string(defects, data.get("avoids_action"), f"{item_path}.avoids_action")
-        expected_savings_reason = require_string(defects, data.get("expected_savings_reason"), f"{item_path}.expected_savings_reason")
+        expected_savings_reason = require_string(
+            defects, data.get("expected_savings_reason"), f"{item_path}.expected_savings_reason"
+        )
         status = data.get("status")
         if status not in LITE_STATUSES:
             defect(defects, f"{item_path}.status", f"must be one of {sorted(LITE_STATUSES)}")
@@ -1127,7 +1172,9 @@ def validate_runtime_lite_advice_entries(
         validation_status = data.get("validation_status")
         if validation_status not in LITE_VALIDATION_STATUSES:
             defect(defects, f"{item_path}.validation_status", f"must be one of {sorted(LITE_VALIDATION_STATUSES)}")
-        validation_defects = require_string_list(defects, data.get("validation_defects"), f"{item_path}.validation_defects")
+        validation_defects = require_string_list(
+            defects, data.get("validation_defects"), f"{item_path}.validation_defects"
+        )
         if validation_status == "pass" and validation_defects:
             defect(defects, f"{item_path}.validation_defects", "must be empty when validation_status is pass")
         if validation_status == "failed" and not validation_defects:
@@ -1140,7 +1187,12 @@ def validate_runtime_lite_advice_entries(
         )
         validation_command = require_string(defects, data.get("validation_command"), f"{item_path}.validation_command")
         require_string(defects, data.get("reason"), f"{item_path}.reason")
-        if not (advice_path_value and inputs_path_value and is_absolute_path(advice_path_value) and is_absolute_path(inputs_path_value)):
+        if not (
+            advice_path_value
+            and inputs_path_value
+            and is_absolute_path(advice_path_value)
+            and is_absolute_path(inputs_path_value)
+        ):
             continue
         advice_path = Path(advice_path_value).resolve()
         inputs_path = Path(inputs_path_value).resolve()
@@ -1149,9 +1201,13 @@ def validate_runtime_lite_advice_entries(
             expected_advice = expected_dir / "advice.json"
             expected_inputs = expected_dir / "input-files.json"
             if advice_path != expected_advice:
-                defect(defects, f"{item_path}.advice_path", f"must be manifest-owned Lite advice path: {expected_advice}")
+                defect(
+                    defects, f"{item_path}.advice_path", f"must be manifest-owned Lite advice path: {expected_advice}"
+                )
             if inputs_path != expected_inputs:
-                defect(defects, f"{item_path}.inputs_path", f"must be manifest-owned Lite inputs path: {expected_inputs}")
+                defect(
+                    defects, f"{item_path}.inputs_path", f"must be manifest-owned Lite inputs path: {expected_inputs}"
+                )
             expected_command = lite_validation_command(script_dir, expected_advice, expected_inputs)
             if validation_command and validation_command != expected_command:
                 defect(defects, f"{item_path}.validation_command", f"must be exactly: {expected_command}")
@@ -1182,7 +1238,9 @@ def validate_runtime_lite_advice_entries(
         if avoids_action and avoids_action != inputs_data.get("avoids_action"):
             defect(defects, f"{item_path}.avoids_action", "must match input-files.json avoids_action")
         if expected_savings_reason and expected_savings_reason != inputs_data.get("expected_savings_reason"):
-            defect(defects, f"{item_path}.expected_savings_reason", "must match input-files.json expected_savings_reason")
+            defect(
+                defects, f"{item_path}.expected_savings_reason", "must match input-files.json expected_savings_reason"
+            )
         if lite_validator is None:
             lite_validator = load_lite_validator(defects, script_dir, validator_module_name)
         if lite_validator is not None:
@@ -1196,7 +1254,11 @@ def validate_runtime_lite_advice_entries(
             )
             actual_validation_status = "pass" if not lite_defects else "failed"
             if validation_status in LITE_VALIDATION_STATUSES and validation_status != actual_validation_status:
-                defect(defects, f"{item_path}.validation_status", f"must match actual Lite validation status {actual_validation_status!r}")
+                defect(
+                    defects,
+                    f"{item_path}.validation_status",
+                    f"must match actual Lite validation status {actual_validation_status!r}",
+                )
             if validation_status == "failed" and validation_defects != lite_defects:
                 defect(defects, f"{item_path}.validation_defects", "must match actual Lite validation defects exactly")
             if validation_status == "pass" and validation_defects:

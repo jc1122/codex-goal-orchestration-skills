@@ -96,7 +96,9 @@ def validate_work_items(branch: dict, branch_id: str) -> tuple[list[dict], int]:
     if worker_parallelism.get("scheduling_mode") != "rolling":
         raise SystemExit(f"branch {branch_id} worker_parallelism.scheduling_mode must be 'rolling'")
     if worker_parallelism.get("max_active_worker_packets") != max_active:
-        raise SystemExit(f"branch {branch_id} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
+        raise SystemExit(
+            f"branch {branch_id} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets"
+        )
     if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {branch_id} worker_parallelism.max_worker_packets_per_branch must be 4")
     slot_refill = worker_parallelism.get("slot_refill", "")
@@ -115,15 +117,27 @@ def validate_work_items(branch: dict, branch_id: str) -> tuple[list[dict], int]:
         if item_id in seen_ids:
             raise SystemExit(f"branch {branch_id} duplicate work item id: {item_id}")
         seen_ids.add(item_id)
-        packet_id = require_safe_label(str(item.get("packet_id", "")), f"branch {branch_id} work_items[{index}].packet_id")
+        packet_id = require_safe_label(
+            str(item.get("packet_id", "")), f"branch {branch_id} work_items[{index}].packet_id"
+        )
         expected_packet_id = f"{branch_id}-{item_id}"
         if packet_id != expected_packet_id:
             raise SystemExit(f"branch {branch_id} work_items[{index}].packet_id must be {expected_packet_id!r}")
         worker_type = item.get("worker_type", "worker")
         if worker_type not in WORK_ITEM_ROLES:
-            raise SystemExit(f"branch {branch_id} work_items[{index}].worker_type must be 'worker' or 'research-worker'")
-        for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
-            values = require_string_list(item.get(key, []), f"branch {branch_id} work_items[{index}].{key}", min_items=min_items)
+            raise SystemExit(
+                f"branch {branch_id} work_items[{index}].worker_type must be 'worker' or 'research-worker'"
+            )
+        for key, min_items in [
+            ("owned_paths", 1),
+            ("verification", 1),
+            ("dod", 1),
+            ("context_files", 0),
+            ("depends_on", 0),
+        ]:
+            values = require_string_list(
+                item.get(key, []), f"branch {branch_id} work_items[{index}].{key}", min_items=min_items
+            )
             if key in {"owned_paths", "context_files"}:
                 for value in values:
                     require_relative_path(value, f"branch {branch_id} work_items[{index}].{key}")
@@ -135,7 +149,9 @@ def validate_work_items(branch: dict, branch_id: str) -> tuple[list[dict], int]:
             if dep not in item_order:
                 raise SystemExit(f"branch {branch_id} work_items[{index}] depends on unknown work item: {dep}")
             if item_order[dep] >= index:
-                raise SystemExit(f"branch {branch_id} work_items[{index}] depends_on must reference only prior work item ids: {dep}")
+                raise SystemExit(
+                    f"branch {branch_id} work_items[{index}] depends_on must reference only prior work item ids: {dep}"
+                )
     return validated, max_active
 
 
@@ -177,9 +193,13 @@ def validate_completed_worker_statuses(
         status_path = worker_status_path(manifest_path, item_by_packet[packet_id])
         status = artifact_status(status_path)
         if status is None:
-            raise SystemExit(f"--completed-worker {packet_id} requires a passing status artifact or scheduler pass evidence: {status_path}")
+            raise SystemExit(
+                f"--completed-worker {packet_id} requires a passing status artifact or scheduler pass evidence: {status_path}"
+            )
         if status != "pass":
-            raise SystemExit(f"--completed-worker {packet_id} points to non-pass status artifact {status_path}: {status}")
+            raise SystemExit(
+                f"--completed-worker {packet_id} points to non-pass status artifact {status_path}: {status}"
+            )
 
 
 def scheduler_state_from_ledger(
@@ -217,7 +237,9 @@ def scheduler_state_from_ledger(
         event_id = event.get("id")
         if name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
             if not isinstance(event_id, str) or event_id not in known:
-                raise SystemExit(f"worker scheduler events[{index}].id is not a manifest worker packet id: {scheduler_path}")
+                raise SystemExit(
+                    f"worker scheduler events[{index}].id is not a manifest worker packet id: {scheduler_path}"
+                )
         if name == "launch":
             if event_id in active:
                 raise SystemExit(f"worker scheduler events[{index}] duplicates active launch for {event_id}")
@@ -256,10 +278,18 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--branch-id", required=True)
-    parser.add_argument("--completed-worker", action="append", default=[], help="Completed and integrated worker packet id.")
+    parser.add_argument(
+        "--completed-worker", action="append", default=[], help="Completed and integrated worker packet id."
+    )
     parser.add_argument("--active-worker", action="append", default=[], help="Currently active worker packet id.")
-    parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted worker packet ids, one per line.")
-    parser.add_argument("--limit", type=int, help="Maximum packet ids to print with --list-ready; values above remaining capacity are clamped.")
+    parser.add_argument(
+        "--list-ready", action="store_true", help="Print eligible unstarted worker packet ids, one per line."
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum packet ids to print with --list-ready; values above remaining capacity are clamped.",
+    )
     args = parser.parse_args()
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
@@ -273,15 +303,28 @@ def main() -> int:
 
     completed = normalize_packet_ids(args.completed_worker, known_packets, "--completed-worker")
     active = normalize_packet_ids(args.active_worker, known_packets, "--active-worker")
-    scheduler_active, scheduler_passed, scheduler_non_pass = scheduler_state_from_ledger(manifest_path, branch_id, ordered_packets, max_active)
+    scheduler_active, scheduler_passed, scheduler_non_pass = scheduler_state_from_ledger(
+        manifest_path, branch_id, ordered_packets, max_active
+    )
     if completed & scheduler_non_pass:
-        raise SystemExit("--completed-worker includes packet ids whose scheduler status is non-pass: " + ", ".join(sorted(completed & scheduler_non_pass)))
+        raise SystemExit(
+            "--completed-worker includes packet ids whose scheduler status is non-pass: "
+            + ", ".join(sorted(completed & scheduler_non_pass))
+        )
     if completed & scheduler_active:
-        raise SystemExit("--completed-worker includes scheduler-active packet ids: " + ", ".join(sorted(completed & scheduler_active)))
+        raise SystemExit(
+            "--completed-worker includes scheduler-active packet ids: "
+            + ", ".join(sorted(completed & scheduler_active))
+        )
     if active & scheduler_passed:
-        raise SystemExit("--active-worker includes scheduler-passed packet ids: " + ", ".join(sorted(active & scheduler_passed)))
+        raise SystemExit(
+            "--active-worker includes scheduler-passed packet ids: " + ", ".join(sorted(active & scheduler_passed))
+        )
     if active & scheduler_non_pass:
-        raise SystemExit("--active-worker includes non-pass closed packet ids; record a scheduler relaunch first: " + ", ".join(sorted(active & scheduler_non_pass)))
+        raise SystemExit(
+            "--active-worker includes non-pass closed packet ids; record a scheduler relaunch first: "
+            + ", ".join(sorted(active & scheduler_non_pass))
+        )
     validate_completed_worker_statuses(manifest_path, work_items, completed, scheduler_passed)
     completed |= scheduler_passed
     active |= scheduler_active

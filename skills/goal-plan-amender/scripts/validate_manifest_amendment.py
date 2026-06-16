@@ -43,7 +43,11 @@ def main() -> int:
         infer_scheduler=not args.no_infer_scheduler,
         run_lint=True,
     )
-    proposed_amendment_id = validation.get("amendment_id") if isinstance(validation.get("amendment_id"), str) and validation.get("amendment_id").strip() else proposal_path.stem
+    proposed_amendment_id = (
+        validation.get("amendment_id")
+        if isinstance(validation.get("amendment_id"), str) and validation.get("amendment_id").strip()
+        else proposal_path.stem
+    )
     amendment_id = ensure_amendment_id(proposed_amendment_id)
     lineage_path = amendment_lineage_path(manifest_path.parent, amendment_id)
     lineage = load_lineage(lineage_path, amendment_id=amendment_id)
@@ -56,7 +60,9 @@ def main() -> int:
         sha256=validation.get("proposal_sha256", "sha256:"),
         parent_sha256=parent_sha,
     )
-    validation_path = Path(args.output) if args.output else (manifest_path.parent / "amendments" / f"{amendment_id}.validation.json")
+    validation_path = (
+        Path(args.output) if args.output else (manifest_path.parent / "amendments" / f"{amendment_id}.validation.json")
+    )
     validation_rel = lineage_path_rel(manifest_path.parent, validation_path)
     validation["lineage_path"] = lineage_path.as_posix()
     validation["lineage_stages"] = list(lineage.get("stages", [])) if isinstance(lineage.get("stages"), list) else []

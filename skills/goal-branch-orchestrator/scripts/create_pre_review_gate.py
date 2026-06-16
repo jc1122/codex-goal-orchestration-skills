@@ -97,9 +97,7 @@ def validate_base_ref(base_ref: str) -> str:
     if ".." in candidate or candidate.endswith("/") or candidate.endswith(".lock"):
         raise SystemExit(f"manifest base_ref is not a plausible git ref: {base_ref!r}")
     if not _GIT_REF_RE.fullmatch(candidate):
-        raise SystemExit(
-            f"manifest base_ref contains characters that are not valid in a git ref: {base_ref!r}"
-        )
+        raise SystemExit(f"manifest base_ref contains characters that are not valid in a git ref: {base_ref!r}")
     return candidate
 
 
@@ -112,7 +110,9 @@ def run_test_command(command: str, *, cwd: Path) -> subprocess.CompletedProcess[
     try:
         argv = shlex.split(command)
     except ValueError as exc:
-        return subprocess.CompletedProcess(args=command, returncode=2, stdout=f"invalid test command {command!r}: {exc}")
+        return subprocess.CompletedProcess(
+            args=command, returncode=2, stdout=f"invalid test command {command!r}: {exc}"
+        )
     if not argv:
         return subprocess.CompletedProcess(args=command, returncode=2, stdout=f"empty test command: {command!r}")
     return run_command(argv, cwd=cwd)
@@ -342,7 +342,9 @@ def worker_pass_defects(bundle_dir: Path, branch: dict, branch_status: dict, bra
             defects.append(f"worker packet {packet_id} is missing from branch status before reviewer launch")
             continue
         if status.get("status") != "pass":
-            defects.append(f"worker packet {packet_id} must be pass before reviewer launch, got {status.get('status')!r}")
+            defects.append(
+                f"worker packet {packet_id} must be pass before reviewer launch, got {status.get('status')!r}"
+            )
         blockers = status.get("blockers")
         if isinstance(blockers, list) and blockers:
             defects.append(f"worker packet {packet_id} still has blockers before reviewer launch")
@@ -359,13 +361,20 @@ def worker_pass_defects(bundle_dir: Path, branch: dict, branch_status: dict, bra
         for field in ["active_ids", "blocked_ids", "deferred_ids"]:
             values = parallelism.get(field)
             if isinstance(values, list) and values:
-                defects.append(f"worker scheduler reports {field} before reviewer launch: " + ", ".join(str(item) for item in values))
+                defects.append(
+                    f"worker scheduler reports {field} before reviewer launch: "
+                    + ", ".join(str(item) for item in values)
+                )
         finished_ids = [item for item in parallelism.get("finished_ids", []) if isinstance(item, str)]
         missing_finished = [packet_id for packet_id in expected_ids if packet_id not in finished_ids]
         if missing_finished:
-            defects.append("worker scheduler is missing finish evidence before reviewer launch: " + ", ".join(missing_finished))
+            defects.append(
+                "worker scheduler is missing finish evidence before reviewer launch: " + ", ".join(missing_finished)
+            )
     if branch_status.get("status") in {"blocked", "failed"}:
-        defects.append(f"branch status is {branch_status.get('status')!r}; reviewer launch requires integrated worker evidence")
+        defects.append(
+            f"branch status is {branch_status.get('status')!r}; reviewer launch requires integrated worker evidence"
+        )
     return defects
 
 
@@ -447,7 +456,11 @@ def worktree_integration_check(worktree: Path, branch_status: dict) -> tuple[dic
     dirty_worker_paths = sorted(
         {
             path
-            for path in [*dirty_by_kind.get("unstaged", []), *dirty_by_kind.get("staged", []), *dirty_by_kind.get("untracked", [])]
+            for path in [
+                *dirty_by_kind.get("unstaged", []),
+                *dirty_by_kind.get("staged", []),
+                *dirty_by_kind.get("untracked", []),
+            ]
             if path in declared_changed
         }
     )
@@ -483,7 +496,11 @@ def untracked_whitespace_defects(worktree: Path) -> list[str]:
     defects: list[str] = []
     for rel_path in result.stdout.splitlines():
         rel_path = rel_path.strip()
-        if not rel_path or not is_repo_relative_path(rel_path, reject_porcelain=True) or is_runtime_cache_path(rel_path):
+        if (
+            not rel_path
+            or not is_repo_relative_path(rel_path, reject_porcelain=True)
+            or is_runtime_cache_path(rel_path)
+        ):
             continue
         target = (worktree / rel_path).resolve()
         try:
@@ -530,22 +547,41 @@ def worktree_snapshot(worktree: Path, base_ref: str, branch_id: str, branch_stat
     defects = []
     head_result = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
     merge_base_result = run_command(["git", "merge-base", base_ref, "HEAD"], cwd=worktree)
-    name_status_result = run_command(["git", "diff", "--name-status", "--find-renames", f"{base_ref}...HEAD"], cwd=worktree)
+    name_status_result = run_command(
+        ["git", "diff", "--name-status", "--find-renames", f"{base_ref}...HEAD"], cwd=worktree
+    )
     if head_result.returncode != 0:
         defects.append("could not capture worktree HEAD:\n" + head_result.stdout.strip())
     if merge_base_result.returncode != 0:
         defects.append("could not capture worktree merge-base:\n" + merge_base_result.stdout.strip())
     if name_status_result.returncode != 0:
         defects.append("could not capture worktree name-status diff:\n" + name_status_result.stdout.strip())
-    base_paths = git_lines(["git", "diff", "--name-only", f"{base_ref}...HEAD"], cwd=worktree, defects=defects, label=f"git diff --name-only {base_ref}...HEAD")
-    unstaged_paths = git_lines(["git", "diff", "--name-only", "HEAD"], cwd=worktree, defects=defects, label="git diff --name-only HEAD")
-    staged_paths = git_lines(["git", "diff", "--cached", "--name-only", "HEAD"], cwd=worktree, defects=defects, label="git diff --cached --name-only HEAD")
-    untracked_paths = git_lines(["git", "ls-files", "--others", "--exclude-standard"], cwd=worktree, defects=defects, label="git ls-files --others --exclude-standard")
-    status_paths = [
-        path
-        for path in branch_status.get("changed_files", [])
-        if isinstance(path, str) and path.strip()
-    ] if isinstance(branch_status.get("changed_files"), list) else []
+    base_paths = git_lines(
+        ["git", "diff", "--name-only", f"{base_ref}...HEAD"],
+        cwd=worktree,
+        defects=defects,
+        label=f"git diff --name-only {base_ref}...HEAD",
+    )
+    unstaged_paths = git_lines(
+        ["git", "diff", "--name-only", "HEAD"], cwd=worktree, defects=defects, label="git diff --name-only HEAD"
+    )
+    staged_paths = git_lines(
+        ["git", "diff", "--cached", "--name-only", "HEAD"],
+        cwd=worktree,
+        defects=defects,
+        label="git diff --cached --name-only HEAD",
+    )
+    untracked_paths = git_lines(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=worktree,
+        defects=defects,
+        label="git ls-files --others --exclude-standard",
+    )
+    status_paths = (
+        [path for path in branch_status.get("changed_files", []) if isinstance(path, str) and path.strip()]
+        if isinstance(branch_status.get("changed_files"), list)
+        else []
+    )
     base_paths = freshness_paths(base_paths)
     current_paths = freshness_paths([*status_paths, *base_paths, *unstaged_paths, *staged_paths, *untracked_paths])
     snapshot = {
@@ -553,8 +589,12 @@ def worktree_snapshot(worktree: Path, base_ref: str, branch_id: str, branch_stat
         "branch_id": branch_id,
         "worktree": worktree.as_posix(),
         "base_ref": base_ref,
-        "worktree_head": head_result.stdout.strip().splitlines()[0] if head_result.returncode == 0 and head_result.stdout.strip() else "",
-        "merge_base": merge_base_result.stdout.strip().splitlines()[0] if merge_base_result.returncode == 0 and merge_base_result.stdout.strip() else "",
+        "worktree_head": head_result.stdout.strip().splitlines()[0]
+        if head_result.returncode == 0 and head_result.stdout.strip()
+        else "",
+        "merge_base": merge_base_result.stdout.strip().splitlines()[0]
+        if merge_base_result.returncode == 0 and merge_base_result.stdout.strip()
+        else "",
         "diff_name_status_sha256": sha256_text(name_status_result.stdout if name_status_result.returncode == 0 else ""),
         "base_range_changed_files": base_paths,
         "current_changed_files": current_paths,
@@ -676,13 +716,9 @@ def reuse_policy(
     source_hashes = {
         key: value
         for key, value in (
-            review.get("semantic_input_hashes", {})
-            if isinstance(review.get("semantic_input_hashes"), dict)
-            else {}
+            review.get("semantic_input_hashes", {}) if isinstance(review.get("semantic_input_hashes"), dict) else {}
         ).items()
-        if isinstance(key, str)
-        and key in semantic_input_paths
-        and isinstance(value, str)
+        if isinstance(key, str) and key in semantic_input_paths and isinstance(value, str)
     }
     if source_hashes != semantic_hashes:
         missing_paths = [
@@ -707,7 +743,9 @@ def reuse_policy(
     accepted = not defects
     final_base_reuse = is_final_base_reuse_source(review_path)
     no_op_reason = (
-        "deterministic final-base no-op reuse path accepted" if final_base_reuse else "deterministic reviewer reuse/no-op path accepted"
+        "deterministic final-base no-op reuse path accepted"
+        if final_base_reuse
+        else "deterministic reviewer reuse/no-op path accepted"
     )
     acceptance_reason = (
         no_op_reason
@@ -782,11 +820,7 @@ def branch_semantic_probe_requirements(branch: dict) -> list[str]:
     elif isinstance(dod, list):
         text_parts.extend(item for item in dod if isinstance(item, str))
     combined = "\n".join(text_parts).lower()
-    requirements = [
-        keyword
-        for keyword in SEMANTIC_PROBE_KEYWORDS
-        if semantic_keyword_present(combined, keyword)
-    ]
+    requirements = [keyword for keyword in SEMANTIC_PROBE_KEYWORDS if semantic_keyword_present(combined, keyword)]
     return sorted(dict.fromkeys(requirements))
 
 
@@ -865,7 +899,12 @@ def _pytest_full_suite_segment(segment: str) -> bool:
 
     if tokens[index] == "pytest" or tokens[index] == "pytest.exe":
         return _segment_tail_has_no_positional_args(tokens[index + 1 :])
-    if PYTHON_COMMAND_RE.fullmatch(tokens[index]) and index + 2 < len(tokens) and tokens[index + 1] == "-m" and tokens[index + 2] in {"pytest", "pytest.exe"}:
+    if (
+        PYTHON_COMMAND_RE.fullmatch(tokens[index])
+        and index + 2 < len(tokens)
+        and tokens[index + 1] == "-m"
+        and tokens[index + 2] in {"pytest", "pytest.exe"}
+    ):
         return _segment_tail_has_no_positional_args(tokens[index + 3 :])
     return False
 
@@ -1008,9 +1047,7 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     ]
     status_result = run_command(status_command)
     bootstrap_allowed_status_defects = (
-        allowed_status_bootstrap_defects(status_result.stdout)
-        if status_result.returncode != 0
-        else []
+        allowed_status_bootstrap_defects(status_result.stdout) if status_result.returncode != 0 else []
     )
     status_validation_passed = status_result.returncode == 0 or bool(bootstrap_allowed_status_defects)
     manifest_command = [
@@ -1042,8 +1079,14 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     semantic_probes, semantic_probe_defects = semantic_probe_check(branch, tests)
     dod_items = [item for item in args.dod_item if item.strip()]
     dod_value = branch_status.get("dod_checklist")
-    declared_dod_items = [item for item in dod_value if isinstance(item, str) and item.strip()] if isinstance(dod_value, list) else []
-    dod_defects = [] if dod_items else ["DoD evidence is required; pass --dod-item. Branch status dod_checklist is informational only."]
+    declared_dod_items = (
+        [item for item in dod_value if isinstance(item, str) and item.strip()] if isinstance(dod_value, list) else []
+    )
+    dod_defects = (
+        []
+        if dod_items
+        else ["DoD evidence is required; pass --dod-item. Branch status dod_checklist is informational only."]
+    )
     evidence_rel_path = BRANCH_VALIDATOR.review_evidence_path(branch_id)
     write_json(
         bundle_dir / evidence_rel_path,
@@ -1090,11 +1133,18 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         },
         "tests": tests,
         "diff_check": {
-            "status": "pass" if diff_result.returncode == 0 and unstaged_diff_result.returncode == 0 and staged_diff_result.returncode == 0 and not untracked_defects else "failed",
+            "status": "pass"
+            if diff_result.returncode == 0
+            and unstaged_diff_result.returncode == 0
+            and staged_diff_result.returncode == 0
+            and not untracked_defects
+            else "failed",
             "commands": [diff_command, unstaged_diff_command, staged_diff_command, untracked_check_command],
         },
         "artifacts_fresh": {
-            "status": "pass" if not hash_defects and not freshness_defects and not diagnostic_hash_defects else "failed",
+            "status": "pass"
+            if not hash_defects and not freshness_defects and not diagnostic_hash_defects
+            else "failed",
             "artifacts": sorted(semantic_hashes),
             "current_artifacts": dict(sorted(semantic_hashes.items())),
             "diagnostic_artifacts": dict(sorted(diagnostic_hashes.items())),
@@ -1120,7 +1170,9 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         defects.append("manifest validation failed:\n" + manifest_result.stdout.strip())
     if bootstrap_allowed_status_defects:
         checks["status_validation"]["bootstrap_allowed_defects"] = bootstrap_allowed_status_defects
-        checks["status_validation"]["bootstrap_reason"] = "allowed stale or missing pre-review artifacts while creating replacement gate"
+        checks["status_validation"]["bootstrap_reason"] = (
+            "allowed stale or missing pre-review artifacts while creating replacement gate"
+        )
     elif status_result.returncode != 0:
         defects.append("branch status validation failed:\n" + status_result.stdout.strip())
     if diff_result.returncode != 0:

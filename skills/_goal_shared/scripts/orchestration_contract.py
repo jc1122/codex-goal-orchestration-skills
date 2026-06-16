@@ -228,10 +228,7 @@ WORKER_MODEL_POLICY = {
     "default_ladder": list(DEFAULT_WORKER_LADDER),
     "allowed_routes": list(DEFAULT_WORKER_LADDER),
     "default_route_class": DEFAULT_WORKER_ROUTE_CLASS,
-    "route_classes": {
-        route_class: list(ladder)
-        for route_class, ladder in WORKER_ROUTE_CLASS_LADDERS.items()
-    },
+    "route_classes": {route_class: list(ladder) for route_class, ladder in WORKER_ROUTE_CLASS_LADDERS.items()},
     "branch_may_select_worker_route": True,
     "selection_reason_required": True,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder.",
@@ -534,10 +531,7 @@ def normalize_route_ladder(
         seen.add(alias)
         positions.append(allowed.index(alias))
     if positions != sorted(positions):
-        raise ValueError(
-            f"{route_name} route aliases must preserve standard ladder order: "
-            + ", ".join(allowed)
-        )
+        raise ValueError(f"{route_name} route aliases must preserve standard ladder order: " + ", ".join(allowed))
     return flattened
 
 

@@ -221,7 +221,9 @@ def promote(args: argparse.Namespace) -> dict:
     ]
     unowned = [path for path in changed_files if branch_owned and not path_is_owned(path, branch_owned)]
     if unowned:
-        raise SystemExit("repair evidence cannot promote branch changes outside declared owned paths: " + ", ".join(unowned))
+        raise SystemExit(
+            "repair evidence cannot promote branch changes outside declared owned paths: " + ", ".join(unowned)
+        )
 
     item_owned = [owned for owned in item.get("owned_paths", []) if isinstance(owned, str) and owned.strip()]
     promoted_changed = [path for path in changed_files if not item_owned or path_is_owned(path, item_owned)]
@@ -250,10 +252,16 @@ def promote(args: argparse.Namespace) -> dict:
         shutil.copyfile(telemetry_path, archived_telemetry)
 
     source_ladder = previous_status.get("selected_ladder")
-    selected_ladder = [item for item in source_ladder if isinstance(item, str)] if isinstance(source_ladder, list) else []
+    selected_ladder = (
+        [item for item in source_ladder if isinstance(item, str)] if isinstance(source_ladder, list) else []
+    )
     if not selected_ladder:
         selected_ladder = ["deterministic-repair"]
-    route_class = previous_status.get("route_class") if isinstance(previous_status.get("route_class"), str) else item.get("route_class", "normal-code")
+    route_class = (
+        previous_status.get("route_class")
+        if isinstance(previous_status.get("route_class"), str)
+        else item.get("route_class", "normal-code")
+    )
     worker_status = {
         "packet_id": packet_id,
         "role": "worker",
@@ -283,7 +291,9 @@ def promote(args: argparse.Namespace) -> dict:
         "repair_promotion": {
             "kind": "worker-repair-promotion",
             "source_status_path": safe_bundle_rel_path(bundle_dir, archived_status),
-            "source_telemetry_path": safe_bundle_rel_path(bundle_dir, archived_telemetry) if archived_telemetry.exists() else None,
+            "source_telemetry_path": safe_bundle_rel_path(bundle_dir, archived_telemetry)
+            if archived_telemetry.exists()
+            else None,
             "integrated_commit": head,
             "validated_by": "promote_worker_repair_evidence.py",
         },

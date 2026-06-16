@@ -69,12 +69,15 @@ SAFE_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
 def git_ok(repo_root: Path, *args: str) -> bool:
-    return subprocess.run(
-        ["git", "-C", repo_root.as_posix(), *args],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    ).returncode == 0
+    return (
+        subprocess.run(
+            ["git", "-C", repo_root.as_posix(), *args],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        ).returncode
+        == 0
+    )
 
 
 def git_output(repo_root: Path, *args: str) -> str:
@@ -217,7 +220,9 @@ def validate_branch_dependencies(branches: list[dict]) -> dict[str, list[str]]:
             if dep == bid:
                 raise SystemExit(f"branch {bid} cannot depend on itself")
             if order[dep] >= index:
-                raise SystemExit(f"branch {bid} depends_on must reference only prior branch ids; invalid dependency: {dep}")
+                raise SystemExit(
+                    f"branch {bid} depends_on must reference only prior branch ids; invalid dependency: {dep}"
+                )
             seen.add(dep)
             normalized.append(dep)
         dependencies[bid] = normalized
@@ -254,8 +259,16 @@ def validate_branch_worker_contract(branch: dict) -> None:
         worker_type = item.get("worker_type", "worker")
         if worker_type not in WORK_ITEM_ROLES:
             raise SystemExit(f"branch {bid} work_items[{index}].worker_type must be 'worker' or 'research-worker'")
-        for key, min_items in [("owned_paths", 1), ("verification", 1), ("dod", 1), ("context_files", 0), ("depends_on", 0)]:
-            values = require_string_list(item.get(key, []), f"branch {bid} work_items[{index}].{key}", min_items=min_items)
+        for key, min_items in [
+            ("owned_paths", 1),
+            ("verification", 1),
+            ("dod", 1),
+            ("context_files", 0),
+            ("depends_on", 0),
+        ]:
+            values = require_string_list(
+                item.get(key, []), f"branch {bid} work_items[{index}].{key}", min_items=min_items
+            )
             if key in {"owned_paths", "context_files"}:
                 for value in values:
                     require_relative_path(value, f"branch {bid} work_items[{index}].{key}")
@@ -264,7 +277,9 @@ def validate_branch_worker_contract(branch: dict) -> None:
             if dep not in seen_work_item_ids:
                 raise SystemExit(f"branch {bid} work_items[{index}] depends on unknown work item: {dep}")
             if work_item_order[dep] >= index:
-                raise SystemExit(f"branch {bid} work_items[{index}] depends_on must reference only prior work item ids: {dep}")
+                raise SystemExit(
+                    f"branch {bid} work_items[{index}] depends_on must reference only prior work item ids: {dep}"
+                )
     max_workers = branch.get("max_active_worker_packets")
     if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} max_active_worker_packets must be an integer from 1 to 4")
@@ -276,17 +291,26 @@ def validate_branch_worker_contract(branch: dict) -> None:
     if worker_parallelism.get("scheduling_mode") != "rolling":
         raise SystemExit(f"branch {bid} worker_parallelism.scheduling_mode must be 'rolling'")
     if worker_parallelism.get("scheduler_path") != CONTRACT.worker_scheduler_path(str(bid)):
-        raise SystemExit(f"branch {bid} worker_parallelism.scheduler_path must be {CONTRACT.worker_scheduler_path(str(bid))!r}")
+        raise SystemExit(
+            f"branch {bid} worker_parallelism.scheduler_path must be {CONTRACT.worker_scheduler_path(str(bid))!r}"
+        )
     if worker_parallelism.get("max_active_worker_packets") != max_workers:
-        raise SystemExit(f"branch {bid} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets")
+        raise SystemExit(
+            f"branch {bid} worker_parallelism.max_active_worker_packets must match branch max_active_worker_packets"
+        )
     if worker_parallelism.get("max_worker_packets_per_branch") != MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} worker_parallelism.max_worker_packets_per_branch must be 4")
     if "serial_reason" in worker_parallelism:
         raise SystemExit(f"branch {bid} worker_parallelism.serial_reason is obsolete; use serial_reasons")
     serial_reasons = worker_parallelism.get("serial_reasons")
-    if not isinstance(serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in serial_reasons):
+    if not isinstance(serial_reasons, list) or any(
+        not isinstance(item, str) or not item.strip() for item in serial_reasons
+    ):
         raise SystemExit(f"branch {bid} worker_parallelism.serial_reasons must be an array of non-empty strings")
-    if not isinstance(worker_parallelism.get("parallelization_rationale"), str) or not worker_parallelism["parallelization_rationale"].strip():
+    if (
+        not isinstance(worker_parallelism.get("parallelization_rationale"), str)
+        or not worker_parallelism["parallelization_rationale"].strip()
+    ):
         raise SystemExit(f"branch {bid} worker_parallelism.parallelization_rationale must be non-empty")
     dependency_policy = worker_parallelism.get("dependency_policy", "")
     if not isinstance(dependency_policy, str) or "depends_on" not in dependency_policy:
@@ -309,7 +333,9 @@ def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> Non
         return
     policy = manifest.get("research_worker_policy")
     if not isinstance(policy, dict):
-        raise SystemExit("manifest research_worker_policy is required when any work item uses worker_type='research-worker'")
+        raise SystemExit(
+            "manifest research_worker_policy is required when any work item uses worker_type='research-worker'"
+        )
     if policy.get("enabled") is not True:
         raise SystemExit("manifest research_worker_policy.enabled must be true")
     if policy.get("worker_type") != RESEARCH_WORKER_TYPE:
@@ -319,9 +345,13 @@ def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> Non
             raise SystemExit(f"manifest research_worker_policy.{key} must be non-empty")
     rejected, missing = CONTRACT.research_policy_defects(policy)
     if rejected:
-        raise SystemExit(f"manifest research_worker_policy contains obsolete narrow-access phrase(s): {', '.join(rejected)}")
+        raise SystemExit(
+            f"manifest research_worker_policy contains obsolete narrow-access phrase(s): {', '.join(rejected)}"
+        )
     if missing:
-        raise SystemExit(f"manifest research_worker_policy is missing required boundary phrase(s): {', '.join(missing)}")
+        raise SystemExit(
+            f"manifest research_worker_policy is missing required boundary phrase(s): {', '.join(missing)}"
+        )
 
 
 def branch_status_path(manifest_path: Path, branch: dict) -> Path:
@@ -353,9 +383,13 @@ def validate_completed_branch_statuses(
         status_path = branch_status_path(manifest_path, branch_by_id[branch_id])
         status = artifact_status(status_path)
         if status is None:
-            raise SystemExit(f"--completed-branch {branch_id} requires a passing status artifact or scheduler pass evidence: {status_path}")
+            raise SystemExit(
+                f"--completed-branch {branch_id} requires a passing status artifact or scheduler pass evidence: {status_path}"
+            )
         if status != "pass":
-            raise SystemExit(f"--completed-branch {branch_id} points to non-pass status artifact {status_path}: {status}")
+            raise SystemExit(
+                f"--completed-branch {branch_id} points to non-pass status artifact {status_path}: {status}"
+            )
 
 
 def scheduler_state_from_ledger(
@@ -435,7 +469,8 @@ def scheduler_state_from_ledger(
     relaunchable = {
         branch_id
         for branch_id in non_pass
-        if blocked_reason_codes.get(branch_id) in {"stale_active", "native_agent_unreachable", "timeout", "launcher_failed"}
+        if blocked_reason_codes.get(branch_id)
+        in {"stale_active", "native_agent_unreachable", "timeout", "launcher_failed"}
     }
     return active, passed, non_pass, relaunchable
 
@@ -708,11 +743,24 @@ def main() -> int:
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--audit", required=True)
     parser.add_argument("--wave")
-    parser.add_argument("--branch", action="append", default=[], help="Render one branch id. Repeat for multiple eligible branches.")
-    parser.add_argument("--completed-branch", action="append", default=[], help="Branch id whose status has completed and been accepted.")
-    parser.add_argument("--active-branch", action="append", default=[], help="Branch id already active; used only with --list-ready.")
+    parser.add_argument(
+        "--branch", action="append", default=[], help="Render one branch id. Repeat for multiple eligible branches."
+    )
+    parser.add_argument(
+        "--completed-branch",
+        action="append",
+        default=[],
+        help="Branch id whose status has completed and been accepted.",
+    )
+    parser.add_argument(
+        "--active-branch", action="append", default=[], help="Branch id already active; used only with --list-ready."
+    )
     parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted branch ids, one per line.")
-    parser.add_argument("--limit", type=int, help="Maximum branch ids to print with --list-ready; values above remaining capacity are clamped.")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Maximum branch ids to print with --list-ready; values above remaining capacity are clamped.",
+    )
     parser.add_argument("--list-waves", action="store_true")
     parser.add_argument(
         "--delegation-mode",
@@ -737,8 +785,12 @@ def main() -> int:
             "set to none/off/omit to preserve legacy ambient-model behavior."
         ),
     )
-    parser.add_argument("--delegation-report", help="Write a JSON branch delegation plan with native/CLI selection provenance.")
-    parser.add_argument("--json", action="store_true", help="Print the branch delegation plan as JSON instead of shell/comments.")
+    parser.add_argument(
+        "--delegation-report", help="Write a JSON branch delegation plan with native/CLI selection provenance."
+    )
+    parser.add_argument(
+        "--json", action="store_true", help="Print the branch delegation plan as JSON instead of shell/comments."
+    )
     args = parser.parse_args()
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
@@ -808,19 +860,24 @@ def main() -> int:
     if not isinstance(dependency_policy, str) or not dependency_policy.strip():
         raise SystemExit("manifest parallelization.dependency_policy must be non-empty")
     wave_execution = parallelization.get("wave_execution", "")
-    if not isinstance(wave_execution, str) or "saturat" not in wave_execution.lower() or "depends_on" not in wave_execution:
-        raise SystemExit("manifest parallelization.wave_execution must describe rolling saturation and depends_on deferral")
+    if (
+        not isinstance(wave_execution, str)
+        or "saturat" not in wave_execution.lower()
+        or "depends_on" not in wave_execution
+    ):
+        raise SystemExit(
+            "manifest parallelization.wave_execution must describe rolling saturation and depends_on deferral"
+        )
     if "serial_reason" in parallelization:
         raise SystemExit("manifest parallelization.serial_reason is obsolete; use serial_reasons")
     serial_reasons = parallelization.get("serial_reasons", [])
-    if not isinstance(serial_reasons, list) or any(not isinstance(item, str) or not item.strip() for item in serial_reasons):
+    if not isinstance(serial_reasons, list) or any(
+        not isinstance(item, str) or not item.strip() for item in serial_reasons
+    ):
         raise SystemExit("manifest parallelization.serial_reasons must be an array of non-empty strings")
     parallelization_rationale = parallelization.get("parallelization_rationale", "")
-    has_parallelization_reason = (
-        bool(serial_reasons)
-    ) or (
-        isinstance(parallelization_rationale, str)
-        and bool(parallelization_rationale.strip())
+    has_parallelization_reason = (bool(serial_reasons)) or (
+        isinstance(parallelization_rationale, str) and bool(parallelization_rationale.strip())
     )
     if max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
         raise SystemExit("max_active_branch_agents below 4 requires serial_reasons or parallelization_rationale")
@@ -851,7 +908,9 @@ def main() -> int:
         raise SystemExit("branch ids must not appear in more than one wave")
     if waves and set(wave_branch_ids) != set(manifest_branch_ids):
         raise SystemExit("waves must cover exactly the manifest branch ids")
-    branch_dependencies = validate_branch_dependencies([branch for branch in manifest_branches if isinstance(branch, dict)])
+    branch_dependencies = validate_branch_dependencies(
+        [branch for branch in manifest_branches if isinstance(branch, dict)]
+    )
 
     manifest_dir = manifest_path.parent
     for branch in manifest_branches:
@@ -865,7 +924,9 @@ def main() -> int:
         require_relative_path(branch["review_path"], "review_path")
         require_relative_path(branch["pre_review_gate_path"], "pre_review_gate_path")
         if branch["pre_review_gate_path"] != CONTRACT.pre_review_gate_path(str(branch.get("id", ""))):
-            raise SystemExit(f"branch {branch.get('id')} pre_review_gate_path must be {CONTRACT.pre_review_gate_path(str(branch.get('id', '')))!r}")
+            raise SystemExit(
+                f"branch {branch.get('id')} pre_review_gate_path must be {CONTRACT.pre_review_gate_path(str(branch.get('id', '')))!r}"
+            )
         require_relative_path(branch["worktree_path"], "worktree_path")
         prompt_path = resolve(manifest_dir, branch["prompt"])
         if not prompt_path.exists():
@@ -878,7 +939,9 @@ def main() -> int:
             print(f"{wave.get('id')}: {', '.join(wave.get('branches', []))}")
         return 0
 
-    ordered_branch_ids = [branch["id"] for branch in manifest_branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)]
+    ordered_branch_ids = [
+        branch["id"] for branch in manifest_branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)
+    ]
     known_ids = set(ordered_branch_ids)
     completed = set()
     for value in args.completed_branch:
@@ -896,13 +959,24 @@ def main() -> int:
         max_active,
     )
     if completed & scheduler_non_pass:
-        raise SystemExit("--completed-branch includes branch ids whose scheduler status is non-pass: " + ", ".join(sorted(completed & scheduler_non_pass)))
+        raise SystemExit(
+            "--completed-branch includes branch ids whose scheduler status is non-pass: "
+            + ", ".join(sorted(completed & scheduler_non_pass))
+        )
     if completed & scheduler_active:
-        raise SystemExit("--completed-branch includes scheduler-active branch ids: " + ", ".join(sorted(completed & scheduler_active)))
+        raise SystemExit(
+            "--completed-branch includes scheduler-active branch ids: "
+            + ", ".join(sorted(completed & scheduler_active))
+        )
     if active & scheduler_passed:
-        raise SystemExit("--active-branch includes scheduler-passed branch ids: " + ", ".join(sorted(active & scheduler_passed)))
+        raise SystemExit(
+            "--active-branch includes scheduler-passed branch ids: " + ", ".join(sorted(active & scheduler_passed))
+        )
     if active & scheduler_non_pass:
-        raise SystemExit("--active-branch includes non-pass closed branch ids; record a scheduler relaunch first: " + ", ".join(sorted(active & scheduler_non_pass)))
+        raise SystemExit(
+            "--active-branch includes non-pass closed branch ids; record a scheduler relaunch first: "
+            + ", ".join(sorted(active & scheduler_non_pass))
+        )
     validate_completed_branch_statuses(
         manifest_path,
         [branch for branch in manifest_branches if isinstance(branch, dict)],
@@ -972,7 +1046,9 @@ def main() -> int:
                 if bid in active:
                     raise SystemExit(f"branch {bid} is already scheduler-active")
                 if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
-                    raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
+                    raise SystemExit(
+                        f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree"
+                    )
     if selected_ids is not None and len(active) + len(selected_ids) > max_active:
         raise SystemExit("selected branches plus active branches would exceed max_active_branch_agents")
 

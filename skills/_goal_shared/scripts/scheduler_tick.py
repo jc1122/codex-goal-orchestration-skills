@@ -119,7 +119,9 @@ def sha256_file(path: Path) -> str:
 
 
 def deterministic_timestamp(seq: int) -> str:
-    return (datetime(2000, 1, 1, tzinfo=UTC) + timedelta(seconds=seq)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    return (
+        (datetime(2000, 1, 1, tzinfo=UTC) + timedelta(seconds=seq)).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
 
 
 def manifest_epoch(manifest: dict) -> str:
@@ -158,7 +160,9 @@ def branch_dependencies(manifest: dict) -> dict[str, list[str]]:
     branches = manifest.get("branches")
     if not isinstance(branches, list) or not branches:
         raise SystemExit("manifest branches must be a non-empty array")
-    known = [str(branch.get("id")) for branch in branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)]
+    known = [
+        str(branch.get("id")) for branch in branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)
+    ]
     known_set = set(known)
     dependencies: dict[str, list[str]] = {}
     for branch in branches:
@@ -181,7 +185,9 @@ def worker_dependencies(branch: dict, branch_id: str) -> tuple[list[str], dict[s
     if not isinstance(work_items, list) or not work_items:
         raise SystemExit(f"branch {branch_id} work_items must be a non-empty array")
     if len(work_items) > CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH:
-        raise SystemExit(f"branch {branch_id} must not declare more than {CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH} work items")
+        raise SystemExit(
+            f"branch {branch_id} must not declare more than {CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH} work items"
+        )
     packet_ids: list[str] = []
     item_to_packet: dict[str, str] = {}
     dependencies: dict[str, list[str]] = {}
@@ -224,7 +230,12 @@ def scheduler_spec(manifest_path: Path, manifest: dict, scope: str, branch_id: s
         if any(not isinstance(item, str) or not item.strip() for item in item_ids):
             raise SystemExit("manifest branches must all have non-empty string ids")
         max_active = manifest.get("max_active_branch_agents", CONTRACT.MAX_ACTIVE_BRANCH_AGENTS)
-        if not isinstance(max_active, int) or isinstance(max_active, bool) or max_active < 1 or max_active > CONTRACT.MAX_ACTIVE_BRANCH_AGENTS:
+        if (
+            not isinstance(max_active, int)
+            or isinstance(max_active, bool)
+            or max_active < 1
+            or max_active > CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
+        ):
             raise SystemExit("manifest max_active_branch_agents must be an integer from 1 to 4")
         parallelization = manifest.get("parallelization")
         scheduler_path = CONTRACT.MAIN_SCHEDULER_PATH
@@ -246,7 +257,12 @@ def scheduler_spec(manifest_path: Path, manifest: dict, scope: str, branch_id: s
     branch = manifest_branch(manifest, branch_id)
     item_ids, dependencies = worker_dependencies(branch, branch_id)
     max_active = branch.get("max_active_worker_packets", CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH)
-    if not isinstance(max_active, int) or isinstance(max_active, bool) or max_active < 1 or max_active > CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH:
+    if (
+        not isinstance(max_active, int)
+        or isinstance(max_active, bool)
+        or max_active < 1
+        or max_active > CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+    ):
         raise SystemExit(f"branch {branch_id} max_active_worker_packets must be an integer from 1 to 4")
     return {
         "kind": "branch-worker-pool",
@@ -373,7 +389,9 @@ def replay(
             raise SystemExit(f"scheduler events[{index}].event is unsupported: {name!r}")
 
     def is_repair_relaunch(item_id: str) -> bool:
-        if not (allow_relaunch and item_id in launched and item_id in closed and finished_status.get(item_id) != "pass"):
+        if not (
+            allow_relaunch and item_id in launched and item_id in closed and finished_status.get(item_id) != "pass"
+        ):
             return False
         if relaunch_reason_codes is None:
             return True
@@ -394,11 +412,7 @@ def replay(
 
     eligible = eligible_ids()
     excused = blocked_excuses | deferred_excuses | under_capacity_excuses
-    unexcused = [
-        item_id
-        for item_id in eligible
-        if item_id not in excused or is_repair_relaunch(item_id)
-    ]
+    unexcused = [item_id for item_id in eligible if item_id not in excused or is_repair_relaunch(item_id)]
     launchable = [item_id for item_id in unexcused if item_id not in launched or is_repair_relaunch(item_id)]
     return {
         "active": [item_id for item_id in item_ids if item_id in active],
@@ -842,7 +856,12 @@ def close_from_artifacts(
             )
             progressed = True
             after_close = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
-            if worker_scope and terminal_status in TERMINAL_STATUSES and terminal_status != "pass" and item_id not in after_close["blocked"]:
+            if (
+                worker_scope
+                and terminal_status in TERMINAL_STATUSES
+                and terminal_status != "pass"
+                and item_id not in after_close["blocked"]
+            ):
                 appended.append(
                     append_event(
                         ledger,
@@ -917,7 +936,8 @@ def close_from_artifacts(
             state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
             closed = set(state["closed"])
             launchable = [
-                candidate for candidate in state["launchable"]
+                candidate
+                for candidate in state["launchable"]
                 if candidate in terminal_statuses and candidate not in closed
             ]
         if progressed:
@@ -953,16 +973,33 @@ def main() -> int:
     parser.add_argument("--scope", choices=["main", "worker"], required=True)
     parser.add_argument("--branch-id")
     parser.add_argument("--runtime-ref", required=True)
-    parser.add_argument("--timestamp", help="Defaults to deterministic synthetic ISO timestamps derived from event sequence numbers.")
-    parser.add_argument("--init", action="store_true", help="Create the manifest-derived scheduler ledger when missing.")
-    parser.add_argument("--record-ready", action="store_true", help="Append ready events for newly eligible scheduler ids.")
+    parser.add_argument(
+        "--timestamp", help="Defaults to deterministic synthetic ISO timestamps derived from event sequence numbers."
+    )
+    parser.add_argument(
+        "--init", action="store_true", help="Create the manifest-derived scheduler ledger when missing."
+    )
+    parser.add_argument(
+        "--record-ready", action="store_true", help="Append ready events for newly eligible scheduler ids."
+    )
     parser.add_argument("--launch", action="append", default=[], help="Append a launch event for an eligible id.")
     parser.add_argument("--finish", action="append", default=[], help="Append a finish event for an active id.")
     parser.add_argument("--status", choices=sorted(TERMINAL_STATUSES))
-    parser.add_argument("--close", action="append", default=[], help="Append close event(s); emits refill when capacity frees with eligible work.")
-    parser.add_argument("--defer", action="append", default=[], help="Append a structured defer event for an eligible id.")
+    parser.add_argument(
+        "--close",
+        action="append",
+        default=[],
+        help="Append close event(s); emits refill when capacity frees with eligible work.",
+    )
+    parser.add_argument(
+        "--defer", action="append", default=[], help="Append a structured defer event for an eligible id."
+    )
     parser.add_argument("--blocked", action="append", default=[], help="Append a structured blocked event for an id.")
-    parser.add_argument("--under-capacity", action="store_true", help="Record under-capacity evidence for current unexcused eligible ids.")
+    parser.add_argument(
+        "--under-capacity",
+        action="store_true",
+        help="Record under-capacity evidence for current unexcused eligible ids.",
+    )
     parser.add_argument(
         "--close-from-artifacts",
         action="store_true",
@@ -970,9 +1007,13 @@ def main() -> int:
     )
     parser.add_argument("--reason-code", choices=sorted(REASON_CODES))
     parser.add_argument("--reason")
-    parser.add_argument("--list-ready", action="store_true", help="Print launchable ids after applying requested events.")
+    parser.add_argument(
+        "--list-ready", action="store_true", help="Print launchable ids after applying requested events."
+    )
     parser.add_argument("--limit", type=int)
-    parser.add_argument("--validate-final", action="store_true", help="Run strict closed-ledger validation after writing.")
+    parser.add_argument(
+        "--validate-final", action="store_true", help="Run strict closed-ledger validation after writing."
+    )
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()
 

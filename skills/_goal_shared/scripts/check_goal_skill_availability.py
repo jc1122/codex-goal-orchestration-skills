@@ -164,11 +164,20 @@ def candidate_roots(cli_roots: list[str], allow_fallback_roots: bool) -> list[Pa
         return roots
     codex_home = os.environ.get("CODEX_HOME")
     if codex_home:
-        add_unique(roots, normalize_absolute_root(Path(codex_home) / "skills", "CODEX_HOME/skills", fail_on_relative=False))
-    add_unique(roots, normalize_absolute_root(Path.home() / ".codex" / "skills", "~/.codex/skills", fail_on_relative=False))
-    add_unique(roots, normalize_absolute_root(Path.home() / ".agents" / "skills", "~/.agents/skills", fail_on_relative=False))
+        add_unique(
+            roots, normalize_absolute_root(Path(codex_home) / "skills", "CODEX_HOME/skills", fail_on_relative=False)
+        )
+    add_unique(
+        roots, normalize_absolute_root(Path.home() / ".codex" / "skills", "~/.codex/skills", fail_on_relative=False)
+    )
+    add_unique(
+        roots, normalize_absolute_root(Path.home() / ".agents" / "skills", "~/.agents/skills", fail_on_relative=False)
+    )
     try:
-        add_unique(roots, normalize_absolute_root(Path(__file__).resolve().parents[2], "script skill root", fail_on_relative=False))
+        add_unique(
+            roots,
+            normalize_absolute_root(Path(__file__).resolve().parents[2], "script skill root", fail_on_relative=False),
+        )
     except IndexError:
         pass
     return roots
@@ -235,11 +244,7 @@ def main() -> int:
     skills = {skill: find_skill(roots, skill) for skill in required}
     codex_cli = shutil.which("codex") if args.require_codex_cli else None
     blockers = [skill for skill, result in skills.items() if result["status"] != "pass"]
-    selected_roots = {
-        result["selected"]["root"]
-        for result in skills.values()
-        if result.get("selected")
-    }
+    selected_roots = {result["selected"]["root"] for result in skills.values() if result.get("selected")}
     if len(selected_roots) > 1:
         blockers.append("mixed-skill-roots")
     if args.require_codex_cli and not codex_cli:

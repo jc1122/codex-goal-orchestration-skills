@@ -110,7 +110,9 @@ def parse_git_status(raw: str) -> dict[str, list[str]]:
     return {"tracked": tracked, "untracked": untracked}
 
 
-def root_worktree_state_from_manifest(manifest: dict[str, Any], status_result: subprocess.CompletedProcess[str]) -> dict[str, object]:
+def root_worktree_state_from_manifest(
+    manifest: dict[str, Any], status_result: subprocess.CompletedProcess[str]
+) -> dict[str, object]:
     repo_status = manifest.get("repo_status")
     if isinstance(repo_status, dict):
         state = repo_status.get("root_worktree_state")
@@ -285,7 +287,9 @@ def main() -> int:
 
     blocking = [item for item in defects if item["severity"] in {"critical", "major"}]
     audit_status = "pass" if not blocking else "failed"
-    missing_dod_items = [] if audit_status == "pass" else ["Resolve deterministic prompt-audit defects before branch scheduling."]
+    missing_dod_items = (
+        [] if audit_status == "pass" else ["Resolve deterministic prompt-audit defects before branch scheduling."]
+    )
     summary = (
         "Deterministic prompt audit passed script-provable bundle, prompt, path, telemetry, and git whitespace checks."
         if audit_status == "pass"

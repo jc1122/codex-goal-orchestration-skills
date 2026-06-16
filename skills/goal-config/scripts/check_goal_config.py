@@ -19,9 +19,7 @@ from pathlib import Path
 from typing import Any
 
 
-MODEL_RE = re.compile(
-    r"(?<![A-Za-z0-9_.~/+-])([~A-Za-z0-9_.+-]+(?:/[~A-Za-z0-9_.:+-]+)+)(?![A-Za-z0-9_.~/+-])"
-)
+MODEL_RE = re.compile(r"(?<![A-Za-z0-9_.~/+-])([~A-Za-z0-9_.+-]+(?:/[~A-Za-z0-9_.:+-]+)+)(?![A-Za-z0-9_.~/+-])")
 ROLE_ALIASES = {
     "lite": "lite_agent",
     "flash": "lite_agent",
@@ -130,7 +128,7 @@ def model_candidates(provider: str, model: str) -> set[str]:
     candidates = {model}
     prefix = f"{provider}/"
     if model.startswith(prefix):
-        candidates.add(model[len(prefix):])
+        candidates.add(model[len(prefix) :])
     else:
         candidates.add(f"{provider}/{model}")
     return {candidate for candidate in candidates if candidate}
@@ -191,7 +189,9 @@ def compact_text(value: Any) -> str | None:
 
 def short_message(message: str) -> str:
     compact = re.sub(r"\s+", " ", message).strip()
-    auth_match = re.search(r"(?i)(AuthenticateToken authentication failed|401[^.;\n]*|403[^.;\n]*|unauthorized[^.;\n]*)", compact)
+    auth_match = re.search(
+        r"(?i)(AuthenticateToken authentication failed|401[^.;\n]*|403[^.;\n]*|unauthorized[^.;\n]*)", compact
+    )
     if auth_match:
         compact = auth_match.group(0).strip()
     if len(compact) > MAX_ERROR_MESSAGE_CHARS:
@@ -280,7 +280,9 @@ def extract_opencode_errors(
                 seen.add(key)
 
     combined = f"{stdout}\n{stderr}"
-    auth_match = re.search(r"(?i)(401|403)?[^.\n]*(AuthenticateToken|authentication failed|unauthorized)[^.\n]*", combined)
+    auth_match = re.search(
+        r"(?i)(401|403)?[^.\n]*(AuthenticateToken|authentication failed|unauthorized)[^.\n]*", combined
+    )
     if auth_match:
         message = auth_match.group(0).strip()
         status = "401" if "401" in message else ("403" if "403" in message else "")
@@ -376,7 +378,9 @@ def reusable_smoke_route_report(paths: list[Path]) -> dict[str, Any]:
     }
 
 
-def cached_smoke_report(cache: dict[tuple[str, str, str], dict[str, Any]], model: dict[str, Any]) -> dict[str, Any] | None:
+def cached_smoke_report(
+    cache: dict[tuple[str, str, str], dict[str, Any]], model: dict[str, Any]
+) -> dict[str, Any] | None:
     key = route_key(model)
     if key is None or key not in cache:
         return None
@@ -409,7 +413,9 @@ def empty_tokens() -> dict[str, int | None]:
     return {"input": None, "output": None, "reasoning": None, "cache_read": None, "cache_write": None}
 
 
-def token_telemetry(tokens: dict[str, Any] | None, *, source: str, unavailable_reason: str | None = None) -> dict[str, Any]:
+def token_telemetry(
+    tokens: dict[str, Any] | None, *, source: str, unavailable_reason: str | None = None
+) -> dict[str, Any]:
     token_data = tokens if isinstance(tokens, dict) else {}
     present = {
         key: isinstance(token_data.get(key), int)
@@ -634,9 +640,7 @@ def normalize_telemetry_collect(config: dict[str, Any], contract: Any) -> list[s
             if item not in contract.TELEMETRY_COLLECT_ITEMS:
                 unsupported.append(item)
         if unsupported:
-            failures.append(
-                "telemetry.collect contains unsupported items: " + ", ".join(sorted(unsupported))
-            )
+            failures.append("telemetry.collect contains unsupported items: " + ", ".join(sorted(unsupported)))
 
     raw_text = telemetry.get("raw_text")
     if raw_text is not None and not isinstance(raw_text, bool):
@@ -666,9 +670,7 @@ def validate_for_preflight(config: dict[str, Any], mode: str, contract: Any) -> 
             failures.append(f"aggressiveness.{name} must be an integer")
             continue
         if value < 1 or value > cap:
-            failures.append(
-                f"aggressiveness.{name} must be an integer from 1 to {cap}; got {value!r}"
-            )
+            failures.append(f"aggressiveness.{name} must be an integer from 1 to {cap}; got {value!r}")
 
     validation_mode = get_config_validation_mode(config)
     if validation_mode is None:
@@ -677,9 +679,7 @@ def validate_for_preflight(config: dict[str, Any], mode: str, contract: Any) -> 
         failures.append(f"validation.mode must be one of {tuple(VALIDATION_MODES)}; got {validation_mode!r}")
 
     if validation_mode in {"smoke", "debug"} and mode not in {"smoke", "discover"}:
-        failures.append(
-            f"validation mode {validation_mode!r} requires smoke/discover check mode; got mode {mode!r}"
-        )
+        failures.append(f"validation mode {validation_mode!r} requires smoke/discover check mode; got mode {mode!r}")
 
     if validation_mode == "debug" and (config.get("telemetry", {}).get("mode") or "standard") != "debug":
         failures.append("validation mode debug requires telemetry.mode=debug")
@@ -715,7 +715,9 @@ def validate_for_preflight(config: dict[str, Any], mode: str, contract: Any) -> 
     return failures
 
 
-def remediate_for_preflight(config: dict[str, Any], *, mode: str, contract: Any) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def remediate_for_preflight(
+    config: dict[str, Any], *, mode: str, contract: Any
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     remediated = copy.deepcopy(config)
     actions: list[dict[str, Any]] = []
 
@@ -760,7 +762,9 @@ def remediate_for_preflight(config: dict[str, Any], *, mode: str, contract: Any)
         collect = telemetry.get("collect")
         unsupported = []
         if isinstance(collect, list):
-            unsupported = [item for item in collect if isinstance(item, str) and item not in contract.TELEMETRY_COLLECT_ITEMS]
+            unsupported = [
+                item for item in collect if isinstance(item, str) and item not in contract.TELEMETRY_COLLECT_ITEMS
+            ]
         if unsupported or not isinstance(collect, list):
             telemetry["collect"] = list(contract.TELEMETRY_COLLECT_ITEMS)
             actions.append(
@@ -891,13 +895,17 @@ def check_opencode_model(
         cache_status = "hit"
     else:
         version = command_result([resolved_binary, "--version"], timeout_seconds=20)
-        models = command_result([resolved_binary, *model_list_args], timeout_seconds=60) if provider else {
-            "returncode": 1,
-            "stdout": "",
-            "stderr": "",
-            "elapsed_ms": 0,
-            "timed_out": False,
-        }
+        models = (
+            command_result([resolved_binary, *model_list_args], timeout_seconds=60)
+            if provider
+            else {
+                "returncode": 1,
+                "stdout": "",
+                "stderr": "",
+                "elapsed_ms": 0,
+                "timed_out": False,
+            }
+        )
         model_list_cache[cache_key] = dict(models)
         cache_status = "miss"
 
@@ -1033,7 +1041,9 @@ def run_harness_smoke(
             include_raw_errors=include_raw_errors,
         )
         readback = read_opencode_session(session_id, opencode_db) if session_id else {"status": "missing_session_id"}
-        assistant_response = readback.get("assistant_response") if isinstance(readback.get("assistant_response"), str) else ""
+        assistant_response = (
+            readback.get("assistant_response") if isinstance(readback.get("assistant_response"), str) else ""
+        )
         response_excerpt, response_excerpt_source = focused_response_excerpt(assistant_response, expected)
         tokens = readback.get("tokens", empty_tokens())
         contains_expected = expected in assistant_response
@@ -1153,7 +1163,9 @@ def validate_config_shape(config: dict[str, Any]) -> list[str]:
     return failures
 
 
-def classify_routes(harness_reports: list[dict[str, Any]], *, smoke_requested: bool) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def classify_routes(
+    harness_reports: list[dict[str, Any]], *, smoke_requested: bool
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     accepted: list[dict[str, Any]] = []
     rejected: list[dict[str, Any]] = []
     for report in harness_reports:
@@ -1278,9 +1290,7 @@ def check_model_for_harness(
         )
     if kind in {"opencode-bridge", "codex", "generic-cli"}:
         return check_non_opencode_model(model, harness=harness)
-    return {"status": "failed", "reason": f"unsupported harness kind: {kind}"}, [
-        f"unsupported harness kind: {kind}"
-    ]
+    return {"status": "failed", "reason": f"unsupported harness kind: {kind}"}, [f"unsupported harness kind: {kind}"]
 
 
 def discover_profile_routes(
@@ -1374,7 +1384,7 @@ def discover_profile_routes(
                         **route,
                         "reason": f"early_accept_count reached ({early_accept_count})",
                     }
-                    for route in candidates[index + 1:]
+                    for route in candidates[index + 1 :]
                 ]
                 break
 
@@ -1613,10 +1623,7 @@ def report_path_for_state(mode: str) -> str:
 
 
 def route_summary(route: dict[str, Any]) -> str:
-    return " ".join(
-        str(route.get(key, "-"))
-        for key in ("role", "harness", "provider", "model")
-    )
+    return " ".join(str(route.get(key, "-")) for key in ("role", "harness", "provider", "model"))
 
 
 def print_report_summary(result: dict[str, Any], *, output: Path | None) -> None:
@@ -1668,7 +1675,8 @@ def write_report(result: dict[str, Any], *, output: Path | None, stdout_mode: st
 
 
 def write_state(
-    result: dict[str, Any], *,
+    result: dict[str, Any],
+    *,
     output: Path | None,
     state_output: Path | None,
     for_preflight: bool = False,
@@ -1723,8 +1731,7 @@ def write_state(
         next_command = None
         if output_path:
             next_command = (
-                "inspect "
-                f"{output_path} failures, repair the config or provider auth, then rerun check_goal_config.py"
+                f"inspect {output_path} failures, repair the config or provider auth, then rerun check_goal_config.py"
             )
     state = {
         "schema_version": 1,
@@ -1811,7 +1818,9 @@ def main() -> int:
         help="Include full raw provider error payloads in opencode error records.",
     )
     parser.add_argument("--state-output", type=Path, help="Write goal-config-state.json for UX/state handoff.")
-    parser.add_argument("--models-output", type=Path, help="Use this opencode models output fixture instead of live CLI.")
+    parser.add_argument(
+        "--models-output", type=Path, help="Use this opencode models output fixture instead of live CLI."
+    )
     parser.add_argument("--opencode-db", type=Path, default=opencode_db_path(), help="opencode session database path.")
     args = parser.parse_args()
     if args.json:
@@ -1849,7 +1858,9 @@ def main() -> int:
             "available": bool(remediation_actions),
             "actions": remediation_actions,
             "remediated_config_path": args.remediated_output.resolve().as_posix() if args.remediated_output else None,
-            "follow_up": "rerun --for-preflight with --smoke for debug/smoke validation modes" if any(action.get("action") == "rerun_check" for action in remediation_actions) else None,
+            "follow_up": "rerun --for-preflight with --smoke for debug/smoke validation modes"
+            if any(action.get("action") == "rerun_check" for action in remediation_actions)
+            else None,
         }
         if args.smoke and args.reuse_smoke_report:
             reused = reusable_smoke_route_report(args.reuse_smoke_report)
@@ -1961,16 +1972,14 @@ def main() -> int:
             "discover_providers": args.discover_provider,
             "discover_model_filter": args.discover_model_filter,
             "candidate_routes": candidates,
-            "checked_roles": [
-                str(report["role"])
-                for report in harness_reports
-                if isinstance(report.get("role"), str)
-            ],
+            "checked_roles": [str(report["role"]) for report in harness_reports if isinstance(report.get("role"), str)],
             "accepted_routes": accepted_routes,
             "rejected_routes": rejected_routes,
             "skipped_routes": classify_skipped_routes(harness_reports),
             "unvisited_routes": unvisited_routes,
-            "opencode_binary": resolve_binary(str(harnesses.get(args.discover_harness, {}).get("command", "opencode"))) if isinstance(harnesses, dict) else None,
+            "opencode_binary": resolve_binary(str(harnesses.get(args.discover_harness, {}).get("command", "opencode")))
+            if isinstance(harnesses, dict)
+            else None,
             "opencode_db": args.opencode_db.as_posix(),
             "harnesses": harness_reports,
             "failures": failures,
@@ -1987,11 +1996,7 @@ def main() -> int:
     model_list_cache: dict[str, dict[str, Any]] = {}
     missing_smoke_roles: set[str] = set()
     if args.smoke:
-        missing_smoke_roles = {
-            role
-            for role in roles
-            if not isinstance(smokes.get(role), dict)
-        }
+        missing_smoke_roles = {role for role in roles if not isinstance(smokes.get(role), dict)}
         if missing_smoke_roles:
             failures.append(f"missing smoke config for roles: {', '.join(sorted(missing_smoke_roles))}")
 

@@ -70,10 +70,7 @@ def build_lite_prompt(
     the two copies is exactly the class of bug this consolidation prevents).
     """
     base_dir = str(base_dir)
-    source_lines = "\n".join(
-        f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)"
-        for item in sources
-    )
+    source_lines = "\n".join(f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)" for item in sources)
     example_sources = json.dumps(sources, indent=2, sort_keys=True)
     command = bridge_advice_command(
         control_script=control_script,

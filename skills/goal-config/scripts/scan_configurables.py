@@ -211,7 +211,10 @@ def build_preference_questions() -> dict[str, Any]:
                         "id": "discover_available",
                         "label": "Discover all candidates",
                         "description": "Create or reuse a seed config, list configured candidate models from CLIs, smoke every candidate unless provider auth fails, then report accepted_routes, rejected_routes, skipped_routes, and unvisited_routes. Use this for discovery-path coverage checks.",
-                        "needs": ["optional provider/model filter", "roles each accepted route may serve when auto mapping is not enough"],
+                        "needs": [
+                            "optional provider/model filter",
+                            "roles each accepted route may serve when auto mapping is not enough",
+                        ],
                         "maps_to": [
                             "create_goal_config.py --preset current-default --output /abs/seed.goal.config.json --state-output /abs/goal-config-state.json",
                             "check_goal_config.py --config /abs/seed.goal.config.json --discover-profile mixed-fast --discover-all-candidates --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json",
@@ -228,13 +231,18 @@ def build_preference_questions() -> dict[str, Any]:
                         "label": "DeepSeek via opencode-worker-bridge",
                         "description": "Bind selected roles to the bridge deepseek routes ds-flash-max (deepseek-v4-flash) or ds-pro-max (deepseek-v4-pro), always launched with --variant max through opencode_worker.py.",
                         "needs": ["role-to-route choices among ds-flash-max / ds-pro-max"],
-                        "maps_to": ["--role-model ROLE:opencode-bridge:deepseek-v4-pro", "--role-model ROLE:opencode-bridge:deepseek-v4-flash"],
+                        "maps_to": [
+                            "--role-model ROLE:opencode-bridge:deepseek-v4-pro",
+                            "--role-model ROLE:opencode-bridge:deepseek-v4-flash",
+                        ],
                     },
                     {
                         "id": "native_codex",
                         "label": "Native Codex / gpt models",
                         "description": "Use the codex CLI for selected roles: codex-spark/codex-mini workers, codex --search read-only research, and gpt-5.5/gpt-5.4 prompt-audit. Ask for the exact route if the user has not supplied it.",
-                        "needs": ["role-to-model choices among codex-spark / codex-mini / gpt-5.5 / gpt-5.4 / codex-research"],
+                        "needs": [
+                            "role-to-model choices among codex-spark / codex-mini / gpt-5.5 / gpt-5.4 / codex-research"
+                        ],
                         "maps_to": ["--role-model ROLE:codex:MODEL"],
                     },
                     {
@@ -242,10 +250,25 @@ def build_preference_questions() -> dict[str, Any]:
                         "label": "Mixed/custom",
                         "description": "Use explicit role mappings across the opencode-bridge, codex, or generic-cli harnesses.",
                         "needs": ["role-model mapping for each changed role", "optional custom harness specs"],
-                        "maps_to": ["--role-model", "--harness-spec", "--lite-ladder", "--worker-ladder", "--reviewer-ladder", "--amender-ladder"],
+                        "maps_to": [
+                            "--role-model",
+                            "--harness-spec",
+                            "--lite-ladder",
+                            "--worker-ladder",
+                            "--reviewer-ladder",
+                            "--amender-ladder",
+                        ],
                     },
                 ],
-                "maps_to": ["--preset", "--role-model", "--harness-spec", "--lite-ladder", "--worker-ladder", "--reviewer-ladder", "--amender-ladder"],
+                "maps_to": [
+                    "--preset",
+                    "--role-model",
+                    "--harness-spec",
+                    "--lite-ladder",
+                    "--worker-ladder",
+                    "--reviewer-ladder",
+                    "--amender-ladder",
+                ],
             },
             {
                 "id": "effort_profile",
@@ -299,11 +322,30 @@ def build_preference_questions() -> dict[str, Any]:
                         "id": "custom",
                         "label": "Custom",
                         "description": "Ask for exact branch cap, worker cap, wave cap, Lite timeout, and demanding-agent timeout.",
-                        "needs": ["max active branches", "max active worker packets", "max waves", "Lite timeout seconds", "demanding timeout seconds"],
-                        "maps_to": ["--max-active-branch-agents", "--max-active-worker-packets", "--max-waves", "--lite-timeout-seconds", "--demanding-timeout-seconds"],
+                        "needs": [
+                            "max active branches",
+                            "max active worker packets",
+                            "max waves",
+                            "Lite timeout seconds",
+                            "demanding timeout seconds",
+                        ],
+                        "maps_to": [
+                            "--max-active-branch-agents",
+                            "--max-active-worker-packets",
+                            "--max-waves",
+                            "--lite-timeout-seconds",
+                            "--demanding-timeout-seconds",
+                        ],
                     },
                 ],
-                "maps_to": ["--effort-profile", "--max-active-branch-agents", "--max-active-worker-packets", "--max-waves", "--lite-timeout-seconds", "--demanding-timeout-seconds"],
+                "maps_to": [
+                    "--effort-profile",
+                    "--max-active-branch-agents",
+                    "--max-active-worker-packets",
+                    "--max-waves",
+                    "--lite-timeout-seconds",
+                    "--demanding-timeout-seconds",
+                ],
             },
             {
                 "id": "validation_mode",
@@ -350,7 +392,11 @@ def build_preference_questions() -> dict[str, Any]:
                         "maps_to": ["check_goal_config.py --harness ROLE", "optional brief telemetry_mode=debug"],
                     },
                 ],
-                "maps_to": ["check_goal_config.py --require-models", "check_goal_config.py --smoke", "brief telemetry_mode=debug"],
+                "maps_to": [
+                    "check_goal_config.py --require-models",
+                    "check_goal_config.py --smoke",
+                    "brief telemetry_mode=debug",
+                ],
             },
         ],
     }

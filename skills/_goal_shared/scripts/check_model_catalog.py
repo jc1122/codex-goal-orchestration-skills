@@ -119,11 +119,15 @@ def load_manifest_config(manifest_path: Path) -> tuple[dict[str, Any] | None, di
     if config_path is not None and config_path.exists():
         config = read_json(config_path)
     elif manifest.get("goal_config_path") is not None:
-        warnings.append(f"manifest goal_config_path does not resolve to an existing bundle file: {manifest.get('goal_config_path')}")
+        warnings.append(
+            f"manifest goal_config_path does not resolve to an existing bundle file: {manifest.get('goal_config_path')}"
+        )
     if check_path is not None and check_path.exists():
         check = read_json(check_path)
     elif manifest.get("goal_config_check_path") is not None:
-        warnings.append(f"manifest goal_config_check_path does not resolve to an existing bundle file: {manifest.get('goal_config_check_path')}")
+        warnings.append(
+            f"manifest goal_config_check_path does not resolve to an existing bundle file: {manifest.get('goal_config_check_path')}"
+        )
     return config, check, warnings
 
 
@@ -158,11 +162,7 @@ def harness_report_by_role(check: dict[str, Any] | None) -> dict[str, dict[str, 
     reports = check.get("harnesses")
     if not isinstance(reports, list):
         return {}
-    return {
-        str(item["role"]): item
-        for item in reports
-        if isinstance(item, dict) and isinstance(item.get("role"), str)
-    }
+    return {str(item["role"]): item for item in reports if isinstance(item, dict) and isinstance(item.get("role"), str)}
 
 
 def configured_route_rows(
@@ -308,7 +308,9 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
             status = "failed"
         elif missing:
             status = "warning"
-            warnings.append("bundled catalog may be stale; route model absence is advisory unless live catalog also misses it")
+            warnings.append(
+                "bundled catalog may be stale; route model absence is advisory unless live catalog also misses it"
+            )
 
         report = {
             "schema_version": 1,
@@ -325,7 +327,9 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
         report["warnings"].extend(config_warnings)
         report["manifest_path"] = manifest.as_posix()
         report["goal_config_path"] = (manifest.parent / "goal.config.json").as_posix() if config is not None else None
-        report["goal_config_check_path"] = (manifest.parent / "goal-config.check.json").as_posix() if check is not None else None
+        report["goal_config_check_path"] = (
+            (manifest.parent / "goal-config.check.json").as_posix() if check is not None else None
+        )
         if config is None:
             report["checked_aliases"] = [row["alias"] for row in route_rows]
             if config_warnings:
@@ -359,9 +363,17 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--json", action="store_true", help="Print a machine-readable model catalog report.")
-    parser.add_argument("--check", action="store_true", help="Print a concise check result and fail on live catalog mismatches.")
-    parser.add_argument("--source", choices=("auto", "live", "bundled"), default="auto", help="Catalog source to inspect.")
-    parser.add_argument("--require-codex", action="store_true", help="Fail instead of skipping when the Codex CLI/catalog is unavailable.")
+    parser.add_argument(
+        "--check", action="store_true", help="Print a concise check result and fail on live catalog mismatches."
+    )
+    parser.add_argument(
+        "--source", choices=("auto", "live", "bundled"), default="auto", help="Catalog source to inspect."
+    )
+    parser.add_argument(
+        "--require-codex",
+        action="store_true",
+        help="Fail instead of skipping when the Codex CLI/catalog is unavailable.",
+    )
     parser.add_argument(
         "--manifest",
         help="Accepted for runtime command compatibility; model catalog checks are account/CLI scoped and ignore this path.",

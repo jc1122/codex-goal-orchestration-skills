@@ -60,7 +60,9 @@ def _load_path_rules():
 
 
 def _load_contract():
-    return _load_shared_module("orchestration_contract.py", "goal_shared_orchestration_contract", "shared orchestration contract")
+    return _load_shared_module(
+        "orchestration_contract.py", "goal_shared_orchestration_contract", "shared orchestration contract"
+    )
 
 
 def _load_lite_prompt():
@@ -289,14 +291,22 @@ def validate_bridge_envelope(defects: list[str], inputs: dict, *, lite_status: o
             defect(defects, "input-files.json.bridge_control_script", "may be unavailable only for blocked Lite advice")
         return
     if not isinstance(control_script, str) or not control_script.strip():
-        defect(defects, "input-files.json.bridge_control_script", "must be a non-empty absolute path or unavailable for blocked advice")
+        defect(
+            defects,
+            "input-files.json.bridge_control_script",
+            "must be a non-empty absolute path or unavailable for blocked advice",
+        )
         return
     control_path = Path(control_script)
     if "\\" in control_script or not control_path.is_absolute() or ".." in control_path.parts:
         defect(defects, "input-files.json.bridge_control_script", "must be an absolute path without traversal")
         return
     if control_path.name != "opencode_worker.py":
-        defect(defects, "input-files.json.bridge_control_script", "must point at the bridge control script opencode_worker.py")
+        defect(
+            defects,
+            "input-files.json.bridge_control_script",
+            "must point at the bridge control script opencode_worker.py",
+        )
     if not isinstance(control_version, str) or not control_version.strip() or control_version == "unavailable":
         defect(defects, "input-files.json.bridge_control_version", "must be the captured bridge control-script version")
     if blocked:
@@ -388,7 +398,11 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
     )
     regenerated_hash = sha256_text(regenerated)
     if regenerated_hash != expected:
-        defect(defects, "input-files.json.prompt_sha256", f"must match regenerated prompt from input-files.json/task.md: got {regenerated_hash}")
+        defect(
+            defects,
+            "input-files.json.prompt_sha256",
+            f"must match regenerated prompt from input-files.json/task.md: got {regenerated_hash}",
+        )
     actual_text = prompt_path.read_text(encoding="utf-8")
     actual = sha256_text(actual_text)
     if actual != expected:
@@ -430,11 +444,11 @@ def validate_source_files(defects: list[str], value: object, path: str, expected
     if expected is not None:
         expected_min = [
             {
-                    "path": item.get("path"),
-                    "sha256": item.get("sha256"),
-                    "size_bytes": item.get("size_bytes"),
-                    "reason": item.get("reason"),
-                }
+                "path": item.get("path"),
+                "sha256": item.get("sha256"),
+                "size_bytes": item.get("size_bytes"),
+                "reason": item.get("reason"),
+            }
             for item in expected
         ]
         if actual != expected_min:
@@ -561,8 +575,7 @@ def validate(
         if commands and expected_command not in commands:
             defect(defects, "$.commands_run", f"must record exact Lite command {expected_command!r}")
     elif commands and not any(
-        LITE_MODEL in command and f"--permission-profile {LITE_PERMISSION_PROFILE}" in command
-        for command in commands
+        LITE_MODEL in command and f"--permission-profile {LITE_PERMISSION_PROFILE}" in command for command in commands
     ):
         defect(defects, "$.commands_run", "must record the fixed Lite deepseek model and read-only permission profile")
     return defects

@@ -51,11 +51,7 @@ def resolve_absolute_path(value: str, field: str, *, must_exist: bool) -> Path:
 
 def is_absolute_path(value: str) -> bool:
     path = Path(value)
-    return not (
-        "\\" in value
-        or not path.is_absolute()
-        or ".." in path.parts
-    )
+    return not ("\\" in value or not path.is_absolute() or ".." in path.parts)
 
 
 def resolve(base: Path, value: str) -> Path:

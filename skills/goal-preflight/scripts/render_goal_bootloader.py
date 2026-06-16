@@ -121,7 +121,9 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
         routes["unverified_config_aliases"] = {
             "worker": worker_policy.get("default_ladder", []),
         }
-        routes["worker_recommendation_reason"] = "route availability was not verified; prompts defer concrete worker alias selection until a fresh model catalog or accepted-route smoke check"
+        routes["worker_recommendation_reason"] = (
+            "route availability was not verified; prompts defer concrete worker alias selection until a fresh model catalog or accepted-route smoke check"
+        )
     else:
         routes["worker"] = worker_policy.get("default_ladder", [])
     amender_policy = manifest.get("amender_model_policy", {})
@@ -132,7 +134,9 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
     routes["reviewer"] = review_policy.get("routes", {})
     parallelization = manifest.get("parallelization", {})
     routes["dependency_parallel_policy"] = {
-        "max_active_branch_agents": parallelization.get("max_active_branch_agents", manifest.get("max_active_branch_agents")),
+        "max_active_branch_agents": parallelization.get(
+            "max_active_branch_agents", manifest.get("max_active_branch_agents")
+        ),
         "max_waves": parallelization.get("max_waves", 0),
         "max_branches_per_wave": parallelization.get("max_branches_per_wave", 0),
     }
@@ -147,7 +151,11 @@ def _caps_summary(manifest: dict) -> dict[str, object]:
         if isinstance(branch, dict) and isinstance(branch.get("id"), str)
     }
     numeric_caps = [value for value in branch_caps.values() if isinstance(value, int) and not isinstance(value, bool)]
-    uniform_worker_cap = numeric_caps[0] if numeric_caps and len(set(numeric_caps)) == 1 and len(numeric_caps) == len(branch_caps) else None
+    uniform_worker_cap = (
+        numeric_caps[0]
+        if numeric_caps and len(set(numeric_caps)) == 1 and len(numeric_caps) == len(branch_caps)
+        else None
+    )
     return {
         "max_active_branch_agents": manifest.get("max_active_branch_agents"),
         "max_active_worker_packets_default": uniform_worker_cap,
@@ -274,7 +282,12 @@ def _verified_routes_summary(manifest: dict) -> dict[str, object]:
         summary["telemetry_capability_status"] = "unknown"
     else:
         summary["telemetry_capability_status"] = "not_verified"
-    if isinstance(available, int) and isinstance(unavailable, int) and not isinstance(available, bool) and not isinstance(unavailable, bool):
+    if (
+        isinstance(available, int)
+        and isinstance(unavailable, int)
+        and not isinstance(available, bool)
+        and not isinstance(unavailable, bool)
+    ):
         total = available + unavailable
         summary["token_telemetry_coverage_ratio"] = round(available / total, 6) if total > 0 else None
     if route_verified:
@@ -336,9 +349,14 @@ def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
             entry["max_prompt_chars"] = budget
             entry["prompt_char_margin"] = budget - int(entry["chars"])
     max_single_prompt_chars = max((int(item["chars"]) for item in entries), default=0)
-    per_file_min_margin = None if budget is None else min((budget - int(item["chars"]) for item in entries), default=budget)
+    per_file_min_margin = (
+        None if budget is None else min((budget - int(item["chars"]) for item in entries), default=budget)
+    )
     branch_prompt_entries = [item for item in entries if str(item.get("path", "")).startswith("branches/")]
-    runtime_rules_present = isinstance(manifest.get("runtime_rules_path"), str) and (bundle_dir / str(manifest["runtime_rules_path"])).exists()
+    runtime_rules_present = (
+        isinstance(manifest.get("runtime_rules_path"), str)
+        and (bundle_dir / str(manifest["runtime_rules_path"])).exists()
+    )
     repeated_sections = {
         "branch_prompt_count": len(branch_prompt_entries),
         "shared_runtime_rules_extracted": runtime_rules_present,
@@ -386,7 +404,9 @@ def _artifact_entry(bundle_dir: Path, relative_path: str) -> dict[str, object]:
 
 
 def _artifact_size_report(bundle_dir: Path, manifest: dict, prompt_report: dict[str, object]) -> dict[str, object]:
-    prompt_paths = [str(item.get("path")) for item in prompt_report.get("files", []) if isinstance(item, dict) and item.get("path")]
+    prompt_paths = [
+        str(item.get("path")) for item in prompt_report.get("files", []) if isinstance(item, dict) and item.get("path")
+    ]
     machine_paths = [
         "job.manifest.json",
         "goal-config-selection.json",
@@ -420,7 +440,9 @@ def _artifact_size_report(bundle_dir: Path, manifest: dict, prompt_report: dict[
         "optional_machine_artifacts": {
             "counted_when_present": optional_machine_paths,
             "present": present_optional_machine_paths,
-            "absent_not_counted": [path for path in optional_machine_paths if path not in present_optional_machine_paths],
+            "absent_not_counted": [
+                path for path in optional_machine_paths if path not in present_optional_machine_paths
+            ],
         },
         "note": "prompt_size_report covers prompt files only; artifact_size_report includes selected machine artifacts and the manifest runtime contract",
     }
@@ -458,10 +480,17 @@ def _launch_blockers(
     blockers: list[str] = []
     if _config_status_blocks_launch(goal_config_status):
         blockers.append(goal_config_status)
-    token_telemetry = verified_routes.get("token_telemetry") if isinstance(verified_routes.get("token_telemetry"), dict) else {}
+    token_telemetry = (
+        verified_routes.get("token_telemetry") if isinstance(verified_routes.get("token_telemetry"), dict) else {}
+    )
     unavailable = token_telemetry.get("unavailable_routes")
     waiver = manifest.get("route_policy_degraded_telemetry_waiver")
-    waiver_accepted = isinstance(waiver, dict) and waiver.get("accepted") is True and isinstance(waiver.get("reason"), str) and waiver.get("reason", "").strip()
+    waiver_accepted = (
+        isinstance(waiver, dict)
+        and waiver.get("accepted") is True
+        and isinstance(waiver.get("reason"), str)
+        and waiver.get("reason", "").strip()
+    )
     if (
         verified_routes.get("route_model_availability_verified") is True
         and isinstance(unavailable, int)
@@ -492,7 +521,9 @@ def _readiness_warnings(
 ) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
     for warning in manifest.get("preflight_warnings", []):
-        if isinstance(warning, dict) and _manifest_warning_still_applies(warning, bundle_dir=bundle_dir, repo_root=repo_root):
+        if isinstance(warning, dict) and _manifest_warning_still_applies(
+            warning, bundle_dir=bundle_dir, repo_root=repo_root
+        ):
             warnings.append(warning)
     if verified_routes.get("route_model_availability_verified") is not True:
         warnings.append(
@@ -502,7 +533,9 @@ def _readiness_warnings(
                 "message": f"{goal_config_status}; worker route alias recommendations are deferred until accepted routes are verified.",
             }
         )
-    token_telemetry = verified_routes.get("token_telemetry") if isinstance(verified_routes.get("token_telemetry"), dict) else {}
+    token_telemetry = (
+        verified_routes.get("token_telemetry") if isinstance(verified_routes.get("token_telemetry"), dict) else {}
+    )
     unavailable = token_telemetry.get("unavailable_routes")
     if (
         verified_routes.get("route_model_availability_verified") is True
@@ -613,20 +646,22 @@ def _readiness_next_commands(
         return commands
     if launch_blockers:
         blockers = ", ".join(sorted(set(launch_blockers)))
-        commands.append(
-            f"Launch blockers remain: {blockers}. Do not launch /goal until launch blockers are cleared."
-        )
+        commands.append(f"Launch blockers remain: {blockers}. Do not launch /goal until launch blockers are cleared.")
         commands.append(
             f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir} --repo-root {repo_root or "<repo-root>"} --readiness --json'
         )
         return commands
-    commands.append(f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir}')
+    commands.append(
+        f'python3 "$GOAL_SKILLS_ROOT"/goal-preflight/scripts/render_goal_bootloader.py --bundle-dir {bundle_dir}'
+    )
     if lint_bundle_status == "pass" and repair_gate_status == "pass" and runtime_gate.get("status") == "pass":
         commands.append("/goal")
     return commands
 
 
-def _cleanup_plan(manifest: dict, bundle_dir: Path, repo_root: Path | None, warnings: list[dict[str, object]]) -> dict[str, object]:
+def _cleanup_plan(
+    manifest: dict, bundle_dir: Path, repo_root: Path | None, warnings: list[dict[str, object]]
+) -> dict[str, object]:
     warning_paths = [
         str(warning.get("path"))
         for warning in warnings
@@ -756,7 +791,10 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         f"runtime_gate={json.dumps(runtime_gate, sort_keys=True)}",
         f"repair_gate={json.dumps(repair_gate, sort_keys=True)}",
         "branch_dag:",
-        *[f"  {branch['id']}: wave={branch['wave']} dependency_level={branch['dependency_level']} depends_on={branch['depends_on']} worker_cap={branch['worker_cap']}" for branch in branch_dag],
+        *[
+            f"  {branch['id']}: wave={branch['wave']} dependency_level={branch['dependency_level']} depends_on={branch['depends_on']} worker_cap={branch['worker_cap']}"
+            for branch in branch_dag
+        ],
         f"lint_status={json.dumps({'brief_lint': lint_brief, 'bundle_lint': lint_bundle}, sort_keys=True)}",
         f"git_status={resolved_repo_root or '<unknown repo>'}",
         *[f"  {line}" for line in _git_status(resolved_repo_root)],
@@ -852,7 +890,9 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
 
 def _compact_readiness(readiness: dict) -> dict:
     prompt_size = readiness.get("prompt_size_report") if isinstance(readiness.get("prompt_size_report"), dict) else {}
-    artifact_size = readiness.get("artifact_size_report") if isinstance(readiness.get("artifact_size_report"), dict) else {}
+    artifact_size = (
+        readiness.get("artifact_size_report") if isinstance(readiness.get("artifact_size_report"), dict) else {}
+    )
     return {
         "status": readiness.get("status"),
         "launch_allowed": readiness.get("launch_allowed"),
@@ -906,7 +946,9 @@ def _readiness_result_kind(readiness: dict) -> tuple[str, str, str | None]:
     if bundle_lint.get("status") != "pass" or repair_gate.get("status") != "pass":
         return "blocked", "blocked_artifact_gate", "artifact lint or repair gate is not pass"
     runtime_gate = readiness.get("runtime_gate") if isinstance(readiness.get("runtime_gate"), dict) else {}
-    blocked_reason = runtime_gate.get("reason") if isinstance(runtime_gate.get("reason"), str) else "readiness status is not pass"
+    blocked_reason = (
+        runtime_gate.get("reason") if isinstance(runtime_gate.get("reason"), str) else "readiness status is not pass"
+    )
     return "blocked", "blocked_readiness_usable_bundle", blocked_reason
 
 
@@ -941,10 +983,7 @@ def _repair_gate_is_bundle_lint_only(repair_gate: dict[str, object]) -> bool:
     actions = repair_gate.get("actions", ())
     if not isinstance(actions, list) or not actions:
         return False
-    return all(
-        isinstance(item, dict) and item.get("kind") == "bundle_lint_repair"
-        for item in actions
-    )
+    return all(isinstance(item, dict) and item.get("kind") == "bundle_lint_repair" for item in actions)
 
 
 def _bootloader_launch_handoff_is_stale(
@@ -981,7 +1020,9 @@ def _bootloader_launch_blockers(
     return [item for item in launch_blockers if isinstance(item, str) and item not in deferred]
 
 
-def _compute_bootloader_launch_readiness(bundle_dir: Path, repo_root: Path | None, bootloader_text: str) -> tuple[str, list[str]]:
+def _compute_bootloader_launch_readiness(
+    bundle_dir: Path, repo_root: Path | None, bootloader_text: str
+) -> tuple[str, list[str]]:
     manifest = _load_manifest(bundle_dir)
     goal_config_status = _config_compatibility(manifest)
     lint_brief = _lint_status(bundle_dir, "brief")
@@ -1118,7 +1159,9 @@ def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:
         bootloader_text = _read_bootloader(bundle_dir)
         readiness_status, launch_blockers = _compute_bootloader_launch_readiness(bundle_dir, repo_root, bootloader_text)
         if readiness_status != "pass":
-            blocker_reason = "; ".join(sorted(set(launch_blockers))) if launch_blockers else "bundle readiness is blocked"
+            blocker_reason = (
+                "; ".join(sorted(set(launch_blockers))) if launch_blockers else "bundle readiness is blocked"
+            )
             return f"""# BLOCKED READINESS: do not launch /goal yet
 
 Bundle is usable for inspection and lint repair, but launch is blocked.
@@ -1190,8 +1233,12 @@ def main() -> int:
     parser.add_argument("--readiness", action="store_true", help="Show a compact readiness summary for the bundle.")
     parser.add_argument("--json", action="store_true", help="With --readiness, print JSON readiness output.")
     parser.add_argument("--output", type=Path, help="Write the printed bootloader/readiness output to this path.")
-    parser.add_argument("--stdout", action="store_true", help="With --output, also print the full rendered payload to stdout.")
-    parser.add_argument("--write", action="store_true", help="With --repo-root, rewrite goal-bootloader.md before printing.")
+    parser.add_argument(
+        "--stdout", action="store_true", help="With --output, also print the full rendered payload to stdout."
+    )
+    parser.add_argument(
+        "--write", action="store_true", help="With --repo-root, rewrite goal-bootloader.md before printing."
+    )
     args = parser.parse_args()
 
     if args.json and not args.readiness:
@@ -1205,10 +1252,14 @@ def main() -> int:
             repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
         if args.json:
             if args.output is not None and args.output.resolve() == (bundle_dir / "readiness.json").resolve():
-                text = render_and_refresh_canonical_readiness_json(bundle_dir, args.output.resolve(), repo_root=repo_root)
+                text = render_and_refresh_canonical_readiness_json(
+                    bundle_dir, args.output.resolve(), repo_root=repo_root
+                )
                 print(text, end="" if text.endswith("\n") else "\n")
                 return 0
-            emit_output(render_readiness_json(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout, json_mode=True)
+            emit_output(
+                render_readiness_json(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout, json_mode=True
+            )
             return 0
         emit_output(render_readiness(bundle_dir, repo_root=repo_root), args.output, stdout=args.stdout)
         return 0

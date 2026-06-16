@@ -366,7 +366,10 @@ def failure_summary(packet_dir: Path, config: dict[str, Any]) -> str:
             parts.append(f"{log_path.name}: {tail[:500]}")
         else:
             parts.append(f"{log_path.name}: empty")
-    return "Prompt audit attempts failed without producing a valid prompt-audit.json. failure_fingerprints=" + "; ".join(parts)
+    return (
+        "Prompt audit attempts failed without producing a valid prompt-audit.json. failure_fingerprints="
+        + "; ".join(parts)
+    )
 
 
 def write_terminal_audit(packet_dir: Path, config: dict[str, Any], message: str) -> None:
@@ -392,7 +395,8 @@ def write_terminal_audit(packet_dir: Path, config: dict[str, Any], message: str)
         ],
         "actionability_verdict": "blocked",
         "commands_run": commands,
-        "summary": message + " Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
+        "summary": message
+        + " Inspect audit event logs in this packet directory for the underlying CLI or schema error.",
     }
     write_json(packet_path(packet_dir, config, "output_name"), data)
 
@@ -459,7 +463,9 @@ def run_packet(packet_dir: Path) -> int:
         return 1
     for path in [prompt_path, schema_path]:
         if not path.exists():
-            write_terminal_audit(packet_dir, config, f"{terminal_message(config, 'missing_runtime_file')} Missing: {path.name}")
+            write_terminal_audit(
+                packet_dir, config, f"{terminal_message(config, 'missing_runtime_file')} Missing: {path.name}"
+            )
             write_telemetry(packet_dir, config)
             return 1
 
@@ -482,7 +488,9 @@ def run_packet(packet_dir: Path) -> int:
             write_telemetry(packet_dir, config)
             return 0 if audit_status(output_path) == "pass" else 1
 
-    write_terminal_audit(packet_dir, config, f"{terminal_message(config, 'invalid_output')} {failure_summary(packet_dir, config)}")
+    write_terminal_audit(
+        packet_dir, config, f"{terminal_message(config, 'invalid_output')} {failure_summary(packet_dir, config)}"
+    )
     write_telemetry(packet_dir, config)
     return 1
 

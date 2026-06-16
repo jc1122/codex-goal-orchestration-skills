@@ -61,15 +61,25 @@ def main() -> int:
         raise SystemExit("at least one terminal branch id is required for an amendment decision")
     overlap = sorted(active & terminal)
     if overlap:
-        raise SystemExit("branch ids cannot be both active and terminal in an amendment decision: " + ", ".join(overlap))
+        raise SystemExit(
+            "branch ids cannot be both active and terminal in an amendment decision: " + ", ".join(overlap)
+        )
 
     bundle_dir = manifest_path.parent
     amendments_dir = bundle_dir / "amendments"
     decision_path = amendments_dir / f"{amendment_id}.decision.json"
     if decision_path.exists() and not args.replace:
         raise SystemExit(f"amendment decision already exists; pass --replace to recreate: {decision_path}")
-    scheduler_path = manifest.get("parallelization", {}).get("scheduler_path") if isinstance(manifest.get("parallelization"), dict) else None
-    scheduler_rel = scheduler_path if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path") else CONTRACT.MAIN_SCHEDULER_PATH
+    scheduler_path = (
+        manifest.get("parallelization", {}).get("scheduler_path")
+        if isinstance(manifest.get("parallelization"), dict)
+        else None
+    )
+    scheduler_rel = (
+        scheduler_path
+        if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path")
+        else CONTRACT.MAIN_SCHEDULER_PATH
+    )
     data = {
         "schema_version": 1,
         "amendment_id": amendment_id,
@@ -85,9 +95,15 @@ def main() -> int:
         "terminal_branch_ids": sorted(terminal),
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
         "packet_path": (amendments_dir / f"{amendment_id}.packet").as_posix() if args.decision == "launch" else None,
-        "proposal_path": (amendments_dir / f"{amendment_id}.proposal.json").as_posix() if args.decision == "launch" else None,
-        "validation_path": (amendments_dir / f"{amendment_id}.validation.json").as_posix() if args.decision == "launch" else None,
-        "accepted_path": (amendments_dir / f"{amendment_id}.accepted.json").as_posix() if args.decision == "launch" else None,
+        "proposal_path": (amendments_dir / f"{amendment_id}.proposal.json").as_posix()
+        if args.decision == "launch"
+        else None,
+        "validation_path": (amendments_dir / f"{amendment_id}.validation.json").as_posix()
+        if args.decision == "launch"
+        else None,
+        "accepted_path": (amendments_dir / f"{amendment_id}.accepted.json").as_posix()
+        if args.decision == "launch"
+        else None,
     }
     write_json(decision_path, data)
     print(decision_path)

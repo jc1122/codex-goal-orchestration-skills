@@ -307,7 +307,17 @@ def load_optional_manifest(base_dir: Path) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-def lite_launch_config(packet_id: str, purpose: str, base_dir: Path, control_script: str, control_version: str, *, avoids_action: str, expected_savings_reason: str, manifest: dict | None = None) -> dict:
+def lite_launch_config(
+    packet_id: str,
+    purpose: str,
+    base_dir: Path,
+    control_script: str,
+    control_version: str,
+    *,
+    avoids_action: str,
+    expected_savings_reason: str,
+    manifest: dict | None = None,
+) -> dict:
     return {
         "schema_version": 1,
         "role": "lite_advisor",
@@ -403,9 +413,17 @@ def main() -> int:
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--input-file", action="append", default=[])
     parser.add_argument("--task-file")
-    parser.add_argument("--avoids-action", help="Expensive action this Lite packet is expected to avoid; defaults by purpose when known.")
-    parser.add_argument("--expected-savings-reason", help="Concrete reason this Lite packet reduces a heavier read or model call; defaults by purpose when known.")
-    parser.add_argument("--replace", action="store_true", help="Replace an existing packet directory after removing it first.")
+    parser.add_argument(
+        "--avoids-action",
+        help="Expensive action this Lite packet is expected to avoid; defaults by purpose when known.",
+    )
+    parser.add_argument(
+        "--expected-savings-reason",
+        help="Concrete reason this Lite packet reduces a heavier read or model call; defaults by purpose when known.",
+    )
+    parser.add_argument(
+        "--replace", action="store_true", help="Replace an existing packet directory after removing it first."
+    )
     args = parser.parse_args()
 
     packet_id = require_safe_label(args.packet_id, "packet-id")
@@ -417,15 +435,8 @@ def main() -> int:
         raise SystemExit(f"--base-dir must be a directory: {base_dir}")
     manifest = load_optional_manifest(base_dir)
     out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
-    task_file = (
-        resolve_absolute_path(args.task_file, "--task-file", must_exist=True)
-        if args.task_file
-        else None
-    )
-    input_files = [
-        resolve_absolute_path(value, "--input-file", must_exist=True)
-        for value in args.input_file
-    ]
+    task_file = resolve_absolute_path(args.task_file, "--task-file", must_exist=True) if args.task_file else None
+    input_files = [resolve_absolute_path(value, "--input-file", must_exist=True) for value in args.input_file]
     if not input_files:
         raise SystemExit("at least one --input-file is required")
     sources = [source_metadata(path, base_dir) for path in input_files]

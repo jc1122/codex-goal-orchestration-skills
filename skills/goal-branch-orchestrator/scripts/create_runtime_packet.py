@@ -23,8 +23,12 @@ def _load_shared_script(module_name: str, script_name: str, label: str):
     return module
 
 
-CONTRACT = _load_shared_script("goal_shared_orchestration_contract", "orchestration_contract.py", "shared orchestration contract")
-STATUS_VALIDATION = _load_shared_script("goal_shared_status_validation", "status_validation.py", "shared status validation helpers")
+CONTRACT = _load_shared_script(
+    "goal_shared_orchestration_contract", "orchestration_contract.py", "shared orchestration contract"
+)
+STATUS_VALIDATION = _load_shared_script(
+    "goal_shared_status_validation", "status_validation.py", "shared status validation helpers"
+)
 CONTEXT_PACK = _load_shared_script("goal_shared_context_pack", "context_pack.py", "shared context pack helper")
 BRANCH_VALIDATOR = None
 BRIDGE_HARNESS_KIND = CONTRACT.BRIDGE_HARNESS_KIND
@@ -226,12 +230,13 @@ def normalize_worker_ladder(
         if alias in seen:
             raise SystemExit(f"worker route alias repeated: {alias!r}")
         seen.add(alias)
-        positions.append(default_ladder.index(alias) if alias in default_ladder else len(default_ladder) + allowed_routes.index(alias))
-    if positions != sorted(positions):
-        raise SystemExit(
-            "worker route aliases must preserve standard ladder order: "
-            + ", ".join(default_ladder)
+        positions.append(
+            default_ladder.index(alias)
+            if alias in default_ladder
+            else len(default_ladder) + allowed_routes.index(alias)
         )
+    if positions != sorted(positions):
+        raise SystemExit("worker route aliases must preserve standard ladder order: " + ", ".join(default_ladder))
     return flattened
 
 
@@ -297,26 +302,31 @@ def default_selection_reason(route_class: str) -> str:
     return CONTRACT.worker_route_class_reason(route_class)
 
 
-def validate_route_class_selection(route_class: str, selected_ladder: list[str], selection_reason: str, policy: dict | None = None) -> None:
+def validate_route_class_selection(
+    route_class: str, selected_ladder: list[str], selection_reason: str, policy: dict | None = None
+) -> None:
     if policy is not None:
         allowed = set(ladder_for_route_class(route_class, policy))
         disallowed = [alias for alias in selected_ladder if alias not in allowed]
         if disallowed:
-            raise SystemExit(f"route_class {route_class!r} cannot use configured route aliases: " + ", ".join(disallowed))
+            raise SystemExit(
+                f"route_class {route_class!r} cannot use configured route aliases: " + ", ".join(disallowed)
+            )
         return
     if route_class in {"mechanical", "docs", "small-edit", "normal-code"}:
         allowed = set(ladder_for_route_class(route_class))
         disallowed = [alias for alias in selected_ladder if alias not in allowed]
         if disallowed:
             raise SystemExit(
-                f"route_class {route_class!r} cannot use premium/full worker route aliases: "
-                + ", ".join(disallowed)
+                f"route_class {route_class!r} cannot use premium/full worker route aliases: " + ", ".join(disallowed)
             )
     if route_class == "complex-code":
         reason = selection_reason.lower()
         markers = ("complex", "risk", "cross-module", "premium", "architecture", "validator", "scheduler")
         if not any(marker in reason for marker in markers):
-            raise SystemExit("--selection-reason for route_class 'complex-code' must include a concrete cost/risk justification")
+            raise SystemExit(
+                "--selection-reason for route_class 'complex-code' must include a concrete cost/risk justification"
+            )
 
 
 def is_ordered_subsequence(values: list[str], ladder: list[str]) -> bool:
@@ -475,9 +485,7 @@ def apply_model_catalog_to_worker_ladder(
             "reason": "not present" if present is not True else "not supported_in_api",
         }
         if explicit_routes:
-            defects.append(
-                f"{alias}: model={detail['model']} present={present} supported_in_api={supported}"
-            )
+            defects.append(f"{alias}: model={detail['model']} present={present} supported_in_api={supported}")
         else:
             filtered.append(detail)
 
@@ -755,9 +763,7 @@ def configured_telemetry_attempts(
                 "{prompt}",
             ]
             attempt["command"] = (
-                "codex exec --ephemeral "
-                + CODEX_LEAN_EXEC_FLAGS_TEXT
-                + f" -m {model.get('model')} -s {sandbox}"
+                "codex exec --ephemeral " + CODEX_LEAN_EXEC_FLAGS_TEXT + f" -m {model.get('model')} -s {sandbox}"
             )
         elif kind == BRIDGE_HARNESS_KIND:
             # A configured opencode-bridge role (e.g. lite_agent / demanding_agent)
@@ -990,7 +996,10 @@ def status_schema(
             "route_class": {"type": "string", "enum": list(WORKER_ROUTE_CLASSES)},
             "selected_ladder": selected_ladder_schema,
             "selection_reason": nonempty_string,
-            "changed_files": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path}},
+            "changed_files": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path},
+            },
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "tests": {"type": "array", "items": nonempty_string},
             "blockers": {"type": "array", "items": nonempty_string},
@@ -999,13 +1008,12 @@ def status_schema(
     }
 
 
-def review_schema(packet_id: str, semantic_hashes: dict[str, str] | None = None, reuse_policy: dict | None = None) -> dict:
+def review_schema(
+    packet_id: str, semantic_hashes: dict[str, str] | None = None, reuse_policy: dict | None = None
+) -> dict:
     nonempty_string = {"type": "string", "minLength": 1}
     semantic_hashes = semantic_hashes or {}
-    semantic_properties = {
-        key: {"type": "string", "const": value}
-        for key, value in sorted(semantic_hashes.items())
-    }
+    semantic_properties = {key: {"type": "string", "const": value} for key, value in sorted(semantic_hashes.items())}
     _reuse_policy = reuse_policy or {
         "mode": "new",
         "accepted": False,
@@ -1083,7 +1091,10 @@ def research_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "search_queries": {"type": "array", "items": nonempty_string},
             "source_urls": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": url}},
             "tools_used": {"type": "array", "items": nonempty_string},
-            "local_files_read": {"type": "array", "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path}},
+            "local_files_read": {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path},
+            },
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "findings": {"type": "array", "minItems": 1, "items": nonempty_string},
             "blockers": {"type": "array", "items": nonempty_string},
@@ -1198,7 +1209,9 @@ def markdown_section(text: str, heading: str, *, max_chars: int = 800) -> str:
     return value
 
 
-def find_manifest_context(context_files: list[str], branch_id: str, packet_id: str) -> tuple[Path, dict, dict, dict] | None:
+def find_manifest_context(
+    context_files: list[str], branch_id: str, packet_id: str
+) -> tuple[Path, dict, dict, dict] | None:
     for value in context_files:
         path = Path(value)
         if path.name != "job.manifest.json":
@@ -1211,11 +1224,7 @@ def find_manifest_context(context_files: list[str], branch_id: str, packet_id: s
         if not branch_data:
             continue
         work_items = branch_data.get("work_items") if isinstance(branch_data.get("work_items"), list) else []
-        matches = [
-            item
-            for item in work_items
-            if isinstance(item, dict) and item.get("packet_id") == packet_id
-        ]
+        matches = [item for item in work_items if isinstance(item, dict) and item.get("packet_id") == packet_id]
         if len(matches) != 1:
             continue
         return path, manifest, branch_data, matches[0]
@@ -1257,7 +1266,9 @@ def compact_worker_context(
     verification = compact_list(work_item.get("verification"))
     dod = compact_list(work_item.get("dod"))
     depends_on = compact_list(work_item.get("depends_on"))
-    worker_parallelism = branch_data.get("worker_parallelism") if isinstance(branch_data.get("worker_parallelism"), dict) else {}
+    worker_parallelism = (
+        branch_data.get("worker_parallelism") if isinstance(branch_data.get("worker_parallelism"), dict) else {}
+    )
     artifact = {
         "schema_version": 1,
         "kind": "compact_worker_context",
@@ -1346,11 +1357,7 @@ def compact_worker_context(
             "- Do not read skill Python source unless a script or validator fails and source-level debugging is required.",
         ]
     )
-    filtered_context_files = [
-        value
-        for value in context_files
-        if Path(value).resolve() != manifest_path.resolve()
-    ]
+    filtered_context_files = [value for value in context_files if Path(value).resolve() != manifest_path.resolve()]
     return "\n".join(task_lines).rstrip() + "\n", filtered_context_files, artifact
 
 
@@ -1438,7 +1445,9 @@ def worker_scheduler_path(manifest_path: Path | None, branch_id: str) -> Path | 
     return manifest_path.parent / "schedulers" / f"{branch_id}.worker.scheduler.json"
 
 
-def refuse_closed_pass_replacement(packet_dir: Path, *, replace: bool, scheduler_path: Path | None, packet_id: str) -> None:
+def refuse_closed_pass_replacement(
+    packet_dir: Path, *, replace: bool, scheduler_path: Path | None, packet_id: str
+) -> None:
     if not replace or scheduler_path is None or not packet_dir.exists():
         return
     if scheduler_closed_pass_for_packet(scheduler_path, packet_id):
@@ -1645,12 +1654,20 @@ def branch_route_classes(branch: dict) -> list[str]:
 
 def docs_path(path: str) -> bool:
     lowered = path.lower()
-    return lowered.endswith((".md", ".markdown", ".txt", ".rst", ".adoc")) or lowered.startswith(("docs/", "doc/", "readme", "changelog", "license", "notice"))
+    return lowered.endswith((".md", ".markdown", ".txt", ".rst", ".adoc")) or lowered.startswith(
+        ("docs/", "doc/", "readme", "changelog", "license", "notice")
+    )
 
 
 def test_path(path: str) -> bool:
     lowered = path.lower()
-    return lowered.startswith(("test/", "tests/", "spec/", "specs/")) or "/tests/" in lowered or lowered.startswith("test_") or "_test." in lowered or ".spec." in lowered
+    return (
+        lowered.startswith(("test/", "tests/", "spec/", "specs/"))
+        or "/tests/" in lowered
+        or lowered.startswith("test_")
+        or "_test." in lowered
+        or ".spec." in lowered
+    )
 
 
 def production_paths(paths: list[str]) -> list[str]:
@@ -1737,7 +1754,9 @@ def _manifest_reviewer_route_aliases(
     return alias_map, role_alias_map
 
 
-def _resolve_goal_config_review_routes(manifest: dict | None, manifest_path: Path | None = None) -> dict[str, list[str]]:
+def _resolve_goal_config_review_routes(
+    manifest: dict | None, manifest_path: Path | None = None
+) -> dict[str, list[str]]:
     if not isinstance(manifest, dict):
         return {}
     goal_config = goal_config_from_manifest(manifest, manifest_path)
@@ -1783,7 +1802,9 @@ def _resolve_review_route_list(raw_routes: list[str], manifest_aliases: dict[str
     return resolved
 
 
-def _default_route_variants(manifest_aliases: dict[str, list[str]], role_aliases: dict[str, list[str]]) -> dict[str, list[str]]:
+def _default_route_variants(
+    manifest_aliases: dict[str, list[str]], role_aliases: dict[str, list[str]]
+) -> dict[str, list[str]]:
     variants: dict[str, list[str]] = {}
     for tier in CONTRACT.REVIEW_ROUTE_TIERS:
         variants[tier] = []
@@ -1808,7 +1829,9 @@ def _default_route_variants(manifest_aliases: dict[str, list[str]], role_aliases
     return variants
 
 
-def _route_variants_from_manifest(policy: dict, manifest: dict | None, manifest_path: Path | None = None) -> dict[str, list[str]]:
+def _route_variants_from_manifest(
+    policy: dict, manifest: dict | None, manifest_path: Path | None = None
+) -> dict[str, list[str]]:
     policy_routes = _normalize_review_routes(policy.get("routes") if isinstance(policy, dict) else None)
     goal_config_routes = _resolve_goal_config_review_routes(manifest, manifest_path=manifest_path)
     if not policy_routes and goal_config_routes:
@@ -1917,7 +1940,9 @@ def explicit_review_tier(value: object) -> str:
 def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, list[str]]:
     explicit = explicit_review_tier(gate.get("review_tier")) or explicit_review_tier(branch.get("review_tier"))
     if explicit:
-        explicit_reason = nonempty_text(gate.get("review_tier_reason")) or nonempty_text(branch.get("review_tier_reason"))
+        explicit_reason = nonempty_text(gate.get("review_tier_reason")) or nonempty_text(
+            branch.get("review_tier_reason")
+        )
         return explicit, [explicit_reason or f"explicit {explicit} review tier"]
     changed_paths = review_changed_paths(gate, branch)
     trigger_hits: list[str] = []
@@ -1952,11 +1977,17 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
     if route_classes and set(route_classes) <= {"small-edit", "normal-code"}:
         return "standard", ["normal or small-edit implementation route classes require standard reviewer routing"]
     policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
-    default_tier = policy.get("default_tier") if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS else CONTRACT.REVIEW_MODEL_POLICY["default_tier"]
+    default_tier = (
+        policy.get("default_tier")
+        if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS
+        else CONTRACT.REVIEW_MODEL_POLICY["default_tier"]
+    )
     return str(default_tier), ["default deterministic review tier"]
 
 
-def select_review_route(manifest: dict, gate: dict, *, branch_id: str, packet_id: str, manifest_path: Path | None = None) -> dict:
+def select_review_route(
+    manifest: dict, gate: dict, *, branch_id: str, packet_id: str, manifest_path: Path | None = None
+) -> dict:
     branch = branch_entry(manifest, branch_id)
     tier, reasons = infer_review_tier(manifest, gate, branch)
     policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
@@ -2239,7 +2270,14 @@ def prompt_for(
         )
     if role == "research-worker":
         return research_worker_prompt(
-            packet_id, branch, worktree, schema_name, owned_files, context_files, task_text, include_worktree_context_excerpts
+            packet_id,
+            branch,
+            worktree,
+            schema_name,
+            owned_files,
+            context_files,
+            task_text,
+            include_worktree_context_excerpts,
         )
     if role == "worker":
         attribution = worker_attribution or {}
@@ -2281,6 +2319,7 @@ def launch_for(
         return compact_launch_script()
 
     raise SystemExit(f"unsupported role for launch script generation: {role}")
+
 
 def reviewer_ladder_from_route(review_route: dict | None) -> list[str]:
     route = review_route or {
@@ -2374,7 +2413,9 @@ def validate_launch_config_adapter(config: dict) -> None:
             if not isinstance(timeout, int) or isinstance(timeout, bool) or timeout <= 0:
                 defects.append(f"{path}.timeout_seconds must be a positive integer")
             telemetry_capability = attempt.get("telemetry_capability")
-            if not isinstance(telemetry_capability, dict) or not _nonempty_string(telemetry_capability.get("token_usage")):
+            if not isinstance(telemetry_capability, dict) or not _nonempty_string(
+                telemetry_capability.get("token_usage")
+            ):
                 defects.append(f"{path}.telemetry_capability.token_usage must describe token telemetry support")
             if provider == BRIDGE_HARNESS_KIND:
                 if not _nonempty_string(attempt.get("command_binary")):
@@ -2397,7 +2438,11 @@ def validate_launch_config_adapter(config: dict) -> None:
                         defects.append(f"{path}.bridge.pool_dir is required for {provider} attempts")
     selected_ladder = config.get("selected_ladder")
     if selected_ladder is not None:
-        aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)] if isinstance(attempts, list) else []
+        aliases = (
+            [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)]
+            if isinstance(attempts, list)
+            else []
+        )
         if selected_ladder != aliases:
             defects.append("launch-config selected_ladder must exactly match attempt aliases")
     if defects:
@@ -2436,39 +2481,59 @@ def compact_launch_config(
     )
     if role == "worker":
         worker_attempts = worker_telemetry_attempts(selected_ladder, goal_config)
-        return annotate_attempt_metadata({
-            **launch_config_base(
-                "worker", packet_id, branch, worktree, schema_name, output_name, "workspace-write", WORKER_ATTEMPT_TIMEOUT_SECONDS
-            ),
-            **debug_config,
-            "route_class": route_class,
-            "selected_ladder": selected_ladder,
-            "selection_reason": selection_reason,
-            "owned_files": owned_files or [],
-            "worker_prompt": WORKER_PACKET_PROMPT,
-            "status_markers": {
-                "begin": WORKER_STATUS_BEGIN,
-                "end": WORKER_STATUS_END,
+        return annotate_attempt_metadata(
+            {
+                **launch_config_base(
+                    "worker",
+                    packet_id,
+                    branch,
+                    worktree,
+                    schema_name,
+                    output_name,
+                    "workspace-write",
+                    WORKER_ATTEMPT_TIMEOUT_SECONDS,
+                ),
+                **debug_config,
+                "route_class": route_class,
+                "selected_ladder": selected_ladder,
+                "selection_reason": selection_reason,
+                "owned_files": owned_files or [],
+                "worker_prompt": WORKER_PACKET_PROMPT,
+                "status_markers": {
+                    "begin": WORKER_STATUS_BEGIN,
+                    "end": WORKER_STATUS_END,
+                },
+                "attempts": worker_attempts,
+                "selected_commands": selected_commands_from_attempts(worker_attempts),
+                "model_catalog": model_catalog or {},
+                "route_policy": route_policy or {},
+                "telemetry_script": telemetry_script,
+                "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
+                "retry_ordinal": retry_ordinal,
             },
-            "attempts": worker_attempts,
-            "selected_commands": selected_commands_from_attempts(worker_attempts),
-            "model_catalog": model_catalog or {},
-            "route_policy": route_policy or {},
-            "telemetry_script": telemetry_script,
-            "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
-            "retry_ordinal": retry_ordinal,
-        }, retry_ordinal=retry_ordinal)
+            retry_ordinal=retry_ordinal,
+        )
     if role == "research-worker":
-        return annotate_attempt_metadata({
-            **launch_config_base(
-                "research-worker", packet_id, branch, worktree, schema_name, output_name, "read-only", RESEARCH_ATTEMPT_TIMEOUT_SECONDS
-            ),
-            **debug_config,
-            "retry_ordinal": retry_ordinal,
-            "attempts": research_telemetry_attempts(),
-            "telemetry_script": telemetry_script,
-            "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
-        }, retry_ordinal=retry_ordinal)
+        return annotate_attempt_metadata(
+            {
+                **launch_config_base(
+                    "research-worker",
+                    packet_id,
+                    branch,
+                    worktree,
+                    schema_name,
+                    output_name,
+                    "read-only",
+                    RESEARCH_ATTEMPT_TIMEOUT_SECONDS,
+                ),
+                **debug_config,
+                "retry_ordinal": retry_ordinal,
+                "attempts": research_telemetry_attempts(),
+                "telemetry_script": telemetry_script,
+                "terminal_message": f"Research worker primary and fallback failed without producing {output_name}.",
+            },
+            retry_ordinal=retry_ordinal,
+        )
     if role == "reviewer":
         reviewer_ladder = reviewer_ladder_from_route(review_route)
         selected_route = review_route or {}
@@ -2479,35 +2544,49 @@ def compact_launch_config(
                 configured_route_commands([alias], goal_config)[0]
                 if goal_config
                 else (
-                    bridge_telemetry_attempt(alias, role="reviewer", timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS, sandbox="read-only")["command"]
+                    bridge_telemetry_attempt(
+                        alias, role="reviewer", timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS, sandbox="read-only"
+                    )["command"]
                     if CONTRACT.is_bridge_alias(alias)
                     else CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
                 )
             )
             for alias in reviewer_ladder
         ]
-        return annotate_attempt_metadata({
-            **launch_config_base(
-                "reviewer", packet_id, branch, worktree, schema_name, output_name, "read-only", REVIEWER_ATTEMPT_TIMEOUT_SECONDS
-            ),
-            **debug_config,
-            "attempts": reviewer_telemetry_attempts(reviewer_ladder, goal_config),
-            "telemetry_script": telemetry_script,
-            "status_markers": _review_route_markers_for_role("reviewer"),
-            "review_route": selected_route,
-            "selection_context": selection_context or {"tier": selection_tier, "reasons": selected_route.get("selection_reason")},
-            "semantic_input_hashes": review_semantic_hashes or {},
-            "reuse_policy": review_reuse_policy or {
-                "mode": "new",
-                "accepted": False,
-                "semantic_hashes_match": False,
-                "source_review_path": None,
-                "source_telemetry_path": None,
+        return annotate_attempt_metadata(
+            {
+                **launch_config_base(
+                    "reviewer",
+                    packet_id,
+                    branch,
+                    worktree,
+                    schema_name,
+                    output_name,
+                    "read-only",
+                    REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
+                ),
+                **debug_config,
+                "attempts": reviewer_telemetry_attempts(reviewer_ladder, goal_config),
+                "telemetry_script": telemetry_script,
+                "status_markers": _review_route_markers_for_role("reviewer"),
+                "review_route": selected_route,
+                "selection_context": selection_context
+                or {"tier": selection_tier, "reasons": selected_route.get("selection_reason")},
+                "semantic_input_hashes": review_semantic_hashes or {},
+                "reuse_policy": review_reuse_policy
+                or {
+                    "mode": "new",
+                    "accepted": False,
+                    "semantic_hashes_match": False,
+                    "source_review_path": None,
+                    "source_telemetry_path": None,
+                },
+                "terminal_commands": terminal_commands,
+                "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
+                "retry_ordinal": retry_ordinal,
             },
-            "terminal_commands": terminal_commands,
-            "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
-            "retry_ordinal": retry_ordinal,
-        }, retry_ordinal=retry_ordinal)
+            retry_ordinal=retry_ordinal,
+        )
     return None
 
 
@@ -2527,7 +2606,9 @@ def main() -> int:
         "--manifest",
         help="Absolute path to job.manifest.json. Required for reviewer packets; optional for compact worker packets.",
     )
-    parser.add_argument("--pre-review-gate", help="Required for reviewer packets; absolute path to pre_review_gate.json.")
+    parser.add_argument(
+        "--pre-review-gate", help="Required for reviewer packets; absolute path to pre_review_gate.json."
+    )
     parser.add_argument("--task-file")
     parser.add_argument("--owned-file", action="append", default=[])
     parser.add_argument("--context-file", action="append", default=[])
@@ -2562,8 +2643,12 @@ def main() -> int:
         action="store_true",
         help="Honor an explicit --worker-route subsequence that prunes a manifest-configured route-class ladder.",
     )
-    parser.add_argument("--selection-reason", help="Required when --worker-route is supplied; recorded in route.json and worker status.")
-    parser.add_argument("--replace", action="store_true", help="Archive an existing packet directory under attempts/ and recreate it.")
+    parser.add_argument(
+        "--selection-reason", help="Required when --worker-route is supplied; recorded in route.json and worker status."
+    )
+    parser.add_argument(
+        "--replace", action="store_true", help="Archive an existing packet directory under attempts/ and recreate it."
+    )
     args = parser.parse_args()
 
     packet_id = require_safe_label(args.packet_id, "packet-id")
@@ -2596,11 +2681,7 @@ def main() -> int:
             context_files.append(manifest_value)
     elif args.manifest and args.role == "research-worker":
         raise SystemExit("--manifest is only valid for worker compact context or reviewer packet generation")
-    task_file = (
-        resolve_absolute_path(args.task_file, "--task-file", must_exist=True)
-        if args.task_file
-        else None
-    )
+    task_file = resolve_absolute_path(args.task_file, "--task-file", must_exist=True) if args.task_file else None
     if args.role in {"research-worker", "reviewer"} and (args.worker_route or args.selection_reason):
         raise SystemExit("research-worker and reviewer packets must not set worker route options")
     if args.model_catalog and args.role != "worker":
@@ -2647,11 +2728,15 @@ def main() -> int:
             packet_id=packet_id,
             manifest_path=manifest_path,
         )
-        review_semantic_hashes = {
-            key: value
-            for key, value in gate.get("semantic_input_hashes", {}).items()
-            if isinstance(key, str) and isinstance(value, str)
-        } if isinstance(gate.get("semantic_input_hashes"), dict) else {}
+        review_semantic_hashes = (
+            {
+                key: value
+                for key, value in gate.get("semantic_input_hashes", {}).items()
+                if isinstance(key, str) and isinstance(value, str)
+            }
+            if isinstance(gate.get("semantic_input_hashes"), dict)
+            else {}
+        )
         review_reuse_policy = {
             "mode": "new",
             "accepted": False,
@@ -2688,7 +2773,11 @@ def main() -> int:
         worker_allowed_routes = policy_allowed_routes(worker_policy)
         explicit_worker_routes = bool(normalized_worker_routes)
         manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
-        route_class = normalize_route_class(args.route_class or manifest_route_class or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS))
+        route_class = normalize_route_class(
+            args.route_class
+            or manifest_route_class
+            or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS)
+        )
         selected_ladder = (
             normalize_worker_ladder(
                 normalized_worker_routes,
@@ -2771,7 +2860,11 @@ def main() -> int:
         output_name = "status.json"
         manifest_hash = CONTEXT_PACK.sha256_file(manifest_path) if manifest_path else ""
         work_item_id = manifest_work_item.get("id") if isinstance(manifest_work_item, dict) else ""
-        manifest_epoch = str(manifest.get("manifest_epoch") or manifest.get("epoch") or "current") if isinstance(manifest, dict) else "current"
+        manifest_epoch = (
+            str(manifest.get("manifest_epoch") or manifest.get("epoch") or "current")
+            if isinstance(manifest, dict)
+            else "current"
+        )
         route_id = f"{packet_id}:{route_class}:{','.join(selected_ladder or [])}"
         worker_attribution = {
             "branch_id": manifest_branch_id,

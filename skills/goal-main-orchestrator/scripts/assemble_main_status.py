@@ -204,7 +204,9 @@ def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]
     return summaries
 
 
-def scheduler_rollup(manifest_path: Path, manifest: dict, branches: list[dict], *, status: str, blockers: list[str]) -> dict:
+def scheduler_rollup(
+    manifest_path: Path, manifest: dict, branches: list[dict], *, status: str, blockers: list[str]
+) -> dict:
     defects: list[str] = []
     max_active = manifest.get("max_active_branch_agents", CONTRACT.MAX_ACTIVE_BRANCH_AGENTS)
     if not isinstance(max_active, int) or isinstance(max_active, bool):
@@ -252,11 +254,7 @@ def current_amendment_records(
     if not amendments_dir.is_dir():
         return [], set(), []
     terminal_statuses = _terminal_statuses(branch_statuses)
-    active_ids = {
-        item
-        for item in branch_parallelism.get("active_ids", [])
-        if isinstance(item, str) and item.strip()
-    }
+    active_ids = {item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()}
     manifest_sha = sha256_file(manifest_path)
     records = []
     covered_branch_ids: set[str] = set()
@@ -267,11 +265,11 @@ def current_amendment_records(
         decision = data.get("decision")
         if not isinstance(amendment_id, str) or decision not in CONTRACT.AMENDMENT_DECISIONS:
             continue
-        terminal_ids = [
-            item
-            for item in data.get("terminal_branch_ids", [])
-            if isinstance(item, str) and item.strip()
-        ] if isinstance(data.get("terminal_branch_ids"), list) else []
+        terminal_ids = (
+            [item for item in data.get("terminal_branch_ids", []) if isinstance(item, str) and item.strip()]
+            if isinstance(data.get("terminal_branch_ids"), list)
+            else []
+        )
         reasons: list[str] = []
         if data.get("manifest") != manifest_path.as_posix():
             reasons.append("manifest path mismatch")
@@ -304,9 +302,7 @@ def current_amendment_records(
                 "decision": decision,
                 "decision_path": path.relative_to(manifest_path.parent).as_posix(),
                 "packet_validation_path": (
-                    f"amendments/{amendment_id}.packet/packet.validation.json"
-                    if decision == "launch"
-                    else None
+                    f"amendments/{amendment_id}.packet/packet.validation.json" if decision == "launch" else None
                 ),
             }
         )

@@ -27,10 +27,14 @@ from amendment_lib import (
 )
 
 
-FILE_RE = re.compile(r"(?<![/A-Za-z0-9_.-])((?:src|tests|scripts|plans|docs|\.github)/[A-Za-z0-9_./+-]+\.[A-Za-z0-9_+-]+)")
+FILE_RE = re.compile(
+    r"(?<![/A-Za-z0-9_.-])((?:src|tests|scripts|plans|docs|\.github)/[A-Za-z0-9_./+-]+\.[A-Za-z0-9_+-]+)"
+)
 MODULE_RE = re.compile(r"`?(marketnn(?:\.[A-Za-z_][A-Za-z0-9_]*){1,})`?")
 BARE_PY_RE = re.compile(r"(?<![/A-Za-z0-9_])`?([A-Za-z_][A-Za-z0-9_]*\.py)`?")
-MISSING_WORD_RE = re.compile(r"\b(absent|missing|not found|required verification test files|no module named|cannot import name)\b", re.I)
+MISSING_WORD_RE = re.compile(
+    r"\b(absent|missing|not found|required verification test files|no module named|cannot import name)\b", re.I
+)
 TEST_FAIL_RE = re.compile(r"((?:tests)/[A-Za-z0-9_./+-]+\.py).*?fail(?:s|ed)? to collect", re.I)
 ALLOWED_PREFIXES = ("src/", "tests/", "scripts/", "plans/", "docs/", ".github/")
 DETERMINISTIC_MODE = "deterministic_blocker_repair"
@@ -161,7 +165,11 @@ def extract_repair_paths(blockers: list[str], *, review_context: bool = False) -
                 append_unique(owned_paths, path)
                 append_unique(verification_tests, path)
                 continue
-            if path.startswith("tests/") and "fail to collect" in lowered and not ("absent" in lowered or "not found" in lowered):
+            if (
+                path.startswith("tests/")
+                and "fail to collect" in lowered
+                and not ("absent" in lowered or "not found" in lowered)
+            ):
                 append_unique(verification_tests, path)
                 continue
             if missing_context or review_context:
@@ -288,14 +296,12 @@ def repair_branch(
         group_tests = [path for path in paths + verification_tests if path.startswith("tests/")]
         if group_tests:
             verification.append("env PYTHONPATH=src python3 -m pytest " + " ".join(dict.fromkeys(group_tests)) + " -q")
-        matching_review_items = [
-            item
-            for item in review_items
-            if any(path in item for path in paths)
-        ]
-        review_dod = [
-            f"Reviewer evidence from {review_source} is resolved for this worker's assigned paths."
-        ] if isinstance(review_source, str) and matching_review_items else []
+        matching_review_items = [item for item in review_items if any(path in item for path in paths)]
+        review_dod = (
+            [f"Reviewer evidence from {review_source} is resolved for this worker's assigned paths."]
+            if isinstance(review_source, str) and matching_review_items
+            else []
+        )
         review_dod.extend(f"Reviewer finding addressed: {item}" for item in matching_review_items[:6])
         work_items.append(
             {
@@ -344,7 +350,9 @@ def repair_branch(
         ],
     }
     if has_overlap:
-        branch["contention_reason"] = "Terminal-blocker repair intentionally overlaps prior protected ownership while leaving terminal artifacts immutable."
+        branch["contention_reason"] = (
+            "Terminal-blocker repair intentionally overlaps prior protected ownership while leaving terminal artifacts immutable."
+        )
         branch["worker_contention_reason"] = "Repair workers may touch paths from preserved blocker evidence."
     return branch
 
@@ -364,7 +372,9 @@ def generate_proposal(input_data: dict) -> dict:
         if not isinstance(branch, dict):
             continue
         status_path_value = branch.get("status_path")
-        if not isinstance(status_path_value, str) or relative_path_defect(status_path_value, f"{terminal_branch_id}.status_path"):
+        if not isinstance(status_path_value, str) or relative_path_defect(
+            status_path_value, f"{terminal_branch_id}.status_path"
+        ):
             continue
         status_path = bundle_dir / status_path_value
         if not status_path.exists():
@@ -481,7 +491,9 @@ def emit_proposal(input_path: Path, proposal_path: Path, telemetry_path: Path) -
     )
     write_json(lineage_path, lineage)
     command = f"python3 {Path(__file__).resolve().as_posix()} --emit-proposal --input-files {input_path.as_posix()} --proposal {proposal_path.as_posix()} --telemetry {telemetry_path.as_posix()}"
-    write_json(telemetry_path, telemetry(str(input_data["amendment_id"]), proposal_path, input_path, telemetry_path, command))
+    write_json(
+        telemetry_path, telemetry(str(input_data["amendment_id"]), proposal_path, input_path, telemetry_path, command)
+    )
 
 
 def launch_script() -> str:
@@ -519,9 +531,15 @@ def create_packet(args: argparse.Namespace) -> Path:
     if not decision_path.exists():
         raise SystemExit(f"missing launch decision artifact: {decision_path}")
     decision = load_json_object(decision_path)
-    if decision.get("schema_version") != 1 or decision.get("amendment_id") != amendment_id or decision.get("decision") != "launch":
+    if (
+        decision.get("schema_version") != 1
+        or decision.get("amendment_id") != amendment_id
+        or decision.get("decision") != "launch"
+    ):
         raise SystemExit(f"amendment decision must be a launch decision for {amendment_id}: {decision_path}")
-    if decision.get("manifest") != manifest_path.as_posix() or decision.get("manifest_sha256") != sha256_file(manifest_path):
+    if decision.get("manifest") != manifest_path.as_posix() or decision.get("manifest_sha256") != sha256_file(
+        manifest_path
+    ):
         raise SystemExit("amendment decision manifest path or sha256 does not match the live manifest")
     if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
         raise SystemExit("amendment decision reason_code is not valid for a launch decision")
@@ -556,9 +574,17 @@ def create_packet(args: argparse.Namespace) -> Path:
         source_record(main_prompt, "main prompt"),
     ]
     terminal_reviews: dict[str, dict] = {}
-    audit_path = resolve_absolute_path(args.prompt_audit, "--prompt-audit", must_exist=True) if args.prompt_audit else bundle_dir / "audit" / "prompt-audit.json"
+    audit_path = (
+        resolve_absolute_path(args.prompt_audit, "--prompt-audit", must_exist=True)
+        if args.prompt_audit
+        else bundle_dir / "audit" / "prompt-audit.json"
+    )
     add_if_exists(records, audit_path, "prompt audit")
-    scheduler_path = manifest.get("parallelization", {}).get("scheduler_path") if isinstance(manifest.get("parallelization"), dict) else None
+    scheduler_path = (
+        manifest.get("parallelization", {}).get("scheduler_path")
+        if isinstance(manifest.get("parallelization"), dict)
+        else None
+    )
     if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path"):
         add_if_exists(records, bundle_dir / scheduler_path, "main scheduler")
     for branch in manifest.get("branches", []):
@@ -628,7 +654,9 @@ def create_packet(args: argparse.Namespace) -> Path:
             "decision_path": decision_path.as_posix(),
             "generated_operations_count": 0,
             "terminal_branch_ids": sorted(terminal),
-            "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
+            "terminal_branch_statuses": {
+                branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)
+            },
             "source_files": records,
         }
         write_json(no_op_path, no_op_record)
@@ -653,8 +681,12 @@ def create_packet(args: argparse.Namespace) -> Path:
         return no_op_path
     write_json(packet_dir / "input-files.json", packet)
     write_json(packet_dir / "route.json", route)
-    (packet_dir / "task.md").write_text("Deterministically diagnose terminal branch blockers and write a repair-branch proposal.\n", encoding="utf-8")
-    (packet_dir / "prompt.md").write_text("Deterministic local-script packet; no model prompt is used.\n", encoding="utf-8")
+    (packet_dir / "task.md").write_text(
+        "Deterministically diagnose terminal branch blockers and write a repair-branch proposal.\n", encoding="utf-8"
+    )
+    (packet_dir / "prompt.md").write_text(
+        "Deterministic local-script packet; no model prompt is used.\n", encoding="utf-8"
+    )
     launch = launch_script().replace("$AMENDMENT_ID", amendment_id)
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(launch, encoding="utf-8")

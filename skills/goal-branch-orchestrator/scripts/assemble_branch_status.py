@@ -101,9 +101,7 @@ def validate_base_ref(base_ref: str) -> str:
     if ".." in candidate or candidate.endswith("/") or candidate.endswith(".lock"):
         raise SystemExit(f"manifest base_ref is not a plausible git ref: {base_ref!r}")
     if not _GIT_REF_RE.fullmatch(candidate):
-        raise SystemExit(
-            f"manifest base_ref contains characters that are not valid in a git ref: {base_ref!r}"
-        )
+        raise SystemExit(f"manifest base_ref contains characters that are not valid in a git ref: {base_ref!r}")
     return candidate
 
 
@@ -261,7 +259,9 @@ def promote_worker_with_repair_evidence(
             worktree=worktree,
         )
         if synth_path is None:
-            blockers.extend(f"partial repair evidence synthesis unavailable for {packet_id}: {error}" for error in synth_errors)
+            blockers.extend(
+                f"partial repair evidence synthesis unavailable for {packet_id}: {error}" for error in synth_errors
+            )
             return blockers
         repair_path = synth_path
     result = subprocess.run(
@@ -350,7 +350,11 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
     expected_ids = BRANCH_VALIDATOR.expected_worker_packet_ids([], branch, branch_id)
     dependencies = BRANCH_VALIDATOR.expected_worker_dependencies(branch, branch_id)
     max_active = branch.get("max_active_worker_packets")
-    capacity = max_active if isinstance(max_active, int) and not isinstance(max_active, bool) else CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+    capacity = (
+        max_active
+        if isinstance(max_active, int) and not isinstance(max_active, bool)
+        else CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH
+    )
     defects: list[str] = []
     scheduler_file = bundle_dir / expected_path
     summary = STATUS_VALIDATION.validate_scheduler_artifact(
@@ -374,7 +378,11 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
                 if isinstance(event, dict) and event.get("event") == "refill":
                     seq = event.get("seq")
                     eligible = event.get("eligible_ids", [])
-                    suffix = ",".join(item for item in eligible if isinstance(item, str)) if isinstance(eligible, list) else ""
+                    suffix = (
+                        ",".join(item for item in eligible if isinstance(item, str))
+                        if isinstance(eligible, list)
+                        else ""
+                    )
                     refill_events.append(f"seq:{seq}:{suffix}" if isinstance(seq, int) else suffix)
                 if isinstance(event, dict) and event.get("event") in {"defer", "under_capacity", "blocked"}:
                     ids: list[str] = []
@@ -429,7 +437,9 @@ def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
     if not lite_dir.is_dir():
         return []
     records = []
-    for packet_dir in sorted(path for path in lite_dir.iterdir() if path.is_dir() and path.name.startswith(f"{branch_id}-L")):
+    for packet_dir in sorted(
+        path for path in lite_dir.iterdir() if path.is_dir() and path.name.startswith(f"{branch_id}-L")
+    ):
         advice_path = packet_dir / "advice.json"
         inputs_path = packet_dir / "input-files.json"
         if not advice_path.exists() or not inputs_path.exists():
@@ -444,21 +454,21 @@ def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
             stderr=subprocess.STDOUT,
             check=False,
         )
-        defects = [
-            line.removeprefix("- ").strip()
-            for line in result.stdout.splitlines()
-            if line.startswith("- ")
-        ]
-        source_files = [
-            {
-                "path": item.get("path"),
-                "sha256": item.get("sha256"),
-                "size_bytes": item.get("size_bytes"),
-                "reason": item.get("reason"),
-            }
-            for item in inputs.get("source_files", [])
-            if isinstance(item, dict)
-        ] if isinstance(inputs.get("source_files"), list) else []
+        defects = [line.removeprefix("- ").strip() for line in result.stdout.splitlines() if line.startswith("- ")]
+        source_files = (
+            [
+                {
+                    "path": item.get("path"),
+                    "sha256": item.get("sha256"),
+                    "size_bytes": item.get("size_bytes"),
+                    "reason": item.get("reason"),
+                }
+                for item in inputs.get("source_files", [])
+                if isinstance(item, dict)
+            ]
+            if isinstance(inputs.get("source_files"), list)
+            else []
+        )
         records.append(
             {
                 "packet_id": packet_dir.name,
@@ -508,7 +518,11 @@ def untracked_whitespace_defects(worktree: Path) -> list[str]:
     defects: list[str] = []
     for rel_path in result.stdout.splitlines():
         rel_path = rel_path.strip()
-        if not rel_path or not is_repo_relative_path(rel_path, reject_porcelain=True) or is_runtime_cache_path(rel_path):
+        if (
+            not rel_path
+            or not is_repo_relative_path(rel_path, reject_porcelain=True)
+            or is_runtime_cache_path(rel_path)
+        ):
             continue
         target = (worktree / rel_path).resolve()
         try:
@@ -559,7 +573,9 @@ def collect_manifest_dod(branch: dict) -> list[str]:
     return items
 
 
-def current_pre_review_gate(bundle_dir: Path, branch_id: str) -> tuple[dict | None, dict[str, str], str | None, list[str]]:
+def current_pre_review_gate(
+    bundle_dir: Path, branch_id: str
+) -> tuple[dict | None, dict[str, str], str | None, list[str]]:
     gate_path = bundle_dir / CONTRACT.pre_review_gate_path(branch_id)
     if not gate_path.exists():
         return None, {}, None, [f"current pre-review gate is missing: {gate_path}"]
@@ -570,15 +586,15 @@ def current_pre_review_gate(bundle_dir: Path, branch_id: str) -> tuple[dict | No
     if not isinstance(gate_hashes, dict):
         return gate, {}, None, [f"current pre-review gate lacks semantic_input_hashes: {gate_path}"]
     expected_hashes = {
-        key: value
-        for key, value in gate_hashes.items()
-        if isinstance(key, str) and isinstance(value, str)
+        key: value for key, value in gate_hashes.items() if isinstance(key, str) and isinstance(value, str)
     }
     expected_packet_id = gate.get("review_packet_id") if isinstance(gate.get("review_packet_id"), str) else None
     return gate, expected_hashes, expected_packet_id, []
 
 
-def review_matches_gate(data: dict, branch_id: str, expected_hashes: dict[str, str], expected_packet_id: str | None) -> bool:
+def review_matches_gate(
+    data: dict, branch_id: str, expected_hashes: dict[str, str], expected_packet_id: str | None
+) -> bool:
     packet_id = data.get("packet_id")
     if not isinstance(packet_id, str) or not packet_id.startswith(f"{branch_id}-R"):
         return False
@@ -587,11 +603,11 @@ def review_matches_gate(data: dict, branch_id: str, expected_hashes: dict[str, s
     if data.get("role") != "reviewer":
         return False
     candidate_hashes = data.get("semantic_input_hashes")
-    current_hashes = {
-        key: value
-        for key, value in candidate_hashes.items()
-        if isinstance(key, str) and isinstance(value, str)
-    } if isinstance(candidate_hashes, dict) else {}
+    current_hashes = (
+        {key: value for key, value in candidate_hashes.items() if isinstance(key, str) and isinstance(value, str)}
+        if isinstance(candidate_hashes, dict)
+        else {}
+    )
     return current_hashes == expected_hashes
 
 
@@ -628,7 +644,10 @@ def promote_reviewer_output(bundle_dir: Path, review_path: Path, branch_id: str)
     candidates, defects = current_reviewer_candidates(bundle_dir, branch_id, expected_hashes, expected_packet_id)
     if len(candidates) != 1:
         if candidates:
-            defects.append("review artifact is missing and reviewer promotion is ambiguous: " + ", ".join(path.as_posix() for path in candidates))
+            defects.append(
+                "review artifact is missing and reviewer promotion is ambiguous: "
+                + ", ".join(path.as_posix() for path in candidates)
+            )
         else:
             defects.append(f"review artifact is missing: {review_path}")
         return defects
@@ -780,7 +799,13 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
 
     all_workers_pass = bool(worker_statuses) and not worker_blockers
     diff_checks_pass = all(result.returncode == 0 for _command, result in diff_results) and not untracked_defects
-    can_pass = args.allow_pass and all_workers_pass and inferred_review_status == "mergeable" and diff_checks_pass and not blockers
+    can_pass = (
+        args.allow_pass
+        and all_workers_pass
+        and inferred_review_status == "mergeable"
+        and diff_checks_pass
+        and not blockers
+    )
     if args.status:
         status = args.status
     elif can_pass:
@@ -839,7 +864,9 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
             append_unique(downgraded_blockers, value)
         branch_status["status"] = "blocked"
         branch_status["blockers"] = downgraded_blockers
-        branch_status["handoff"] = "Branch status validation failed; pass artifact was downgraded to blocked with validator defects preserved."
+        branch_status["handoff"] = (
+            "Branch status validation failed; pass artifact was downgraded to blocked with validator defects preserved."
+        )
         if branch_status.get("review_status") == "missing":
             branch_status["review_waiver_path"] = review_waiver_rel_path(branch_id)
             write_review_waiver(bundle_dir, branch, branch_id, branch_status)

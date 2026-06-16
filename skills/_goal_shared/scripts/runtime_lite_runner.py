@@ -234,7 +234,10 @@ def verify_file_hash(path: Path, expected: object, label: str) -> tuple[bool, st
 def verify_bridge_control(config: dict[str, Any], inputs: dict[str, Any]) -> tuple[bool, str]:
     control_script = inputs.get("bridge_control_script")
     if not isinstance(control_script, str) or not control_script.strip():
-        return False, f"opencode-worker-bridge control script unavailable at packet creation path: {control_script or ''}"
+        return (
+            False,
+            f"opencode-worker-bridge control script unavailable at packet creation path: {control_script or ''}",
+        )
     path = Path(control_script)
     if not path.is_absolute() or not path.exists() or path.name != "opencode_worker.py":
         return False, f"opencode-worker-bridge control script unavailable at packet creation path: {control_script}"
@@ -322,7 +325,12 @@ def _elapsed_ms_from_timestamps(timestamps: Any) -> int | None:
     if not isinstance(timestamps, dict):
         return None
     start = timestamps.get("started_at") or timestamps.get("created_at") or timestamps.get("start")
-    end = timestamps.get("completed_at") or timestamps.get("finished_at") or timestamps.get("end") or timestamps.get("updated_at")
+    end = (
+        timestamps.get("completed_at")
+        or timestamps.get("finished_at")
+        or timestamps.get("end")
+        or timestamps.get("updated_at")
+    )
     if not isinstance(start, str) or not isinstance(end, str):
         return None
     try:
@@ -460,39 +468,78 @@ def run_bridge_delegate(
     rc = 1
     try:
         acquire_rc = run_bridge_subcommand(
-            config, control_path, "pool-acquire",
+            config,
+            control_path,
+            "pool-acquire",
             ["--pool-dir", pool_dir.as_posix(), "--max-workers", str(max_workers), "--worker-id", worker_id],
-            cwd=cwd, stdout_path=run_dir / "pool-acquire.log",
+            cwd=cwd,
+            stdout_path=run_dir / "pool-acquire.log",
         )
         if acquire_rc != 0:
             raw_path.write_text("bridge pool capacity limit reached; scheduler should refill later\n", encoding="utf-8")
             return acquire_rc, {"status": "blocked", "passed": False, "assistant_text": ""}
         acquired = True
         run_bridge_subcommand(
-            config, control_path, "start",
-            ["--state", state_path.as_posix(), "--cwd", cwd.as_posix(),
-             "--pool-dir", pool_dir.as_posix(), "--pool-worker-id", worker_id],
-            cwd=cwd, stdout_path=run_dir / "start.log",
+            config,
+            control_path,
+            "start",
+            [
+                "--state",
+                state_path.as_posix(),
+                "--cwd",
+                cwd.as_posix(),
+                "--pool-dir",
+                pool_dir.as_posix(),
+                "--pool-worker-id",
+                worker_id,
+            ],
+            cwd=cwd,
+            stdout_path=run_dir / "start.log",
         )
         rc = run_bridge_subcommand(
-            config, control_path, "delegate",
-            ["--state", state_path.as_posix(), "--run-dir", run_dir.as_posix(), "--job-id", worker_id,
-             "--prompt-file", task_path.as_posix(), "--provider", provider, "--model", model,
-             "--variant", variant, "--permission-profile", profile,
-             "--report", (run_dir / "delegation-report.json").as_posix()],
-            cwd=cwd, stdout_path=run_dir / "delegate.log",
+            config,
+            control_path,
+            "delegate",
+            [
+                "--state",
+                state_path.as_posix(),
+                "--run-dir",
+                run_dir.as_posix(),
+                "--job-id",
+                worker_id,
+                "--prompt-file",
+                task_path.as_posix(),
+                "--provider",
+                provider,
+                "--model",
+                model,
+                "--variant",
+                variant,
+                "--permission-profile",
+                profile,
+                "--report",
+                (run_dir / "delegation-report.json").as_posix(),
+            ],
+            cwd=cwd,
+            stdout_path=run_dir / "delegate.log",
         )
         run_bridge_subcommand(
-            config, control_path, "stop",
+            config,
+            control_path,
+            "stop",
             ["--state", state_path.as_posix(), "--run-dir", run_dir.as_posix()],
-            cwd=cwd, stdout_path=run_dir / "stop.log",
+            cwd=cwd,
+            stdout_path=run_dir / "stop.log",
         )
     finally:
         if acquired:
             run_bridge_subcommand(
-                config, control_path, "pool-release",
+                config,
+                control_path,
+                "pool-release",
                 ["--pool-dir", pool_dir.as_posix(), "--worker-id", worker_id],
-                cwd=cwd, stdout_path=run_dir / "pool-release.log",
+                cwd=cwd,
+                stdout_path=run_dir / "pool-release.log",
             )
 
     mapped = map_bridge_artifacts(run_dir)
@@ -556,7 +603,10 @@ def run_packet(packet_dir: Path) -> int:
         bridge_message_key = "bridge_unavailable"
     checks = [
         (verify_inputs_current(config, inputs), terminal_message(config, "inputs_stale")),
-        (verify_file_hash(prompt_path, inputs.get("prompt_sha256"), "prompt"), terminal_message(config, "prompt_stale")),
+        (
+            verify_file_hash(prompt_path, inputs.get("prompt_sha256"), "prompt"),
+            terminal_message(config, "prompt_stale"),
+        ),
         (verify_file_hash(task_path, inputs.get("task_sha256"), "task"), terminal_message(config, "task_stale")),
         (verify_bridge_control(config, inputs), terminal_message(config, bridge_message_key)),
     ]

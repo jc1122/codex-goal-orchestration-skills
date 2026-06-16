@@ -128,7 +128,14 @@ def telemetry_function(
     )
 
 
-def task_text(amendment_id: str, manifest_path: Path, active: list[str], terminal: list[str], selected_ladder: list[str], selection_reason: str) -> str:
+def task_text(
+    amendment_id: str,
+    manifest_path: Path,
+    active: list[str],
+    terminal: list[str],
+    selected_ladder: list[str],
+    selection_reason: str,
+) -> str:
     return "\n".join(
         [
             f"# Goal Plan Amendment Packet {amendment_id}",
@@ -183,7 +190,9 @@ def launch_script(
     *,
     telemetry_debug: bool = False,
 ) -> str:
-    telemetry = telemetry_function(amendment_id, manifest, manifest_path, selected_ladder, telemetry_debug=telemetry_debug)
+    telemetry = telemetry_function(
+        amendment_id, manifest, manifest_path, selected_ladder, telemetry_debug=telemetry_debug
+    )
     attempt_lines: list[str] = []
     for attempt in amender_telemetry_attempts(manifest, manifest_path, selected_ladder):
         alias = str(attempt.get("alias") or "")
@@ -201,7 +210,9 @@ def launch_script(
             runner = f"run_codex_model {CONTRACT.shell_quote(label)} {CONTRACT.shell_quote(model)}"
         else:
             logs = attempt.get("event_logs")
-            event_name = logs[0] if isinstance(logs, list) and logs and isinstance(logs[0], str) else f"events-{label}.log"
+            event_name = (
+                logs[0] if isinstance(logs, list) and logs and isinstance(logs[0], str) else f"events-{label}.log"
+            )
             command = _configured_attempt_command(attempt, amendment_id=amendment_id, repo_root=repo_root)
             if command is None:
                 command = f"unsupported_attempt {CONTRACT.shell_quote(event_name)} {CONTRACT.shell_quote(alias)} {CONTRACT.shell_quote(str(kind or 'unknown'))}"
@@ -213,12 +224,12 @@ def launch_script(
                 "  exit 0",
                 "fi",
                 "",
-                "if [ -s \"$proposal_path\" ] && valid_proposal; then",
+                'if [ -s "$proposal_path" ] && valid_proposal; then',
                 "  write_telemetry",
                 "  exit 1",
                 "fi",
                 "",
-                "rm -f \"$proposal_path\"",
+                'rm -f "$proposal_path"',
                 "",
             ]
         )
@@ -560,7 +571,12 @@ def main() -> int:
     parser.add_argument("--prompt-audit")
     parser.add_argument("--active-branch", action="append", default=[])
     parser.add_argument("--terminal-branch", action="append", default=[])
-    parser.add_argument("--amender-route", action="append", default=[], help="Allowed plan-amender model alias; repeat or comma-separate to select an ordered subsequence.")
+    parser.add_argument(
+        "--amender-route",
+        action="append",
+        default=[],
+        help="Allowed plan-amender model alias; repeat or comma-separate to select an ordered subsequence.",
+    )
     parser.add_argument("--selection-reason", help="Required when --amender-route is supplied; recorded in route.json.")
     parser.add_argument("--replace", action="store_true")
     args = parser.parse_args()
@@ -577,16 +593,25 @@ def main() -> int:
         raise SystemExit(str(exc)) from exc
     if args.amender_route and not str(args.selection_reason or "").strip():
         raise SystemExit("--selection-reason is required when --amender-route is supplied")
-    selection_reason = str(args.selection_reason or "").strip() or "Default deterministic plan-amender model ladder from amender_model_policy."
+    selection_reason = (
+        str(args.selection_reason or "").strip()
+        or "Default deterministic plan-amender model ladder from amender_model_policy."
+    )
     bundle_dir = manifest_path.parent
     amendments_dir = bundle_dir / "amendments"
     decision_path = amendments_dir / f"{amendment_id}.decision.json"
     if not decision_path.exists():
         raise SystemExit(f"missing launch decision artifact: {decision_path}")
     decision = load_json_object(decision_path)
-    if decision.get("schema_version") != 1 or decision.get("amendment_id") != amendment_id or decision.get("decision") != "launch":
+    if (
+        decision.get("schema_version") != 1
+        or decision.get("amendment_id") != amendment_id
+        or decision.get("decision") != "launch"
+    ):
         raise SystemExit(f"amendment decision must be a launch decision for {amendment_id}: {decision_path}")
-    if decision.get("manifest") != manifest_path.as_posix() or decision.get("manifest_sha256") != sha256_file(manifest_path):
+    if decision.get("manifest") != manifest_path.as_posix() or decision.get("manifest_sha256") != sha256_file(
+        manifest_path
+    ):
         raise SystemExit("amendment decision manifest path or sha256 does not match the live manifest")
     if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
         raise SystemExit("amendment decision reason_code is not valid for a launch decision")
@@ -622,9 +647,17 @@ def main() -> int:
     records.append(source_record(manifest_path, "live manifest"))
     records.append(source_record(decision_path, "amendment launch decision"))
     records.append(source_record(main_prompt, "main prompt"))
-    audit_path = resolve_absolute_path(args.prompt_audit, "--prompt-audit", must_exist=True) if args.prompt_audit else bundle_dir / "audit" / "prompt-audit.json"
+    audit_path = (
+        resolve_absolute_path(args.prompt_audit, "--prompt-audit", must_exist=True)
+        if args.prompt_audit
+        else bundle_dir / "audit" / "prompt-audit.json"
+    )
     add_if_exists(records, audit_path, "prompt audit")
-    scheduler_path = manifest.get("parallelization", {}).get("scheduler_path") if isinstance(manifest.get("parallelization"), dict) else None
+    scheduler_path = (
+        manifest.get("parallelization", {}).get("scheduler_path")
+        if isinstance(manifest.get("parallelization"), dict)
+        else None
+    )
     if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path"):
         add_if_exists(records, bundle_dir / scheduler_path, "main scheduler")
     for branch in manifest.get("branches", []):
@@ -671,7 +704,9 @@ def main() -> int:
     write_json(packet_dir / "proposal.schema.json", proposal_schema(amendment_id, str(manifest.get("job_id", ""))))
     write_json(packet_dir / "proposal.example.json", proposal_example(amendment_id, str(manifest.get("job_id", ""))))
     write_json(packet_dir / "route.json", route)
-    rendered_task = task_text(amendment_id, manifest_path, sorted(active), sorted(terminal), selected_ladder, selection_reason)
+    rendered_task = task_text(
+        amendment_id, manifest_path, sorted(active), sorted(terminal), selected_ladder, selection_reason
+    )
     (packet_dir / "task.md").write_text(rendered_task, encoding="utf-8")
     (packet_dir / "prompt.md").write_text(
         rendered_task

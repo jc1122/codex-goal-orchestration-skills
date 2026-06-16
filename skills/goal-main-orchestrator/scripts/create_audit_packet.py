@@ -161,12 +161,10 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
         work_items = branch.get("work_items", [])
         if isinstance(work_items, list):
             worker_packet_ids = ",".join(
-                str(item.get("packet_id", "missing")) if isinstance(item, dict) else "invalid"
-                for item in work_items
+                str(item.get("packet_id", "missing")) if isinstance(item, dict) else "invalid" for item in work_items
             )
             worker_types = ",".join(
-                str(item.get("worker_type", "worker")) if isinstance(item, dict) else "invalid"
-                for item in work_items
+                str(item.get("worker_type", "worker")) if isinstance(item, dict) else "invalid" for item in work_items
             )
         else:
             worker_packet_ids = "invalid"
@@ -179,7 +177,9 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
                 worktree=resolve_repo_path(repo_root, branch.get("worktree_path", ""), "worktree_path").as_posix(),
                 status=resolve_bundle_path(base, branch.get("status_path", ""), "status_path").as_posix(),
                 review=resolve_bundle_path(base, branch.get("review_path", ""), "review_path").as_posix(),
-                depends_on=",".join(branch.get("depends_on", [])) if isinstance(branch.get("depends_on", []), list) else "invalid",
+                depends_on=",".join(branch.get("depends_on", []))
+                if isinstance(branch.get("depends_on", []), list)
+                else "invalid",
                 max_workers=branch.get("max_active_worker_packets", "missing"),
                 worker_packets=len(work_items) if isinstance(work_items, list) else "invalid",
                 worker_packet_ids=worker_packet_ids,
@@ -292,7 +292,9 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--replace", action="store_true", help="Archive an existing audit packet under attempts/ and recreate it.")
+    parser.add_argument(
+        "--replace", action="store_true", help="Archive an existing audit packet under attempts/ and recreate it."
+    )
     parser.add_argument(
         "--attempt-timeout-seconds",
         type=int,
@@ -320,7 +322,9 @@ def main() -> int:
     )
     (out_dir / "launch-config.json").write_text(
         json.dumps(
-            audit_launch_config(manifest_path, repo_root, manifest=manifest, attempt_timeout_seconds=args.attempt_timeout_seconds),
+            audit_launch_config(
+                manifest_path, repo_root, manifest=manifest, attempt_timeout_seconds=args.attempt_timeout_seconds
+            ),
             indent=2,
             sort_keys=True,
         )

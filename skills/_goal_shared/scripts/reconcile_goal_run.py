@@ -190,7 +190,9 @@ def build_stale_artifact_index(bundle_dir: Path, manifest: dict[str, Any]) -> di
                     "size_bytes": path.stat().st_size,
                     "stale_reason": infer_stale_reason(root_name),
                     "superseding_artifact": superseding_artifact,
-                    "terminal_reason": None if superseding_artifact else f"{infer_stale_reason(root_name)}: no replacement artifact path resolved",
+                    "terminal_reason": None
+                    if superseding_artifact
+                    else f"{infer_stale_reason(root_name)}: no replacement artifact path resolved",
                     "excluded_from_current_evidence": True,
                     "retention_epoch": retention_epoch,
                 }
@@ -258,7 +260,9 @@ def stale_artifact_index_state(
     return state
 
 
-def add_issue(target: list[dict[str, Any]], *, code: str, path: Path | str, kind: str, owner: str, message: str) -> None:
+def add_issue(
+    target: list[dict[str, Any]], *, code: str, path: Path | str, kind: str, owner: str, message: str
+) -> None:
     path_text = path.as_posix() if isinstance(path, Path) else path
     item = {
         "code": code,
@@ -532,7 +536,9 @@ def branch_summary(
     status_path = bundle_path(bundle_dir, branch.get("status_path"), f"branches/{branch_id}.status.json")
     review_path = bundle_path(bundle_dir, branch.get("review_path"), f"branches/{branch_id}.review.json")
     prompt_path = bundle_path(bundle_dir, branch.get("prompt"), f"branches/{branch_id}.prompt.md")
-    pre_review_gate_path = bundle_path(bundle_dir, branch.get("pre_review_gate_path"), f"branches/{branch_id}.pre_review_gate.json")
+    pre_review_gate_path = bundle_path(
+        bundle_dir, branch.get("pre_review_gate_path"), f"branches/{branch_id}.pre_review_gate.json"
+    )
     worktree_path = repo_or_bundle_path(bundle_dir, repo_root, branch.get("worktree_path"))
     status_data, status_error = read_json_or_none(status_path) if status_path.exists() else (None, None)
     status_value = status_data.get("status") if isinstance(status_data, dict) else None
@@ -607,8 +613,12 @@ def branch_summary(
         validation_defects = BRANCH_VALIDATOR.validate_branch_status(
             status_data,
             branch_id=branch_id,
-            branch=status_data.get("branch") if isinstance(status_data.get("branch"), str) else branch.get("branch_name"),
-            worktree=status_data.get("worktree") if isinstance(status_data.get("worktree"), str) else (worktree_path.as_posix() if worktree_path else None),
+            branch=status_data.get("branch")
+            if isinstance(status_data.get("branch"), str)
+            else branch.get("branch_name"),
+            worktree=status_data.get("worktree")
+            if isinstance(status_data.get("worktree"), str)
+            else (worktree_path.as_posix() if worktree_path else None),
             manifest=manifest,
             manifest_path=manifest_path,
             status_path=status_path,
@@ -647,7 +657,9 @@ def branch_summary(
             "finished_status": {branch_id: "blocked"},
             "max_observed_active": 0,
             "terminal_reason_code": "dependency_failed",
-            "terminal_reason": dependency_failed_event.get("reason") if isinstance(dependency_failed_event, dict) else None,
+            "terminal_reason": dependency_failed_event.get("reason")
+            if isinstance(dependency_failed_event, dict)
+            else None,
         }
     else:
         scheduler = validate_scheduler(
@@ -714,7 +726,9 @@ def branch_summary(
         "schema_status": "pass" if status_data is not None else "missing",
         "runtime_status": status_value if status_value in RUNTIME_STATUS_VALUES else "missing",
         "review_status": review_status if review_status in REVIEW_STATUS_VALUES else "missing",
-        "resume_action": "reuse_terminal_status" if status_data is not None and not validation_defects else "repair_or_reassemble",
+        "resume_action": "reuse_terminal_status"
+        if status_data is not None and not validation_defects
+        else "repair_or_reassemble",
         "status_path": artifact_ref(bundle_dir, status_path),
         "review_path": artifact_ref(bundle_dir, review_path),
         "prompt_path": artifact_ref(bundle_dir, prompt_path),
@@ -799,12 +813,20 @@ def string_list(value: object) -> list[str]:
 
 
 def manifest_branches_by_id(branches: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    return {branch_id: branch for branch in branches if isinstance((branch_id := branch.get("id")), str) and branch_id.strip()}
+    return {
+        branch_id: branch
+        for branch in branches
+        if isinstance((branch_id := branch.get("id")), str) and branch_id.strip()
+    }
 
 
 def branch_report_successful(branch: dict[str, Any]) -> bool:
     validation = branch.get("validation") if isinstance(branch.get("validation"), dict) else {}
-    return branch.get("runtime_status") == "pass" and branch.get("review_status") == "mergeable" and validation.get("status") == "pass"
+    return (
+        branch.get("runtime_status") == "pass"
+        and branch.get("review_status") == "mergeable"
+        and validation.get("status") == "pass"
+    )
 
 
 def manifest_branch_declares_recovery(manifest_branch: dict[str, Any] | None, target_branch_id: str) -> bool:
@@ -823,9 +845,16 @@ def recovered_branch_ids(branches: list[dict[str, Any]], branch_reports: list[di
     recovered: set[str] = set()
     for branch in branch_reports:
         target_branch_id = branch.get("branch_id")
-        if not isinstance(target_branch_id, str) or branch.get("runtime_status") not in {"partial", "blocked", "failed"}:
+        if not isinstance(target_branch_id, str) or branch.get("runtime_status") not in {
+            "partial",
+            "blocked",
+            "failed",
+        }:
             continue
-        if any(manifest_branch_declares_recovery(manifest_by_id.get(recovery_id), target_branch_id) for recovery_id in successful_branch_ids):
+        if any(
+            manifest_branch_declares_recovery(manifest_by_id.get(recovery_id), target_branch_id)
+            for recovery_id in successful_branch_ids
+        ):
             recovered.add(target_branch_id)
     return recovered
 
@@ -912,7 +941,9 @@ def compact_issue_ref(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def scheduler_recovery_closeout_commands(manifest_path: Path, branch_id: str, *, reason_code: str, reason: str) -> list[str]:
+def scheduler_recovery_closeout_commands(
+    manifest_path: Path, branch_id: str, *, reason_code: str, reason: str
+) -> list[str]:
     scheduler_tick = SKILLS_ROOT / "goal-main-orchestrator" / "scripts" / "scheduler_tick.py"
     base = (
         f"python3 {scheduler_tick} --manifest {manifest_path.as_posix()} --scope main "
@@ -928,9 +959,7 @@ def scheduler_recovery_closeout_commands(manifest_path: Path, branch_id: str, *,
 
 def stale_active_branch_ids(main_scheduler: dict[str, Any], branch_reports: list[dict[str, Any]]) -> list[str]:
     branch_by_id = {
-        str(branch.get("branch_id")): branch
-        for branch in branch_reports
-        if isinstance(branch.get("branch_id"), str)
+        str(branch.get("branch_id")): branch for branch in branch_reports if isinstance(branch.get("branch_id"), str)
     }
     result: list[str] = []
     for branch_id in main_scheduler.get("active", []):
@@ -993,7 +1022,9 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
     pre_dispatch = pre_branch_dispatch_phase(bundle_dir, branch_reports)
 
     main_status_path = bundle_dir / "main.status.json"
-    main_status_data, main_status_error = read_json_or_none(main_status_path) if main_status_path.exists() else (None, None)
+    main_status_data, main_status_error = (
+        read_json_or_none(main_status_path) if main_status_path.exists() else (None, None)
+    )
     main_validation_defects: list[str] = []
     if main_status_data is None:
         add_issue(
@@ -1080,7 +1111,10 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             f"python3 {SKILLS_ROOT / 'goal-main-orchestrator' / 'scripts' / 'assemble_main_status.py'} "
             f"--manifest {manifest_path.as_posix()} --out {main_status_path.as_posix()} --replace"
         )
-    if telemetry["telemetry_count"] and (not telemetry["summary_exists"] or any(item["code"].startswith("stale_telemetry") for item in stale_or_unreconciled)):
+    if telemetry["telemetry_count"] and (
+        not telemetry["summary_exists"]
+        or any(item["code"].startswith("stale_telemetry") for item in stale_or_unreconciled)
+    ):
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-main-orchestrator' / 'scripts' / 'summarize_telemetry.py'} "
             f"--bundle-dir {bundle_dir.as_posix()}"
@@ -1096,16 +1130,24 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
     ]
     for branch in branch_reports:
         validation_defects.extend(f"{branch['branch_id']}: {item}" for item in branch["validation"]["defects"])
-        validation_defects.extend(f"{branch['branch_id']} scheduler: {item}" for item in branch["worker_scheduler"]["validation_defects"])
+        validation_defects.extend(
+            f"{branch['branch_id']} scheduler: {item}" for item in branch["worker_scheduler"]["validation_defects"]
+        )
 
-    effective_missing_artifacts = [item for item in missing_artifacts if not (pre_dispatch and suppress_pre_dispatch_issue(item))]
+    effective_missing_artifacts = [
+        item for item in missing_artifacts if not (pre_dispatch and suppress_pre_dispatch_issue(item))
+    ]
     effective_stale_or_unreconciled = [
         item for item in stale_or_unreconciled if not (pre_dispatch and suppress_pre_dispatch_issue(item))
     ]
     effective_validation_defects = [] if pre_dispatch else validation_defects
-    hard_issue_count = len(effective_missing_artifacts) + len(effective_stale_or_unreconciled) + len(effective_validation_defects)
+    hard_issue_count = (
+        len(effective_missing_artifacts) + len(effective_stale_or_unreconciled) + len(effective_validation_defects)
+    )
     main_status_value = main_status_data.get("status") if isinstance(main_status_data, dict) else None
-    status = "incomplete" if pre_dispatch else "pass" if hard_issue_count == 0 and main_status_value == "pass" else "blocked"
+    status = (
+        "incomplete" if pre_dispatch else "pass" if hard_issue_count == 0 and main_status_value == "pass" else "blocked"
+    )
     if not pre_dispatch and hard_issue_count == 0 and main_status_value in {"partial", "blocked", "failed"}:
         status = str(main_status_value)
 
@@ -1119,8 +1161,7 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         if isinstance(item.get("owner"), str) and str(item.get("owner")).startswith("B")
     }
     branch_reuse = {
-        branch_id: reusable and branch_id not in stale_branch_owners
-        for branch_id, reusable in branch_reuse.items()
+        branch_id: reusable and branch_id not in stale_branch_owners for branch_id, reusable in branch_reuse.items()
     }
     resume_action = choose_resume_action(
         overall_safe_to_reuse=False,
@@ -1143,7 +1184,6 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         validation_defects=validation_defects,
     )
 
-
     terminal_branch_ids = [
         branch["branch_id"]
         for branch in branch_reports
@@ -1158,7 +1198,8 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             "validation_status": branch.get("validation", {}).get("status"),
         }
         for branch in branch_reports
-        if branch.get("runtime_status") in {"partial", "blocked", "failed"} and branch.get("branch_id") not in recovered_ids
+        if branch.get("runtime_status") in {"partial", "blocked", "failed"}
+        and branch.get("branch_id") not in recovered_ids
     ]
     missing_branch_ids = [
         branch["branch_id"]
@@ -1166,9 +1207,15 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         if branch.get("runtime_status") == "missing" or branch.get("status_path", {}).get("exists") is not True
     ]
     safe_branch_ids = [branch_id for branch_id, reusable in branch_reuse.items() if reusable]
-    blocked_work = [compact_issue_ref(item) for item in [*effective_missing_artifacts, *effective_stale_or_unreconciled]]
+    blocked_work = [
+        compact_issue_ref(item) for item in [*effective_missing_artifacts, *effective_stale_or_unreconciled]
+    ]
     pending_work = (
-        [compact_issue_ref(item) for item in [*missing_artifacts, *stale_or_unreconciled] if suppress_pre_dispatch_issue(item)]
+        [
+            compact_issue_ref(item)
+            for item in [*missing_artifacts, *stale_or_unreconciled]
+            if suppress_pre_dispatch_issue(item)
+        ]
         if pre_dispatch
         else []
     )
@@ -1227,7 +1274,9 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             "status": main_status_value,
             "schema_status": "pass" if main_status_data is not None else "missing",
             "runtime_status": main_status_value if main_status_value in RUNTIME_STATUS_VALUES else "missing",
-            "resume_action": "reuse_terminal_status" if main_status_data is not None and not main_validation_defects else "assemble_or_repair",
+            "resume_action": "reuse_terminal_status"
+            if main_status_data is not None and not main_validation_defects
+            else "assemble_or_repair",
             "validation": {
                 "status": "pass" if not main_validation_defects else "failed",
                 "defects": main_validation_defects,
@@ -1273,16 +1322,27 @@ def main() -> int:
     parser.add_argument("--manifest", required=True, help="Path to job.manifest.json.")
     parser.add_argument("--repo-root", help="Repository root used to resolve relative branch worktree paths.")
     parser.add_argument("--output", help="Optional report output path. Defaults to stdout only unless --write is used.")
-    parser.add_argument("--write", action="store_true", help="Write orchestration.state.json and resume.report.json in the bundle root.")
-    parser.add_argument("--require-pass", action="store_true", help="Return non-zero unless final_state_validation.status is pass.")
+    parser.add_argument(
+        "--write", action="store_true", help="Write orchestration.state.json and resume.report.json in the bundle root."
+    )
+    parser.add_argument(
+        "--require-pass", action="store_true", help="Return non-zero unless final_state_validation.status is pass."
+    )
     parser.add_argument("--json", action="store_true", help="Print JSON report instead of compact status lines.")
     args = parser.parse_args()
 
     manifest_path = STATUS_VALIDATION.resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
-    repo_root = STATUS_VALIDATION.resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True) if args.repo_root else None
+    repo_root = (
+        STATUS_VALIDATION.resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
+        if args.repo_root
+        else None
+    )
     if args.write:
         manifest = read_json(manifest_path)
-        write_json(manifest_path.parent / "stale-artifacts.index.json", build_stale_artifact_index(manifest_path.parent, manifest))
+        write_json(
+            manifest_path.parent / "stale-artifacts.index.json",
+            build_stale_artifact_index(manifest_path.parent, manifest),
+        )
     report = build_report(manifest_path, repo_root=repo_root)
     if args.write and report.get("execution_phase") != "pre_branch_dispatch":
         materialize_main_status_if_missing(manifest_path)

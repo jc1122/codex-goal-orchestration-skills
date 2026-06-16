@@ -93,7 +93,11 @@ def routes_verified(report: dict) -> bool:
     if summary.get("route_verification_status") == "routes_verified":
         return True
     accepted_route_count = summary.get("accepted_route_count")
-    return isinstance(accepted_route_count, int) and not isinstance(accepted_route_count, bool) and accepted_route_count > 0
+    return (
+        isinstance(accepted_route_count, int)
+        and not isinstance(accepted_route_count, bool)
+        and accepted_route_count > 0
+    )
 
 
 def accepted_route_roles(report: dict | None) -> set[str]:
@@ -178,10 +182,7 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
             report = read_json(candidate)
         except Exception:  # noqa: BLE001
             continue
-        if (
-            routes_verified(report)
-            and report_matches_config(report, config, config_sha256=config_sha256)
-        ):
+        if routes_verified(report) and report_matches_config(report, config, config_sha256=config_sha256):
             return candidate
     return None
 
@@ -318,7 +319,9 @@ def emit_failure_summary(
             print(f"- {item}", file=sys.stderr)
 
 
-def run_tracked_phase(phase: str, command: list[str], out_dir: Path, output: Path | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+def run_tracked_phase(
+    phase: str, command: list[str], out_dir: Path, output: Path | None = None
+) -> tuple[subprocess.CompletedProcess[str], dict]:
     before = artifact_snapshot(out_dir)
     start = time.perf_counter()
     result = run(command)
@@ -488,7 +491,9 @@ def brief_requests_debug(brief: dict) -> bool:
 
 def compact_readiness(readiness: dict) -> dict:
     prompt_size = readiness.get("prompt_size_report") if isinstance(readiness.get("prompt_size_report"), dict) else {}
-    artifact_size = readiness.get("artifact_size_report") if isinstance(readiness.get("artifact_size_report"), dict) else {}
+    artifact_size = (
+        readiness.get("artifact_size_report") if isinstance(readiness.get("artifact_size_report"), dict) else {}
+    )
     return {
         "status": readiness.get("status"),
         "launch_allowed": readiness.get("launch_allowed"),
@@ -538,7 +543,11 @@ def update_result_readiness_fields(result: dict, readiness_data: dict, *, verbos
 
 
 def artifact_chars_by_path(readiness_data: dict) -> dict[str, int]:
-    report = readiness_data.get("artifact_size_report") if isinstance(readiness_data.get("artifact_size_report"), dict) else {}
+    report = (
+        readiness_data.get("artifact_size_report")
+        if isinstance(readiness_data.get("artifact_size_report"), dict)
+        else {}
+    )
     entries = report.get("machine_artifacts") if isinstance(report.get("machine_artifacts"), list) else []
     result: dict[str, int] = {}
     for item in entries:
@@ -560,7 +569,9 @@ def readiness_size_report_matches_files(readiness_data: dict, bundle_dir: Path) 
     return checked
 
 
-def refresh_final_readiness_sizes(out_dir: Path, repo_root: Path, output_path: Path, result: dict, *, verbose: bool) -> dict:
+def refresh_final_readiness_sizes(
+    out_dir: Path, repo_root: Path, output_path: Path, result: dict, *, verbose: bool
+) -> dict:
     readiness_path = out_dir / "readiness.json"
     if not readiness_path.exists():
         return {"status": "missing"}
@@ -577,7 +588,9 @@ def refresh_final_readiness_sizes(out_dir: Path, repo_root: Path, output_path: P
     return readiness_data
 
 
-def update_preflight_report(out_dir: Path, readiness: dict, lint_path: Path, repair_path: Path, result_kind: str) -> None:
+def update_preflight_report(
+    out_dir: Path, readiness: dict, lint_path: Path, repair_path: Path, result_kind: str
+) -> None:
     report_path = out_dir / "PREFLIGHT_REPORT.md"
     if not report_path.exists():
         return
@@ -648,7 +661,9 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
     result = run(command)
     elapsed_ms = int((time.perf_counter() - start) * 1000)
     failure_output = "\n".join(item for item in [result.stdout, result.stderr] if item)
-    original = read_json(original_report) if original_report.exists() else {"status": "failed", "failures": [failure_output]}
+    original = (
+        read_json(original_report) if original_report.exists() else {"status": "failed", "failures": [failure_output]}
+    )
     try:
         config_data = read_json(config)
     except Exception:  # noqa: BLE001
@@ -710,15 +725,25 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         start = time.perf_counter()
         remediated_result = run(remediated_command)
         remediated_elapsed_ms = int((time.perf_counter() - start) * 1000)
-        remediated_failure_output = "\n".join(item for item in [remediated_result.stdout, remediated_result.stderr] if item)
-        remediated = read_json(remediated_report) if remediated_report.exists() else {"status": "failed", "failures": [remediated_failure_output]}
+        remediated_failure_output = "\n".join(
+            item for item in [remediated_result.stdout, remediated_result.stderr] if item
+        )
+        remediated = (
+            read_json(remediated_report)
+            if remediated_report.exists()
+            else {"status": "failed", "failures": [remediated_failure_output]}
+        )
         remediated_config_data = read_json(remediated_config) if remediated_config.exists() else {}
         candidate["remediated_config_path"] = remediated_config.as_posix()
         candidate["remediated_check_path"] = remediated_report.as_posix()
         candidate["remediated_status"] = remediated.get("status")
         candidate["remediated_failures"] = remediated.get("failures", [])
-        candidate["remediated_route_coverage_missing_worker_roles"] = missing_worker_route_roles(remediated_config_data, remediated)
-        candidate["remediated_check_telemetry"] = subprocess_telemetry(remediated_command, remediated_result, remediated_elapsed_ms)
+        candidate["remediated_route_coverage_missing_worker_roles"] = missing_worker_route_roles(
+            remediated_config_data, remediated
+        )
+        candidate["remediated_check_telemetry"] = subprocess_telemetry(
+            remediated_command, remediated_result, remediated_elapsed_ms
+        )
         if remediated_result.returncode == 0 and remediated.get("status") == "pass":
             candidate.update(
                 {
@@ -789,20 +814,28 @@ def main() -> int:
     parser.add_argument("--brief", required=True)
     parser.add_argument("--repo-root", required=True)
     parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--goal-config", action="append", default=[], help="Candidate config path. Repeat to control selection order.")
+    parser.add_argument(
+        "--goal-config", action="append", default=[], help="Candidate config path. Repeat to control selection order."
+    )
     parser.add_argument(
         "--goal-config-check",
         help="Optional passing check report to use when a supplied goal-config has a route-verified smoke/discovery file.",
     )
     parser.add_argument("--no-goal-config", action="store_true", help="Do not auto-detect or embed a goal config.")
-    parser.add_argument("--allow-blocked-readiness", action="store_true", help="Return zero even when readiness is blocked.")
+    parser.add_argument(
+        "--allow-blocked-readiness", action="store_true", help="Return zero even when readiness is blocked."
+    )
     parser.add_argument(
         "--build-blocked-bundle",
         action="store_true",
         help="Continue past an early runtime gate blocker and build an inspection-only bundle.",
     )
     parser.add_argument("--json", action="store_true", help="Print pipeline JSON to stdout.")
-    parser.add_argument("--verbose", action="store_true", help="Embed full config-selection and readiness payloads in the pipeline result.")
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Embed full config-selection and readiness payloads in the pipeline result.",
+    )
     parser.add_argument("--output", help="Write pipeline result JSON. Defaults to <bundle>/preflight.pipeline.json.")
     args = parser.parse_args()
 
@@ -828,7 +861,11 @@ def main() -> int:
     brief_lint_result, record = run_tracked_phase("brief_lint", brief_lint_command, out_dir, brief_lint)
     commands.append(record)
     if brief_lint_result.returncode != 0:
-        output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
+        output_path = (
+            resolve_absolute_path(args.output, "--output", must_exist=False)
+            if args.output
+            else out_dir / "preflight.pipeline.json"
+        )
         result = {
             "status": "failed",
             "phase": "brief_lint",
@@ -876,7 +913,11 @@ def main() -> int:
             "next_commands": blocked_gate_next_commands(brief, repo_root, out_dir),
             "commands": commands,
         }
-        output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
+        output_path = (
+            resolve_absolute_path(args.output, "--output", must_exist=False)
+            if args.output
+            else out_dir / "preflight.pipeline.json"
+        )
         write_json(output_path, result)
         if args.json:
             print(json.dumps(result, indent=2, sort_keys=True))
@@ -928,11 +969,24 @@ def main() -> int:
         (out_dir / "create-bundle-result.json").as_posix(),
     ]
     if selected:
-        create_command.extend(["--goal-config", str(selected["selected_config_path"]), "--goal-config-check", str(selected["selected_check_path"])])
-    create_result, record = run_tracked_phase("create_bundle", create_command, out_dir, out_dir / "create-bundle-result.json")
+        create_command.extend(
+            [
+                "--goal-config",
+                str(selected["selected_config_path"]),
+                "--goal-config-check",
+                str(selected["selected_check_path"]),
+            ]
+        )
+    create_result, record = run_tracked_phase(
+        "create_bundle", create_command, out_dir, out_dir / "create-bundle-result.json"
+    )
     commands.append(record)
     if create_result.returncode != 0:
-        output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
+        output_path = (
+            resolve_absolute_path(args.output, "--output", must_exist=False)
+            if args.output
+            else out_dir / "preflight.pipeline.json"
+        )
         result = {
             "status": "failed",
             "phase": "create_bundle",
@@ -1017,7 +1071,9 @@ def main() -> int:
     elif readiness_data.get("status") != "pass":
         status = "blocked"
         result_kind = "blocked_readiness_usable_bundle"
-        runtime_gate = readiness_data.get("runtime_gate") if isinstance(readiness_data.get("runtime_gate"), dict) else {}
+        runtime_gate = (
+            readiness_data.get("runtime_gate") if isinstance(readiness_data.get("runtime_gate"), dict) else {}
+        )
         blocked_reason = runtime_gate.get("reason") or "readiness status is not pass"
     update_preflight_report(out_dir, readiness_data, bundle_lint, repair_gate, result_kind)
     result = {
@@ -1043,7 +1099,11 @@ def main() -> int:
     if args.verbose:
         result["config_selection_full"] = config_selection
         result["readiness_full"] = readiness_data
-    output_path = resolve_absolute_path(args.output, "--output", must_exist=False) if args.output else out_dir / "preflight.pipeline.json"
+    output_path = (
+        resolve_absolute_path(args.output, "--output", must_exist=False)
+        if args.output
+        else out_dir / "preflight.pipeline.json"
+    )
     write_json(output_path, result)
     if output_path == out_dir / "preflight.pipeline.json":
         readiness_data = refresh_final_readiness_sizes(out_dir, repo_root, output_path, result, verbose=args.verbose)

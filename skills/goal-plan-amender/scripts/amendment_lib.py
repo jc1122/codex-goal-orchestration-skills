@@ -147,7 +147,11 @@ def amender_model_specs(manifest: dict | None, manifest_path: Path | None = None
 def amender_harnesses(manifest: dict | None, manifest_path: Path | None = None) -> dict[str, dict]:
     goal_config = goal_config_from_manifest(manifest, manifest_path)
     harnesses = goal_config.get("harnesses") if isinstance(goal_config, dict) else None
-    return {key: value for key, value in harnesses.items() if isinstance(key, str) and isinstance(value, dict)} if isinstance(harnesses, dict) else {}
+    return (
+        {key: value for key, value in harnesses.items() if isinstance(key, str) and isinstance(value, dict)}
+        if isinstance(harnesses, dict)
+        else {}
+    )
 
 
 def _string_list(value: object) -> list[str]:
@@ -204,14 +208,17 @@ def validate_amender_model_policy(manifest: dict | None, manifest_path: Path | N
         defects.append("ordering_rule must be a non-empty string")
     specs = amender_model_specs(manifest, manifest_path)
     missing_specs = [
-        alias
-        for alias in allowed_routes
-        if alias not in specs and alias not in CONTRACT.ALLOWED_AMENDER_ROUTES
+        alias for alias in allowed_routes if alias not in specs and alias not in CONTRACT.ALLOWED_AMENDER_ROUTES
     ]
     if missing_specs:
-        defects.append("allowed_routes aliases need goal-config model metadata or built-in Codex aliases: " + ", ".join(missing_specs))
+        defects.append(
+            "allowed_routes aliases need goal-config model metadata or built-in Codex aliases: "
+            + ", ".join(missing_specs)
+        )
     if defects:
-        raise ValueError("manifest amender_model_policy is not compatible with plan-amender routing: " + "; ".join(defects))
+        raise ValueError(
+            "manifest amender_model_policy is not compatible with plan-amender routing: " + "; ".join(defects)
+        )
     return policy
 
 
@@ -303,10 +310,16 @@ def bridge_amender_attempt(alias: str, *, timeout_seconds: int) -> dict:
     }
 
 
-def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None, selected_ladder: list[str]) -> list[dict]:
+def amender_telemetry_attempts(
+    manifest: dict | None, manifest_path: Path | None, selected_ladder: list[str]
+) -> list[dict]:
     policy = amender_model_policy(manifest, manifest_path)
     timeout = policy.get("timeout_seconds")
-    timeout_seconds = timeout if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0 else CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS
+    timeout_seconds = (
+        timeout
+        if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0
+        else CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS
+    )
     specs = amender_model_specs(manifest, manifest_path)
     harnesses = amender_harnesses(manifest, manifest_path)
     if not specs:
@@ -315,7 +328,9 @@ def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None
             if CONTRACT.is_bridge_alias(alias):
                 attempts.append(bridge_amender_attempt(alias, timeout_seconds=timeout_seconds))
                 continue
-            attempts.extend(CONTRACT.codex_telemetry_attempts([alias], timeout_seconds=timeout_seconds, sandbox="read-only"))
+            attempts.extend(
+                CONTRACT.codex_telemetry_attempts([alias], timeout_seconds=timeout_seconds, sandbox="read-only")
+            )
         return attempts
     attempts = []
     for alias in selected_ladder:
@@ -325,7 +340,9 @@ def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None
         spec = specs.get(alias)
         if not isinstance(spec, dict):
             if alias in CONTRACT.ALLOWED_AMENDER_ROUTES:
-                attempts.extend(CONTRACT.codex_telemetry_attempts([alias], timeout_seconds=timeout_seconds, sandbox="read-only"))
+                attempts.extend(
+                    CONTRACT.codex_telemetry_attempts([alias], timeout_seconds=timeout_seconds, sandbox="read-only")
+                )
                 continue
             raise SystemExit(f"goal_config missing model role used by amender route ladder: {alias}")
         harness_name = spec.get("harness")
@@ -348,7 +365,9 @@ def amender_telemetry_attempts(manifest: dict | None, manifest_path: Path | None
                 "harness_kind": kind,
                 "command_binary": command_binary,
                 "command": command,
-                "run_args": harness.get("run_args") or harness.get("smoke_args") or [] if isinstance(harness, dict) else [],
+                "run_args": harness.get("run_args") or harness.get("smoke_args") or []
+                if isinstance(harness, dict)
+                else [],
                 "run_readback": harness.get("run_readback", "stdout") if isinstance(harness, dict) else "stdout",
                 "effort": "configured",
                 "sandbox": "read-only",
@@ -536,7 +555,9 @@ def manifest_to_brief(manifest: dict) -> dict:
         "runtime_cap": copy.deepcopy(manifest.get("runtime_cap")),
         "runtime_rules_path": manifest.get("runtime_rules_path"),
         "runtime_rules_sha256": manifest.get("runtime_rules_sha256"),
-        "branches": [branch_brief_from_manifest(branch) for branch in manifest.get("branches", []) if isinstance(branch, dict)],
+        "branches": [
+            branch_brief_from_manifest(branch) for branch in manifest.get("branches", []) if isinstance(branch, dict)
+        ],
     }
     for key in RUNTIME_BRIEF_PRESERVED_KEYS:
         if key in manifest:
@@ -624,7 +645,13 @@ def prompt_regeneration_branch_ids(candidate: dict, protected_branch_ids: set[st
 def normalize_candidate_manifest(manifest: dict, bundle_dir: Path | None = None) -> tuple[dict, dict]:
     brief = PREFLIGHT.normalize_brief(manifest_to_brief(manifest))
     hydrate_brief_runtime_sidecars(brief, manifest, bundle_dir)
-    for key in ["source_attachments", "source_attachment_promotions", "runtime_cap", "runtime_rules_path", "runtime_rules_sha256"]:
+    for key in [
+        "source_attachments",
+        "source_attachment_promotions",
+        "runtime_cap",
+        "runtime_rules_path",
+        "runtime_rules_sha256",
+    ]:
         if key in manifest:
             brief[key] = copy.deepcopy(manifest[key])
     normalized = PREFLIGHT.manifest_from_normalized_brief(brief, bundle_dir)
@@ -648,7 +675,9 @@ def normalize_candidate_manifest(manifest: dict, bundle_dir: Path | None = None)
 
 def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict[str, str]]:
     parallelization = manifest.get("parallelization", {})
-    scheduler_path = parallelization.get("scheduler_path") if isinstance(parallelization, dict) else CONTRACT.MAIN_SCHEDULER_PATH
+    scheduler_path = (
+        parallelization.get("scheduler_path") if isinstance(parallelization, dict) else CONTRACT.MAIN_SCHEDULER_PATH
+    )
     if not isinstance(scheduler_path, str) or relative_path_defect(scheduler_path, "scheduler_path"):
         raise ValueError("manifest scheduler_path is unsafe; refusing to infer protected branch state")
     ledger_path = manifest_path.parent / scheduler_path
@@ -657,7 +686,9 @@ def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict
     try:
         ledger = load_json_object(ledger_path)
     except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"could not read scheduler ledger for protected branch inference: {ledger_path}: {exc}") from exc
+        raise ValueError(
+            f"could not read scheduler ledger for protected branch inference: {ledger_path}: {exc}"
+        ) from exc
     active: set[str] = set()
     finished_status: dict[str, str] = {}
     terminal: dict[str, str] = {}
@@ -694,7 +725,9 @@ def status_file_terminal_state(manifest_path: Path, manifest: dict) -> dict[str,
         try:
             data = load_json_object(path)
         except Exception as exc:  # noqa: BLE001
-            raise ValueError(f"could not read terminal branch status artifact for protected branch inference: {path}: {exc}") from exc
+            raise ValueError(
+                f"could not read terminal branch status artifact for protected branch inference: {path}: {exc}"
+            ) from exc
         status = data.get("status")
         if status in CONTRACT.STATUSES:
             statuses[branch_id] = str(status)
@@ -726,7 +759,9 @@ def protected_ids(
     terminal_status.update(status_terminal)
     overlap = sorted(active & set(terminal_status))
     if overlap:
-        raise ValueError(f"branch ids cannot be both active and terminal for amendment protection: {', '.join(overlap)}")
+        raise ValueError(
+            f"branch ids cannot be both active and terminal for amendment protection: {', '.join(overlap)}"
+        )
     return active, set(terminal_status), terminal_status
 
 
@@ -887,7 +922,9 @@ def apply_operations_to_manifest(
             if defects and defects[-1].startswith(path):
                 continue
             branches[target_index : target_index + 1] = new_branches
-            replace_dependency(branches[target_index + len(new_branches) :], branch_id, [str(value) for value in replacement_ids])
+            replace_dependency(
+                branches[target_index + len(new_branches) :], branch_id, [str(value) for value in replacement_ids]
+            )
             changed_branch_ids.update(str(value) for value in replacement_ids)
             continue
 
@@ -1060,7 +1097,9 @@ def validate_proposal(
         defects.append(str(exc))
     protected = active | terminal
     if active & terminal:
-        defects.append("active_branch_ids and terminal_branch_ids must not overlap: " + ", ".join(sorted(active & terminal)))
+        defects.append(
+            "active_branch_ids and terminal_branch_ids must not overlap: " + ", ".join(sorted(active & terminal))
+        )
     if not terminal:
         defects.append("at least one terminal branch id is required to validate a manifest amendment")
 
@@ -1130,7 +1169,9 @@ def validate_proposal(
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
         "protected_branch_ids": sorted(protected),
         "changed_branch_ids": changed_branch_ids,
-        "candidate_branch_ids": [branch["id"] for branch in candidate.get("branches", [])] if isinstance(candidate, dict) and isinstance(candidate.get("branches"), list) else [],
+        "candidate_branch_ids": [branch["id"] for branch in candidate.get("branches", [])]
+        if isinstance(candidate, dict) and isinstance(candidate.get("branches"), list)
+        else [],
         "candidate_manifest_sha256": canonical_sha256(candidate) if candidate is not None and not defects else None,
         "defects": defects,
     }

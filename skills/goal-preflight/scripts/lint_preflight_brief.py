@@ -41,9 +41,13 @@ is_repo_relative_path = PATH_RULES.is_repo_relative_path
 
 SEVERITY_ORDER = {"minor": 1, "major": 2, "critical": 3}
 PLACEHOLDER_RE = re.compile(r"(<(?!bundle\b)[^>\n]+>|\b(?:TODO|TBD|FIXME|XXX)\b|\?\?\?)", re.IGNORECASE)
-WEAK_DOD_RE = re.compile(r"^(done|complete|completed|implemented|works|working|tests pass|fix it|ship it|as needed)\.?$", re.IGNORECASE)
+WEAK_DOD_RE = re.compile(
+    r"^(done|complete|completed|implemented|works|working|tests pass|fix it|ship it|as needed)\.?$", re.IGNORECASE
+)
 COMMAND_START_RE = re.compile(r"^[A-Za-z0-9_./-]+(?:\s+|$)")
-NEGATIVE_STATE_RE = re.compile(r"\b(partial|blocked|failed|negative|unresolved|unsupported|probe-only|preserve)\b", re.IGNORECASE)
+NEGATIVE_STATE_RE = re.compile(
+    r"\b(partial|blocked|failed|negative|unresolved|unsupported|probe-only|preserve)\b", re.IGNORECASE
+)
 EXACT_SOURCE_RE = re.compile(
     r"\b("
     r"exact\s+(?:operation\s+)?(?:list|instance|source|payload|dataset|benchmark|data)|"
@@ -56,7 +60,9 @@ EXACT_SOURCE_RE = re.compile(
     re.IGNORECASE,
 )
 INLINE_SOURCE_TUPLE_RE = re.compile(r"\(\s*\d+\s*,\s*\d+\s*\)")
-RUNTIME_CAP_RE = re.compile(r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE)
+RUNTIME_CAP_RE = re.compile(
+    r"\b(runtime|time|wall[-\s]*clock)\s+cap\b|\bwithin\s+the\s+(?:chosen\s+)?(?:runtime\s+)?cap\b", re.IGNORECASE
+)
 PROMOTED_CONTEXT_ATTACHMENT_MIN_BYTES = 8192
 PROMOTED_CONTEXT_ATTACHMENT_MIN_USES = 2
 
@@ -173,7 +179,9 @@ def concrete_runtime_cap(value: object) -> bool:
         if not value:
             return False
         return any(
-            isinstance(item, int | float) and not isinstance(item, bool) and item > 0
+            isinstance(item, int | float)
+            and not isinstance(item, bool)
+            and item > 0
             or isinstance(item, str)
             and item.strip()
             and bool(re.search(r"\d", item))
@@ -268,7 +276,9 @@ def lint_runtime_cap(defects: list[dict], brief: dict) -> None:
 
 
 def lint_paths(defects: list[dict], branch: dict, branch_path: str, repo_root: Path | None, *, git_repo: bool) -> None:
-    for item_index, item in enumerate(branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []):
+    for item_index, item in enumerate(
+        branch.get("work_items", []) if isinstance(branch.get("work_items"), list) else []
+    ):
         if not isinstance(item, dict):
             continue
         item_path = f"{branch_path}.work_items[{item_index}]"
@@ -317,25 +327,44 @@ def lint_verification_and_dod(defects: list[dict], branch: dict, branch_path: st
             continue
         verification = string_list(item.get("verification"))
         if not verification:
-            defect(defects, f"{item_path}.verification", "critical", "must include at least one exact verification command")
+            defect(
+                defects, f"{item_path}.verification", "critical", "must include at least one exact verification command"
+            )
         for index, command in enumerate(verification):
             if PLACEHOLDER_RE.search(command):
-                defect(defects, f"{item_path}.verification[{index}]", "major", "verification command contains placeholder text")
+                defect(
+                    defects,
+                    f"{item_path}.verification[{index}]",
+                    "major",
+                    "verification command contains placeholder text",
+                )
             if not COMMAND_START_RE.search(command):
-                defect(defects, f"{item_path}.verification[{index}]", "major", "verification entry should look like an exact shell command")
+                defect(
+                    defects,
+                    f"{item_path}.verification[{index}]",
+                    "major",
+                    "verification entry should look like an exact shell command",
+                )
         dod = string_list(item.get("dod"))
         if not dod:
             defect(defects, f"{item_path}.dod", "critical", "must include at least one falsifiable DoD item")
         for index, item_dod in enumerate(dod):
             if len(item_dod.split()) < 4 or WEAK_DOD_RE.fullmatch(item_dod.strip()):
-                defect(defects, f"{item_path}.dod[{index}]", "major", "DoD item is too vague to verify deterministically")
+                defect(
+                    defects, f"{item_path}.dod[{index}]", "major", "DoD item is too vague to verify deterministically"
+                )
             if PLACEHOLDER_RE.search(item_dod):
                 defect(defects, f"{item_path}.dod[{index}]", "major", "DoD item contains placeholder text")
     branch_dod = string_list(branch.get("dod"))
     if branch_dod:
         for index, item_dod in enumerate(branch_dod):
             if len(item_dod.split()) < 4 or WEAK_DOD_RE.fullmatch(item_dod.strip()):
-                defect(defects, f"{branch_path}.dod[{index}]", "major", "branch DoD item is too vague to verify deterministically")
+                defect(
+                    defects,
+                    f"{branch_path}.dod[{index}]",
+                    "major",
+                    "branch DoD item is too vague to verify deterministically",
+                )
 
 
 def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
