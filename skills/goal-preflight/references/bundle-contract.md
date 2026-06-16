@@ -68,8 +68,8 @@ Preflight script entry paths are absolute only: `prepare_goal_bundle.py --brief/
     "allowed_operations": ["add_branch", "split_unstarted_branch", "replace_unstarted_branch", "add_dependency_to_unstarted_branch", "add_work_item_to_unstarted_branch", "mark_unstarted_branch_obsolete"]
   },
   "amender_model_policy": {
-    "default_ladder": ["gpt-5.4", "gpt-5.4-mini"],
-    "allowed_routes": ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"],
+    "default_ladder": ["ds-pro-max", "ds-flash-max"],
+    "allowed_routes": ["ds-pro-max", "ds-flash-max"],
     "launcher": "goal-main-orchestrator",
     "selection_reason_required": true,
     "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
@@ -77,8 +77,17 @@ Preflight script entry paths are absolute only: `prepare_goal_bundle.py --brief/
     "timeout_seconds": 1200
   },
   "worker_model_policy": {
-    "default_ladder": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
-    "allowed_routes": ["gemini-pro", "gemini-flash", "codex-spark", "codex-mini"],
+    "default_ladder": ["ds-pro-max", "ds-flash-max", "codex-spark", "codex-mini"],
+    "allowed_routes": ["ds-pro-max", "ds-flash-max", "codex-spark", "codex-mini"],
+    "default_route_class": "normal-code",
+    "route_classes": {
+      "mechanical": ["ds-flash-max"],
+      "docs": ["ds-flash-max"],
+      "small-edit": ["ds-flash-max", "codex-mini"],
+      "normal-code": ["ds-flash-max", "codex-spark"],
+      "complex-code": ["ds-pro-max", "codex-spark"],
+      "custom": ["ds-pro-max", "ds-flash-max", "codex-spark", "codex-mini"]
+    },
     "branch_may_select_worker_route": true,
     "selection_reason_required": true,
     "ordering_rule": "Selected worker routes must be a non-empty ordered subsequence of default_ladder."
@@ -91,12 +100,12 @@ Preflight script entry paths are absolute only: `prepare_goal_bundle.py --brief/
     "local_access": "Read-only local file and command inspection for the assigned worktree, explicit context files, and configured tool or skill documentation when task-relevant; no writes, no secrets or unrelated private files."
   },
   "lite_model_policy": {
-    "default_ladder": ["gemini-lite"],
-    "allowed_routes": ["gemini-lite"],
-    "model_map": {"gemini-lite": "gemini-3.1-flash-lite-preview"},
+    "default_ladder": ["ds-flash-max"],
+    "allowed_routes": ["ds-flash-max"],
+    "model_map": {"ds-flash-max": "deepseek-v4-flash"},
     "launcher": "create_lite_advice_packet.py",
     "selection_reason_required": false,
-    "ordering_rule": "Lite advisors use the fixed gemini-lite route; no runtime route broadening is allowed.",
+    "ordering_rule": "Lite advisors use the fixed ds-flash-max bridge route; no runtime route broadening is allowed.",
     "approval_mode": "plan",
     "timeout_seconds": 600
   },
@@ -113,11 +122,11 @@ Preflight script entry paths are absolute only: `prepare_goal_bundle.py --brief/
   },
   "review_model_policy": {
     "router": "deterministic-v1",
-    "default_tier": "light",
+    "default_tier": "standard",
     "routes": {
-      "light": ["gpt-5.4-mini", "gpt-5.4"],
-      "standard": ["gpt-5.4", "gpt-5.5"],
-      "heavy": ["gpt-5.5", "gpt-5.4"]
+      "light": ["ds-flash-max"],
+      "standard": ["ds-pro-max"],
+      "heavy": ["ds-pro-max", "gpt-5.5"]
     }
   },
   "orchestration_watchdog": {
@@ -202,7 +211,7 @@ Preflight script entry paths are absolute only: `prepare_goal_bundle.py --brief/
 - Bundle lint checks verification commands for common repo path references and `python -m package.module` references. A branch may verify files/modules it owns or that completed dependency branches own; future-owned or unrelated owned paths are critical defects.
 - Dependent branches with no direct work-item `context_files` must include `dependency_context_reason`; bundle creation supplies a default reason that tells runtime to inspect completed dependency branch status/review artifacts before launching the dependent branch.
 - Readiness treats `repo_status.repo_is_git=false` as a blocked runtime gate for branch/worktree orchestration. Directory mode is not runtime-supported until a future no-git execution mode is explicit in the manifest and bootloader.
-- `job.manifest.json` contains `worker_model_policy` with the fixed Gemini Pro -> Gemini Flash -> Codex Spark -> Codex mini ladder; branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
+- `job.manifest.json` contains `worker_model_policy` with the fixed `ds-pro-max -> ds-flash-max -> codex-spark -> codex-mini` ladder (bridge deepseek leading, native Codex fallback); branch-selected worker routes must be non-empty ordered subsequences with recorded reasons.
 - `job.manifest.json` contains `research_worker_policy` defining `research-worker` packets as broad read-only information retrieval through Codex native search plus configured CLI/MCP/connector/browser/search tools, shell/network inspection commands, remote APIs, package metadata lookups, and read-only local access. It must not suppress user config, and it must prohibit file edits and state-changing actions.
 - `job.manifest.json` contains `lite_model_policy` and `lite_advisor_policy`; Lite advisors are fixed-route context routers, validate through `validate_lite_advice.py`, write telemetry, and cannot satisfy audit/review/mergeability/DoD evidence.
 - `job.manifest.json` contains `preflight_lite_advice` as an array. It is empty when preflight Lite was not used; otherwise every preflight Lite packet under `lite/` is recorded with relative `lite/<packet_id>/advice.json` and `lite/<packet_id>/input-files.json` paths plus validation status/defects.

@@ -60,7 +60,7 @@ When a terminal branch is blocked by missing local files, the main orchestrator 
 
 ## Model Routing
 
-Main selects an ordered amender model ladder from manifest `amender_model_policy.allowed_routes`. The packet records that choice in `A001.packet/route.json`, launches bounded read-only Codex attempts, and writes `A001.packet/telemetry.json`. The default ladder is `gpt-5.4 -> gpt-5.4-mini`; `gpt-5.5` is allowed only with a concrete selection reason.
+Main selects an ordered amender model ladder from manifest `amender_model_policy.allowed_routes`. The packet records that choice in `A001.packet/route.json`, launches bounded read-only attempts, and writes `A001.packet/telemetry.json`. The default ladder is the bridge deepseek routes `ds-pro-max -> ds-flash-max`; bridge routes are delegated read-only through the opencode-worker-bridge `opencode_worker.py`, while any native Codex route runs `codex exec --ephemeral -s read-only`.
 
 `create_adaptation_packet.py` requires a matching `A001.decision.json`; the packet's active and terminal branch ids must match that decision. `validate_amender_packet.py` writes `A001.packet/packet.validation.json` and fails if the decision, route, input-file hashes, proposal envelope, or telemetry aliases drift.
 

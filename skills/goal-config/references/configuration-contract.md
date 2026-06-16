@@ -18,7 +18,7 @@ If the user has not already supplied preferences, ask the missing categories bef
 
 Use the JSON `interaction.ask_order`. Ask sections in order, and when the user says to continue or wants completion, ask/apply all remaining missing sections in one compact pass:
 
-1. Model profile: explain that this selects harnesses and role-to-model ladders. Show all listed choices, including checked config reuse, current default, opencode DeepSeek v4, discovery of available routes, Gemini, agy generic CLI, and mixed/custom mappings.
+1. Model profile: explain that this selects harnesses and role-to-model ladders. Show all listed choices, including checked config reuse, current default, the `opencode-deepseek-v4` bridge profile, discovery of available routes, agy generic CLI, and mixed/custom mappings.
 2. Effort profile: explain that this controls branch/worker caps, timeouts, and token/character pressure. Show lean, balanced, thorough, and custom.
 3. Validation and debug telemetry: explain that this controls fail-closed model checks, harness smoke tests, and whether preflight should collect full debug traces. Show model check only, model check plus smoke, smoke plus debug telemetry, and custom validation. Steer normal users toward smoke mode; debug is for trace analysis workflows.
 
@@ -33,7 +33,7 @@ Do not silently create a default config unless the user explicitly says to use d
 - `effort`: timeout and output-size limits for lite and demanding agents.
 - `models`: separate entries per model role. Each entry records `harness`, `provider`, `model`, and an alias.
 - `model_ladders`: ordered role names, not raw provider strings.
-- `harnesses`: named harness definitions including command, smoke invocation, runtime invocation, and readback mode for `opencode`, `codex`, `gemini`, and `generic-cli`.
+- `harnesses`: named harness definitions including command, smoke invocation, runtime invocation, and readback mode for `opencode-bridge`, `codex`, and `generic-cli`.
 - `harness_smokes`: smoke prompt, expected text, timeout, and readback mode for each role.
 - `telemetry`: semantic collection groups by model role and harness (`route_decisions`, `token_usage`, `timings`, `scheduler_utilization`, `context_pack_stats`, `validator_runs`, `artifact_hashes`). Detailed token/character/time counter names belong in `usage_units`, not `telemetry.collect`.
 - `model_policies`: worker, reviewer, amender, and Lite route policies consumed by `goal-preflight` and runtime packet generation.
@@ -55,35 +55,31 @@ Every configured model role must have a `harness_smokes` entry. The checker fail
 
 `create_goal_config.py --harness-spec /abs/spec.json` or `--harness-spec '{"name":"..."}'` accepts either a JSON object with `name` or an object keyed by harness name. Harness specs must avoid provider pricing fields and should contain:
 
-- `kind`: one of `opencode`, `codex`, `gemini`, or `generic-cli`.
+- `kind`: one of `opencode-bridge`, `codex`, or `generic-cli`.
 - `command`: executable name or absolute command path.
 - `smoke_args`: argument template for `check_goal_config.py --smoke`.
 - `run_args`: argument template for runtime packet launchers.
-- `run_readback`: `opencode_session_db`, `output_file`, or `stdout`.
+- `run_readback`: `bridge_run_dir`, `output_file`, or `stdout`.
 
 Templates may use `{prompt}`, `{prompt_file}`, `{model}`, `{provider}`, `{role}`, `{alias}`, `{packet_id}`, `{worktree}`, `{schema_name}`, and `{output_path}`. The checker decides that a harness is pluggable only after binary/model validation and the requested smoke tests pass.
 
-## Opencode Checks
+## Harness Checks
 
-For opencode-backed roles, `check_goal_config.py` must:
+For `opencode-bridge` roles, `check_goal_config.py` must:
 
-- find the `opencode` binary unless a fixture model list is supplied;
-- confirm the exact `provider/model` string appears in `opencode models <provider>`;
-- accept nested provider model ids such as `openrouter/deepseek/deepseek-v4-pro` and provider-list aliases such as the model id without the repeated provider prefix;
-- run `opencode run --pure --format json --model <provider/model> --variant max` when `--smoke` is requested for generated opencode DeepSeek v4 routes;
+- confirm the exact `provider/model` string is a known bridge route (`deepseek/deepseek-v4-flash` for `ds-flash-max`, `deepseek/deepseek-v4-pro` for `ds-pro-max`), accepting nested provider model ids such as `openrouter/deepseek/deepseek-v4-pro`;
+- run the bridge offline readiness command (`opencode_worker.py doctor --json`) when `--smoke` is requested; no live deepseek delegate runs at check time;
 - for `codex` roles, run `codex exec <prompt>` when `--smoke` is requested;
-- for `gemini` roles, run `gemini <prompt>` when `--smoke` is requested;
 - for `generic-cli` roles, run the configured harness `command` plus `smoke_args` template with prompt context when `--smoke` is requested;
-- read assistant text and token counters for the captured session id from the local opencode session database;
 - report token counts, response character counts, stdout/stderr character counts, elapsed milliseconds, model, provider, harness, and role separately;
 - set `token_telemetry.available=false` when a harness does not expose counters, so audits compare character counts and elapsed time instead of treating token totals as complete;
 - focus `response_excerpt` on the expected assistant smoke text when possible, so CLI boilerplate does not dominate scan output.
 
-Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When opencode emits JSON errors, the report should preserve actionable provider/status/message/count fields such as status `401` and message `AuthenticateToken authentication failed`. Full raw provider payloads belong only behind `check_goal_config.py --include-raw-errors`.
+Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When a harness emits JSON errors, the report should preserve actionable provider/status/message/count fields such as status `401` and message `AuthenticateToken authentication failed`. Full raw provider payloads belong only behind `check_goal_config.py --include-raw-errors`.
 
-For `codex` and `gemini` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation. Bare provider-implied forms such as `--role-model lite_agent:gemini:gemini-3-flash-preview` are allowed.
+For `codex` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation. Bare provider-implied forms such as `--role-model worker_codex_spark:codex:openai/gpt-5.3-codex-spark` are allowed. For `opencode-bridge` roles, use `--role-model ROLE:opencode-bridge:deepseek/deepseek-v4-flash` (or `deepseek-v4-pro`).
 
-When the user asks to "use all available" models, treat it as discovery, not as a silent default. First create or reuse a seed config, then use `check_goal_config.py --config /abs/seed.goal.config.json --discover-profile mixed-fast --discover-all-candidates --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json` to try a fixed ranking across configured opencode, Codex, Gemini, and generic antigravity harnesses. The profile stops a provider after the first auth failure. If `--discover-all-candidates` is omitted, the profile may stop early after enough accepted routes and must report unvisited candidates. Provider-specific opencode listing remains available with `--discover-provider PROVIDER [--discover-model-filter REGEX] [--discover-max N]`.
+When the user asks to "use all available" models, treat it as discovery, not as a silent default. First create or reuse a seed config, then use `check_goal_config.py --config /abs/seed.goal.config.json --discover-profile mixed-fast --discover-all-candidates --smoke --stdout summary --output /abs/goal-config-discovery.json --state-output /abs/goal-config-state.json` to try a fixed ranking across the configured `opencode-bridge`, Codex, and generic harnesses. The profile stops a provider after the first auth failure. If `--discover-all-candidates` is omitted, the profile may stop early after enough accepted routes and must report unvisited candidates.
 
 Discovery with `--discover-all-candidates` and discovery smoke is for validating discovery path coverage; it is not the default performance/throughput validation workflow.
 

@@ -132,7 +132,7 @@ For normal runs, prefer smoke mode; request debug only when a user asks for trac
 
 Ask only missing sections in that order. If the user says to continue or wants completion, ask/apply all remaining missing sections in one compact pass. Do not silently create a default config unless the user says to use defaults or selects an existing checked profile.
 
-Create the opencode DeepSeek v4 profile requested for Lite and demanding agents:
+Create the default `opencode-deepseek-v4` profile, which routes deepseek work through the opencode-worker-bridge and keeps native Codex routes:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
@@ -143,7 +143,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --output /abs/goal.config.json
 ```
 
-The preset lists `deepseek/deepseek-v4-flash` separately as `lite_agent` and `deepseek/deepseek-v4-pro` separately as `demanding_agent`. Generated opencode smoke and runtime invocations pass `--variant max` for both Flash and Pro. It records effort in tokens, characters, and elapsed time only.
+The preset emits the two bridge routes — `ds-flash-max` (`deepseek/deepseek-v4-flash`) as `lite_agent` and `ds-pro-max` (`deepseek/deepseek-v4-pro`) as `demanding_agent`, both on harness kind `opencode-bridge` with `--variant max` — plus native Codex fallback rungs (`codex-spark`, `codex-mini`), native read-only research (`codex --search`), and native prompt audit (`gpt-5.5`). It records effort in tokens, characters, and elapsed time only.
 
 Create flags are binding. If the user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, the rendered `goal.config.json` must apply those values or the command must fail.
 
@@ -164,17 +164,16 @@ To use user-supplied models, keep roles explicit:
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --preset opencode-deepseek-v4 \
-  --role-model lite_agent:opencode:deepseek/deepseek-v4-flash \
-  --role-model demanding_agent:opencode:deepseek/deepseek-v4-pro \
+  --role-model lite_agent:opencode-bridge:deepseek/deepseek-v4-flash \
+  --role-model demanding_agent:opencode-bridge:deepseek/deepseek-v4-pro \
   --worker-ladder demanding_agent,lite_agent \
   --reviewer-ladder demanding_agent \
   --output /abs/goal.config.json
 ```
 
-For `codex` and `gemini`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4` or `gemini-3-flash-preview`.
-Bare provider-implied forms also work for those harnesses, for example `--role-model lite_agent:gemini:gemini-3-flash-preview`.
+For `codex`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4`. Bare provider-implied forms also work, for example `--role-model worker_codex_spark:codex:openai/gpt-5.3-codex-spark`.
 
-To plug in another CLI harness, provide a JSON harness spec path or inline JSON and map roles to it. Built-in harness kinds are `opencode`, `codex`, `gemini`, and `generic-cli`; `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
+To plug in another CLI harness, provide a JSON harness spec path or inline JSON and map roles to it. Built-in harness kinds are `opencode-bridge`, `codex`, and `generic-cli`; `opencode-bridge` routes deepseek work through the bridge `opencode_worker.py`, and `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
 
 ```json
 {
@@ -195,7 +194,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --output /abs/goal.config.json
 ```
 
-Fail closed on missing opencode models:
+Fail closed on missing models:
 
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
@@ -220,7 +219,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
 
 When `--output` is supplied, checker stdout defaults to `summary`: status, accepted routes, rejection counts, and output path. Use `--stdout full` to print the full JSON report, or `--stdout none` for quiet file-only output.
 
-The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them, such as opencode session database readback. Each smoke entry includes `token_telemetry.available`; when it is false, compare character counts and elapsed time instead of pretending token totals are complete. CLI response excerpts are focused on the expected assistant smoke text when possible to keep boilerplate out of the scan path. The checker does not read provider credentials or report provider prices. Passing smoke evidence is reused for duplicate `(harness, provider, model)` routes in the same run; `--reuse-smoke-report /abs/previous.json` can reuse a prior passing discovery/check report.
+The smoke report records role, harness, provider, model, exact model availability, return code, elapsed milliseconds, stdout/stderr character counts, assistant response character counts, and token counters when the harness exposes them. For `opencode-bridge` routes the smoke is the bridge's offline readiness command (`opencode_worker.py doctor --json`); no live deepseek delegate runs at check time. Each smoke entry includes `token_telemetry.available`; when it is false, compare character counts and elapsed time instead of pretending token totals are complete. CLI response excerpts are focused on the expected assistant smoke text when possible to keep boilerplate out of the scan path. The checker does not read provider credentials or report provider prices. Passing smoke evidence is reused for duplicate `(harness, provider, model)` routes in the same run; `--reuse-smoke-report /abs/previous.json` can reuse a prior passing discovery/check report.
 
 For large reports, prefer scoped reads:
 
@@ -229,9 +228,9 @@ jq '.accepted_routes | length' /abs/goal-config-smoke.json
 jq '.unvisited_routes' /abs/goal-config-smoke.json
 ```
 
-Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. The canonical `/goal` smoke report should omit `--harness` so it covers worker, reviewer, amender, Lite, and demanding aliases that runtime packets may use. To isolate a failing route after the full report fails, pass repeated or comma-separated `--harness` values, for example `--harness worker_opencode`.
+Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. The canonical `/goal` smoke report should omit `--harness` so it covers worker, reviewer, amender, Lite, and demanding aliases that runtime packets may use. To isolate a failing route after the full report fails, pass repeated or comma-separated `--harness` values, for example `--harness worker_codex_spark`.
 
-The opencode checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Generated opencode route smokes use `--variant max` for both DeepSeek v4 Flash and Pro. Full raw provider error payloads are emitted only with `--include-raw-errors`. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
+The checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Generated `opencode-bridge` route smokes use the bridge offline `doctor --json` readiness command for both `ds-flash-max` and `ds-pro-max` (`--variant max` is preserved in the runtime args). Full raw provider error payloads are emitted only with `--include-raw-errors`. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
 
 Discovery mode checks provider-listed candidates without manually writing every role first:
 
@@ -240,14 +239,14 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/check_goal_config.py" \
   --config /abs/goal.config.json \
   --discover-profile mixed-fast \
   --discover-all-candidates \
-  --discover-model-filter 'deepseek|gpt-5.4|gemini' \
+  --discover-model-filter 'deepseek|gpt-5.4' \
   --smoke \
   --stdout summary \
   --output /abs/goal-config-discovery.json \
   --state-output /abs/goal-config-state.json
 ```
 
-`mixed-fast` tries a fixed ranking across configured opencode, Codex, Gemini, and generic antigravity harnesses. By default it may stop early after enough accepted routes; `--discover-all-candidates` disables that early accept stop and adds explicit `skipped_routes` and `unvisited_routes` evidence. Provider-specific opencode listing remains available with repeated `--discover-provider PROVIDER`.
+`mixed-fast` tries a fixed ranking across the configured `opencode-bridge`, Codex, and generic harnesses. By default it may stop early after enough accepted routes; `--discover-all-candidates` disables that early accept stop and adds explicit `skipped_routes` and `unvisited_routes` evidence.
 This route-discovery flow is for discovery-path validation (discover all candidates and smoke traversal), not the default performance validation loop.
 
 The discovery report includes `candidate_routes`, `accepted_routes`, and `rejected_routes`. Use the accepted route list to create the final explicit `goal.config.json`; do not pass unreviewed discovered routes directly into preflight.
@@ -397,6 +396,8 @@ Branch and worker parallelism are rolling saturated pools:
 - non-pass dependencies require `dependency_failed` scheduler evidence.
 - ready, launch, under-capacity, defer, blocked, finish, close, and refill events belong in schema v2 scheduler ledgers.
 
+The per-branch worker cap of 4 is enforced by `render_worker_schedule.py`, which clamps ready workers to remaining capacity. When deepseek packets run through the opencode-worker-bridge, the bridge's own file-backed concurrency pool re-enforces that bound as defense-in-depth: a packet that would exceed the pool capacity is held with `bridge_pool_capacity` evidence for the scheduler to refill later.
+
 Use scheduler helpers rather than hand-editing ledgers:
 
 ```bash
@@ -408,34 +409,40 @@ python3 "$GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/append_scheduler_event
 
 ## Model Routing
 
-Prompt audit is read-only and runs before branch creation. Its route is `gpt-5.5 -> gpt-5.4`, with deterministic audit available through `run_prompt_audit_phase.py --deterministic`.
+Worker, reviewer, plan-amender, and Lite deepseek routing goes through the **opencode-worker-bridge** skill (harness kind `opencode-bridge`, provider `deepseek`). The integration is deep: the runtime drives the bridge `opencode_worker.py` delegate/supervisor and a file-backed concurrency pool rather than spawning `opencode run` directly. Two bridge routes are emitted, both with `--variant max`:
 
-Normal worker aliases, in default order:
+- `ds-pro-max` (`deepseek-v4-pro --variant max`): the TOUGH route for higher-effort planning, review, and complex coding.
+- `ds-flash-max` (`deepseek-v4-flash --variant max`): the LIGHT route for mechanical/docs work, bounded edits, and Lite advisory.
 
-1. `gemini-pro` (`gemini-3.1-pro-preview`)
-2. `gemini-flash` (`gemini-3-flash-preview`)
-3. `codex-spark` (`gpt-5.3-codex-spark`)
-4. `codex-mini` (`gpt-5.4-mini`)
+Native gpt/codex routing is retained for provider diversity, native research, and native prompt audit: `codex-spark` (`gpt-5.3-codex-spark`), `codex-mini` (`gpt-5.4-mini`), `gpt-5.4`, `gpt-5.5`, and read-only research (`codex --search`).
+
+Prompt audit is read-only and runs before branch creation. It stays native: its route is `gpt-5.5 -> gpt-5.4` with `--output-schema`, and deterministic audit is available through `run_prompt_audit_phase.py --deterministic`.
+
+Normal worker ladder, in default order: `ds-pro-max -> ds-flash-max -> codex-spark -> codex-mini` (bridge deepseek leads, native Codex provides provider-diversity fallback).
 
 Worker route classes:
 
-- `mechanical` and `docs`: `codex-mini`
-- `small-edit` and `normal-code`: `codex-spark -> codex-mini`
-- `complex-code` and `custom`: full ordered ladder when justified
+- `mechanical` and `docs`: `ds-flash-max`
+- `small-edit`: `ds-flash-max -> codex-mini`
+- `normal-code`: `ds-flash-max -> codex-spark`
+- `complex-code`: `ds-pro-max -> codex-spark`
+- `custom`: full ordered ladder when justified (`ds-pro-max -> ds-flash-max -> codex-spark -> codex-mini`)
 
 The branch orchestrator may choose a non-empty ordered subsequence with a concrete `selection_reason`. Passing the fresh `model-catalog.json` lets packet generation prune unsupported Codex aliases and reject unavailable explicit selections.
 
-Research workers use `codex --search exec --ephemeral -s read-only` with user config loaded. They may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, remote APIs, package metadata, shell/network inspection, and local read-only files. They must not edit files, inspect secrets or unrelated private files, or perform state-changing actions.
+Research workers stay native and use `codex --search exec --ephemeral -s read-only` with user config loaded. They may use Codex native search, configured read-only CLI/MCP/connector/browser/search tools, remote APIs, package metadata, shell/network inspection, and local read-only files. They must not edit files, inspect secrets or unrelated private files, or perform state-changing actions.
 
 Reviewer routes are selected from `review_model_policy`:
 
-- `light`: `gpt-5.4-mini -> gpt-5.4`
-- `standard`: `gpt-5.4 -> gpt-5.5`
-- `heavy`: `gpt-5.5 -> gpt-5.4`
+- `light`: `ds-flash-max`
+- `standard`: `ds-pro-max`
+- `heavy`: `ds-pro-max -> gpt-5.5`
 
 Reviewers are read-only and require a passing `pre_review_gate.json`. Reviewer reuse is valid only when semantic hashes match and both source review and source telemetry exist.
 
-Plan-amender default route is `gpt-5.4 -> gpt-5.4-mini`; `gpt-5.5` is allowed only with a concrete reason. Deterministic blocker-repair packets use local status-artifact parsing and alias `deterministic-blocker-repair` instead of a model call.
+Plan-amender default route is `ds-pro-max -> ds-flash-max` (bridge deepseek). Deterministic blocker-repair packets use local status-artifact parsing and alias `deterministic-blocker-repair` instead of a model call.
+
+The CLI branch-control fallback launches a Codex orchestrator session (not a worker), so its default model stays native `gpt-5.4-mini`; per-packet worker/reviewer/amender/Lite routes remain governed by the manifest policies above.
 
 Check the local Codex model catalog:
 
@@ -504,7 +511,7 @@ jq -c 'select(.event_type=="scheduler_event" or .event_type=="launcher_state" or
 
 ## Lite Advisors
 
-Lite advisors are optional Gemini Flash Lite packets for context routing only. They cannot satisfy prompt audit, worker pass, reviewer pass, mergeability, scientific claim support, or DoD evidence. Always validate Lite output before use and then open only cited original files or spans needed for verification.
+Lite advisors are optional read-only packets for context routing only, delegated through the opencode-worker-bridge `ds-flash-max` route (`opencode_worker.py delegate --provider deepseek --model deepseek-v4-flash --variant max --permission-profile read-only`). They cannot satisfy prompt audit, worker pass, reviewer pass, mergeability, scientific claim support, or DoD evidence. Always validate Lite output before use and then open only cited original files or spans needed for verification.
 
 Allowed purposes:
 
@@ -522,7 +529,7 @@ python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/create_lite_advice_packet.py" --
 python3 "$GOAL_SKILLS_ROOT/<skill-name>/scripts/validate_lite_advice.py" --help
 ```
 
-Lite packets capture the Gemini binary path, version, binary sha256, input hashes, task hash, prompt hash, advice, and telemetry. Runtime status files must record every used or ignored relevant Lite packet; validators scan `lite/` for unrecorded packets.
+Lite packets capture the bridge control-script path (`opencode_worker.py`), its control version, input hashes, task hash, prompt hash, advice, and telemetry. Runtime status files must record every used or ignored relevant Lite packet; validators scan `lite/` for unrecorded packets.
 
 ## Validation Gates
 

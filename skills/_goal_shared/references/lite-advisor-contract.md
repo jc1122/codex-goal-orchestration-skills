@@ -1,6 +1,6 @@
 # Lite Advisor Contract
 
-Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file plus one telemetry file. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, absolute Gemini binary path, Gemini version, Gemini binary sha256 captured at packet creation, immutable input/prompt/task hashes, regenerated prompt consistency checks, fail-closed validation, manifest-owned artifact paths, unrecorded-packet discovery, packet-local telemetry, and auditable status records.
+Lite advisors are optional, CLI-only, read-only helper packets. They consume explicit input files and write one advisory output file plus one telemetry file. Lite work is delegated through the opencode-worker-bridge `ds-flash-max` route (deepseek-v4-flash `--variant max`) under permission profile `read-only`. Lite output is never pass/fail evidence, never a mergeability verdict, never a scientific claim judgment, and never permission to skip validators or heavy reviewers. Determinism means a deterministic envelope around nondeterministic model text: fixed skill allowlist, fixed model string, the captured bridge control-script path (`opencode_worker.py`) and control version, immutable input/prompt/task hashes, regenerated prompt consistency checks, fail-closed validation, manifest-owned artifact paths, unrecorded-packet discovery, packet-local telemetry, and auditable status records.
 
 Use Lite as a context router:
 
@@ -38,17 +38,17 @@ All `--input-file` paths must be inside `--base-dir`; use the repository root as
 
 Packet ids are immutable by default. If the packet directory already exists, the generator fails. Pass `--replace` only when intentionally deleting and regenerating that packet.
 
-Generated launchers capture the absolute Gemini CLI path, Gemini version, Gemini binary sha256, `task.md` hash, and `prompt.md` hash in `input-files.json`, then run that captured path:
+Generated launchers capture the absolute bridge control-script path (`opencode_worker.py`), its control version, the `task.md` hash, and the `prompt.md` hash in `input-files.json`, then delegate through the bridge:
 
 ```bash
-/absolute/path/to/gemini --model gemini-3.1-flash-lite-preview \
-  --approval-mode plan \
-  --skip-trust \
-  --output-format text \
-  -p "Follow the complete Lite advisory packet instructions provided on stdin." < prompt.md
+python3 /absolute/path/to/opencode-worker-bridge/scripts/opencode_worker.py delegate \
+  --provider deepseek --model deepseek-v4-flash --variant max \
+  --permission-profile read-only
 ```
 
-The launcher rehashes every input, rehashes `task.md`, rehashes `prompt.md`, rehashes the captured Gemini binary, and rechecks the Gemini version before calling Gemini. It writes `telemetry.json` next to `advice.json` on every terminal path. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, verifies packet telemetry, and verifies the captured Gemini path/version/sha for non-blocked advice. If Gemini is unavailable, the captured binary path is missing, the Gemini binary or version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
+The launcher rehashes every input, rehashes `task.md`, rehashes `prompt.md`, and re-resolves the captured bridge control script and version before delegating. It writes `telemetry.json` next to `advice.json` on every terminal path. The validator rehashes every input, rehashes `task.md`, regenerates `prompt.md` from `input-files.json` plus `task.md`, verifies packet telemetry, and verifies the captured bridge control-script path/version for non-blocked advice. If the bridge control script is unavailable or missing, its version changed, inputs changed, the prompt or task changed, quota is exhausted, or output is invalid, the launcher writes blocked `advice.json`; the parent workflow continues unless the user explicitly required Lite.
+
+For offline fixture capture, set `GOAL_LITE_OFFLINE_BRIDGE_METADATA=1` plus `GOAL_LITE_BRIDGE_CONTROL_SCRIPT=/abs/opencode_worker.py` and `GOAL_LITE_BRIDGE_CONTROL_VERSION=<captured>`; the live deepseek delegate is never invoked at packet creation in that mode.
 
 ## Output
 
@@ -68,7 +68,7 @@ Lite advice must include:
 
 For all non-`preflight-decomposition` purposes, `recommended_reads` may only cite explicit Lite input files. `preflight-decomposition` may suggest additional follow-up paths, but the parent agent must open and verify originals before acting.
 
-`telemetry.json` must include `packet_id`, `role: "lite_advisor"`, the fixed `gemini-lite` attempt with provider/model id, `called`/`accepted` booleans, prompt/output/log character and byte counts, and any token counts that the Gemini CLI exposes in logs. Character and byte counts are the deterministic spending proxy when token counts are unavailable.
+`telemetry.json` must include `packet_id`, `role: "lite_advisor"`, the fixed `ds-flash-max` bridge attempt with provider/model id and `--variant max`, `called`/`accepted` booleans, prompt/output/log character and byte counts, and any token counts that the bridge exposes in logs. Character and byte counts are the deterministic spending proxy when token counts are unavailable.
 
 Validate advice explicitly before using it:
 
