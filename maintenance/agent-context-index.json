@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:24b083368be08dd6bb160be85f7412fb1c16f4b22430dc69883e193e5461fd01"
+    "source_fingerprint": "sha256:568fb12b76fafcbcb6e071ff6820fbe8b6b063fc2addcc6ee296214cf7f084d9"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,14 +16,14 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 9796,
-      "approx_tokens": 117552,
+      "lines": 9744,
+      "approx_tokens": 117676,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "4567:run_runtime_packet_fixtures:1524l",
-        "6812:run_base_ref_default_fixture:1282l",
-        "8874:run_branch_status_negative_fixtures:878l",
-        "3192:run_worker_repair_promotion_fixture:375l"
+        "4518:run_runtime_packet_fixtures:1522l",
+        "6748:run_base_ref_default_fixture:1283l",
+        "8819:run_branch_status_negative_fixtures:881l",
+        "3232:run_worker_repair_promotion_fixture:375l"
       ]
     },
     {
@@ -42,40 +42,40 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3183,
-      "approx_tokens": 32234,
+      "lines": 3097,
+      "approx_tokens": 31344,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2711:run_packet:432l",
-        "1615:summarize_dirty_stop_salvage:128l",
-        "2533:extract_status_json:102l",
-        "2216:run_opencode_model:91l"
+        "2634:run_packet:423l",
+        "1901:run_opencode_bridge_model:269l",
+        "1415:summarize_dirty_stop_salvage:128l",
+        "2482:extract_status_json:102l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2886,
-      "approx_tokens": 30608,
+      "lines": 2977,
+      "approx_tokens": 31292,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2423:main:460l",
-        "1092:compact_worker_context:118l",
-        "2316:compact_launch_config:105l",
-        "1352:reviewer_packet_context:99l"
+        "2514:main:460l",
+        "1237:compact_worker_context:118l",
+        "2407:compact_launch_config:105l",
+        "1497:reviewer_packet_context:99l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 2279,
-      "approx_tokens": 27784,
+      "lines": 2302,
+      "approx_tokens": 28158,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "870:validate_worker_artifacts:170l",
-        "2066:validate_branch_status:157l",
-        "1857:validate_review_artifact_for_branch:153l",
-        "507:validate_launch_config_artifact:102l"
+        "893:validate_worker_artifacts:170l",
+        "2089:validate_branch_status:157l",
+        "1880:validate_review_artifact_for_branch:153l",
+        "516:validate_launch_config_artifact:116l"
       ]
     }
   ],
@@ -156,6 +156,7 @@
       "open_core_scripts_only_for": "implementation or debugging of that script surface",
       "depends_on": [
         "_goal_shared",
+        "goal-config",
         "goal-preflight"
       ]
     },
@@ -336,6 +337,13 @@
     },
     {
       "source": "goal-branch-orchestrator",
+      "target": "goal-config",
+      "paths": [
+        "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py"
+      ]
+    },
+    {
+      "source": "goal-branch-orchestrator",
       "target": "goal-main-orchestrator",
       "paths": [
         "skills/goal-branch-orchestrator/SKILL.md"
@@ -412,6 +420,7 @@
         "skills/goal-main-orchestrator/scripts/runtime_phase_manifest.py",
         "skills/goal-main-orchestrator/scripts/scheduler_tick.py",
         "skills/goal-main-orchestrator/scripts/script_only_repair_gate.py",
+        "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
         "skills/goal-main-orchestrator/scripts/validate_lite_advice.py",
         "skills/goal-main-orchestrator/scripts/validate_main_status.py",
         "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py"
