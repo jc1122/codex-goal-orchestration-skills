@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:beb97d82f009c0ff38a431f2a5b6defd1fef8b86290ac71aba11e11fced25751"
+    "source_fingerprint": "sha256:4dfc5661272b0072e184035324590740d1f64834c57ccd9a7f79a6235e045094"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,21 +29,21 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3489,
-      "approx_tokens": 39482,
+      "lines": 3487,
+      "approx_tokens": 39470,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1728:normalize_brief:263l",
-        "3251:create_bundle:146l",
-        "2935:manifest_from_normalized_brief:134l",
-        "3110:render_branch_prompt_text:105l"
+        "1726:normalize_brief:263l",
+        "3249:create_bundle:146l",
+        "2933:manifest_from_normalized_brief:134l",
+        "3108:render_branch_prompt_text:105l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
       "lines": 3220,
-      "approx_tokens": 31673,
+      "approx_tokens": 31666,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "2752:run_packet:427l",
