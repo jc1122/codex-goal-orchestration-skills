@@ -51,6 +51,15 @@ WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
 WORK_ITEM_ROLES = set(CONTRACT.WORK_ITEM_ROLES)
 ROUTE_POLICY_VERSION = "goal-route-policy-v2"
 RESEARCH_ALIASES = CONTRACT.RESEARCH_ALIASES
+# Reviewer routes are bridge-led with native gpt fallback (REVIEW_MODEL_ROUTES);
+# include every alias that can legitimately appear in a reviewer telemetry
+# artifact (bridge deepseek + native gpt, plus legacy gpt-5.4-mini).
+REVIEWER_ALLOWED_ALIASES = tuple(
+    dict.fromkeys(
+        [alias for route in CONTRACT.REVIEW_MODEL_ROUTES.values() for alias in route]
+        + ["gpt-5.4-mini", "gpt-5.4", "gpt-5.5"]
+    )
+)
 COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 RESEARCH_FORBIDDEN_COMMAND_PATTERNS = [
     (r"\bgit\s+(push|commit|reset|checkout|clean|merge|rebase)\b", "git state mutation"),
@@ -574,10 +583,24 @@ def validate_launch_config_artifact(
             aliases.append(alias)
         provider = require_string(defects, attempt.get("provider"), f"{attempt_path}.provider")
         model = require_string(defects, attempt.get("model"), f"{attempt_path}.model")
+        if provider and provider not in {"codex", CONTRACT.BRIDGE_HARNESS_KIND}:
+            defect(defects, f"{attempt_path}.provider", f"must be a supported route adapter (codex or {CONTRACT.BRIDGE_HARNESS_KIND}), got {provider!r}")
         if provider == "codex" and alias in CONTRACT.CODEX_ROUTE_MODELS:
             expected_model = CONTRACT.codex_model(alias)
             if model != expected_model:
                 defect(defects, f"{attempt_path}.model", f"must be {expected_model!r} for alias {alias!r}")
+        if provider == CONTRACT.BRIDGE_HARNESS_KIND and CONTRACT.is_bridge_alias(alias):
+            expected_model = CONTRACT.bridge_model(alias)
+            if model != expected_model:
+                defect(defects, f"{attempt_path}.model", f"must be {expected_model!r} for bridge alias {alias!r}")
+            bridge = attempt.get("bridge")
+            if not isinstance(bridge, dict):
+                defect(defects, f"{attempt_path}.bridge", "must be an object for opencode-bridge attempts")
+            else:
+                if bridge.get("provider") != CONTRACT.BRIDGE_PROVIDER_ID:
+                    defect(defects, f"{attempt_path}.bridge.provider", f"must be {CONTRACT.BRIDGE_PROVIDER_ID!r}")
+                for key in ("model", "variant", "permission_profile", "run_dir"):
+                    require_string(defects, bridge.get(key), f"{attempt_path}.bridge.{key}")
         require_string(defects, attempt.get("command"), f"{attempt_path}.command")
         rendered_command = require_string(defects, attempt.get("rendered_command"), f"{attempt_path}.rendered_command")
         if rendered_command and isinstance(attempt.get("command"), str) and rendered_command != attempt.get("command"):
@@ -1848,7 +1871,7 @@ def validate_review_reuse_sources(
         source_telemetry,
         f"{path}.reuse_policy.source_telemetry_path",
         role="reviewer",
-        allowed_aliases=("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
+        allowed_aliases=REVIEWER_ALLOWED_ALIASES,
         require_called=True,
     )
     return True
@@ -1972,7 +1995,7 @@ def validate_review_artifact_for_branch(
                 "$.review_status.telemetry_path",
                 packet_id=packet_id if isinstance(packet_id, str) else None,
                 role="reviewer",
-                allowed_aliases=route_aliases or ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
+                allowed_aliases=route_aliases or REVIEWER_ALLOWED_ALIASES,
                 require_called=False,
             )
             called = [
@@ -1988,7 +2011,7 @@ def validate_review_artifact_for_branch(
         "$.review_status.telemetry_path",
         packet_id=packet_id if isinstance(packet_id, str) else None,
         role="reviewer",
-        allowed_aliases=route_aliases or ("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
+        allowed_aliases=route_aliases or REVIEWER_ALLOWED_ALIASES,
         require_called=True,
     )
     telemetry_attempts = telemetry.get("attempts") if isinstance(telemetry.get("attempts"), list) else []

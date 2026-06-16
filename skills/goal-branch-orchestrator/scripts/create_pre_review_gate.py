@@ -79,16 +79,43 @@ def run_command(command: list[str], *, cwd: Path | None = None) -> subprocess.Co
     )
 
 
-def run_shell_command(command: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        command,
-        cwd=cwd,
-        shell=True,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        check=False,
-    )
+_GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def validate_base_ref(base_ref: str) -> str:
+    """Reject manifest base_ref values that are not a plausible git ref.
+
+    Closes the manifest-base_ref command-injection vector: only safe ref
+    characters are allowed (no shell metacharacters, whitespace, or leading
+    dashes that could be parsed as git options).
+    """
+    candidate = base_ref.strip()
+    if not candidate:
+        raise SystemExit("manifest base_ref must be a non-empty git ref")
+    if candidate.startswith("-"):
+        raise SystemExit(f"manifest base_ref must not start with '-': {base_ref!r}")
+    if ".." in candidate or candidate.endswith("/") or candidate.endswith(".lock"):
+        raise SystemExit(f"manifest base_ref is not a plausible git ref: {base_ref!r}")
+    if not _GIT_REF_RE.fullmatch(candidate):
+        raise SystemExit(
+            f"manifest base_ref contains characters that are not valid in a git ref: {base_ref!r}"
+        )
+    return candidate
+
+
+def run_test_command(command: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Run a declared test command as list-form argv (shell=False).
+
+    The command string is tokenized with shlex and executed without a shell,
+    closing the shell-injection vector while preserving simple argv commands.
+    """
+    try:
+        argv = shlex.split(command)
+    except ValueError as exc:
+        return subprocess.CompletedProcess(args=command, returncode=2, stdout=f"invalid test command {command!r}: {exc}")
+    if not argv:
+        return subprocess.CompletedProcess(args=command, returncode=2, stdout=f"empty test command: {command!r}")
+    return run_command(argv, cwd=cwd)
 
 
 def status_validation_defects(output: str) -> list[str]:
@@ -911,7 +938,7 @@ def test_check(args: argparse.Namespace, worktree: Path, branch_status: dict, br
     manifest_commands = manifest_test_commands(branch)
     explicit_commands = [command for command in args.test_command if isinstance(command, str) and command.strip()]
     for command in [*explicit_commands, *manifest_commands]:
-        result = run_shell_command(command, cwd=worktree)
+        result = run_test_command(command, cwd=worktree)
         commands.append(command)
         if result.returncode != 0:
             defects.append(f"test command failed ({result.returncode}): {command}\n{result.stdout.strip()}")
@@ -994,13 +1021,13 @@ def create_gate(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
         "--no-write",
     ]
     manifest_result = run_command(manifest_command)
-    base_ref = manifest.get("base_ref", "main")
+    base_ref = validate_base_ref(str(manifest.get("base_ref", "main")))
     diff_command = f"git diff --check {base_ref}...HEAD"
-    diff_result = run_shell_command(diff_command, cwd=worktree)
+    diff_result = run_command(["git", "diff", "--check", f"{base_ref}...HEAD"], cwd=worktree)
     unstaged_diff_command = "git diff --check HEAD"
-    unstaged_diff_result = run_shell_command(unstaged_diff_command, cwd=worktree)
+    unstaged_diff_result = run_command(["git", "diff", "--check", "HEAD"], cwd=worktree)
     staged_diff_command = "git diff --cached --check HEAD"
-    staged_diff_result = run_shell_command(staged_diff_command, cwd=worktree)
+    staged_diff_result = run_command(["git", "diff", "--cached", "--check", "HEAD"], cwd=worktree)
     untracked_check_command = "git ls-files --others --exclude-standard + internal untracked trailing-whitespace scan"
     untracked_defects = untracked_whitespace_defects(worktree)
     tests, test_defects = test_check(args, worktree, branch_status, branch)

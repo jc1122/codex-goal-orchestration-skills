@@ -83,8 +83,40 @@ def annotate_status_lanes(branch_status: dict, validation_defects: list[str]) ->
     branch_status["resume_action"] = "reuse_terminal_status" if not validation_defects else "repair_or_reassemble"
 
 
-def run_shell(command: str, *, cwd: Path) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, cwd=cwd, shell=True, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+_GIT_REF_RE = re.compile(r"^[A-Za-z0-9._/-]+$")
+
+
+def validate_base_ref(base_ref: str) -> str:
+    """Reject manifest base_ref values that are not a plausible git ref.
+
+    Closes the manifest-base_ref command-injection vector: only safe ref
+    characters are allowed (no shell metacharacters, whitespace, or leading
+    dashes that could be parsed as git options).
+    """
+    candidate = base_ref.strip()
+    if not candidate:
+        raise SystemExit("manifest base_ref must be a non-empty git ref")
+    if candidate.startswith("-"):
+        raise SystemExit(f"manifest base_ref must not start with '-': {base_ref!r}")
+    if ".." in candidate or candidate.endswith("/") or candidate.endswith(".lock"):
+        raise SystemExit(f"manifest base_ref is not a plausible git ref: {base_ref!r}")
+    if not _GIT_REF_RE.fullmatch(candidate):
+        raise SystemExit(
+            f"manifest base_ref contains characters that are not valid in a git ref: {base_ref!r}"
+        )
+    return candidate
+
+
+def run_git(argv: list[str], *, cwd: Path) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *argv],
+        cwd=cwd,
+        shell=False,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
 
 
 def branch_entry(manifest: dict, branch_id: str) -> dict:
@@ -448,7 +480,7 @@ def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
 
 
 def changed_files_from_git(worktree: Path, base_ref: str) -> list[str]:
-    result = run_shell(f"git diff --name-only {base_ref}...HEAD", cwd=worktree)
+    result = run_git(["diff", "--name-only", f"{base_ref}...HEAD"], cwd=worktree)
     if result.returncode != 0:
         return []
     return [
@@ -470,7 +502,7 @@ def is_runtime_cache_path(path: str) -> bool:
 
 
 def untracked_whitespace_defects(worktree: Path) -> list[str]:
-    result = run_shell("git ls-files --others --exclude-standard", cwd=worktree)
+    result = run_git(["ls-files", "--others", "--exclude-standard"], cwd=worktree)
     if result.returncode != 0:
         return [f"untracked file scan failed: {result.stdout.strip()}"]
     defects: list[str] = []
@@ -722,13 +754,13 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     )
     worker_parallelism, scheduler_defects = scheduler_rollup(manifest_path, branch, branch_id)
     inferred_review_status, review_blockers = review_status(bundle_dir, branch, branch_id)
-    base_ref = str(manifest.get("base_ref", "main"))
+    base_ref = validate_base_ref(str(manifest.get("base_ref", "main")))
     diff_commands = [
-        f"git diff --check {base_ref}...HEAD",
-        "git diff --check HEAD",
-        "git diff --cached --check HEAD",
+        (f"git diff --check {base_ref}...HEAD", ["diff", "--check", f"{base_ref}...HEAD"]),
+        ("git diff --check HEAD", ["diff", "--check", "HEAD"]),
+        ("git diff --cached --check HEAD", ["diff", "--cached", "--check", "HEAD"]),
     ]
-    diff_results = [(command, run_shell(command, cwd=worktree)) for command in diff_commands]
+    diff_results = [(label, run_git(argv, cwd=worktree)) for label, argv in diff_commands]
     untracked_check_command = "git ls-files --others --exclude-standard + internal untracked trailing-whitespace scan"
     untracked_defects = untracked_whitespace_defects(worktree)
     changed_files = list(args.changed_file) if args.changed_file else changed_files_from_git(worktree, base_ref)

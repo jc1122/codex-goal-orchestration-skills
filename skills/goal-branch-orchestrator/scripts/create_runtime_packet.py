@@ -27,12 +27,17 @@ CONTRACT = _load_shared_script("goal_shared_orchestration_contract", "orchestrat
 STATUS_VALIDATION = _load_shared_script("goal_shared_status_validation", "status_validation.py", "shared status validation helpers")
 CONTEXT_PACK = _load_shared_script("goal_shared_context_pack", "context_pack.py", "shared context pack helper")
 BRANCH_VALIDATOR = None
-GEMINI_COMMAND = "gemini"
-GEMINI_APPROVAL_MODE = "yolo"
-GEMINI_PRO_MODEL = "gemini-3.1-pro-preview"
-GEMINI_FLASH_MODEL = "gemini-3-flash-preview"
-GEMINI_PROBE_TIMEOUT_SECONDS = 20
-GEMINI_PROBE_PROMPT = "Return exactly: GEMINI_MODEL_PROBE_OK"
+BRIDGE_HARNESS_KIND = CONTRACT.BRIDGE_HARNESS_KIND
+BRIDGE_PROVIDER_ID = CONTRACT.BRIDGE_PROVIDER_ID
+# Bridge launches delegate deepseek work through the opencode-worker-bridge
+# control script `opencode_worker.py`. Permission profiles are role-scoped:
+# workers get workspace-write, read-only roles (reviewer/research/audit/etc.)
+# get read-only.
+BRIDGE_WORKER_PERMISSION_PROFILE = "workspace-write"
+BRIDGE_READONLY_PERMISSION_PROFILE = "read-only"
+BRIDGE_POOL_MAX_WORKERS = 4
+BRIDGE_RUN_DIR_PARENT = "bridge"
+BRIDGE_POOL_DIR = "bridge/pool"
 SPARK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-spark"]
 MINI_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-mini"]
 RESEARCH_MODEL = CONTRACT.CODEX_ROUTE_MODELS[CONTRACT.RESEARCH_ALIASES[0]]
@@ -46,8 +51,8 @@ WORKER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.WORKER_ATTEMPT_TIMEOUT_SECONDS
 RESEARCH_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.RESEARCH_ATTEMPT_TIMEOUT_SECONDS
 REVIEWER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.REVIEWER_ATTEMPT_TIMEOUT_SECONDS
 TIMEOUT_KILL_AFTER_SECONDS = CONTRACT.TIMEOUT_KILL_AFTER_SECONDS
-GEMINI_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
-GEMINI_STATUS_END = "END_WORKER_STATUS_JSON"
+WORKER_STATUS_BEGIN = "BEGIN_WORKER_STATUS_JSON"
+WORKER_STATUS_END = "END_WORKER_STATUS_JSON"
 REVIEW_STATUS_BEGIN = "BEGIN_REVIEW_JSON"
 REVIEW_STATUS_END = "END_REVIEW_JSON"
 MAX_CONTEXT_PACK_CHARS = CONTEXT_PACK.DEFAULT_TOTAL_CHARS
@@ -61,28 +66,26 @@ ROUTE_POLICY_VERSION = "goal-route-policy-v2"
 WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
 WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
 WORKER_ROUTE_LABELS = {
-    "gemini-pro": "Gemini Pro",
-    "gemini-flash": "Gemini Flash",
+    "ds-pro-max": "DeepSeek Pro (max)",
+    "ds-flash-max": "DeepSeek Flash (max)",
     "codex-spark": "Codex Spark",
     "codex-mini": "Codex mini",
 }
 CODEX_LEAN_EXEC_FLAGS_TEXT = " ".join(CONTRACT.CODEX_LEAN_EXEC_FLAGS)
 WORKER_ROUTE_COMMANDS = {
-    "gemini-pro": f"gemini --model {GEMINI_PRO_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
-    "gemini-flash": f"gemini --model {GEMINI_FLASH_MODEL} --approval-mode {GEMINI_APPROVAL_MODE}",
     "codex-spark": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {SPARK_MODEL} -s workspace-write",
     "codex-mini": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {MINI_MODEL} -s workspace-write",
 }
 WORKER_ROUTE_EVENT_LABELS = {
-    "gemini-pro": "gemini-pro",
-    "gemini-flash": "gemini-flash",
+    "ds-pro-max": "ds-pro-max",
+    "ds-flash-max": "ds-flash-max",
     "codex-spark": "spark",
     "codex-mini": "mini",
 }
 CODEX_WORKER_ROUTES = frozenset({"codex-spark", "codex-mini"})
 WORKER_PACKET_PROMPT = "Follow the complete worker packet instructions provided on stdin."
 REVIEW_ROUTE_MODELS = {
-    alias: CONTRACT.CODEX_ROUTE_MODELS[alias]
+    alias: (CONTRACT.bridge_model(alias) if CONTRACT.is_bridge_alias(alias) else CONTRACT.CODEX_ROUTE_MODELS[alias])
     for route in CONTRACT.REVIEW_MODEL_ROUTES.values()
     for alias in route
 }
@@ -498,13 +501,6 @@ def apply_model_catalog_to_worker_ladder(
     return retained, metadata
 
 
-def worker_route_commands(selected_ladder: list[str]) -> list[str]:
-    commands = []
-    for alias in selected_ladder:
-        commands.append(WORKER_ROUTE_COMMANDS[alias])
-    return commands
-
-
 def event_label_for_alias(alias: str) -> str:
     if alias in WORKER_ROUTE_EVENT_LABELS:
         return WORKER_ROUTE_EVENT_LABELS[alias]
@@ -551,17 +547,125 @@ def configured_route_commands(selected_ladder: list[str], goal_config: dict) -> 
     return commands
 
 
+def bridge_permission_profile(role: str) -> str:
+    """Role -> bridge permission profile.
+
+    Workers edit their worktree (workspace-write); every read-only role
+    (reviewer, research, audit, plan-amender, lite-advisor, ...) is read-only.
+    """
+    return BRIDGE_WORKER_PERMISSION_PROFILE if role == "worker" else BRIDGE_READONLY_PERMISSION_PROFILE
+
+
+def bridge_run_dir_rel(alias: str) -> str:
+    return f"{BRIDGE_RUN_DIR_PARENT}/{alias}"
+
+
+def bridge_run_args(alias: str, *, run_dir_rel: str, retry: bool) -> list[str]:
+    """Templated human-renderable command string args for the bridge launch.
+
+    The runner drives the bridge command sequence directly (pool-acquire ->
+    start -> delegate/supervisor -> stop -> pool-release); these args exist so
+    configured_route_commands / golden can render a stable human command.
+    """
+    sub = "supervisor" if retry else "delegate"
+    args = [
+        "{bridge_root}/scripts/opencode_worker.py",
+        sub,
+        "--provider",
+        BRIDGE_PROVIDER_ID,
+        "--model",
+        CONTRACT.bridge_model(alias),
+        "--variant",
+        CONTRACT.bridge_variant(alias),
+        "--run-dir",
+        "{packet_dir}/" + run_dir_rel,
+    ]
+    return args
+
+
+def bridge_telemetry_attempt(
+    alias: str,
+    *,
+    role: str,
+    timeout_seconds: int,
+    sandbox: str,
+    retry: bool = False,
+) -> dict:
+    """Build a single BRIDGE attempt dict (sibling of the native builder).
+
+    A bridge attempt delegates a deepseek launch through opencode_worker.py.
+    The launch plan drives pool-acquire -> start -> delegate (or supervisor for
+    the retry loop) -> stop -> pool-release with a per-packet run_dir/pool_dir.
+    """
+    label = CONTRACT.bridge_event_label(alias)
+    run_dir_rel = bridge_run_dir_rel(alias)
+    profile = bridge_permission_profile(role)
+    model = CONTRACT.bridge_model(alias)
+    variant = CONTRACT.bridge_variant(alias)
+    run_args = bridge_run_args(alias, run_dir_rel=run_dir_rel, retry=retry)
+    sub = "supervisor" if retry else "delegate"
+    command = (
+        f"python3 {{bridge_root}}/scripts/opencode_worker.py {sub} "
+        f"--provider {BRIDGE_PROVIDER_ID} --model {model} --variant {variant} "
+        f"--permission-profile {profile} --run-dir {{packet_dir}}/{run_dir_rel}"
+    )
+    return {
+        "alias": alias,
+        "provider": BRIDGE_HARNESS_KIND,
+        "provider_id": BRIDGE_PROVIDER_ID,
+        "model": model,
+        "variant": variant,
+        "harness": BRIDGE_HARNESS_KIND,
+        "harness_kind": BRIDGE_HARNESS_KIND,
+        "command_binary": "python3",
+        "command": command,
+        "run_args": run_args,
+        "run_readback": "bridge_run_dir",
+        "effort": "configured",
+        "sandbox": sandbox,
+        "timeout_seconds": timeout_seconds,
+        "event_logs": [f"events-{label}.jsonl"],
+        "probe_logs": [],
+        "status_markers": {
+            "begin": WORKER_STATUS_BEGIN,
+            "end": WORKER_STATUS_END,
+        },
+        "bridge": {
+            "provider": BRIDGE_PROVIDER_ID,
+            "model": model,
+            "variant": variant,
+            "permission_profile": profile,
+            "run_dir": run_dir_rel,
+            "pool_dir": BRIDGE_POOL_DIR,
+            "pool_max_workers": BRIDGE_POOL_MAX_WORKERS,
+            "prompt_file": "prompt.md",
+            "supervisor": bool(retry),
+        },
+    }
+
+
 def configured_telemetry_attempts(
     selected_ladder: list[str],
     goal_config: dict,
     *,
     timeout_seconds: int,
     sandbox: str,
+    role: str = "worker",
 ) -> list[dict]:
     models = goal_config.get("models", {})
     harnesses = goal_config.get("harnesses", {})
     attempts: list[dict] = []
     for alias in selected_ladder:
+        if CONTRACT.is_bridge_alias(alias):
+            attempts.append(
+                bridge_telemetry_attempt(
+                    alias,
+                    role=role,
+                    timeout_seconds=timeout_seconds,
+                    sandbox=sandbox,
+                )
+            )
+            continue
         model = models.get(alias)
         if not isinstance(model, dict):
             raise SystemExit(f"goal_config missing model role used by route ladder: {alias}")
@@ -571,7 +675,7 @@ def configured_telemetry_attempts(
             raise SystemExit(f"goal_config model {alias} references unknown harness: {harness_name}")
         kind = harness.get("kind")
         label = event_label_for_alias(alias)
-        event_suffix = "jsonl" if kind in {"codex", "opencode"} else "log"
+        event_suffix = "jsonl" if kind in {"codex", BRIDGE_HARNESS_KIND} else "log"
         attempt = {
             "alias": alias,
             "provider": kind,
@@ -589,8 +693,8 @@ def configured_telemetry_attempts(
             "event_logs": [f"events-{label}.{event_suffix}"],
             "probe_logs": [],
             "status_markers": {
-                "begin": GEMINI_STATUS_BEGIN,
-                "end": GEMINI_STATUS_END,
+                "begin": WORKER_STATUS_BEGIN,
+                "end": WORKER_STATUS_END,
             },
         }
         if kind == "codex":
@@ -611,12 +715,47 @@ def configured_telemetry_attempts(
                 + CODEX_LEAN_EXEC_FLAGS_TEXT
                 + f" -m {model.get('model')} -s {sandbox}"
             )
-        if kind == "gemini":
-            attempt["probe_model"] = str(model.get("model") or "")
-            attempt["probe_timeout_seconds"] = GEMINI_PROBE_TIMEOUT_SECONDS
-            attempt["probe_prompt"] = GEMINI_PROBE_PROMPT
-            attempt["probe_logs"] = [f"events-{label}-probe.log"]
         attempts.append(attempt)
+    return attempts
+
+
+def fallback_telemetry_attempts(
+    selected_ladder: list[str],
+    *,
+    role: str,
+    timeout_seconds: int,
+    sandbox: str,
+) -> list[dict]:
+    """Build attempts without a goal_config, dispatching per-rung.
+
+    Bridge aliases -> bridge attempt; native codex aliases -> lean codex exec.
+    A mixed ladder (e.g. ds-pro-max -> codex-spark) emits one attempt per rung.
+    """
+    attempts: list[dict] = []
+    codex_aliases: list[str] = []
+    for alias in selected_ladder:
+        if CONTRACT.is_bridge_alias(alias):
+            attempts.append(
+                bridge_telemetry_attempt(
+                    alias,
+                    role=role,
+                    timeout_seconds=timeout_seconds,
+                    sandbox=sandbox,
+                )
+            )
+        elif alias in CONTRACT.CODEX_ROUTE_MODELS:
+            codex_attempt = CONTRACT.codex_telemetry_attempts(
+                [alias],
+                timeout_seconds=timeout_seconds,
+                sandbox=sandbox,
+                lean=True,
+            )[0]
+            codex_aliases.append(alias)
+            attempts.append(codex_attempt)
+        else:
+            raise SystemExit(f"unsupported route alias for fallback attempts: {alias!r}")
+    for attempt in attempts:
+        attempt.setdefault("sandbox", sandbox)
     return attempts
 
 
@@ -627,69 +766,14 @@ def worker_telemetry_attempts(selected_ladder: list[str], goal_config: dict | No
             goal_config,
             timeout_seconds=WORKER_ATTEMPT_TIMEOUT_SECONDS,
             sandbox="workspace-write",
+            role="worker",
         )
-    attempts = []
-    for alias in selected_ladder:
-        label = WORKER_ROUTE_EVENT_LABELS[alias]
-        if alias == "gemini-pro":
-            attempts.append(
-                {
-                    "alias": alias,
-                    "provider": "gemini",
-                    "model": GEMINI_PRO_MODEL,
-                    "effort": "",
-                    "command": WORKER_ROUTE_COMMANDS[alias],
-                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
-                    "event_logs": [f"events-{label}.log"],
-                    "probe_logs": [f"events-{label}-probe.log"],
-                    "probe_model": GEMINI_PRO_MODEL,
-                    "probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
-                    "probe_prompt": GEMINI_PROBE_PROMPT,
-                    "status_markers": {
-                        "begin": GEMINI_STATUS_BEGIN,
-                        "end": GEMINI_STATUS_END,
-                    },
-                }
-            )
-        elif alias == "gemini-flash":
-            attempts.append(
-                {
-                    "alias": alias,
-                    "provider": "gemini",
-                    "model": GEMINI_FLASH_MODEL,
-                    "effort": "",
-                    "command": WORKER_ROUTE_COMMANDS[alias],
-                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
-                    "event_logs": [f"events-{label}.log"],
-                    "probe_logs": [f"events-{label}-probe.log"],
-                    "probe_model": GEMINI_FLASH_MODEL,
-                    "probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
-                    "probe_prompt": GEMINI_PROBE_PROMPT,
-                    "status_markers": {
-                        "begin": GEMINI_STATUS_BEGIN,
-                        "end": GEMINI_STATUS_END,
-                    },
-                }
-            )
-        else:
-            model = SPARK_MODEL if alias == "codex-spark" else MINI_MODEL
-            attempts.append(
-                {
-                    "alias": alias,
-                    "provider": "codex",
-                    "model": model,
-                    "effort": "",
-                    "command": WORKER_ROUTE_COMMANDS[alias],
-                    "timeout_seconds": WORKER_ATTEMPT_TIMEOUT_SECONDS,
-                    "event_logs": [f"events-{label}.jsonl"],
-                    "probe_logs": [],
-                    "ignore_user_config": True,
-                    "ignore_rules": True,
-                }
-            )
-    for attempt in attempts:
-        attempt.setdefault("sandbox", "workspace-write")
-    return attempts
+    return fallback_telemetry_attempts(
+        selected_ladder,
+        role="worker",
+        timeout_seconds=WORKER_ATTEMPT_TIMEOUT_SECONDS,
+        sandbox="workspace-write",
+    )
 
 
 def reviewer_telemetry_attempts(selected_ladder: list[str], goal_config: dict | None = None) -> list[dict]:
@@ -699,12 +783,13 @@ def reviewer_telemetry_attempts(selected_ladder: list[str], goal_config: dict | 
             goal_config,
             timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
             sandbox="read-only",
+            role="reviewer",
         )
-    return CONTRACT.codex_telemetry_attempts(
+    return fallback_telemetry_attempts(
         selected_ladder,
+        role="reviewer",
         timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS,
         sandbox="read-only",
-        lean=True,
     )
 
 
@@ -1515,7 +1600,7 @@ def production_paths(paths: list[str]) -> list[str]:
 def _review_route_markers_for_role(role: str) -> dict[str, str]:
     if role == "reviewer":
         return {"begin": REVIEW_STATUS_BEGIN, "end": REVIEW_STATUS_END}
-    return {"begin": GEMINI_STATUS_BEGIN, "end": GEMINI_STATUS_END}
+    return {"begin": WORKER_STATUS_BEGIN, "end": WORKER_STATUS_END}
 
 
 def _normalize_review_routes(routes: object) -> dict[str, list[str]]:
@@ -2058,9 +2143,9 @@ Return a worker status object matching `{schema_name}`. Allowed `status` values 
 
 If your CLI harness does not write `{schema_name}` directly, print the final status object between these exact marker lines and do not print any other JSON object between them:
 
-{GEMINI_STATUS_BEGIN}
+{WORKER_STATUS_BEGIN}
 {example_status}
-{GEMINI_STATUS_END}
+{WORKER_STATUS_END}
 """
 
 
@@ -2117,59 +2202,6 @@ def prompt_for(
             route_id=attribution.get("route_id", ""),
         )
     raise SystemExit(f"unsupported role for prompt generation: {role}")
-
-
-def worker_attempt_script(selected_ladder: list[str], output_name: str) -> str:
-    run_commands = {
-        "gemini-pro": f"run_gemini gemini-pro {shell_quote(GEMINI_PRO_MODEL)}",
-        "gemini-flash": f"run_gemini gemini-flash {shell_quote(GEMINI_FLASH_MODEL)}",
-        "codex-spark": f"run_codex spark {shell_quote(SPARK_MODEL)}",
-        "codex-mini": f"run_codex mini {shell_quote(MINI_MODEL)}",
-    }
-    lines = []
-    for index, alias in enumerate(selected_ladder):
-        label = WORKER_ROUTE_LABELS[alias]
-        lines.extend(
-            [
-                f"if {run_commands[alias]}; then",
-                "  write_telemetry",
-                "  exit 0",
-                "fi",
-                "",
-            ]
-        )
-        if index < len(selected_ladder) - 1:
-            lines.extend(
-                [
-                    f"guard_clean_for_fallback {shell_quote(label)}",
-                    "",
-                ]
-            )
-            continue
-        lines.extend(
-            [
-                "if [ -s \"$output_path\" ]; then",
-                "  write_telemetry",
-                "  exit 1",
-                "fi",
-                "",
-                "if worktree_dirty; then",
-                f"  echo {shell_quote(label + ' failed after leaving dirty worktree; no fallback remains.')} > \"$packet_dir/fallback.blocked.txt\"",
-                f"  write_terminal_status blocked {shell_quote(label + ' failed after leaving dirty worktree; no fallback remains.')}",
-                "  write_telemetry",
-                "  exit 2",
-                "fi",
-                "",
-            ]
-        )
-    lines.extend(
-        [
-            f"write_terminal_status blocked {shell_quote(f'All selected worker route attempts failed cleanly without producing {output_name}.')}",
-            "write_telemetry",
-            "exit 1",
-        ]
-    )
-    return "\n".join(lines)
 
 
 def launch_for(
@@ -2272,7 +2304,7 @@ def validate_launch_config_adapter(config: dict) -> None:
                 defects.append(f"{path} must be an object")
                 continue
             provider = attempt.get("harness_kind") or attempt.get("provider")
-            if provider not in {"codex", "gemini", "opencode", "generic-cli", "copilot"}:
+            if provider not in {"codex", BRIDGE_HARNESS_KIND}:
                 defects.append(f"{path}.provider must be a supported route adapter, got {provider!r}")
                 continue
             for key in ["alias", "model", "command", "rendered_command", "route_policy_version"]:
@@ -2284,26 +2316,25 @@ def validate_launch_config_adapter(config: dict) -> None:
             telemetry_capability = attempt.get("telemetry_capability")
             if not isinstance(telemetry_capability, dict) or not _nonempty_string(telemetry_capability.get("token_usage")):
                 defects.append(f"{path}.telemetry_capability.token_usage must describe token telemetry support")
-            if provider in {"gemini", "copilot"} and not _nonempty_string(attempt.get("probe_model")):
-                defects.append(f"{path}.probe_model is required for {provider} probe validation")
-            if provider == "gemini":
-                for key in ["gemini_command", "gemini_probe_prompt", "gemini_approval_mode"]:
-                    if not _nonempty_string(config.get(key)):
-                        defects.append(f"launch-config.{key} is required for gemini attempts")
-            if provider == "copilot" and not _nonempty_string(config.get("copilot_command")):
-                defects.append("launch-config.copilot_command is required for copilot attempts")
-            if provider in {"opencode", "generic-cli"}:
+            if provider == BRIDGE_HARNESS_KIND:
                 if not _nonempty_string(attempt.get("command_binary")):
                     defects.append(f"{path}.command_binary is required for {provider} attempts")
                 run_args = attempt.get("run_args")
-                if not isinstance(run_args, list):
-                    defects.append(f"{path}.run_args must be an array for {provider} attempts")
+                if not isinstance(run_args, list) or not run_args:
+                    defects.append(f"{path}.run_args must be a non-empty array for {provider} attempts")
                 if not _nonempty_string(attempt.get("run_readback")):
                     defects.append(f"{path}.run_readback is required for {provider} attempts")
-            if provider == "generic-cli":
-                markers = attempt.get("status_markers")
-                if not isinstance(markers, dict) or not _nonempty_string(markers.get("begin")) or not _nonempty_string(markers.get("end")):
-                    defects.append(f"{path}.status_markers begin/end are required for generic-cli marker extraction")
+                bridge = attempt.get("bridge")
+                if not isinstance(bridge, dict):
+                    defects.append(f"{path}.bridge must be an object for {provider} attempts")
+                else:
+                    for key in ["provider", "model", "variant", "permission_profile", "run_dir"]:
+                        if not _nonempty_string(bridge.get(key)):
+                            defects.append(f"{path}.bridge.{key} is required for {provider} attempts")
+                    if _nonempty_string(bridge.get("provider")) and bridge.get("provider") != BRIDGE_PROVIDER_ID:
+                        defects.append(f"{path}.bridge.provider must be {BRIDGE_PROVIDER_ID!r} for {provider} attempts")
+                    if not _nonempty_string(bridge.get("pool_dir")):
+                        defects.append(f"{path}.bridge.pool_dir is required for {provider} attempts")
     selected_ladder = config.get("selected_ladder")
     if selected_ladder is not None:
         aliases = [attempt.get("alias") for attempt in attempts if isinstance(attempt, dict)] if isinstance(attempts, list) else []
@@ -2356,8 +2387,8 @@ def compact_launch_config(
             "owned_files": owned_files or [],
             "worker_prompt": WORKER_PACKET_PROMPT,
             "status_markers": {
-                "begin": GEMINI_STATUS_BEGIN,
-                "end": GEMINI_STATUS_END,
+                "begin": WORKER_STATUS_BEGIN,
+                "end": WORKER_STATUS_END,
             },
             "attempts": worker_attempts,
             "selected_commands": selected_commands_from_attempts(worker_attempts),
@@ -2365,10 +2396,6 @@ def compact_launch_config(
             "route_policy": route_policy or {},
             "telemetry_script": telemetry_script,
             "terminal_message": f"All selected worker route attempts failed cleanly without producing {output_name}.",
-            "gemini_probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
-            "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
-            "gemini_approval_mode": GEMINI_APPROVAL_MODE,
-            "gemini_command": GEMINI_COMMAND,
             "retry_ordinal": retry_ordinal,
         }, retry_ordinal=retry_ordinal)
     if role == "research-worker":
@@ -2388,7 +2415,15 @@ def compact_launch_config(
         selection_tier = selected_route.get("tier")
         selection_context = selected_route.get("selection_context")
         terminal_commands = [
-            configured_route_commands([alias], goal_config)[0] if goal_config else CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
+            (
+                configured_route_commands([alias], goal_config)[0]
+                if goal_config
+                else (
+                    bridge_telemetry_attempt(alias, role="reviewer", timeout_seconds=REVIEWER_ATTEMPT_TIMEOUT_SECONDS, sandbox="read-only")["command"]
+                    if CONTRACT.is_bridge_alias(alias)
+                    else CONTRACT.codex_command(alias, sandbox="read-only", lean=True)
+                )
+            )
             for alias in reviewer_ladder
         ]
         return annotate_attempt_metadata({
@@ -2411,10 +2446,6 @@ def compact_launch_config(
             },
             "terminal_commands": terminal_commands,
             "terminal_message": f"Reviewer primary and fallback failed without producing {output_name}.",
-            "gemini_probe_timeout_seconds": GEMINI_PROBE_TIMEOUT_SECONDS,
-            "gemini_probe_prompt": GEMINI_PROBE_PROMPT,
-            "gemini_approval_mode": GEMINI_APPROVAL_MODE,
-            "gemini_command": GEMINI_COMMAND,
             "retry_ordinal": retry_ordinal,
         }, retry_ordinal=retry_ordinal)
     return None

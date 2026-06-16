@@ -11,7 +11,6 @@ import os
 import re
 import shlex
 import shutil
-import sqlite3
 import subprocess
 import sys
 import time
@@ -35,6 +34,21 @@ OPENCODE_WAL_FAILURE_SIGNATURE = "PRAGMA journal_mode = WAL"
 OPENCODE_SQLITE_WAL_SUBCLASS = "opencode_sqlite_wal_failure"
 OPENCODE_EMPTY_OUTPUT_SUBCLASS = "opencode_empty_assistant_output"
 OPENCODE_PROVIDER_API_ERROR_SUBCLASS = "opencode_provider_api_error"
+# Bridge adapter (opencode-worker-bridge) constants. The bridge delegates
+# deepseek launches through scripts/opencode_worker.py and writes file-backed
+# goal-delegator-* artifacts that we map onto the existing telemetry schema.
+BRIDGE_HARNESS_KIND = "opencode-bridge"
+BRIDGE_DEFAULT_POOL_MAX_WORKERS = 4
+BRIDGE_JOB_ENVELOPE_NAME = "job_envelope.json"
+BRIDGE_WORKER_STATUS_NAME = "worker.status.json"
+BRIDGE_SUPERVISOR_VERDICT_NAME = "supervisor_verdict.json"
+BRIDGE_WORKER_STATE_NAME = "opencode-worker-state.json"
+# Bridge lifecycle/verdict status -> success (returncode 0) classification.
+BRIDGE_PASS_STATUSES = frozenset({"passed", "completed", "done", "success"})
+# Bridge issue taxonomy ids (provider_error_code on failure).
+BRIDGE_ISSUE_IDS = frozenset(
+    {"transport", "model_output", "validation", "permission", "timeout", "cleanup", "orchestrator_policy", "harness_bug", "unknown"}
+)
 CACHE_PATH_PARTS = (
     "__pycache__",
     ".pytest_cache",
@@ -443,88 +457,6 @@ def attempt_elapsed_ms(attempt: dict[str, Any]) -> int | None:
     return None
 
 
-def opencode_db_path(xdg_data_home: Path | None = None) -> Path:
-    if xdg_data_home is not None:
-        return xdg_data_home / "opencode" / "opencode.db"
-    xdg_data = os.environ.get("XDG_DATA_HOME")
-    if xdg_data:
-        return Path(xdg_data) / "opencode" / "opencode.db"
-    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
-
-
-def opencode_global_auth_path() -> Path:
-    xdg_data = os.environ.get("XDG_DATA_HOME")
-    if xdg_data:
-        return Path(xdg_data) / "opencode" / "auth.json"
-    return Path.home() / ".local" / "share" / "opencode" / "auth.json"
-
-
-def opencode_packet_env(packet_dir: Path) -> tuple[dict[str, str], Path]:
-    root = packet_dir / ".runtime-cache" / "opencode"
-    xdg_data = root / "xdg-data"
-    xdg_state = root / "xdg-state"
-    xdg_cache = root / "xdg-cache"
-    for path in [xdg_data, xdg_state, xdg_cache]:
-        path.mkdir(parents=True, exist_ok=True)
-    packet_opencode_data = xdg_data / "opencode"
-    packet_opencode_data.mkdir(parents=True, exist_ok=True)
-    global_auth = opencode_global_auth_path()
-    packet_auth = packet_opencode_data / "auth.json"
-    if global_auth.exists() and not packet_auth.exists():
-        try:
-            packet_auth.symlink_to(global_auth)
-        except OSError:
-            pass
-    return {
-        "XDG_DATA_HOME": xdg_data.as_posix(),
-        "XDG_STATE_HOME": xdg_state.as_posix(),
-        "XDG_CACHE_HOME": xdg_cache.as_posix(),
-    }, opencode_db_path(xdg_data)
-
-
-def opencode_wal_failure_report(execution: dict[str, Any], packet_dir: Path) -> dict[str, Any] | None:
-    stderr_name = execution.get("stderr_path")
-    if not isinstance(stderr_name, str) or not stderr_name:
-        return None
-    stderr_path = packet_dir / stderr_name
-    if not stderr_path.exists():
-        return None
-    stderr_text = stderr_path.read_text(encoding="utf-8", errors="replace")
-    if OPENCODE_WAL_FAILURE_SIGNATURE not in stderr_text:
-        return None
-    return {
-        "status": "harness_failure",
-        "failure_subclass": OPENCODE_SQLITE_WAL_SUBCLASS,
-        "provider_error_code": "OPENCODE_SQLITE_WAL",
-        "messages": [
-            "Opencode failed before model execution while initializing its sqlite session database: "
-            + OPENCODE_WAL_FAILURE_SIGNATURE,
-            f"stderr: {stderr_name}",
-        ],
-    }
-
-
-def parse_session_id(stdout: str) -> str | None:
-    for line in stdout.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(event, dict):
-            session_id = event.get("sessionID")
-            if isinstance(session_id, str) and session_id:
-                return session_id
-            part = event.get("part")
-            if isinstance(part, dict):
-                session_id = part.get("sessionID")
-                if isinstance(session_id, str) and session_id:
-                    return session_id
-    return None
-
-
 def safe_json(data: str) -> dict[str, Any]:
     try:
         value = json.loads(data)
@@ -563,44 +495,6 @@ def detect_provider_error_code(lines: list[str]) -> str | None:
     return None
 
 
-def opencode_error_event_report(event_path: Path) -> dict[str, Any] | None:
-    if not event_path.exists():
-        return None
-    for line in event_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        event = safe_parse_json_dict(line)
-        if not event or event.get("type") != "error":
-            continue
-        error = event.get("error")
-        if not isinstance(error, dict):
-            continue
-        data = error.get("data")
-        data = data if isinstance(data, dict) else {}
-        metadata = data.get("metadata")
-        metadata = metadata if isinstance(metadata, dict) else {}
-        message = data.get("message") or error.get("message")
-        message = message if isinstance(message, str) and message.strip() else "opencode provider API error"
-        status_code = data.get("statusCode") or data.get("status_code") or data.get("status")
-        if isinstance(status_code, bool) or not isinstance(status_code, int):
-            status_code = None
-        provider_error_code = data.get("code") or error.get("code")
-        if not isinstance(provider_error_code, str) or not provider_error_code.strip():
-            provider_error_code = f"OPENCODE_PROVIDER_HTTP_{status_code}" if status_code is not None else "OPENCODE_PROVIDER_API_ERROR"
-        report: dict[str, Any] = {
-            "status": "failed",
-            "failure_class": "provider_api_error",
-            "failure_subclass": OPENCODE_PROVIDER_API_ERROR_SUBCLASS,
-            "provider_error_code": provider_error_code,
-            "provider_error_name": error.get("name") if isinstance(error.get("name"), str) else None,
-            "provider_error_message": message,
-            "provider_http_status": status_code,
-            "provider_error_url": metadata.get("url") if isinstance(metadata.get("url"), str) else None,
-            "provider_response_body": data.get("responseBody") if isinstance(data.get("responseBody"), str) else None,
-            "messages": [message],
-        }
-        return {key: value for key, value in report.items() if value is not None}
-    return None
-
-
 def _command_from_parts(parts: list[str] | tuple[str, ...]) -> str:
     return shlex.join(str(item) for item in parts)
 
@@ -627,81 +521,6 @@ def status_objects_from_text(raw_text: str) -> list[dict[str, Any]]:
     if parsed is not None and parsed not in objects:
         objects.append(parsed)
     return objects
-
-
-def read_opencode_assistant_text(session_id: str, db_path: Path) -> tuple[str, dict[str, Any]]:
-    if not db_path.exists():
-        return "", {"status": "missing_db", "db_path": db_path.as_posix()}
-    con = sqlite3.connect(db_path)
-    try:
-        row = con.execute(
-            """
-            select id, tokens_input, tokens_output, tokens_reasoning, tokens_cache_read, tokens_cache_write
-            from session where id=?
-            """,
-            (session_id,),
-        ).fetchone()
-        if row is None:
-            return "", {"status": "missing_session", "session_id": session_id}
-        roles: dict[str, str] = {}
-        for message_id, message_data in con.execute(
-            "select id, data from message where session_id=? order by time_created",
-            (session_id,),
-        ):
-            parsed = safe_json(message_data)
-            role = parsed.get("role")
-            if isinstance(role, str):
-                roles[message_id] = role
-        texts: list[str] = []
-        for message_id, part_data in con.execute(
-            "select message_id, data from part where session_id=? order by time_created",
-            (session_id,),
-        ):
-            if roles.get(message_id) != "assistant":
-                continue
-            part = safe_json(part_data)
-            if part.get("type") == "text" and isinstance(part.get("text"), str):
-                texts.append(part["text"])
-        return "".join(texts), {
-            "status": "pass",
-            "session_id": row[0],
-            "tokens": {
-                "input": row[1],
-                "output": row[2],
-                "reasoning": row[3],
-                "cache_read": row[4],
-                "cache_write": row[5],
-            },
-        }
-    finally:
-        con.close()
-
-
-def opencode_empty_output_report(assistant_text: str, readback: dict[str, Any]) -> dict[str, Any] | None:
-    if assistant_text.strip() or readback.get("status") != "pass":
-        return None
-    tokens = readback.get("tokens")
-    if not isinstance(tokens, dict):
-        return None
-    token_values: list[int] = []
-    for key in ("input", "output", "reasoning", "cache_read", "cache_write"):
-        value = tokens.get(key)
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
-            token_values.append(value)
-        elif value is not None:
-            return None
-    if not token_values or any(value != 0 for value in token_values):
-        return None
-    message = "opencode readback returned empty assistant output with zero token usage"
-    return {
-        "status": "failed",
-        "failure_class": "schema_or_output_readback",
-        "failure_subclass": OPENCODE_EMPTY_OUTPUT_SUBCLASS,
-        "provider_error_code": "OPENCODE_NO_ASSISTANT_OUTPUT",
-        "messages": [message],
-    }
 
 
 def state_artifact_name(config: dict[str, Any]) -> str:
@@ -1313,25 +1132,6 @@ def run_with_timeout(
     }
 
 
-def first_log_path(packet_dir: Path, attempt: dict[str, Any], key: str, fallback: str) -> Path:
-    logs = attempt.get(key, [])
-    if isinstance(logs, list):
-        for value in logs:
-            if isinstance(value, str) and value:
-                return packet_dir / value
-    return packet_dir / fallback
-
-
-def validate_probe_output(path: Path, prompt: str, label: str) -> int:
-    expected = prompt.rsplit(":", 1)[-1].strip()
-    text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-    if expected in text:
-        return 0
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(f"\n{label} model probe did not return expected token: {expected}\n")
-    return 1
-
-
 def worktree_status_lines(worktree: str, *, untracked_files_all: bool = False) -> list[str]:
     command = ["git", "-C", worktree, "status", "--porcelain"]
     if untracked_files_all:
@@ -1896,235 +1696,477 @@ def write_telemetry(packet_dir: Path, config: dict[str, Any]) -> None:
     write_packet_summary(packet_dir, config)
 
 
-def run_gemini_probe_command(
-    attempt: dict[str, Any],
-    *,
-    label: str,
-    packet_dir: Path,
-    config: dict[str, Any],
-    worktree: str,
-) -> tuple[int, dict[str, Any], Path]:
-    model = attempt.get("probe_model")
-    if not isinstance(model, str) or not model:
-        raise SystemExit(f"{CONFIG_NAME} missing probe model for {label}")
-    approval = string_value(config, "gemini_approval_mode") if isinstance(config.get("gemini_approval_mode"), str) else "yolo"
-    prompt = str(attempt.get("probe_prompt", string_value(config, "gemini_probe_prompt")))
-    command = [
-        string_value(config, "gemini_command"),
-        "--model",
-        model,
-        "--approval-mode",
-        approval,
-        "--skip-trust",
-        "-p",
-        prompt,
-    ]
-    record_executed_command(attempt, command)
-    timeout_seconds = int_value(attempt, "probe_timeout_seconds") if isinstance(attempt.get("probe_timeout_seconds"), int) else int_value(config, "gemini_probe_timeout_seconds")
-    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
-    log_path = first_log_path(packet_dir, attempt, "probe_logs", f"events-{label}-probe.log")
-    rc = run_with_timeout(
-        command=command,
-        timeout_seconds=timeout_seconds,
-        kill_after_seconds=kill_after_seconds,
-        role=string_value(config, "role"),
-        cwd=worktree,
-        stdin_data=None,
-        stdout_path=log_path,
-    )
-    append_attempt_execution(attempt, rc if isinstance(rc, dict) else {"returncode": rc}, phase=f"probe-{label}")
-    execution = rc if isinstance(rc, dict) else {"returncode": rc}
-    if execution.get("returncode") != 0:
-        return int(execution.get("returncode") or 1), execution, log_path
-    returncode = validate_probe_output(log_path, prompt, "Gemini")
-    execution["validation_returncode"] = returncode
-    return returncode, execution, log_path
+def resolve_bridge_root() -> Path | None:
+    """Resolve the opencode-worker-bridge skill root.
+
+    Order: env override -> source checkout under CWD -> $CODEX_HOME skills ->
+    $HOME/.agents skills (mirrors the SKILL.md resolution snippet).
+    """
+    env_root = os.environ.get("OPENCODE_WORKER_BRIDGE_ROOT")
+    candidates: list[Path] = []
+    if env_root and env_root.strip():
+        candidates.append(Path(env_root).expanduser())
+    candidates.append(Path.cwd() / "skills" / "opencode-worker-bridge")
+    codex_home = os.environ.get("CODEX_HOME") or os.path.join(os.path.expanduser("~"), ".codex")
+    candidates.append(Path(codex_home).expanduser() / "skills" / "opencode-worker-bridge")
+    candidates.append(Path(os.path.expanduser("~")) / ".agents" / "skills" / "opencode-worker-bridge")
+    for candidate in candidates:
+        if (candidate / "scripts" / "opencode_worker.py").exists():
+            return candidate
+    return None
 
 
-def run_gemini_attempt(
-    attempt: dict[str, Any],
-    *,
-    label: str,
-    packet_dir: Path,
-    config: dict[str, Any],
-    schema_path: Path,
-    worktree: str,
-) -> tuple[int, dict[str, Any], Path]:
-    model = attempt.get("model")
-    if not isinstance(model, str) or not model:
-        raise SystemExit(f"{CONFIG_NAME} missing model for {label}")
-    approval = string_value(config, "gemini_approval_mode") if isinstance(config.get("gemini_approval_mode"), str) else "yolo"
-    command_binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else string_value(config, "gemini_command")
-    command = [
-        command_binary,
-        "--model",
-        model,
-        "--approval-mode",
-        approval,
-        "--skip-trust",
-        "-p",
-        str(config.get("worker_prompt", "Follow the complete worker packet instructions provided on stdin.")),
-    ]
-    record_executed_command(attempt, command)
-    timeout_seconds = int_value(attempt, "timeout_seconds")
-    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
-    output_path = first_log_path(packet_dir, attempt, "event_logs", f"events-{label}.log")
-    prompt_path = packet_dir / "prompt.md"
-    rc = run_with_timeout(
-        command=command,
-        timeout_seconds=timeout_seconds,
-        kill_after_seconds=kill_after_seconds,
-        role=string_value(config, "role"),
-        cwd=worktree,
-        stdin_data=prompt_path.read_bytes(),
-        stdout_path=output_path,
-    )
-    if not isinstance(rc, dict):
-        rc = {"returncode": rc}
-    append_attempt_execution(attempt, rc, phase=f"attempt-{label}")
-    if rc.get("returncode") != 0:
-        return int(rc.get("returncode") or 1), rc, output_path
-    parse_report: dict[str, Any] = {}
-    attempt["_parse_report"] = parse_report
-    result = 0 if extract_status_json(packet_dir, schema_path, output_path, config, parse_report=parse_report) else 1
-    return result, rc, output_path
+def bridge_spec(attempt: dict[str, Any]) -> dict[str, Any]:
+    bridge = attempt.get("bridge")
+    return bridge if isinstance(bridge, dict) else {}
 
 
-def run_copilot_probe_command(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], worktree: str) -> tuple[int, dict[str, Any], Path]:
-    model = attempt.get("probe_model")
-    if not isinstance(model, str) or not model:
-        model = string_value(attempt, "model")
-    effort = attempt.get("probe_reasoning_effort") or attempt.get("effort")
-    if not isinstance(effort, str) or not effort:
-        effort = string_value(config, "copilot_probe_reasoning_effort")
-    timeout_seconds = int_value(attempt, "probe_timeout_seconds") if isinstance(attempt.get("probe_timeout_seconds"), int) else int_value(config, "copilot_probe_timeout_seconds")
-    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
-    prompt = str(attempt.get("probe_prompt", string_value(config, "copilot_probe_prompt")))
-    probe_share = packet_dir / f"session-{label}-probe.md"
-    logs = attempt.get("probe_logs", [])
-    probe_path = packet_dir / str(logs[0]) if logs else packet_dir / f"events-{label}-probe.jsonl"
-    version_probe = None
-    for item in logs:
-        if isinstance(item, str) and item.endswith("-version.log"):
-            version_probe = packet_dir / item
+def _elapsed_ms_from_timestamps(timestamps: Any) -> int | None:
+    if not isinstance(timestamps, dict):
+        return None
+    start = timestamps.get("started_at") or timestamps.get("created_at") or timestamps.get("start")
+    end = timestamps.get("completed_at") or timestamps.get("finished_at") or timestamps.get("end") or timestamps.get("updated_at")
+    if not isinstance(start, str) or not isinstance(end, str):
+        return None
+    try:
+        start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    delta_ms = int(round((end_dt - start_dt).total_seconds() * 1000))
+    return delta_ms if delta_ms >= 0 else None
+
+
+def _bridge_usage(*sources: Any) -> dict[str, Any] | None:
+    """Pull a token usage map from any bridge artifact that carries one.
+
+    NEVER emits USD/price fields; only token counts are surfaced. The bridge
+    contract carries no price keys, so this is a token-only passthrough.
+    """
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        usage = source.get("usage") or source.get("tokens") or source.get("token_usage")
+        if isinstance(usage, dict) and usage:
+            return {key: value for key, value in usage.items() if isinstance(value, (int, float)) and not isinstance(value, bool)} or None
+    return None
+
+
+def _bridge_assistant_text(*sources: Any) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in ("assistant_text", "output_text", "summary", "message", "final_message"):
+            value = source.get(key)
+            if isinstance(value, str) and value.strip():
+                return value
+    return ""
+
+
+def map_bridge_artifacts(run_dir: Path) -> dict[str, Any]:
+    """Map bridge goal-delegator-* artifacts onto the package's runtime contract.
+
+    Reads job_envelope.json / worker.status.json / supervisor_verdict.json and
+    returns a dict with:
+      - returncode: 0 on passed/completed/done, nonzero otherwise
+      - status: bridge lifecycle/verdict string
+      - elapsed_ms: derived from job timestamps when available
+      - usage: token map (or None) -- NEVER any USD/price field
+      - assistant_text: worker output text for the *-assistant.log
+      - provider_error_code: bridge issue id on failure (else None)
+      - provider / model / variant: route metadata for telemetry
+    """
+    job = read_optional_json(run_dir / BRIDGE_JOB_ENVELOPE_NAME)
+    worker_status = read_optional_json(run_dir / BRIDGE_WORKER_STATUS_NAME)
+    verdict = read_optional_json(run_dir / BRIDGE_SUPERVISOR_VERDICT_NAME)
+
+    # Verdict (when present) is the authoritative status, else the job status,
+    # else the worker lifecycle.
+    status = None
+    for source, key in ((verdict, "status"), (job, "status"), (worker_status, "lifecycle")):
+        value = source.get(key) if isinstance(source, dict) else None
+        if isinstance(value, str) and value.strip():
+            status = value.strip()
             break
-    if version_probe is None:
-        version_probe = packet_dir / f"events-{label}-version.log"
+    if status is None:
+        status = "unknown"
 
-    command_probe = [
-        string_value(config, "copilot_command"),
-        "copilot",
-        "--",
-        "-C",
-        worktree,
-        "--model",
-        model,
-        "--effort",
-        effort,
-        "--no-ask-user",
-        "--no-custom-instructions",
-        "--no-remote",
-        "--disable-builtin-mcps",
-        "--log-level",
-        "error",
-        "--output-format",
-        "json",
-        "--stream",
-        "off",
-        "--deny-tool",
-        "shell,write,url,memory",
-        "--share",
-        str(probe_share),
-        "-p",
-        prompt,
-    ]
+    passed = status.lower() in BRIDGE_PASS_STATUSES
+    returncode = 0 if passed else 1
 
-    version_command = [string_value(config, "copilot_command"), "copilot", "--", "--version"]
-    record_executed_command(attempt, version_command)
-    version_execution = run_with_timeout(
-        command=version_command,
-        timeout_seconds=timeout_seconds,
-        kill_after_seconds=kill_after_seconds,
-        role=string_value(config, "role"),
-        cwd=worktree,
-        stdin_data=None,
-        stdout_path=version_probe,
-    )
-    append_attempt_execution(attempt, version_execution, phase=f"probe-{label}-version")
-    if version_execution.get("returncode", 0) != 0:
-        return version_execution.get("returncode", 1), version_execution, version_probe
-    record_executed_command(attempt, command_probe)
-    execution = run_with_timeout(
-        command=command_probe,
-        timeout_seconds=timeout_seconds,
-        kill_after_seconds=kill_after_seconds,
-        role=string_value(config, "role"),
-        cwd=worktree,
-        stdin_data=None,
-        stdout_path=probe_path,
-    )
-    append_attempt_execution(attempt, execution, phase=f"probe-{label}")
-    validation_returncode = 1
-    if execution.get("returncode", 1) == 0:
-        validation_returncode = validate_probe_output(probe_path, prompt, "Copilot")
-    execution["validation_returncode"] = validation_returncode
-    return validation_returncode, execution, probe_path
+    provider_error_code: str | None = None
+    if not passed:
+        for source in (verdict, job, worker_status):
+            if not isinstance(source, dict):
+                continue
+            for key in ("issue_id", "provider_error_code", "issue", "failure_id"):
+                value = source.get(key)
+                if isinstance(value, str) and value.strip():
+                    provider_error_code = value.strip()
+                    break
+            if provider_error_code:
+                break
+        if provider_error_code is None:
+            # Map lifecycle -> taxonomy when the artifact lacks an explicit id.
+            lowered = status.lower()
+            if lowered in {"blocked", "needs_input"}:
+                provider_error_code = "orchestrator_policy"
+            elif lowered in {"crashed", "failed"}:
+                provider_error_code = "model_output"
+            else:
+                provider_error_code = "unknown"
+
+    route = job.get("route") if isinstance(job.get("route"), dict) else {}
+    provider = route.get("provider") if isinstance(route.get("provider"), str) else None
+    model = route.get("model") if isinstance(route.get("model"), str) else None
+    variant = route.get("variant") if isinstance(route.get("variant"), str) else None
+
+    elapsed_ms = _elapsed_ms_from_timestamps(job.get("timestamps"))
+    usage = _bridge_usage(verdict, job, worker_status, route)
+    assistant_text = _bridge_assistant_text(verdict, job, worker_status)
+
+    return {
+        "returncode": returncode,
+        "status": status,
+        "passed": passed,
+        "elapsed_ms": elapsed_ms,
+        "usage": usage,
+        "assistant_text": assistant_text,
+        "provider_error_code": provider_error_code,
+        "provider": provider,
+        "model": model,
+        "variant": variant,
+        "artifacts_present": {
+            "job_envelope": bool(job),
+            "worker_status": bool(worker_status),
+            "supervisor_verdict": bool(verdict),
+        },
+    }
 
 
-def run_copilot_attempt(attempt: dict[str, Any], *, label: str, packet_dir: Path, config: dict[str, Any], schema_path: Path, worktree: str) -> tuple[int, dict[str, Any], Path]:
-    model = attempt.get("model")
-    if not isinstance(model, str) or not model:
-        raise SystemExit(f"{CONFIG_NAME} missing model for {label}")
-    effort = attempt.get("effort")
-    if not isinstance(effort, str) or not effort:
-        effort = string_value(config, "copilot_reasoning_effort")
-    output_path = packet_dir / f"events-{label}.jsonl"
-    session_path = packet_dir / f"session-{label}.md"
-    timeout_seconds = int_value(attempt, "timeout_seconds")
-    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
-    prompt_path = packet_dir / "prompt.md"
-    command = [
-        string_value(config, "copilot_command"),
-        "copilot",
-        "--",
-        "-C",
-        worktree,
-        "--model",
-        model,
-        "--effort",
-        effort,
-        "--no-ask-user",
-        "--no-custom-instructions",
-        "--no-remote",
-        "--disable-builtin-mcps",
-        "--log-level",
-        "error",
-        "--output-format",
-        "json",
-        "--stream",
-        "off",
-        "--allow-tool=read,write,shell(pwd),shell(git:*),shell(python3:*),shell(pytest:*),shell(uv:*),shell(rg:*),shell(sed:*),shell(cat:*),shell(ls:*)",
-        "--deny-tool=shell(git push),shell(git reset),shell(rm),memory,url",
-        f"--share={session_path}",
-        "-p",
-        prompt_path.read_text(encoding="utf-8"),
-    ]
-    record_executed_command(attempt, command)
-    execution = run_with_timeout(
+def write_bridge_telemetry_artifacts(
+    packet_dir: Path,
+    label: str,
+    mapped: dict[str, Any],
+) -> Path:
+    """Write the synthetic events-<label>.jsonl + *-assistant.log.
+
+    extract_telemetry.py (unchanged, provider-agnostic) consumes the event log
+    for usage/elapsed and the assistant log text. No USD/price keys are ever
+    written.
+    """
+    event_path = packet_dir / f"events-{label}.jsonl"
+    assistant_path = packet_dir / f"events-{label}-assistant.log"
+    assistant_text = str(mapped.get("assistant_text") or "")
+    assistant_path.write_text(assistant_text, encoding="utf-8")
+    event_record: dict[str, Any] = {
+        "elapsed_ms": mapped.get("elapsed_ms"),
+        "output_nonempty": bool(assistant_text.strip()),
+        "usage": mapped.get("usage"),
+        "provider": mapped.get("provider"),
+        "model": mapped.get("model"),
+        "variant": mapped.get("variant"),
+        "status": mapped.get("status"),
+    }
+    if mapped.get("provider_error_code"):
+        event_record["provider_error_code"] = mapped.get("provider_error_code")
+    event_path.write_text(json.dumps(event_record, separators=(",", ":")) + "\n", encoding="utf-8")
+    return event_path
+
+
+def _run_bridge_command(
+    *,
+    bridge_root: Path,
+    subcommand: str,
+    extra_args: list[str],
+    timeout_seconds: int,
+    kill_after_seconds: int,
+    role: str,
+    cwd: str,
+    stdout_path: Path,
+    stdin_data: bytes | None = None,
+) -> dict[str, Any]:
+    command = ["python3", (bridge_root / "scripts" / "opencode_worker.py").as_posix(), subcommand, *extra_args]
+    return run_with_timeout(
         command=command,
         timeout_seconds=timeout_seconds,
         kill_after_seconds=kill_after_seconds,
-        role=string_value(config, "role"),
-        cwd=worktree,
-        stdin_data=None,
-        stdout_path=output_path,
+        role=role,
+        cwd=cwd,
+        stdin_data=stdin_data,
+        stdout_path=stdout_path,
     )
-    append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
-    if execution.get("returncode", 1) != 0:
-        return int(execution.get("returncode", 1)), execution, output_path
+
+
+def run_opencode_bridge_model(
+    attempt: dict[str, Any],
+    *,
+    packet_dir: Path,
+    config: dict[str, Any],
+    schema_name: str,
+    output_name: str,
+    worktree: str,
+    label: str,
+) -> tuple[int, dict[str, Any], Path]:
+    """Drive opencode_worker.py pool-acquire -> start -> delegate/supervisor -> stop -> pool-release.
+
+    Maps the bridge's goal-delegator-* artifacts onto the package's existing
+    worker-status + telemetry schema (synthetic events-<label>.jsonl usage line
+    + *-assistant.log). For worker role the authoritative output stays the
+    worker's status.json in the worktree (ensure_status_json gate preserved);
+    the bridge envelope supplies returncode + telemetry. Never emits USD.
+    """
+    role = string_value(config, "role")
+    schema_path = packet_dir / schema_name
+    output_path = packet_dir / output_name
+    timeout_seconds = int_value(attempt, "timeout_seconds")
+    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
+    spec = bridge_spec(attempt)
+    event_path = packet_dir / f"events-{label}.jsonl"
+
+    bridge_root = resolve_bridge_root()
+    if bridge_root is None:
+        message = "opencode-worker-bridge control script not found (set OPENCODE_WORKER_BRIDGE_ROOT)"
+        print(message, file=sys.stderr)
+        (packet_dir / f"events-{label}-bridge-error.log").write_text(message + "\n", encoding="utf-8")
+        attempt["_parse_report"] = {
+            "status": "harness_failure",
+            "failure_subclass": "bridge_unavailable",
+            "provider_error_code": "BRIDGE_ROOT_NOT_FOUND",
+            "messages": [message],
+        }
+        execution = {
+            "returncode": 127,
+            "elapsed_ms": 0,
+            "timed_out": False,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "command": "opencode_worker.py",
+            "command_parts": ["opencode_worker.py"],
+        }
+        append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
+        return 127, execution, event_path
+
+    run_dir_rel = str(spec.get("run_dir") or f"bridge/{label}")
+    pool_dir_rel = str(spec.get("pool_dir") or "bridge/pool")
+    run_dir = packet_dir / run_dir_rel
+    pool_dir = packet_dir / pool_dir_rel
+    run_dir.mkdir(parents=True, exist_ok=True)
+    pool_dir.mkdir(parents=True, exist_ok=True)
+    state_path = run_dir / BRIDGE_WORKER_STATE_NAME
+    task_path = run_dir / "task.md"
+    prompt_path = packet_dir / "prompt.md"
+    task_path.write_text(prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else "", encoding="utf-8")
+
+    profile = str(spec.get("permission_profile") or ("workspace-write" if role == "worker" else "read-only"))
+    provider = str(spec.get("provider") or "deepseek")
+    model = str(spec.get("model") or attempt.get("model") or "")
+    variant = str(spec.get("variant") or attempt.get("variant") or "max")
+    max_workers = int(spec.get("pool_max_workers") or BRIDGE_DEFAULT_POOL_MAX_WORKERS)
+    worker_id = string_value(config, "packet_id") or label
+    use_supervisor = bool(spec.get("supervisor"))
+
+    record_executed_command(
+        attempt,
+        [
+            "python3",
+            (bridge_root / "scripts" / "opencode_worker.py").as_posix(),
+            "supervisor" if use_supervisor else "delegate",
+            "--provider",
+            provider,
+            "--model",
+            model,
+            "--variant",
+            variant,
+            "--permission-profile",
+            profile,
+            "--run-dir",
+            run_dir.as_posix(),
+        ],
+    )
+
+    acquired = False
+    last_execution: dict[str, Any] = {
+        "returncode": 1,
+        "elapsed_ms": 0,
+        "timed_out": False,
+        "stdout_bytes": 0,
+        "stderr_bytes": 0,
+        "command": "opencode_worker.py",
+        "command_parts": ["opencode_worker.py"],
+    }
+    try:
+        # Defense-in-depth pool slot. The scheduler is the source of truth for
+        # the cap-4 worker-slot invariant; this lock only catches a runner-level
+        # double-launch and provides stale-lock recovery.
+        acquire = _run_bridge_command(
+            bridge_root=bridge_root,
+            subcommand="pool-acquire",
+            extra_args=["--pool-dir", pool_dir.as_posix(), "--max-workers", str(max_workers), "--worker-id", worker_id],
+            timeout_seconds=timeout_seconds,
+            kill_after_seconds=kill_after_seconds,
+            role=role,
+            cwd=str(packet_dir),
+            stdout_path=run_dir / "pool-acquire.log",
+        )
+        if acquire.get("returncode", 1) != 0:
+            # Try to clear a stale lock (locks older than 300s) and retry once.
+            _run_bridge_command(
+                bridge_root=bridge_root,
+                subcommand="pool-recover",
+                extra_args=["--pool-dir", pool_dir.as_posix()],
+                timeout_seconds=timeout_seconds,
+                kill_after_seconds=kill_after_seconds,
+                role=role,
+                cwd=str(packet_dir),
+                stdout_path=run_dir / "pool-recover.log",
+            )
+            acquire = _run_bridge_command(
+                bridge_root=bridge_root,
+                subcommand="pool-acquire",
+                extra_args=["--pool-dir", pool_dir.as_posix(), "--max-workers", str(max_workers), "--worker-id", worker_id],
+                timeout_seconds=timeout_seconds,
+                kill_after_seconds=kill_after_seconds,
+                role=role,
+                cwd=str(packet_dir),
+                stdout_path=run_dir / "pool-acquire-retry.log",
+            )
+        if acquire.get("returncode", 1) != 0:
+            message = "bridge pool capacity limit reached; scheduler should refill later"
+            attempt["_parse_report"] = {
+                "status": "failed",
+                "failure_subclass": "bridge_pool_capacity",
+                "provider_error_code": "BRIDGE_POOL_CAPACITY",
+                "messages": [message],
+            }
+            append_attempt_execution(attempt, acquire, phase=f"attempt-{label}")
+            write_bridge_telemetry_artifacts(packet_dir, label, {"status": "blocked", "provider_error_code": "BRIDGE_POOL_CAPACITY"})
+            return int(acquire.get("returncode", 1)), acquire, event_path
+        acquired = True
+
+        start = _run_bridge_command(
+            bridge_root=bridge_root,
+            subcommand="start",
+            extra_args=[
+                "--state",
+                state_path.as_posix(),
+                "--cwd",
+                worktree,
+                "--pool-dir",
+                pool_dir.as_posix(),
+                "--pool-worker-id",
+                worker_id,
+            ],
+            timeout_seconds=timeout_seconds,
+            kill_after_seconds=kill_after_seconds,
+            role=role,
+            cwd=str(packet_dir),
+            stdout_path=run_dir / "start.log",
+        )
+
+        if use_supervisor:
+            validator_path = run_dir / "validator.py"
+            delegate_args = [
+                "--run-dir",
+                run_dir.as_posix(),
+                "--state",
+                state_path.as_posix(),
+                "--validator",
+                validator_path.as_posix(),
+                "--retry-action",
+                "continue",
+                "--retry-limit",
+                "1",
+                "--follow-up-file",
+                (run_dir / "follow-up.md").as_posix(),
+            ]
+            delegate = _run_bridge_command(
+                bridge_root=bridge_root,
+                subcommand="supervisor",
+                extra_args=delegate_args,
+                timeout_seconds=timeout_seconds,
+                kill_after_seconds=kill_after_seconds,
+                role=role,
+                cwd=str(packet_dir),
+                stdout_path=run_dir / "supervisor.log",
+            )
+        else:
+            delegate = _run_bridge_command(
+                bridge_root=bridge_root,
+                subcommand="delegate",
+                extra_args=[
+                    "--state",
+                    state_path.as_posix(),
+                    "--run-dir",
+                    run_dir.as_posix(),
+                    "--job-id",
+                    worker_id,
+                    "--prompt-file",
+                    task_path.as_posix(),
+                    "--provider",
+                    provider,
+                    "--model",
+                    model,
+                    "--variant",
+                    variant,
+                    "--permission-profile",
+                    profile,
+                    "--report",
+                    (run_dir / "delegation-report.json").as_posix(),
+                ],
+                timeout_seconds=timeout_seconds,
+                kill_after_seconds=kill_after_seconds,
+                role=role,
+                cwd=str(packet_dir),
+                stdout_path=run_dir / "delegate.log",
+            )
+        last_execution = delegate
+        append_attempt_execution(attempt, delegate, phase=f"attempt-{label}")
+
+        _run_bridge_command(
+            bridge_root=bridge_root,
+            subcommand="stop",
+            extra_args=["--state", state_path.as_posix(), "--run-dir", run_dir.as_posix()],
+            timeout_seconds=timeout_seconds,
+            kill_after_seconds=kill_after_seconds,
+            role=role,
+            cwd=str(packet_dir),
+            stdout_path=run_dir / "stop.log",
+        )
+    finally:
+        if acquired:
+            _run_bridge_command(
+                bridge_root=bridge_root,
+                subcommand="pool-release",
+                extra_args=["--pool-dir", pool_dir.as_posix(), "--worker-id", worker_id],
+                timeout_seconds=timeout_seconds,
+                kill_after_seconds=kill_after_seconds,
+                role=role,
+                cwd=str(packet_dir),
+                stdout_path=run_dir / "pool-release.log",
+            )
+
+    mapped = map_bridge_artifacts(run_dir)
+    write_bridge_telemetry_artifacts(packet_dir, label, mapped)
+
     parse_report: dict[str, Any] = {}
     attempt["_parse_report"] = parse_report
-    return 0 if extract_status_json(packet_dir, schema_path, output_path, config, parse_report=parse_report) else 1, execution, output_path
+    if not mapped.get("passed"):
+        parse_report["status"] = "failed"
+        parse_report["provider_error_code"] = mapped.get("provider_error_code")
+        parse_report["failure_subclass"] = "bridge_lifecycle_" + str(mapped.get("status"))
+        parse_report["messages"] = [f"bridge reported {mapped.get('status')!r}"]
+        if mapped.get("provider_error_code"):
+            attempt["provider_error_code"] = mapped.get("provider_error_code")
+        return int(mapped.get("returncode") or 1), last_execution, event_path
+
+    # For worker role the authoritative output remains the worker's status.json
+    # in the packet; enforce the same ensure_status_json gate as native routes.
+    if role == "worker":
+        assistant_log = packet_dir / f"events-{label}-assistant.log"
+        if not ensure_status_json(packet_dir, schema_path, output_path, assistant_log, config, parse_report=parse_report):
+            return 1, last_execution, event_path
+    return 0, last_execution, event_path
 
 
 def run_codex_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
@@ -2211,99 +2253,6 @@ def render_runtime_args(attempt: dict[str, Any], *, packet_dir: Path, config: di
         if isinstance(item, str):
             rendered.append(item.format(**context))
     return rendered
-
-
-def run_opencode_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
-    schema_path = packet_dir / schema_name
-    output_path = packet_dir / output_name
-    prompt_path = packet_dir / "prompt.md"
-    prompt_text = prompt_path.read_text(encoding="utf-8")
-    event_path = packet_dir / f"events-{label}-readback-error.log"
-    timeout_seconds = int_value(attempt, "timeout_seconds")
-    kill_after_seconds = int_value(config, "timeout_kill_after_seconds")
-    binary = attempt.get("command_binary") if isinstance(attempt.get("command_binary"), str) else "opencode"
-    resolved = shutil.which(binary) if not os.path.isabs(binary) else binary
-    if not resolved:
-        print(f"opencode binary not found: {binary}", file=sys.stderr)
-        event_path.write_text(f"opencode binary not found: {binary}\n", encoding="utf-8")
-        return 127, {
-            "returncode": 127,
-            "elapsed_ms": 0,
-            "timed_out": False,
-            "stdout_bytes": 0,
-            "stderr_bytes": 0,
-            "command": str(binary),
-            "command_parts": [binary],
-        }, event_path
-    event_path = packet_dir / f"events-{label}.jsonl"
-    args = render_runtime_args(
-        attempt,
-        packet_dir=packet_dir,
-        config=config,
-        prompt_text=prompt_text,
-        worktree=worktree,
-        schema_path=schema_path,
-        output_path=output_path,
-    )
-    if not args:
-        args = [
-            "run",
-            "--pure",
-            "--format",
-            "json",
-            "--model",
-            string_value(attempt, "model"),
-            "--variant",
-            "max",
-            "--dir",
-            worktree,
-            prompt_text,
-        ]
-    command = [resolved, *args]
-    record_executed_command(attempt, command)
-    extra_env, db_path = opencode_packet_env(packet_dir)
-    attempt["opencode_state"] = {
-        "xdg_data_home": extra_env["XDG_DATA_HOME"],
-        "xdg_state_home": extra_env["XDG_STATE_HOME"],
-        "xdg_cache_home": extra_env["XDG_CACHE_HOME"],
-        "db_path": db_path.as_posix(),
-        "auth_context": "packet_xdg_linked_global_auth"
-        if (Path(extra_env["XDG_DATA_HOME"]) / "opencode" / "auth.json").exists()
-        else "packet_xdg_no_global_auth_file",
-    }
-    execution = run_with_timeout(
-        command=command,
-        timeout_seconds=timeout_seconds,
-        kill_after_seconds=kill_after_seconds,
-        role=string_value(config, "role"),
-        cwd=str(packet_dir),
-        stdin_data=None,
-        stdout_path=event_path,
-        extra_env=extra_env,
-    )
-    append_attempt_execution(attempt, execution, phase=f"attempt-{label}")
-    if execution.get("returncode", 1) != 0:
-        parse_report = opencode_wal_failure_report(execution, packet_dir) or opencode_error_event_report(event_path)
-        if parse_report:
-            attempt["_parse_report"] = parse_report
-        return int(execution.get("returncode", 1)), execution, event_path
-    session_id = parse_session_id(event_path.read_text(encoding="utf-8", errors="replace") if event_path.exists() else "")
-    if not session_id:
-        print("opencode attempt did not emit a session id", file=sys.stderr)
-        return 1, execution, event_path
-    assistant_text, readback = read_opencode_assistant_text(session_id, db_path)
-    assistant_log_path = packet_dir / f"events-{label}-assistant.log"
-    assistant_log_path.write_text(assistant_text, encoding="utf-8")
-    parse_report: dict[str, Any] = opencode_error_event_report(event_path) or opencode_empty_output_report(assistant_text, readback) or {}
-    if parse_report:
-        readback = {**readback, **parse_report, "status": "failed"}
-    (packet_dir / f"events-{label}-opencode-readback.json").write_text(json.dumps(readback, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    attempt["_parse_report"] = parse_report
-    if parse_report:
-        return 1, execution, event_path
-    if not ensure_status_json(packet_dir, schema_path, output_path, assistant_log_path, config, parse_report=parse_report):
-        return 1, execution, event_path
-    return 0, execution, event_path
 
 
 def run_generic_cli_model(attempt: dict[str, Any], *, packet_dir: Path, config: dict[str, Any], schema_name: str, output_name: str, worktree: str, label: str) -> tuple[int, dict[str, Any], Path]:
@@ -2646,32 +2595,6 @@ def run_worker_attempt(
 ) -> tuple[int, Path | None]:
     label = event_label(attempt, f"attempt-{attempt_index + 1}")
     provider = attempt.get("harness_kind") or attempt.get("provider")
-    if provider == "gemini":
-        rc, _, probe_event_path = run_gemini_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree)
-        if rc != 0:
-            return rc, probe_event_path
-        attempt_rc, _, attempt_event_path = run_gemini_attempt(
-            attempt,
-            label=label,
-            packet_dir=packet_dir,
-            config=config,
-            schema_path=packet_dir / schema_name,
-            worktree=worktree,
-        )
-        return attempt_rc, attempt_event_path
-    if provider == "copilot":
-        rc, _, probe_event_path = run_copilot_probe_command(attempt, label=label, packet_dir=packet_dir, config=config, worktree=worktree)
-        if rc != 0:
-            return rc, probe_event_path
-        attempt_rc, _, attempt_event_path = run_copilot_attempt(
-            attempt,
-            label=label,
-            packet_dir=packet_dir,
-            config=config,
-            schema_path=packet_dir / schema_name,
-            worktree=worktree,
-        )
-        return attempt_rc, attempt_event_path
     if provider == "codex":
         attempt_rc, _, attempt_event_path = run_codex_model(
             attempt,
@@ -2683,8 +2606,8 @@ def run_worker_attempt(
             label=label,
         )
         return attempt_rc, attempt_event_path
-    if provider == "opencode":
-        attempt_rc, _, attempt_event_path = run_opencode_model(
+    if provider == BRIDGE_HARNESS_KIND:
+        attempt_rc, _, attempt_event_path = run_opencode_bridge_model(
             attempt,
             packet_dir=packet_dir,
             config=config,
@@ -2993,8 +2916,8 @@ def run_packet(packet_dir: Path) -> int:
                 worktree=worktree,
                 label=_label,
             )
-        elif provider == "opencode":
-            rc, _, event_path = run_opencode_model(
+        elif provider == BRIDGE_HARNESS_KIND:
+            rc, _, event_path = run_opencode_bridge_model(
                 attempt,
                 packet_dir=packet_dir,
                 config=config,
@@ -3012,15 +2935,6 @@ def run_packet(packet_dir: Path) -> int:
                 output_name=output_name,
                 worktree=worktree,
                 label=_label,
-            )
-        elif provider == "gemini":
-            rc, _, event_path = run_gemini_attempt(
-                attempt,
-                label=_label,
-                packet_dir=packet_dir,
-                config=config,
-                schema_path=packet_dir / schema_name,
-                worktree=worktree,
             )
         else:
             raise SystemExit(f"{CONFIG_NAME} unsupported {role} provider: {provider}")
