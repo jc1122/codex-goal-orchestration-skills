@@ -26,7 +26,7 @@ from fixture_support import (
     assert_shell_syntax,
     attempt,
     make_scheduler_event,
-    offline_gemini_env,
+    offline_bridge_env,
     read_json,
     run_command,
     run_runtime_packet,
@@ -396,8 +396,8 @@ def golden_brief() -> dict:
                         "owned_paths": ["README.md"],
                         "context_files": ["README.md"],
                         "verification": ["git diff --check main...HEAD"],
-                        "route_class": "normal-code",
-                        "route_class_reason": "Golden smoke fixture intentionally exercises a normal-code worker route even though the owned path is documentation-like.",
+                        "route_class": "small-edit",
+                        "route_class_reason": "Golden smoke fixture exercises a small-edit worker route whose native Codex mini fallback is the cheapest deterministic route.",
                         "dod": ["normal worker artifact validates with route and timeout telemetry"],
                     },
                     {
@@ -420,10 +420,16 @@ def write_lite_advice(packet_dir: Path) -> dict:
     source_files = inputs.get("source_files")
     if not isinstance(source_files, list):
         raise SystemExit("golden Lite input-files.json did not contain source_files")
-    gemini_path = str(inputs.get("gemini_path", ""))
+    # B6: the Lite advisor routes through the opencode-worker-bridge (deepseek-v4-flash,
+    # --variant max, read-only). The command echoes the bridge delegate invocation built
+    # from the captured offline bridge control-script path; validate_lite_advice.py
+    # recomputes the exact expected command from inputs.bridge_control_script.
+    control_script = str(inputs.get("bridge_control_script", ""))
+    control = control_script if control_script else "opencode_worker.py"
     command = (
-        f"{gemini_path if gemini_path else 'gemini'} "
-        "--model gemini-3.1-flash-lite-preview --approval-mode plan --skip-trust --output-format text"
+        f"python3 {control} delegate "
+        "--provider deepseek --model deepseek-v4-flash --variant max "
+        "--permission-profile read-only"
     )
     advice = {
         "packet_id": LITE_PACKET,
@@ -450,9 +456,9 @@ def write_lite_advice(packet_dir: Path) -> dict:
             accepted_alias=None,
             attempts=[
                 attempt(
-                    alias="gemini-lite",
-                    provider="gemini",
-                    model="gemini-3.1-flash-lite-preview",
+                    alias="ds-flash-max",
+                    provider="opencode-bridge",
+                    model="deepseek-v4-flash",
                     command=command,
                     timeout_seconds=600,
                     called=False,
@@ -545,7 +551,7 @@ def write_audit(bundle: Path) -> None:
 
 def worker_status(bundle: Path) -> dict:
     manifest_hash = sha256_file(bundle / "job.manifest.json")
-    route_id = f"{WORKER_PACKET}:normal-code:codex-mini"
+    route_id = f"{WORKER_PACKET}:small-edit:codex-mini"
     return {
         "packet_id": WORKER_PACKET,
         "role": "worker",
@@ -559,7 +565,7 @@ def worker_status(bundle: Path) -> dict:
         "evidence_summary": "Synthetic normal-worker pass evidence for golden offline smoke.",
         "branch": BRANCH_NAME,
         "worktree": REPO_ROOT.as_posix(),
-        "route_class": "normal-code",
+        "route_class": "small-edit",
         "selected_ladder": ["codex-mini"],
         "selection_reason": "Golden smoke uses the cheapest deterministic route alias.",
         "changed_files": [],
@@ -803,24 +809,48 @@ def write_pre_review_gate(bundle: Path) -> dict[str, str]:
 
 def write_review(bundle: Path, input_hashes: dict[str, str]) -> None:
     route = read_json(bundle / "reviewers" / REVIEW_PACKET / "route.json")
-    selected_ladder = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else ["gpt-5.4", "gpt-5.5"]
-    model_by_alias = {
+    selected_ladder = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else ["ds-pro-max"]
+    # B1/B4: reviewer routes are bridge deepseek aliases plus native gpt-5.5 for heavy.
+    bridge_model_by_alias = {
+        "ds-pro-max": "deepseek-v4-pro",
+        "ds-flash-max": "deepseek-v4-flash",
+    }
+    native_model_by_alias = {
         "gpt-5.4-mini": "gpt-5.4-mini",
         "gpt-5.4": "gpt-5.4",
         "gpt-5.5": "gpt-5.5",
     }
-    reviewer_attempts = [
-        attempt(
-            alias=str(alias),
+
+    def reviewer_attempt(alias: str, index: int) -> dict:
+        if alias in bridge_model_by_alias:
+            model = bridge_model_by_alias[alias]
+            return attempt(
+                alias=alias,
+                provider="opencode-bridge",
+                model=model,
+                command=(
+                    f"python3 opencode_worker.py delegate --provider deepseek "
+                    f"--model {model} --variant max --permission-profile read-only"
+                ),
+                timeout_seconds=1800,
+                called=index == 0,
+                accepted=index == 0,
+            )
+        model = native_model_by_alias[alias]
+        return attempt(
+            alias=alias,
             provider="codex",
-            model=model_by_alias[str(alias)],
-            command=f"codex exec --ephemeral --ignore-user-config --ignore-rules -m {model_by_alias[str(alias)]} -s read-only",
+            model=model,
+            command=f"codex exec --ephemeral --ignore-user-config --ignore-rules -m {model} -s read-only",
             timeout_seconds=1800,
             called=index == 0,
             accepted=index == 0,
         )
+
+    reviewer_attempts = [
+        reviewer_attempt(str(alias), index)
         for index, alias in enumerate(selected_ladder)
-        if str(alias) in model_by_alias
+        if str(alias) in bridge_model_by_alias or str(alias) in native_model_by_alias
     ]
     accepted_alias = reviewer_attempts[0]["alias"] if reviewer_attempts else None
     review = {
@@ -1256,7 +1286,8 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
     packet_dir = target_bundle / "amendments" / "A001.packet"
     assert_shell_syntax(packet_dir / "launch.sh")
     route = read_json(packet_dir / "route.json")
-    if route.get("selected_ladder") != ["gpt-5.4", "gpt-5.4-mini"]:
+    # B7 routes the amender through the bridge: ds-pro-max -> ds-flash-max.
+    if route.get("selected_ladder") != ["ds-pro-max", "ds-flash-max"]:
         raise SystemExit("golden amender packet did not record the default route")
     proposal = {
         "schema_version": 1,
@@ -1274,22 +1305,22 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
             "A001",
             "plan_amender",
             "../A001.proposal.json",
-            accepted_alias="gpt-5.4",
+            accepted_alias="ds-pro-max",
             attempts=[
                 attempt(
-                    alias="gpt-5.4",
-                    provider="codex",
-                    model="gpt-5.4",
-                    command="codex exec --ephemeral -m gpt-5.4 -s read-only",
+                    alias="ds-pro-max",
+                    provider="opencode-bridge",
+                    model="deepseek-v4-pro",
+                    command="python3 opencode_worker.py delegate --provider deepseek --model deepseek-v4-pro --variant max --permission-profile read-only",
                     timeout_seconds=1200,
                     called=True,
                     accepted=True,
                 ),
                 attempt(
-                    alias="gpt-5.4-mini",
-                    provider="codex",
-                    model="gpt-5.4-mini",
-                    command="codex exec --ephemeral -m gpt-5.4-mini -s read-only",
+                    alias="ds-flash-max",
+                    provider="opencode-bridge",
+                    model="deepseek-v4-flash",
+                    command="python3 opencode_worker.py delegate --provider deepseek --model deepseek-v4-flash --variant max --permission-profile read-only",
                     timeout_seconds=1200,
                     called=False,
                     accepted=False,
@@ -1723,6 +1754,9 @@ def main() -> int:
             task_file=task_file,
             worker_route=["codex-mini"],
             selection_reason="Golden smoke uses the cheapest deterministic route alias.",
+            # B1: codex-mini is the native cheap fallback in the small-edit route class
+            # (normal-code now leads with ds-flash-max -> codex-spark).
+            extra_args=["--route-class", "small-edit"],
         )
         assert_shell_syntax(bundle / "workers" / WORKER_PACKET / "launch.sh")
         worker_config = assert_compact_runtime_launcher(bundle / "workers" / WORKER_PACKET, "worker")
@@ -1736,8 +1770,11 @@ def main() -> int:
             owned_files=["README.md"],
             context_files=[bundle / "branches" / "B01.prompt.md"],
             task_file=task_file,
-            worker_route=["gemini-pro", "codex-spark", "codex-mini"],
-            selection_reason="Golden smoke preserves mixed route probe and log metadata.",
+            worker_route=["ds-pro-max", "codex-spark"],
+            selection_reason="Golden smoke preserves mixed bridge+native route and log metadata.",
+            # The premium ds-pro-max lead is only valid under custom/complex-code route
+            # classes; custom is an explicit branch-orchestrator override.
+            extra_args=["--route-class", "custom"],
         )
         mixed_config = assert_compact_runtime_launcher(mixed_worker, "worker")
         assert_mixed_worker_route(mixed_config, "mixed worker")
@@ -1770,7 +1807,7 @@ def main() -> int:
                 "--task-file",
                 task_file.as_posix(),
             ],
-            env=offline_gemini_env(),
+            env=offline_bridge_env(),
         )
         assert_compact_lite_launcher(bundle / "lite" / LITE_PACKET)
 
@@ -1809,7 +1846,15 @@ def main() -> int:
         reviewer_config = assert_compact_runtime_launcher(bundle / "reviewers" / REVIEW_PACKET, "reviewer")
         if reviewer_config.get("attempt_timeout_seconds") != 1800:
             raise SystemExit("reviewer launch-config should preserve the 1800 second attempt timeout")
-        assert_lean_codex_attempts(reviewer_config.get("attempts", []), "reviewer Codex attempts")
+        # B1/B4: the default (light) reviewer route is the bridge deepseek-flash route,
+        # so the reviewer launch config carries a bridge attempt (not a lean Codex one).
+        reviewer_attempts = reviewer_config.get("attempts", [])
+        if not reviewer_attempts or reviewer_attempts[0].get("harness_kind") != "opencode-bridge":
+            raise SystemExit(f"reviewer launch-config should lead with a bridge attempt: {reviewer_attempts!r}")
+        if reviewer_attempts[0].get("alias") != "ds-flash-max":
+            raise SystemExit(f"reviewer launch-config should use the light bridge reviewer route: {reviewer_attempts!r}")
+        if not isinstance(reviewer_attempts[0].get("bridge"), dict):
+            raise SystemExit(f"reviewer bridge attempt must carry a bridge block: {reviewer_attempts[0]!r}")
         write_review(bundle, input_hashes)
         write_branch_and_main_status(bundle)
 
@@ -2033,30 +2078,40 @@ def main() -> int:
         telemetry_model_data["attempts"][0]["model"] = "gpt-5.5"
         write_json(model_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json", telemetry_model_data)
         model_mismatch_result = validate_branch(model_mismatch_bundle, expect=1)
-        assert_contains(model_mismatch_result.stdout, "for alias", "reviewer alias/model mismatch fixture")
+        # The reviewer route is now the bridge ds-flash-max alias, so a model override is
+        # rejected with the bridge-alias mismatch message.
+        assert_contains(model_mismatch_result.stdout, "for bridge alias", "reviewer alias/model mismatch fixture")
 
         worker_cost_misuse_bundle = tmp_path / "worker-route-class-cost-misuse"
         shutil.copytree(bundle, worker_cost_misuse_bundle)
         rewrite_copied_branch_paths(worker_cost_misuse_bundle)
-        expensive_ladder = ["gemini-pro"]
+        # ds-pro-max is the premium/TOUGH bridge route: in ALLOWED_WORKER_ROUTES but not
+        # in the normal-code route-class ladder, so misrouting normal-code work to it must
+        # be flagged. (Was a premium external route before B1 removed it.)
+        expensive_ladder = ["ds-pro-max"]
         expensive_reason = "Golden smoke intentionally misroutes normal code work through a premium ladder."
+        expensive_route_class = "normal-code"
+        expensive_route_id = f"{WORKER_PACKET}:{expensive_route_class}:{'-'.join(expensive_ladder)}"
         worker_artifact = read_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "status.json")
         worker_artifact["selected_ladder"] = expensive_ladder
         worker_artifact["selection_reason"] = expensive_reason
+        worker_artifact["route_class"] = expensive_route_class
+        worker_artifact["route_id"] = expensive_route_id
         write_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "status.json", worker_artifact)
         worker_route = read_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "route.json")
         worker_route["selected_ladder"] = expensive_ladder
         worker_route["selection_reason"] = expensive_reason
+        worker_route["route_class"] = expensive_route_class
         write_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "route.json", worker_route)
         worker_telemetry = read_json(worker_cost_misuse_bundle / "workers" / WORKER_PACKET / "telemetry.json")
-        worker_telemetry["accepted_alias"] = "gemini-pro"
+        worker_telemetry["accepted_alias"] = "ds-pro-max"
         worker_telemetry["attempts"] = [
             {
-                "alias": "gemini-pro",
-                "provider": "gemini",
-                "model": "gemini-3.1-pro-preview",
+                "alias": "ds-pro-max",
+                "provider": "opencode-bridge",
+                "model": "deepseek-v4-pro",
                 "effort": None,
-                "command": "gemini --model gemini-3.1-pro-preview --approval-mode default",
+                "command": "python3 opencode_worker.py delegate --provider deepseek --model deepseek-v4-pro --variant max --permission-profile workspace-write",
                 "timeout_seconds": 3600,
                 "called": True,
                 "accepted": True,
@@ -2073,6 +2128,8 @@ def main() -> int:
             if isinstance(item, dict) and item.get("packet_id") == WORKER_PACKET:
                 item["selected_ladder"] = expensive_ladder
                 item["selection_reason"] = expensive_reason
+                item["route_class"] = expensive_route_class
+                item["route_id"] = expensive_route_id
         write_json(worker_cost_misuse_bundle / "branches" / "B01.status.json", worker_cost_status)
         worker_cost_result = validate_branch(worker_cost_misuse_bundle, expect=1)
         assert_all_contains(worker_cost_result.stdout, ["route_class 'normal-code'", "premium/full"], "worker route-class cost misuse fixture")

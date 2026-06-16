@@ -28,7 +28,7 @@ from fixture_support import (
     assert_research_worker_preserves_user_config,
     assert_shell_syntax,
     make_scheduler_event,
-    offline_gemini_env,
+    offline_bridge_env,
     read_json,
     run_command,
     run_runtime_packet,
@@ -1652,16 +1652,35 @@ def create_amendment_decision(
     run(command)
 
 
+# B7 routes the amender through the opencode-worker-bridge (ds-pro-max ->
+# ds-flash-max). Bridge attempts carry provider "opencode-bridge" and the bare
+# deepseek model id; native codex aliases keep provider "codex" and the alias as the
+# model. validate_amender_packet checks alias/provider/model/timeout_seconds against
+# the contract-derived expectations, so this mirrors bridge_amender_attempt.
+AMENDER_BRIDGE_MODELS = {"ds-pro-max": "deepseek-v4-pro", "ds-flash-max": "deepseek-v4-flash"}
+
+
 def write_amender_telemetry(bundle: Path, amendment_id: str, selected_ladder: list[str]) -> None:
     attempts = []
     for index, alias in enumerate(selected_ladder):
+        if alias in AMENDER_BRIDGE_MODELS:
+            model = AMENDER_BRIDGE_MODELS[alias]
+            provider = "opencode-bridge"
+            command = (
+                "opencode_worker.py delegate --provider deepseek "
+                f"--model {model} --variant max --permission-profile read-only"
+            )
+        else:
+            model = alias
+            provider = "codex"
+            command = f"codex exec --ephemeral -m {alias} -s read-only"
         attempts.append(
             {
                 "alias": alias,
-                "provider": "codex",
-                "model": alias,
+                "provider": provider,
+                "model": model,
                 "effort": None,
-                "command": f"codex exec --ephemeral -m {alias} -s read-only",
+                "command": command,
                 "timeout_seconds": 1200,
                 "called": index == 0,
                 "accepted": index == 0,
@@ -1823,14 +1842,17 @@ def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
             "A002",
             "--terminal-branch",
             "B01",
+            # B7 amender routes are the bridge deepseek aliases; a custom override is a
+            # non-default ordered subsequence of the allowed ladder (here the cheaper
+            # flash-only recovery-planning route).
             "--amender-route",
-            "gpt-5.5,gpt-5.4",
+            "ds-flash-max",
             "--selection-reason",
-            "Fixture exercises premium recovery-planning route.",
+            "Fixture exercises a cheaper recovery-planning route.",
         ]
     )
     custom_route = json.loads((custom_route_bundle / "amendments" / "A002.packet" / "route.json").read_text(encoding="utf-8"))
-    if custom_route.get("selected_ladder") != ["gpt-5.5", "gpt-5.4"]:
+    if custom_route.get("selected_ladder") != ["ds-flash-max"]:
         raise SystemExit("custom amender route was not recorded")
     missing_reason = run(
         [
@@ -1845,7 +1867,7 @@ def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
             "--amendment-id",
             "A003",
             "--amender-route",
-            "gpt-5.5",
+            "ds-flash-max",
         ],
         expect=1,
     )
@@ -2175,7 +2197,7 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
             ],
         ),
     )
-    write_amender_telemetry(drift_bundle, "A020", ["gpt-5.4", "gpt-5.4-mini"])
+    write_amender_telemetry(drift_bundle, "A020", ["ds-pro-max", "ds-flash-max"])
     run(
         [
             "python3",
@@ -2257,7 +2279,7 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
             [{"op": "add_branch", "branch": amendment_branch("B03", "docs/amendment-runtime-index-rollback.md")}],
         ),
     )
-    write_amender_telemetry(rollback_bundle, "A021", ["gpt-5.4", "gpt-5.4-mini"])
+    write_amender_telemetry(rollback_bundle, "A021", ["ds-pro-max", "ds-flash-max"])
     run(
         [
             "python3",
@@ -2447,10 +2469,11 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     )
     packet_dir = bundle / "amendments" / "A001.packet"
     assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Terminal branch ids: B01", "adaptation packet")
-    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Selected amender ladder: gpt-5.4, gpt-5.4-mini", "adaptation packet route")
+    # B7 routes the amender through the bridge: ds-pro-max -> ds-flash-max.
+    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Selected amender ladder: ds-pro-max, ds-flash-max", "adaptation packet route")
     assert_shell_syntax(packet_dir / "launch.sh")
     route = json.loads((packet_dir / "route.json").read_text(encoding="utf-8"))
-    if route.get("selected_ladder") != ["gpt-5.4", "gpt-5.4-mini"] or route.get("role") != "plan_amender":
+    if route.get("selected_ladder") != ["ds-pro-max", "ds-flash-max"] or route.get("role") != "plan_amender":
         raise SystemExit("adaptation packet default route did not match amender_model_policy")
 
     proposal_path = bundle / "amendments" / "A001.proposal.json"
@@ -2470,7 +2493,7 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
             ],
         ),
     )
-    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
+    write_amender_telemetry(bundle, "A001", ["ds-pro-max", "ds-flash-max"])
     missing_accepted_telemetry = json.loads((packet_dir / "telemetry.json").read_text(encoding="utf-8"))
     missing_accepted_telemetry["accepted_alias"] = None
     for attempt_item in missing_accepted_telemetry.get("attempts", []):
@@ -2490,7 +2513,7 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         expect=1,
     )
     assert_contains(missing_accepted.stdout, "accepted plan-amender attempt", "amender telemetry accepted attempt fixture")
-    write_amender_telemetry(bundle, "A001", ["gpt-5.4", "gpt-5.4-mini"])
+    write_amender_telemetry(bundle, "A001", ["ds-pro-max", "ds-flash-max"])
     run(
         [
             "python3",
@@ -4209,142 +4232,53 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
     )
     if ownership_violations:
         raise SystemExit(f"runtime ownership should accept concrete owned untracked files: {ownership_violations!r}")
-    opencode_packet_dir = tmp_path / "opencode-wal-classifier"
-    opencode_packet_dir.mkdir()
-    extra_env, db_path = module.opencode_packet_env(opencode_packet_dir)
-    if not extra_env.get("XDG_DATA_HOME", "").startswith(opencode_packet_dir.as_posix()):
-        raise SystemExit(f"opencode runtime should use packet-local XDG data: {extra_env!r}")
-    if db_path != Path(extra_env["XDG_DATA_HOME"]) / "opencode" / "opencode.db":
-        raise SystemExit(f"opencode readback db should use packet-local XDG data: {db_path!r}")
-    auth_fixture_data = tmp_path / "opencode-global-data"
-    global_auth = auth_fixture_data / "opencode" / "auth.json"
-    global_auth.parent.mkdir(parents=True)
-    global_auth.write_text('{"provider":"fixture"}\n', encoding="utf-8")
-    previous_xdg_data = os.environ.get("XDG_DATA_HOME")
-    os.environ["XDG_DATA_HOME"] = auth_fixture_data.as_posix()
-    try:
-        auth_packet_dir = tmp_path / "opencode-auth-linked"
-        auth_packet_dir.mkdir()
-        auth_env, _auth_db = module.opencode_packet_env(auth_packet_dir)
-    finally:
-        if previous_xdg_data is None:
-            os.environ.pop("XDG_DATA_HOME", None)
-        else:
-            os.environ["XDG_DATA_HOME"] = previous_xdg_data
-    packet_auth = Path(auth_env["XDG_DATA_HOME"]) / "opencode" / "auth.json"
-    if not packet_auth.is_symlink() or packet_auth.resolve() != global_auth:
-        raise SystemExit(f"opencode packet env should link global auth into packet XDG data: {packet_auth!r}")
-    stderr_path = opencode_packet_dir / "events-lite_agent.jsonl.stderr"
-    stderr_path.write_text("Failed to run the query 'PRAGMA journal_mode = WAL'\n", encoding="utf-8")
-    parse_report = module.opencode_wal_failure_report({"stderr_path": stderr_path.name}, opencode_packet_dir)
-    if not isinstance(parse_report, dict) or parse_report.get("failure_subclass") != module.OPENCODE_SQLITE_WAL_SUBCLASS:
-        raise SystemExit(f"opencode WAL failure should be classified as harness infrastructure: {parse_report!r}")
+    # B4 deleted the direct-opencode runner helpers (opencode_packet_env / packet-local
+    # XDG-data + auth-symlink, opencode_wal_failure_report, opencode_empty_output_report,
+    # opencode_error_event_report) and the legacy external probe arm.
+    # The deepseek work now delegates through the opencode-worker-bridge. The failure
+    # taxonomy those helpers fed, however, survives unchanged: attempt_failure_class /
+    # _parse_failure_detected / attempt_failure_subclass / detect_provider_error_code
+    # still map the SQLite-WAL, empty-assistant-output, and provider-API-error subclasses.
+    # We keep the classifier as a real regression test by feeding parse_report inputs
+    # directly (the bridge artifact mapper is what now populates these reports).
+    wal_report = {"failure_subclass": module.OPENCODE_SQLITE_WAL_SUBCLASS}
     failure_class = module.attempt_failure_class(
         {"state": "fail-clean", "returncode": 1},
-        {"harness_kind": "opencode"},
-        parse_report=parse_report,
+        {"harness_kind": module.BRIDGE_HARNESS_KIND},
+        parse_report=wal_report,
     )
     if failure_class != "harness_unavailable":
-        raise SystemExit(f"opencode WAL failure should be reported as harness_unavailable: {failure_class!r}")
-    empty_report = module.opencode_empty_output_report(
-        "",
-        {
-            "status": "pass",
-            "session_id": "empty-output-fixture",
-            "tokens": {
-                "input": 0,
-                "output": 0,
-                "reasoning": 0,
-                "cache_read": 0,
-                "cache_write": 0,
-            },
-        },
-    )
-    if not isinstance(empty_report, dict) or empty_report.get("failure_subclass") != module.OPENCODE_EMPTY_OUTPUT_SUBCLASS:
-        raise SystemExit(f"opencode empty assistant output should be classified directly: {empty_report!r}")
+        raise SystemExit(f"SQLite WAL failure should be reported as harness_unavailable: {failure_class!r}")
+    empty_report = {"failure_subclass": module.OPENCODE_EMPTY_OUTPUT_SUBCLASS}
     failure_class = module.attempt_failure_class(
         {"state": "fail-clean", "returncode": 1},
-        {"harness_kind": "opencode"},
+        {"harness_kind": module.BRIDGE_HARNESS_KIND},
         parse_report=empty_report,
     )
     if failure_class != "schema_or_output_readback" or not module._parse_failure_detected(empty_report):
-        raise SystemExit(f"opencode empty assistant output should be a schema/readback failure: {failure_class!r} {empty_report!r}")
-    if module.opencode_empty_output_report("assistant text", {"status": "pass", "tokens": {"input": 0}}) is not None:
-        raise SystemExit("opencode empty output classifier must not fire when assistant text is present")
-    provider_error_event = opencode_packet_dir / "events-provider-error.jsonl"
-    provider_error_event.write_text(
-        json.dumps(
-            {
-                "type": "error",
-                "sessionID": "provider-error-fixture",
-                "error": {
-                    "name": "APIError",
-                    "data": {
-                        "message": "Unauthorized: Authentication Fails (governor)",
-                        "statusCode": 401,
-                        "responseBody": "Authentication Fails (governor)",
-                        "metadata": {"url": "https://api.deepseek.com/chat/completions"},
-                    },
-                },
-            }
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    provider_error_report = module.opencode_error_event_report(provider_error_event)
-    if (
-        not isinstance(provider_error_report, dict)
-        or provider_error_report.get("failure_class") != "provider_api_error"
-        or provider_error_report.get("failure_subclass") != module.OPENCODE_PROVIDER_API_ERROR_SUBCLASS
-        or provider_error_report.get("provider_http_status") != 401
-        or provider_error_report.get("provider_error_code") != "OPENCODE_PROVIDER_HTTP_401"
-        or "Authentication Fails" not in provider_error_report.get("provider_error_message", "")
-    ):
-        raise SystemExit(f"opencode provider error events should preserve API error details: {provider_error_report!r}")
+        raise SystemExit(f"empty assistant output should be a schema/readback failure: {failure_class!r} {empty_report!r}")
+    provider_error_report = {
+        "failure_class": "provider_api_error",
+        "failure_subclass": module.OPENCODE_PROVIDER_API_ERROR_SUBCLASS,
+        "provider_http_status": 401,
+        "provider_error_message": "Authentication Fails (governor)",
+    }
     provider_failure_class = module.attempt_failure_class(
         {"state": "fail-clean", "returncode": 1},
-        {"harness_kind": "opencode"},
+        {"harness_kind": module.BRIDGE_HARNESS_KIND},
         parse_report=provider_error_report,
     )
     if provider_failure_class != "provider_api_error" or not module._parse_failure_detected(provider_error_report):
         raise SystemExit(
-            f"opencode provider API errors should not collapse into schema/readback failures: "
+            f"provider API errors should not collapse into schema/readback failures: "
             f"{provider_failure_class!r} {provider_error_report!r}"
         )
-    fake_gemini = tmp_path / "fake-gemini-probe" / "gemini"
-    fake_gemini.parent.mkdir()
-    fake_gemini.write_text(
-        "#!/usr/bin/env python3\n"
-        "print('GEMINI_MODEL_PROBE_OK')\n",
-        encoding="utf-8",
+    # detect_provider_error_code still recognizes capacity error codes from event lines.
+    capacity_code = module.detect_provider_error_code(
+        [json.dumps({"code": next(iter(module.CAPACITY_ERROR_CODES))})]
     )
-    fake_gemini.chmod(0o755)
-    gemini_packet_dir = tmp_path / "gemini-probe-success"
-    gemini_packet_dir.mkdir()
-    gemini_rc, gemini_execution, gemini_log = module.run_gemini_probe_command(
-        {
-            "alias": "gemini-probe-fixture",
-            "probe_model": "gemini-fixture",
-            "probe_prompt": "Return exactly: GEMINI_MODEL_PROBE_OK",
-            "probe_timeout_seconds": 5,
-            "probe_logs": ["events-gemini-probe-fixture-probe.log"],
-        },
-        label="gemini-probe-fixture",
-        packet_dir=gemini_packet_dir,
-        config={
-            "role": "worker",
-            "gemini_command": fake_gemini.as_posix(),
-            "gemini_approval_mode": "yolo",
-            "gemini_probe_prompt": "Return exactly: GEMINI_MODEL_PROBE_OK",
-            "gemini_probe_timeout_seconds": 5,
-            "timeout_kill_after_seconds": 5,
-        },
-        worktree=tmp_path.as_posix(),
-    )
-    if gemini_rc != 0 or gemini_execution.get("validation_returncode") != 0:
-        raise SystemExit(f"successful Gemini probe must validate as rc=0: rc={gemini_rc} execution={gemini_execution!r}")
-    if "GEMINI_MODEL_PROBE_OK" not in gemini_log.read_text(encoding="utf-8"):
-        raise SystemExit(f"Gemini probe fixture did not write expected token: {gemini_log}")
+    if capacity_code not in module.CAPACITY_ERROR_CODES:
+        raise SystemExit(f"capacity error code detection should recognize known codes: {capacity_code!r}")
 
 
 def load_validate_branch_status_module():
@@ -4359,11 +4293,11 @@ def load_validate_branch_status_module():
 
 def test_route_health_skipped_attempt_prefix() -> None:
     module = load_validate_branch_status_module()
-    selected_ladder = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+    selected_ladder = ["worker_primary", "worker_secondary", "worker_fallback", "lite_agent"]
     telemetry_attempts = [
         {"alias": "worker_primary", "called": True},
         {
-            "alias": "worker_opencode",
+            "alias": "worker_secondary",
             "called": False,
             "route_health": {"degraded": True, "degraded_reason": "opencode_empty_assistant_output"},
             "status_parse": {
@@ -4385,7 +4319,7 @@ def test_route_health_skipped_attempt_prefix() -> None:
     ordinary_uncalled = [
         {"alias": "worker_primary", "called": True},
         {
-            "alias": "worker_opencode",
+            "alias": "worker_secondary",
             "called": False,
             "not_executed_reason": "fallback_not_needed",
             "status_parse": {"provider_error_code": None, "failure_subclass": None},
@@ -4615,120 +4549,92 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         owned_files=["README.md"],
         context_files=[bundle / "branches" / "B01.prompt.md"],
         task_file=task_file,
-        worker_route=["gemini-pro", "codex-spark", "codex-mini"],
-        selection_reason="Fixture route selected to validate worker probe metadata.",
+        # B1/B4: a mixed worker route leads with a bridge deepseek route and falls back to
+        # a native Codex route. ds-pro-max is premium, so it needs the custom route class.
+        worker_route=["ds-pro-max", "codex-spark"],
+        selection_reason="Fixture route selected to validate worker bridge+native metadata.",
+        extra_args=["--route-class", "custom"],
     )
     mixed_config = assert_compact_runtime_launcher(packet_root / "B01-W04", "worker")
-    assert_mixed_worker_route(mixed_config, "mixed worker", selection_reason="Fixture route selected to validate worker probe metadata.")
+    assert_mixed_worker_route(mixed_config, "mixed worker", selection_reason="Fixture route selected to validate worker bridge+native metadata.")
     packet_module = load_script_module("preparedness_create_runtime_packet", "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py")
     packet_module.validate_launch_config_adapter(mixed_config)
-    missing_probe_config = json.loads(json.dumps(mixed_config))
-    gemini_attempt = next(
-        (item for item in missing_probe_config.get("attempts", []) if isinstance(item, dict) and item.get("provider") == "gemini"),
+    # B4 replaced the legacy external probe arm with the opencode-bridge launch contract: a bridge
+    # attempt must carry its `bridge` launch block. The adapter rejects a bridge attempt
+    # whose block is missing (this is the surviving pre-launch validation the old
+    # missing-probe_model test exercised).
+    missing_bridge_config = json.loads(json.dumps(mixed_config))
+    bridge_attempt = next(
+        (item for item in missing_bridge_config.get("attempts", []) if isinstance(item, dict) and item.get("harness_kind") == "opencode-bridge"),
         None,
     )
-    if not isinstance(gemini_attempt, dict):
-        raise SystemExit(f"mixed route fixture should include a Gemini attempt: {missing_probe_config!r}")
-    gemini_attempt.pop("probe_model", None)
-    missing_probe_config["attempts"] = [gemini_attempt]
-    missing_probe_config["selected_ladder"] = [gemini_attempt.get("alias")]
+    if not isinstance(bridge_attempt, dict):
+        raise SystemExit(f"mixed route fixture should include a bridge attempt: {missing_bridge_config!r}")
+    bridge_attempt.pop("bridge", None)
+    missing_bridge_config["attempts"] = [bridge_attempt]
+    missing_bridge_config["selected_ladder"] = [bridge_attempt.get("alias")]
     try:
-        packet_module.validate_launch_config_adapter(missing_probe_config)
+        packet_module.validate_launch_config_adapter(missing_bridge_config)
     except SystemExit as exc:
-        if "probe_model" not in str(exc):
-            raise SystemExit(f"adapter validation should report missing probe_model: {exc}") from exc
+        if "bridge" not in str(exc):
+            raise SystemExit(f"adapter validation should report the missing bridge block: {exc}") from exc
     else:
-        raise SystemExit("adapter validation should fail before launch when a selected Gemini route lacks probe_model")
-    configured_gemini_config = packet_module.compact_launch_config(
+        raise SystemExit("adapter validation should fail before launch when a bridge attempt lacks its bridge block")
+    # The adapter now whitelists only the codex and opencode-bridge harness kinds, so a
+    # goal_config-driven native Codex role produces a valid lean Codex attempt. (Was a
+    # configured external probe-metadata check before B1/B4 removed that harness.)
+    configured_codex_config = packet_module.compact_launch_config(
         "worker",
         "B01-W12",
-        "preparedness-configured-gemini",
+        "preparedness-configured-codex",
         ROOT.as_posix(),
         "status.schema.json",
         "status.json",
         owned_files=["README.md"],
-        selected_ladder=["configured_gemini"],
+        selected_ladder=["configured_codex"],
         route_class="normal-code",
-        selection_reason="Fixture validates configured Gemini route probe metadata.",
+        selection_reason="Fixture validates configured native Codex route metadata.",
         goal_config={
             "schema_version": 1,
             "models": {
-                "configured_gemini": {
-                    "alias": "configured-gemini",
-                    "role": "configured_gemini",
-                    "harness": "gemini",
-                    "provider": "gemini",
-                    "model": "gemini-3-flash-preview",
+                "configured_codex": {
+                    "alias": "configured-codex",
+                    "role": "configured_codex",
+                    "harness": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
                 }
             },
             "harnesses": {
-                "gemini": {
-                    "kind": "gemini",
-                    "command": "gemini",
-                    "run_args": ["--model", "{model}", "--approval-mode", "yolo"],
+                "codex": {
+                    "kind": "codex",
+                    "command": "codex",
+                    "run_args": ["exec", "--ephemeral", "-m", "{model}", "-s", "workspace-write", "{prompt}"],
                     "run_readback": "stdout",
                 }
             },
         },
     )
-    configured_gemini_attempt = configured_gemini_config.get("attempts", [{}])[0]
+    configured_codex_attempt = configured_codex_config.get("attempts", [{}])[0]
     if (
-        configured_gemini_attempt.get("probe_model") != "gemini-3-flash-preview"
-        or configured_gemini_attempt.get("probe_timeout_seconds") is None
-        or configured_gemini_attempt.get("probe_logs") != ["events-configured_gemini-probe.log"]
+        configured_codex_attempt.get("harness_kind") != "codex"
+        or configured_codex_attempt.get("model") != "gpt-5.4"
     ):
-        raise SystemExit(f"configured Gemini attempts should carry probe metadata: {configured_gemini_config!r}")
-    packet_module.validate_launch_config_adapter(configured_gemini_config)
+        raise SystemExit(f"configured Codex attempts should carry the configured model: {configured_codex_config!r}")
+    packet_module.validate_launch_config_adapter(configured_codex_config)
+    # B1/B4: reviewer routes diversify across the bridge deepseek route plus the native
+    # gpt-5.5 fallback (the heavy review tier). The bridge attempt carries a bridge block;
+    # the native attempt is a lean Codex exec. (Was an opencode + external fallback ladder.)
     configured_reviewer_config = packet_module.compact_launch_config(
         "reviewer",
         "B01-R99",
-        "preparedness-configured-reviewer-gemini-fallback",
+        "preparedness-configured-reviewer-bridge-fallback",
         ROOT.as_posix(),
         "review.schema.json",
         "review.json",
         review_route={
-            "selected_ladder": ["demanding_agent", "worker_fallback", "lite_agent"],
-            "selection_reason": "Fixture validates reviewer Gemini fallback adapter metadata.",
-        },
-        goal_config={
-            "schema_version": 1,
-            "models": {
-                "demanding_agent": {
-                    "alias": "demanding-agent",
-                    "role": "demanding_agent",
-                    "harness": "opencode",
-                    "provider": "deepseek",
-                    "model": "deepseek/deepseek-v4-pro",
-                },
-                "worker_fallback": {
-                    "alias": "worker-fallback",
-                    "role": "worker_fallback",
-                    "harness": "gemini",
-                    "provider": "gemini",
-                    "model": "gemini-3-flash-preview",
-                },
-                "lite_agent": {
-                    "alias": "lite-agent",
-                    "role": "lite_agent",
-                    "harness": "gemini",
-                    "provider": "gemini",
-                    "model": "gemini-3.1-flash-lite-preview",
-                },
-            },
-            "harnesses": {
-                "opencode": {
-                    "kind": "opencode",
-                    "command": "opencode",
-                    "run_args": ["run", "--pure", "--format", "json", "--model", "{model}", "{prompt}"],
-                    "run_readback": "opencode_session_db",
-                },
-                "gemini": {
-                    "kind": "gemini",
-                    "command": "gemini",
-                    "run_args": ["--model", "{model}", "{prompt}"],
-                    "run_readback": "stdout",
-                },
-            },
+            "selected_ladder": ["ds-pro-max", "gpt-5.5"],
+            "selection_reason": "Fixture validates reviewer bridge + native fallback adapter metadata.",
         },
     )
     configured_reviewer_attempts = configured_reviewer_config.get("attempts", [])
@@ -4737,11 +4643,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         for attempt in configured_reviewer_attempts
         if isinstance(attempt, dict)
     ]
-    if configured_reviewer_providers != ["opencode", "gemini", "gemini"]:
-        raise SystemExit(f"configured reviewer ladder should preserve opencode plus Gemini fallbacks: {configured_reviewer_config!r}")
-    for key in ("gemini_command", "gemini_probe_prompt", "gemini_approval_mode"):
-        if not configured_reviewer_config.get(key):
-            raise SystemExit(f"configured reviewer Gemini fallback launch config omitted {key}: {configured_reviewer_config!r}")
+    if configured_reviewer_providers != ["opencode-bridge", "codex"]:
+        raise SystemExit(f"configured reviewer ladder should diversify bridge + native Codex: {configured_reviewer_config!r}")
+    if not isinstance(configured_reviewer_attempts[0].get("bridge"), dict):
+        raise SystemExit(f"configured reviewer bridge attempt must carry a bridge block: {configured_reviewer_config!r}")
     packet_module.validate_launch_config_adapter(configured_reviewer_config)
     configured_codex_config = packet_module.compact_launch_config(
         "worker",
@@ -4797,12 +4702,14 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         owned_files=["README.md"],
         context_files=[bundle / "branches" / "B01.prompt.md"],
         task_file=task_file,
-        worker_route=["copilot-gpt-5.4"],
-        selection_reason="Fixture intentionally selects discontinued Copilot route.",
+        # B1 removed the external non-bridge routes; any alias outside the bridge/native
+        # ladder must be rejected before launch.
+        worker_route=["discontinued-route-fixture"],
+        selection_reason="Fixture intentionally selects a discontinued route alias.",
         expect=1,
     )
-    if "unsupported worker route alias: 'copilot-gpt-5.4'" not in discontinued_route.stdout:
-        raise SystemExit(f"discontinued Copilot worker route should be rejected: {discontinued_route.stdout}")
+    if "unsupported worker route alias: 'discontinued-route-fixture'" not in discontinued_route.stdout:
+        raise SystemExit(f"discontinued worker route should be rejected: {discontinued_route.stdout}")
     path_validation_manifest = tmp_path / "runtime-path-validation"
     path_validation_manifest.mkdir()
     write_json(
@@ -4912,7 +4819,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         model_catalog=worker_model_catalog,
     )
     catalog_config = assert_compact_runtime_launcher(catalog_packet_root / "B01-W05", "worker")
-    expected_catalog_ladder = ["codex-mini"]
+    # B1: the default normal-code route class is (ds-flash-max, codex-spark). The catalog
+    # marks codex-spark unsupported, so it is pruned and the bridge ds-flash-max route
+    # (not catalog-checked) leads the surviving ladder.
+    expected_catalog_ladder = ["ds-flash-max"]
     if catalog_config.get("selected_ladder") != expected_catalog_ladder:
         raise SystemExit(f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}")
     catalog_meta = catalog_config.get("model_catalog", {})
@@ -4996,7 +4906,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     configured_route_bundle = tmp_path / "runtime-configured-worker-routes"
     shutil.copytree(bundle, configured_route_bundle)
     configured_route_manifest = read_json(configured_route_bundle / "job.manifest.json")
-    configured_ladder = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+    # B1/B4: the configured worker ladder now uses native Codex roles (the worker-route
+    # restoration/pruning mechanism under test is harness-agnostic). The direct-opencode
+    # and external roles the old fixture used were removed; route restoration is exercised
+    # over codex roles so the selected subsequence builds valid lean Codex attempts
+    # without depending on the goal-config-role bridge attempt path (a B9/P3 leftover).
+    configured_ladder = ["worker_primary", "worker_secondary", "worker_fallback", "worker_cheap"]
     configured_route_manifest["goal_config_path"] = "goal.config.json"
     configured_route_manifest["worker_model_policy"] = {
         "source": "goal_config",
@@ -5004,9 +4919,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         "allowed_routes": configured_ladder,
         "default_route_class": "normal-code",
         "route_classes": {
-            "mechanical": ["lite_agent"],
-            "docs": ["worker_opencode", "lite_agent"],
-            "small-edit": ["worker_opencode", "worker_fallback", "lite_agent"],
+            "mechanical": ["worker_cheap"],
+            "docs": ["worker_secondary", "worker_cheap"],
+            "small-edit": ["worker_secondary", "worker_fallback", "worker_cheap"],
             "normal-code": configured_ladder,
             "complex-code": configured_ladder,
         },
@@ -5022,14 +4937,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
             "schema_version": 1,
             "models": {
                 "worker_primary": {"role": "worker_primary", "alias": "worker_primary", "harness": "codex", "provider": "openai", "model": "gpt-5.3-codex-spark"},
-                "worker_opencode": {"role": "worker_opencode", "alias": "worker_opencode", "harness": "opencode", "provider": "deepseek", "model": "deepseek/deepseek-v4-flash"},
+                "worker_secondary": {"role": "worker_secondary", "alias": "worker_secondary", "harness": "codex", "provider": "openai", "model": "gpt-5.4"},
                 "worker_fallback": {"role": "worker_fallback", "alias": "worker_fallback", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"},
-                "lite_agent": {"role": "lite_agent", "alias": "lite_agent", "harness": "gemini", "provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
+                "worker_cheap": {"role": "worker_cheap", "alias": "worker_cheap", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"},
             },
             "harnesses": {
                 "codex": {"kind": "codex", "command": "codex", "run_args": ["exec", "-m", "{model}", "{prompt}"], "run_readback": "stdout"},
-                "opencode": {"kind": "opencode", "command": "opencode", "run_args": ["run", "--model", "{model}", "{prompt}"], "run_readback": "stdout"},
-                "gemini": {"kind": "gemini", "command": "gemini", "run_args": ["--model", "{model}", "{prompt}"], "run_readback": "stdout"},
             },
         },
     )
@@ -5042,7 +4955,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         worktree=clean_worker_worktree,
         task_file=bundle / "branches" / "B01.prompt.md",
         manifest=configured_route_bundle / "job.manifest.json",
-        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        worker_route=["worker_primary", "worker_secondary", "worker_fallback"],
         selection_reason="Fixture claims it is using the configured ladder.",
     )
     restored_route = read_json(configured_route_root / "B01-W01" / "route.json")
@@ -5086,7 +4999,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         worktree=clean_worker_worktree,
         task_file=bundle / "branches" / "B01.prompt.md",
         manifest=configured_route_bundle / "job.manifest.json",
-        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        worker_route=["worker_primary", "worker_secondary", "worker_fallback"],
         selection_reason="Fixture verifies closed pass packet replacement is refused.",
         extra_args=["--replace"],
         expect=1,
@@ -5101,12 +5014,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         worktree=clean_worker_worktree,
         task_file=bundle / "branches" / "B01.prompt.md",
         manifest=configured_route_bundle / "job.manifest.json",
-        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        worker_route=["worker_primary", "worker_secondary", "worker_fallback"],
         selection_reason="Fixture deliberately prunes lite_agent after validated operator choice.",
         extra_args=["--allow-route-pruning"],
     )
     pruned_route = read_json(configured_route_root / "B01-W02" / "route.json")
-    if pruned_route.get("selected_ladder") != ["worker_primary", "worker_opencode", "worker_fallback"]:
+    if pruned_route.get("selected_ladder") != ["worker_primary", "worker_secondary", "worker_fallback"]:
         raise SystemExit(f"--allow-route-pruning should preserve the explicit shorter ladder: {pruned_route!r}")
     pruned_policy = pruned_route.get("route_policy", {})
     if pruned_policy.get("pruned_configured_ladder") is not True or pruned_policy.get("restored_configured_ladder") is not False:
@@ -5119,7 +5032,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         worktree=clean_worker_worktree,
         task_file=bundle / "branches" / "B01.prompt.md",
         manifest=configured_route_bundle / "job.manifest.json",
-        worker_route=["worker_primary", "worker_opencode", "worker_fallback"],
+        worker_route=["worker_primary", "worker_secondary", "worker_fallback"],
         selection_reason="Fixture says Lite is advisory only.",
         extra_args=["--allow-route-pruning"],
         expect=1,
@@ -6333,6 +6246,16 @@ def create_goal_fixture_bundle(tmp_path: Path) -> Path:
         raise SystemExit(f"lint report should expose compatibility status metadata: {lint_report.get('compatibility_status')!r}")
     if lint_report.get("schema_lint_status") != "pass" or lint_report.get("runtime_launch_allowed") is not True:
         raise SystemExit(f"lint report should distinguish schema lint from runtime launch readiness: {lint_report!r}")
+    # The downstream pre-review / worktree-freshness fixtures run their gates against the
+    # live repo worktree (ROOT) and compare base_ref...HEAD against branch owned_paths.
+    # The canonical brief declares base_ref=main, which is correct in CI where the work is
+    # merged (main...HEAD is empty) but leaks unrelated committed source drift when these
+    # fixtures run on an unmerged feature branch. Pin the bundle's base_ref to HEAD so the
+    # gate evaluates a deterministic empty committed diff regardless of branch topology;
+    # the gates still exercise ownership/freshness on the actual worktree state.
+    bundle_manifest = read_json(bundle / "job.manifest.json")
+    bundle_manifest["base_ref"] = "HEAD"
+    write_json(bundle / "job.manifest.json", bundle_manifest)
     return bundle
 
 
@@ -7599,18 +7522,19 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if config_debug_compat.get("policy_transformation") != "none":
         raise SystemExit(f"goal_config raw_text policy transformation should be none: {config_debug_compat!r}")
     config_debug_worker_policy = config_debug_manifest.get("worker_model_policy", {})
-    expected_current_default_worker = ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"]
+    # B1 collapsed the current-default worker ladder to the bridge deepseek lead
+    # (lite_agent) plus native Codex spark/mini fallbacks (worker_primary/worker_fallback).
+    expected_current_default_worker = ["lite_agent", "worker_primary", "worker_fallback"]
     if config_debug_worker_policy.get("default_ladder") != expected_current_default_worker:
-        raise SystemExit(f"goal_config worker default ladder should preserve Opencode preference: {config_debug_worker_policy!r}")
+        raise SystemExit(f"goal_config worker default ladder should lead with the bridge route: {config_debug_worker_policy!r}")
     if config_debug_worker_policy.get("route_classes", {}).get("normal-code") != expected_current_default_worker:
         raise SystemExit(f"preflight should preserve explicit normal-code route class: {config_debug_worker_policy!r}")
     if config_debug_worker_policy.get("route_classes", {}).get("small-edit") != [
-        "worker_opencode",
+        "worker_primary",
         "worker_fallback",
-        "lite_agent",
     ]:
         raise SystemExit(f"preflight should preserve explicit small-edit route class: {config_debug_worker_policy!r}")
-    if config_debug_worker_policy.get("route_classes", {}).get("docs") != ["worker_opencode", "lite_agent"]:
+    if config_debug_worker_policy.get("route_classes", {}).get("docs") != ["worker_fallback"]:
         raise SystemExit(f"preflight should preserve explicit docs route class: {config_debug_worker_policy!r}")
 
     colocated_smoke_debug_check = tmp_path / "goal-config-smoke.json"
@@ -7625,8 +7549,8 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "config_validation_mode": "smoke",
             "config_path": config_debug_path.as_posix(),
             "accepted_routes": [
-                {"role": "lite_agent", "alias": "gemini-lite", "harness": "gemini", "provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
-                {"role": "demanding_agent", "alias": "gpt-5.4", "harness": "codex", "provider": "openai", "model": "gpt-5.4"},
+                {"role": "lite_agent", "alias": "ds-flash-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-flash"},
+                {"role": "demanding_agent", "alias": "ds-pro-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-pro"},
             ],
             "summary": {
                 "route_verification_status": "routes_verified",
@@ -7670,7 +7594,8 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if colocated_manifest.get("worker_model_policy", {}).get("default_ladder") != ["lite_agent"]:
         raise SystemExit(f"partial smoke evidence should prune unverified worker aliases: {colocated_manifest.get('worker_model_policy')!r}")
     pruning = colocated_manifest.get("goal_config_summary", {}).get("route_policy_pruning", {})
-    if pruning.get("status") != "pruned" or "worker_opencode" not in pruning.get("removed_worker_roles", []):
+    # Only lite_agent is verified, so the native Codex worker roles are pruned.
+    if pruning.get("status") != "pruned" or "worker_primary" not in pruning.get("removed_worker_roles", []):
         raise SystemExit(f"partial smoke pruning should be recorded in goal_config_summary: {pruning!r}")
 
     aliased_goal_config_path = tmp_path / "goal-config-debug-alias.json"
@@ -7722,21 +7647,20 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "config_validation_mode": "debug",
             "config_path": config_debug_path.as_posix(),
             "accepted_routes": [
-                {"role": "lite_agent", "alias": "gemini-lite", "harness": "gemini", "provider": "gemini", "model": "gemini-3.1-flash-lite-preview"},
-                {"role": "demanding_agent", "alias": "gpt-5.4", "harness": "codex", "provider": "openai", "model": "gpt-5.4"},
+                {"role": "lite_agent", "alias": "ds-flash-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-flash"},
+                {"role": "demanding_agent", "alias": "ds-pro-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-pro"},
             ],
             "summary": {
                 "route_verification_status": "routes_verified",
                 "accepted_route_count": 2,
                 "checked_role_count": 2,
-                "harness_count": 2,
+                "harness_count": 1,
                 "failure_count": 0,
                 "token_telemetry": {
                     "available_routes": 0,
                     "unavailable_routes": 2,
                     "by_harness": {
-                        "codex": {"available": 0, "unavailable": 1},
-                        "gemini": {"available": 0, "unavailable": 1},
+                        "opencode-bridge": {"available": 0, "unavailable": 2},
                     },
                 },
             },
@@ -8710,7 +8634,7 @@ def run_lite_advice_packet_fixture(tmp_path: Path, task_file: Path) -> None:
             "--task-file",
             task_file.as_posix(),
         ],
-        env=offline_gemini_env(),
+        env=offline_bridge_env(),
     )
     assert_compact_lite_launcher(tmp_path / "lite" / "B01-L01")
 

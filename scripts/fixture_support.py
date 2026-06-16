@@ -24,10 +24,31 @@ _SAFE_SKILL_DIRS = {
     "goal-plan-amender",
     "goal-preflight",
 }
-OFFLINE_GEMINI_PATH = "/usr/bin/gemini-fixture"
-OFFLINE_GEMINI_VERSION = "gemini-fixture 0.0.0"
-OFFLINE_GEMINI_SHA256 = "sha256:" + ("0" * 64)
+# B6: the Lite advisor routes through the opencode-worker-bridge (deepseek-v4-flash,
+# read-only). The old per-provider Lite offline contract is replaced by the
+# GOAL_LITE_OFFLINE_BRIDGE_METADATA contract: an absolute control-script path plus a
+# captured control version, so packet creation never touches the live deepseek delegate.
+OFFLINE_BRIDGE_CONTROL_VERSION = "schema_version:1"
 CODEX_MINI_WORKER_COMMAND = "codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"
+
+
+def offline_bridge_control_script() -> str:
+    """Resolve a deterministic absolute path to the bridge control script.
+
+    Mirrors the bridge fallback chain (``$CODEX_HOME/.codex`` then
+    ``$HOME/.agents``). Existence is not required for offline metadata capture; the
+    path only needs to be absolute and traversal-free, so this stays deterministic on
+    any runner.
+    """
+    codex_home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+    candidates = [
+        Path(codex_home) / "skills" / "opencode-worker-bridge" / "scripts" / "opencode_worker.py",
+        Path.home() / ".agents" / "skills" / "opencode-worker-bridge" / "scripts" / "opencode_worker.py",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.as_posix()
+    return candidates[0].as_posix()
 
 
 @contextlib.contextmanager
@@ -304,19 +325,27 @@ def assert_codex_mini_worker_route(config: dict, selection_reason: str, label: s
 
 
 def assert_mixed_worker_route(config: dict, label: str, *, selection_reason: str | None = None) -> None:
-    expected_ladder = ["gemini-pro", "codex-spark", "codex-mini"]
+    # B1/B4: a mixed worker route now leads with a bridge deepseek route and falls back
+    # to a native Codex route (ds-pro-max -> codex-spark). The bridge attempt carries a
+    # JSONL event log and no probe log (the legacy probe arm was removed in B4).
+    expected_ladder = ["ds-pro-max", "codex-spark"]
     if config.get("selected_ladder") != expected_ladder:
         raise SystemExit(f"{label} launch-config route mismatch: {config.get('selected_ladder')!r}")
     if selection_reason is not None and config.get("selection_reason") != selection_reason:
         raise SystemExit(f"{label} launch-config selection reason mismatch: {config.get('selection_reason')!r}")
     event_logs = launch_attempt_logs(config, "event_logs", label)
     probe_logs = launch_attempt_logs(config, "probe_logs", label)
-    if event_logs != ["events-gemini-pro.log", "events-spark.jsonl", "events-mini.jsonl"]:
+    if event_logs != ["events-ds-pro-max.jsonl", "events-spark.jsonl"]:
         raise SystemExit(f"{label} launch-config event log mismatch: {event_logs!r}")
-    if probe_logs != ["events-gemini-pro-probe.log"]:
-        raise SystemExit(f"{label} launch-config probe log mismatch: {probe_logs!r}")
+    if probe_logs:
+        raise SystemExit(f"{label} launch-config should not include probe logs for the bridge route: {probe_logs!r}")
+    bridge_attempts = launch_attempts_by_provider(config, "opencode-bridge", label)
+    if len(bridge_attempts) != 1 or bridge_attempts[0].get("alias") != "ds-pro-max":
+        raise SystemExit(f"{label} launch-config should include one bridge attempt: {bridge_attempts!r}")
+    if not isinstance(bridge_attempts[0].get("bridge"), dict):
+        raise SystemExit(f"{label} bridge attempt must carry a bridge block: {bridge_attempts[0]!r}")
     codex_attempts = launch_attempts_by_provider(config, "codex", label)
-    assert_lean_codex_attempts(codex_attempts, f"{label} Codex attempt", expected_count=2)
+    assert_lean_codex_attempts(codex_attempts, f"{label} Codex attempt", expected_count=1)
 
 
 def assert_research_worker_preserves_user_config(
@@ -352,14 +381,17 @@ def sha256_file(path: Path) -> str:
     return "sha256:" + digest.hexdigest()
 
 
-def offline_gemini_env(env: dict[str, str] | None = None) -> dict[str, str]:
+def offline_bridge_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """B6 offline-bridge Lite env: capture the bridge control script + version.
+
+    Replaces the removed per-provider Lite offline contract.
+    """
     merged = dict(os.environ if env is None else env)
     merged.update(
         {
-            "GOAL_LITE_OFFLINE_GEMINI_METADATA": "1",
-            "GOAL_LITE_GEMINI_PATH": OFFLINE_GEMINI_PATH,
-            "GOAL_LITE_GEMINI_VERSION": OFFLINE_GEMINI_VERSION,
-            "GOAL_LITE_GEMINI_SHA256": OFFLINE_GEMINI_SHA256,
+            "GOAL_LITE_OFFLINE_BRIDGE_METADATA": "1",
+            "GOAL_LITE_BRIDGE_CONTROL_SCRIPT": offline_bridge_control_script(),
+            "GOAL_LITE_BRIDGE_CONTROL_VERSION": OFFLINE_BRIDGE_CONTROL_VERSION,
         }
     )
     return merged
@@ -555,9 +587,10 @@ def assert_compact_lite_launcher(packet_dir: Path) -> dict:
     if not isinstance(attempts, list) or len(attempts) != 1:
         raise SystemExit(f"Lite launch-config should contain exactly one attempt: {attempts!r}")
     attempt_item = attempts[0]
-    if attempt_item.get("alias") != "gemini-lite":
+    # B6: the Lite advisor route is the bridge deepseek-flash alias (now ds-flash-max).
+    if attempt_item.get("alias") != "ds-flash-max":
         raise SystemExit(f"Lite launch-config attempt alias mismatch: {attempt_item.get('alias')!r}")
-    if attempt_item.get("event_logs") != ["advice.raw.txt"]:
+    if attempt_item.get("event_logs") != ["events-ds-flash-max.jsonl"]:
         raise SystemExit(f"Lite launch-config event logs mismatch: {attempt_item.get('event_logs')!r}")
     if attempt_item.get("timeout_seconds") != 600:
         raise SystemExit(f"Lite attempt timeout mismatch: {attempt_item.get('timeout_seconds')!r}")
