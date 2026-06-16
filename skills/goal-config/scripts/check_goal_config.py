@@ -31,7 +31,7 @@ ROLE_ALIASES = {
     "heavy": "demanding_agent",
     "demanding_agent": "demanding_agent",
 }
-HARNESS_KIND_VALUES = {"opencode", "codex", "gemini", "generic-cli"}
+HARNESS_KIND_VALUES = {"opencode-bridge", "codex", "generic-cli"}
 MAX_ERROR_MESSAGE_CHARS = 220
 VALIDATION_MODES = {"model-check", "smoke", "debug"}
 DISCOVERY_PROFILES: dict[str, dict[str, Any]] = {
@@ -40,22 +40,21 @@ DISCOVERY_PROFILES: dict[str, dict[str, Any]] = {
         "stop_provider_on_auth_error": True,
         "candidates": [
             {
-                "harness": "opencode",
+                "harness": "opencode-bridge",
                 "provider": "deepseek",
-                "model": "deepseek/deepseek-v4-flash",
-                "alias": "opencode-deepseek-flash",
+                "model": "deepseek-v4-flash",
+                "alias": "ds-flash-max",
             },
             {
-                "harness": "opencode",
+                "harness": "opencode-bridge",
                 "provider": "deepseek",
-                "model": "deepseek/deepseek-v4-pro",
-                "alias": "opencode-deepseek-pro",
+                "model": "deepseek-v4-pro",
+                "alias": "ds-pro-max",
             },
             {"harness": "codex", "provider": "openai", "model": "gpt-5.4-mini", "alias": "codex-mini"},
             {"harness": "codex", "provider": "openai", "model": "gpt-5.4", "alias": "codex-heavy"},
-            {"harness": "gemini", "provider": "gemini", "model": "gemini-3-flash-preview", "alias": "gemini-flash"},
-            {"harness": "gemini", "provider": "gemini", "model": "gemini-3.1-pro-preview", "alias": "gemini-pro"},
-            {"harness": "antigravity", "provider": "agy", "model": "agy/current", "alias": "agy-current"},
+            {"harness": "codex", "provider": "openai", "model": "gpt-5.3-codex-spark", "alias": "codex-spark"},
+            {"harness": "codex", "provider": "openai", "model": "gpt-5.5", "alias": "gpt-5-5"},
         ],
     },
 }
@@ -1012,8 +1011,17 @@ def run_harness_smoke(
         if timeout_seconds <= 0:
             timeout_seconds = 600
 
+        resolved_opencode = resolve_binary(binary)
+        if resolved_opencode is None:
+            # Fail closed: a missing harness binary must reject the route, matching
+            # the generic/codex branch below and the documented fail-closed contract.
+            return {
+                "status": "failed",
+                "reason": f"{kind} binary not found",
+            }, [f"{role} {kind} binary not found"]
+
         result = command_result(
-            [resolve_binary(binary) or binary, *smoke_args],
+            [resolved_opencode, *smoke_args],
             timeout_seconds=timeout_seconds,
         )
 
@@ -1268,7 +1276,7 @@ def check_model_for_harness(
             models_fixture=models_fixture,
             model_list_cache=model_list_cache,
         )
-    if kind in {"codex", "gemini", "generic-cli"}:
+    if kind in {"opencode-bridge", "codex", "generic-cli"}:
         return check_non_opencode_model(model, harness=harness)
     return {"status": "failed", "reason": f"unsupported harness kind: {kind}"}, [
         f"unsupported harness kind: {kind}"
@@ -1692,6 +1700,7 @@ def write_state(
         )
     elif for_preflight:
         phase = "preflight_compatible" if status == "pass" else "preflight_incompatible"
+        next_command = None
         check_mode = result.get("check_mode")
         config_validation_mode = result.get("config_validation_mode")
         required_mode = str(check_mode or mode or "check")
@@ -2024,7 +2033,7 @@ def main() -> int:
                 models_fixture=models_fixture,
                 model_list_cache=model_list_cache,
             )
-        elif kind in {"codex", "gemini", "generic-cli"}:
+        elif kind in {"opencode-bridge", "codex", "generic-cli"}:
             model_check, model_failures = check_non_opencode_model(model, harness=harness)
         else:
             model_check = {"status": "failed", "reason": f"unsupported harness kind: {kind}"}

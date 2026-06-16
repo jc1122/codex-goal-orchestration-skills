@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -14,8 +15,29 @@ from typing import Any
 
 IMPLIED_PROVIDER_BY_HARNESS = {
     "codex": "openai",
-    "gemini": "gemini",
+    "opencode-bridge": "deepseek",
 }
+
+
+def bridge_worker_script() -> str:
+    """Resolve the opencode-worker-bridge control script path.
+
+    Mirrors the bridge SKILL.md fallback chain:
+    ``${CODEX_HOME:-$HOME/.codex}/skills/opencode-worker-bridge`` then
+    ``$HOME/.agents/skills/opencode-worker-bridge``. Falls back to the first
+    candidate path when neither is present so the emitted config still carries a
+    deterministic, inspectable command (the offline ``doctor --json`` smoke and
+    the runtime check fail closed when the script is missing).
+    """
+    codex_home = os.environ.get("CODEX_HOME") or str(Path.home() / ".codex")
+    candidates = [
+        Path(codex_home) / "skills" / "opencode-worker-bridge" / "scripts" / "opencode_worker.py",
+        Path.home() / ".agents" / "skills" / "opencode-worker-bridge" / "scripts" / "opencode_worker.py",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate.as_posix()
+    return candidates[0].as_posix()
 
 EFFORT_PROFILES: dict[str, dict[str, int]] = {
     "lean": {
@@ -176,38 +198,34 @@ def model_entry(*, alias: str, role: str, harness: str, provider: str, model: st
 
 
 def default_harnesses() -> dict[str, Any]:
+    bridge_script = bridge_worker_script()
     return {
-        "opencode": {
-            "kind": "opencode",
-            "command": "opencode",
-            "model_list_args": ["models", "{provider}"],
-            "smoke_args": [
-                "run",
-                "--pure",
-                "--format",
-                "json",
-                "--model",
-                "{model}",
-                "--variant",
-                "max",
-                "{prompt}",
-            ],
+        "opencode-bridge": {
+            # Deep integration: worker/reviewer/amender/lite deepseek work routes
+            # through the opencode-worker-bridge control script rather than
+            # `opencode run`. The smoke is the bridge's offline readiness command
+            # (`doctor --json`); runtime uses the supervisor/delegate form.
+            "kind": "opencode-bridge",
+            "command": "python3",
+            "bridge_script": bridge_script,
+            "smoke_args": [bridge_script, "doctor", "--json"],
             "run_args": [
-                "run",
-                "--pure",
-                "--format",
-                "json",
+                bridge_script,
+                "supervisor",
+                "--run-dir",
+                "{packet_dir}/bridge/{alias}",
+                "--state",
+                "{packet_dir}/bridge/{alias}/opencode-worker-state.json",
+                "--provider",
+                "{provider}",
                 "--model",
                 "{model}",
                 "--variant",
                 "max",
-                "--dir",
-                "{worktree}",
-                "--title",
-                "{packet_id}-{alias}",
-                "{prompt}",
+                "--prompt-file",
+                "{prompt_file}",
             ],
-            "run_readback": "opencode_session_db",
+            "run_readback": "bridge_run_dir",
         },
         "codex": {
             "kind": "codex",
@@ -222,21 +240,6 @@ def default_harnesses() -> dict[str, Any]:
                 "{prompt}",
             ],
             "run_readback": "output_file",
-        },
-        "gemini": {
-            "kind": "gemini",
-            "command": "gemini",
-            "approval_mode": "yolo",
-            "smoke_args": ["--model", "{model}", "--approval-mode", "yolo", "-p", "{prompt}"],
-            "run_args": ["--model", "{model}", "--approval-mode", "yolo", "-p", "{prompt}"],
-            "run_readback": "stdout",
-        },
-        "antigravity": {
-            "kind": "generic-cli",
-            "command": "agy",
-            "smoke_args": ["--print", "{prompt}"],
-            "run_args": ["--print", "{prompt}"],
-            "run_readback": "stdout",
         },
     }
 
@@ -802,11 +805,11 @@ def base_config(contract: Any) -> dict[str, Any]:
         },
         "models": {
             "lite_agent": model_entry(
-                alias="gemini-lite",
+                alias="ds-flash-max",
                 role="lite_agent",
-                harness="gemini",
-                provider="gemini",
-                model=contract.LITE_MODEL,
+                harness="opencode-bridge",
+                provider=contract.BRIDGE_PROVIDER_ID,
+                model=contract.bridge_model("ds-flash-max"),
                 purpose="low-token advisory summaries and routing hints",
             ),
             "worker_primary": model_entry(
@@ -815,7 +818,7 @@ def base_config(contract: Any) -> dict[str, Any]:
                 harness="codex",
                 provider="openai",
                 model=contract.CODEX_ROUTE_MODELS["codex-spark"],
-                purpose="ordinary bounded implementation work",
+                purpose="native Codex Spark fallback for ordinary bounded implementation work",
             ),
             "worker_fallback": model_entry(
                 alias="codex-mini",
@@ -823,31 +826,23 @@ def base_config(contract: Any) -> dict[str, Any]:
                 harness="codex",
                 provider="openai",
                 model=contract.CODEX_ROUTE_MODELS["codex-mini"],
-                purpose="cheap fallback and mechanical work",
-            ),
-            "worker_opencode": model_entry(
-                alias="opencode-deepseek-v4-flash",
-                role="worker_opencode",
-                harness="opencode",
-                provider="deepseek",
-                model="deepseek/deepseek-v4-flash",
-                purpose="external fallback for worker packets when Codex routes disconnect",
+                purpose="cheap native Codex fallback and mechanical work",
             ),
             "demanding_agent": model_entry(
-                alias="gpt-5.4",
+                alias="ds-pro-max",
                 role="demanding_agent",
-                harness="codex",
-                provider="openai",
-                model=contract.CODEX_ROUTE_MODELS["gpt-5.4"],
+                harness="opencode-bridge",
+                provider=contract.BRIDGE_PROVIDER_ID,
+                model=contract.bridge_model("ds-pro-max"),
                 purpose="review, planning, and higher-risk reasoning",
             ),
         },
         "model_ladders": {
             "lite": ["lite_agent"],
-            "worker": ["worker_primary", "worker_opencode", "worker_fallback", "lite_agent"],
+            "worker": ["lite_agent", "worker_primary", "worker_fallback"],
             "reviewer": ["demanding_agent"],
-            "amender": ["demanding_agent", "worker_primary"],
-            "demanding": ["demanding_agent", "worker_primary"],
+            "amender": ["demanding_agent", "lite_agent"],
+            "demanding": ["demanding_agent", "lite_agent"],
         },
         "harness_smokes": {},
         "harnesses": default_harnesses(),
@@ -861,37 +856,76 @@ def base_config(contract: Any) -> dict[str, Any]:
 
 
 def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict[str, Any]:
+    """Default profile: deepseek through the opencode-worker-bridge for
+    worker/reviewer/amender/lite work, with native Codex routes retained for
+    provider-diversity fallback, native research (``codex --search`` read-only),
+    and native prompt-audit (``gpt-5.x``)."""
     config = base_config(contract)
-    lite_provider, lite_model = normalize_role_model_for_harness(args.lite_model, "opencode", args.provider)
+    lite_provider, lite_model = normalize_role_model_for_harness(
+        args.lite_model, "opencode-bridge", args.provider
+    )
     demanding_provider, demanding_model = normalize_role_model_for_harness(
         args.demanding_model,
-        "opencode",
+        "opencode-bridge",
         args.provider,
     )
     config["profile"] = "opencode-deepseek-v4"
     config["models"] = {
         "lite_agent": model_entry(
-            alias="opencode-deepseek-v4-flash",
+            alias="ds-flash-max",
             role="lite_agent",
-            harness="opencode",
+            harness="opencode-bridge",
             provider=lite_provider,
             model=lite_model,
-            purpose="low-latency advisory and small deterministic checks",
+            purpose="bridge deepseek-flash (--variant max) for Lite advisory and bounded deterministic edits",
         ),
         "demanding_agent": model_entry(
-            alias="opencode-deepseek-v4-pro",
+            alias="ds-pro-max",
             role="demanding_agent",
-            harness="opencode",
+            harness="opencode-bridge",
             provider=demanding_provider,
             model=demanding_model,
-            purpose="higher-effort planning, review, and complex coding checks",
+            purpose="bridge deepseek-pro (--variant max) for higher-effort planning, review, and complex coding",
+        ),
+        "worker_codex_spark": model_entry(
+            alias="codex-spark",
+            role="worker_codex_spark",
+            harness="codex",
+            provider="openai",
+            model=contract.CODEX_ROUTE_MODELS["codex-spark"],
+            purpose="native Codex Spark fallback rung for provider diversity on ordinary worker packets",
+        ),
+        "worker_codex_mini": model_entry(
+            alias="codex-mini",
+            role="worker_codex_mini",
+            harness="codex",
+            provider="openai",
+            model=contract.CODEX_ROUTE_MODELS["codex-mini"],
+            purpose="native Codex mini fallback rung for cheap or mechanical worker packets",
+        ),
+        "research_agent": model_entry(
+            alias="codex-research",
+            role="research_agent",
+            harness="codex",
+            provider="openai",
+            model=contract.CODEX_ROUTE_MODELS["codex-research"],
+            purpose="native Codex read-only research with web search (codex --search exec -s read-only)",
+        ),
+        "prompt_audit_agent": model_entry(
+            alias="gpt-5.5",
+            role="prompt_audit_agent",
+            harness="codex",
+            provider="openai",
+            model=contract.CODEX_ROUTE_MODELS["gpt-5.5"],
+            purpose="native gpt prompt-audit with schema-validated output (kept native; bridge cannot enforce the audit schema)",
         ),
     }
     config["model_ladders"] = {
         "lite": ["lite_agent"],
-        "worker": ["demanding_agent", "lite_agent"],
+        "worker": ["lite_agent", "worker_codex_spark", "worker_codex_mini"],
         "reviewer": ["demanding_agent"],
         "amender": ["demanding_agent", "lite_agent"],
+        "demanding": ["demanding_agent", "lite_agent"],
     }
     config["effort"]["lite_timeout_seconds"] = 600
     config["effort"]["demanding_timeout_seconds"] = 1200
@@ -941,8 +975,8 @@ def main() -> int:
     parser.add_argument(
         "--preset",
         choices=("current-default", "opencode-deepseek-v4"),
-        default="current-default",
-        help="Configuration preset to render.",
+        default="opencode-deepseek-v4",
+        help="Configuration preset to render. Defaults to the opencode-deepseek-v4 bridge profile.",
     )
     parser.add_argument("--output", type=Path, help="Write goal.config.json to this path; use - for stdout.")
     parser.add_argument("--provider", help="Provider id override for provider/model strings.")
