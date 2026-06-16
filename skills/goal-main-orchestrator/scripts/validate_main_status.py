@@ -580,9 +580,7 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
             if isinstance(decision_data, dict)
             else set()
         )
-        if not local_defects and not decision_terminal_ids <= blocker_branch_ids:
-            current_omitted.append(decision_rel)
-        elif status == "pass" or not blocker_branch_ids:
+        if not local_defects and not decision_terminal_ids <= blocker_branch_ids or status == "pass" or not blocker_branch_ids:
             current_omitted.append(decision_rel)
     if current_omitted:
         defect(

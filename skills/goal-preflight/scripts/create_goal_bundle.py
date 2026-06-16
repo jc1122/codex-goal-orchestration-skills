@@ -1450,9 +1450,7 @@ def ready_width_metadata(
     item_count: int, current_ready_width: int, capacity: int, *, scope: str, identifier: str | None = None
 ) -> dict[str, object]:
     usable_capacity = min(max(capacity, 1), item_count) if item_count else 0
-    if identifier and scope in {"branch", "worker"}:
-        scope_name = f"{scope} {identifier}"
-    elif identifier:
+    if identifier and scope in {"branch", "worker"} or identifier:
         scope_name = f"{scope} {identifier}"
     else:
         scope_name = scope

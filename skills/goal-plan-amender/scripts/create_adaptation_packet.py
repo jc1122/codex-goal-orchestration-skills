@@ -293,7 +293,7 @@ run_codex_model() {{
     --output-schema "$packet_dir/proposal.schema.json" \\
     -o "$proposal_path" \\
     - < "$packet_dir/prompt.md" \\
-	    > "$packet_dir/events-${{label}}.jsonl" 2>&1
+    > "$packet_dir/events-${{label}}.jsonl" 2>&1
 }}
 
 extract_stdout_proposal() {{

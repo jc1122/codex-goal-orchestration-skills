@@ -10,7 +10,7 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +49,7 @@ def append_debug_event(packet_dir: Path, config: dict[str, Any], event: dict[str
         return
     payload = {
         "schema_version": 1,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "packet_id": config.get("packet_id"),
         "role": config.get("role"),
         **event,

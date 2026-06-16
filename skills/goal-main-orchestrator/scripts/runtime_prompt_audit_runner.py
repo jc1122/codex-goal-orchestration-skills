@@ -10,7 +10,7 @@ import shutil
 import signal
 import subprocess
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -49,7 +49,7 @@ def append_debug_event(packet_dir: Path, config: dict[str, Any], event: dict[str
         return
     payload = {
         "schema_version": 1,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "packet_id": config.get("packet_id"),
         "role": config.get("role"),
         **event,
@@ -146,7 +146,7 @@ def valid_defects(value: object) -> bool:
 
 
 def valid_audit_data(data: object, *, manifest: str, repo_root: str) -> bool:
-    if not isinstance(data, dict) or not REQUIRED_AUDIT_KEYS <= set(data):
+    if not isinstance(data, dict) or not set(data) >= REQUIRED_AUDIT_KEYS:
         return False
     if data.get("manifest") != manifest or data.get("repo_root") != repo_root:
         return False

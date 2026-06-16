@@ -168,9 +168,7 @@ def read_packet_debug_end_event(path: Path) -> tuple[float | None, int | None, s
             if event.get("event") != "end":
                 continue
             value = event.get("elapsed_ms")
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                elapsed_seconds = value / 1000
-            elif isinstance(value, float) and value >= 0.0:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0 or isinstance(value, float) and value >= 0.0:
                 elapsed_seconds = value / 1000
             if isinstance(event.get("exit_status"), int) and not isinstance(event.get("exit_status"), bool):
                 exit_status = event.get("exit_status")
@@ -207,9 +205,7 @@ def read_debug_event_timing(path: Path) -> tuple[dict[int, float], dict[int, int
                 continue
             value = event.get("elapsed_ms")
             elapsed_seconds: float | None = None
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                elapsed_seconds = value / 1000
-            elif isinstance(value, float) and value >= 0.0:
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0 or isinstance(value, float) and value >= 0.0:
                 elapsed_seconds = value / 1000
             if elapsed_seconds is not None:
                 attempt_elapsed[attempt_index] = elapsed_seconds

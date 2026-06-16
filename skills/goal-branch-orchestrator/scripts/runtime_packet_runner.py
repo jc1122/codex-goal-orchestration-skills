@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timezone, UTC
 from pathlib import Path
 from typing import Any
 
@@ -233,7 +233,7 @@ def append_debug_event(packet_dir: Path, config: dict[str, Any], event: dict[str
         return
     payload = {
         "schema_version": 1,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "packet_id": config.get("packet_id"),
         "role": config.get("role"),
         **event,
@@ -1074,7 +1074,7 @@ def run_with_timeout(
     stdout_path: Path,
     extra_env: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    started_at = datetime.now(timezone.utc).isoformat()
+    started_at = datetime.now(UTC).isoformat()
     if shutil.which("timeout") is None:
         stdout_path.write_text(TIMEOUT_NOT_FOUND.format(role=role), encoding="utf-8")
         return {
@@ -1124,7 +1124,7 @@ def run_with_timeout(
         stdout_data, stderr_data = proc.communicate(input=stdin_data)
     finally:
         elapsed_ms = int(round((time.perf_counter() - start) * 1000))
-        completed_at = datetime.now(timezone.utc).isoformat()
+        completed_at = datetime.now(UTC).isoformat()
         if external_cache_root is not None:
             shutil.rmtree(external_cache_root, ignore_errors=True)
     stdout_data = stdout_data or b""
@@ -2072,7 +2072,7 @@ def run_opencode_bridge_model(
             return int(acquire.get("returncode", 1)), acquire, event_path
         acquired = True
 
-        start = _run_bridge_command(
+        _run_bridge_command(
             bridge_root=bridge_root,
             subcommand="start",
             extra_args=[
