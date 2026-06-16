@@ -172,6 +172,7 @@ def configured_route_rows(
     codex_by_slug: dict[str, dict[str, Any]],
     codex_catalog_loaded: bool,
     require_codex: bool,
+    bridge_aliases: frozenset[str],
 ) -> tuple[list[dict[str, Any]], list[str]]:
     models = config.get("models") if isinstance(config.get("models"), dict) else {}
     harnesses = config.get("harnesses") if isinstance(config.get("harnesses"), dict) else {}
@@ -191,18 +192,22 @@ def configured_route_rows(
         model_check = check_report.get("model_check") if isinstance(check_report.get("model_check"), dict) else {}
         smoke = check_report.get("smoke") if isinstance(check_report.get("smoke"), dict) else {}
         configured_model = str(model.get("model")) if model.get("model") is not None else ""
-        codex_catalog = codex_by_slug.get(configured_model) if harness_kind == "codex" and codex_catalog_loaded else None
+        # Bridge aliases (deepseek via opencode-bridge) are never validated
+        # against the Codex catalog, even if a manifest mislabels their harness
+        # kind as "codex" — bridge-route readiness is the bridge's concern.
+        is_codex_route = harness_kind == "codex" and alias not in bridge_aliases
+        codex_catalog = codex_by_slug.get(configured_model) if is_codex_route and codex_catalog_loaded else None
         status = "pass"
         reason = ""
         if not isinstance(harness, dict):
             status = "failed"
             reason = f"unknown harness: {harness_name!r}"
             failures.append(f"{alias}: {reason}")
-        elif harness_kind == "codex" and not codex_catalog_loaded and require_codex:
+        elif is_codex_route and not codex_catalog_loaded and require_codex:
             status = "failed"
             reason = "Codex catalog unavailable"
             failures.append(f"{alias}: {reason}")
-        elif harness_kind == "codex" and codex_catalog_loaded and codex_catalog is None:
+        elif is_codex_route and codex_catalog_loaded and codex_catalog is None:
             status = "failed"
             reason = f"configured Codex model absent from catalog: {configured_model}"
             failures.append(f"{alias}: {reason}")
@@ -219,7 +224,7 @@ def configured_route_rows(
                 "model": model.get("model"),
                 "present": (
                     codex_catalog is not None
-                    if harness_kind == "codex" and codex_catalog_loaded
+                    if is_codex_route and codex_catalog_loaded
                     else (model_check.get("status") == "pass" if model_check else None)
                 ),
                 "supported_in_api": codex_catalog.get("supported_in_api") if codex_catalog else None,
@@ -237,7 +242,27 @@ def configured_route_rows(
 def build_report(*, source: str, require_codex: bool, manifest: Path | None = None) -> dict[str, Any]:
     contract = load_contract()
     catalog, actual_source, warnings = load_catalog(source)
-    route_models = dict(sorted(contract.CODEX_ROUTE_MODELS.items()))
+    # Only native codex/gpt route aliases are validated against the local Codex
+    # catalog. Bridge aliases (deepseek via opencode-bridge) are NOT codex
+    # models, so exclude them defensively via is_bridge_alias() — they are
+    # recorded as bridge-managed and never flagged missing from the codex
+    # catalog (bridge-route readiness is the bridge's concern, not this gate).
+    route_models = {
+        alias: model
+        for alias, model in sorted(contract.CODEX_ROUTE_MODELS.items())
+        if not contract.is_bridge_alias(alias)
+    }
+    bridge_route_models = [
+        {
+            "alias": alias,
+            "model": contract.bridge_model(alias),
+            "provider": contract.BRIDGE_PROVIDER_ID,
+            "harness_kind": contract.BRIDGE_HARNESS_KIND,
+            "codex_catalog_validated": False,
+            "note": "managed by opencode-bridge / not codex-catalog validated",
+        }
+        for alias in contract.BRIDGE_ROUTE_ALIASES
+    ]
     codex_by_slug: dict[str, dict[str, Any]] = {}
     if catalog is None:
         status = "failed" if require_codex else "skipped"
@@ -252,6 +277,7 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
                 for alias, model in route_models.items()
             ],
             "missing_route_models": [],
+            "bridge_route_models": bridge_route_models,
         }
         if manifest is None:
             return report
@@ -292,6 +318,7 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
             "models": models,
             "route_models": route_rows,
             "missing_route_models": missing,
+            "bridge_route_models": bridge_route_models,
         }
     if manifest is not None:
         config, check, config_warnings = load_manifest_config(manifest)
@@ -310,6 +337,7 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
             codex_by_slug=codex_by_slug,
             codex_catalog_loaded=catalog is not None,
             require_codex=require_codex,
+            bridge_aliases=frozenset(contract.BRIDGE_ROUTE_ALIASES),
         )
         report["configured_route_models"] = configured_rows
         report["checked_aliases"] = [row["alias"] for row in configured_rows]
@@ -354,6 +382,12 @@ def main() -> int:
             print(
                 f"- {row['alias']}: model={row['model']} present={present} "
                 f"supported_in_api={row['supported_in_api']} visibility={row['visibility']}"
+            )
+        for row in report.get("bridge_route_models", []):
+            print(
+                f"- bridge {row['alias']}: model={row['model']} "
+                f"provider={row['provider']} harness_kind={row['harness_kind']} "
+                f"codex_catalog_validated={row['codex_catalog_validated']}"
             )
         for row in report.get("configured_route_models", []):
             print(
