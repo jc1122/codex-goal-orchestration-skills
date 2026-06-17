@@ -1,4 +1,4 @@
 interface:
   display_name: "Goal Branch Orchestrator"
   short_description: "Dispatch rolling branch workers with packet telemetry."
-  default_prompt: "Use $goal-branch-orchestrator to execute one audited branch prompt with rolling saturated worker dispatch, packet telemetry, optional deterministic CLI-only Lite advisory packets, allowed worker-route selection from the Gemini Pro -> Gemini Flash -> Codex Spark -> Codex mini ladder, and read-only reviewers."
+  default_prompt: "Use $goal-branch-orchestrator to execute one audited branch prompt with rolling saturated worker dispatch, packet telemetry, optional deterministic CLI-only Lite advisory packets, allowed worker-route selection from the ds-pro-max -> ds-flash-max -> codex-spark -> codex-mini ladder (bridge deepseek leading, native Codex fallback), and read-only reviewers."
