@@ -82,13 +82,16 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
     branches = branch_entries(manifest)
     branch_ids = [str(branch["id"]) for branch in branches]
     deps = branch_dependencies(branches)
-    active, terminal, terminal_status = protected_ids(
-        manifest_path,
-        manifest,
-        active_ids=active_ids,
-        terminal_ids=terminal_ids,
-        infer_scheduler=True,
-    )
+    try:
+        active, terminal, terminal_status = protected_ids(
+            manifest_path,
+            manifest,
+            active_ids=active_ids,
+            terminal_ids=terminal_ids,
+            infer_scheduler=True,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     terminal_status.update(load_terminal_status_files(manifest_path, branches))
     terminal |= set(terminal_status)
     unknown_active = sorted(active - set(branch_ids))

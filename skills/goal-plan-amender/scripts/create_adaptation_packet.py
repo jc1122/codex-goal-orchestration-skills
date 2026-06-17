@@ -677,7 +677,8 @@ def _collect_source_records(
     )
     if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path"):
         add_if_exists(records, bundle_dir / scheduler_path, "main scheduler")
-    for branch in manifest.get("branches", []):
+    manifest_branches = manifest.get("branches")
+    for branch in manifest_branches if isinstance(manifest_branches, list) else []:
         if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
             continue
         branch_id = branch["id"]

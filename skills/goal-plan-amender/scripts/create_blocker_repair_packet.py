@@ -44,7 +44,10 @@ DETERMINISTIC_MODE = "deterministic_blocker_repair"
 
 
 def safe_path(value: str) -> str | None:
-    path = value.strip().strip("`'\".,:;()[]{}")
+    # Strip wrapping punctuation but NOT a leading '.' (else ".github/..." paths, which
+    # FILE_RE/ALLOWED_PREFIXES intentionally support, get silently dropped); trailing dots
+    # from prose are removed separately.
+    path = value.strip().strip("`'\",:;()[]{}").rstrip(".")
     if not path or path.startswith("/") or "\\" in path or ".." in path.split("/"):
         return None
     if not path.startswith(ALLOWED_PREFIXES):
@@ -550,13 +553,16 @@ def create_packet(args: argparse.Namespace) -> Path:
             child.unlink()
     packet_dir.mkdir(parents=True, exist_ok=True)
 
-    active, terminal, terminal_status = protected_ids(
-        manifest_path,
-        manifest,
-        active_ids=args.active_branch,
-        terminal_ids=args.terminal_branch,
-        infer_scheduler=True,
-    )
+    try:
+        active, terminal, terminal_status = protected_ids(
+            manifest_path,
+            manifest,
+            active_ids=args.active_branch,
+            terminal_ids=args.terminal_branch,
+            infer_scheduler=True,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     decision_active = sorted(item for item in decision.get("active_branch_ids", []) if isinstance(item, str))
     decision_terminal = sorted(item for item in decision.get("terminal_branch_ids", []) if isinstance(item, str))
     if sorted(active) != decision_active:
