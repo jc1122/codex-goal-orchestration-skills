@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:11a720dd3d4f9a6e0deb4141eb65e57e03c75b5c255dc070cd48b4e7aaccdbc1"
+    "source_fingerprint": "sha256:7334debadb2ca523ed279dee43f7c55bd1be0c1de534498a7e5942aec0869bf7"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -113,11 +113,12 @@
       "bin/install-goal-skills.js"
     ],
     "npm_scripts": {
-      "check": "npm run check:lint && npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance && npm run check:tests",
+      "check": "npm run check:lint && npm run check:shared && npm run check:harness && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance && npm run check:tests",
       "check:config": "python3 scripts/check_goal_config_fixtures.py",
       "check:context": "python3 scripts/generate_agent_context_index.py --check",
       "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
       "check:golden": "python3 scripts/check_golden_smoke.py",
+      "check:harness": "python3 scripts/check_harness_contract.py",
       "check:lint": "ruff check . && ruff format --check .",
       "check:maintenance": "npm run check:context && python3 scripts/check_size_budget.py && python3 scripts/check_dependency_policy.py && npm run check:models",
       "check:maintenance:deps": "python3 scripts/check_dependency_policy.py",

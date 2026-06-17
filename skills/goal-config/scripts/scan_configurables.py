@@ -116,11 +116,7 @@ def build_inventory(contract: Any) -> dict[str, Any]:
             "harnesses": {
                 "description": "CLI harnesses supported by goal-config and checker validation.",
                 "parameters": {
-                    "supported_kinds": [
-                        "opencode-bridge",
-                        "codex",
-                        "generic-cli",
-                    ],
+                    "supported_kinds": list(contract.SUPPORTED_HARNESS_KINDS),
                     "default_harnesses": [
                         "opencode-bridge",
                         "codex",

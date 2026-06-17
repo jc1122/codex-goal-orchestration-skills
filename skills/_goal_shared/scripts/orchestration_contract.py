@@ -79,6 +79,14 @@ CODEX_ROUTE_EVENT_LABELS = {
 # (harness kind "opencode-bridge"). ds-pro-max = TOUGH, ds-flash-max = LIGHT.
 BRIDGE_HARNESS_KIND = "opencode-bridge"
 BRIDGE_PROVIDER_ID = "deepseek"
+# Single source of truth for the harness kinds the family supports end to end.
+# A config-declarable kind MUST be handled by the runtime packet launcher
+# (runtime_packet_runner) or it SystemExits at dispatch. The pre-bridge
+# direct-"opencode" kind (and its opencode-session-db smoke readback) was
+# removed in the opencode-worker-bridge migration; deepseek now routes through
+# BRIDGE_HARNESS_KIND. Keep this tuple, scan_configurables.supported_kinds, and
+# the runtime launcher's handled kinds in lockstep (check_harness_contract.py).
+SUPPORTED_HARNESS_KINDS = (BRIDGE_HARNESS_KIND, "codex", "generic-cli")
 BRIDGE_ROUTE_MODELS = {
     "ds-pro-max": "deepseek-v4-pro",
     "ds-flash-max": "deepseek-v4-flash",

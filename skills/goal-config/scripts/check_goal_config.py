@@ -106,13 +106,6 @@ def command_result(command: list[str], *, timeout_seconds: int | None = None) ->
         }
 
 
-def opencode_db_path() -> Path:
-    xdg_data = os.environ.get("XDG_DATA_HOME")
-    if xdg_data:
-        return Path(xdg_data) / "opencode" / "opencode.db"
-    return Path.home() / ".local" / "share" / "opencode" / "opencode.db"
-
-
 def parse_models(output: str) -> set[str]:
     return set(MODEL_RE.findall(output))
 
@@ -128,7 +121,6 @@ def discovery_smoke(role: str, timeout_seconds: int) -> dict[str, Any]:
         "prompt": f"Reply with {token} and nothing else.",
         "expect": token,
         "timeout_seconds": timeout_seconds,
-        "readback": "opencode_session_db",
     }
 
 
@@ -625,7 +617,6 @@ def run_harness_smoke(
     smoke: dict[str, Any],
     *,
     harness: dict[str, Any],
-    opencode_db: Path,
     include_raw_errors: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     failures: list[str] = []
@@ -702,7 +693,6 @@ def run_or_reuse_smoke(
     smoke: dict[str, Any],
     *,
     harness: dict[str, Any],
-    opencode_db: Path,
     include_raw_errors: bool,
     smoke_cache: dict[tuple[str, str, str], dict[str, Any]],
 ) -> tuple[dict[str, Any], list[str]]:
@@ -714,7 +704,6 @@ def run_or_reuse_smoke(
         model,
         smoke,
         harness=harness,
-        opencode_db=opencode_db,
         include_raw_errors=include_raw_errors,
     )
     remember_smoke(smoke_cache, model, role, smoke_report)
@@ -871,7 +860,6 @@ def discover_profile_routes(
     max_candidates: int | None,
     smoke: bool,
     models_fixture: set[str] | None,
-    opencode_db: Path,
     include_raw_errors: bool,
     smoke_cache: dict[tuple[str, str, str], dict[str, Any]],
     discover_all_candidates: bool,
@@ -935,7 +923,6 @@ def discover_profile_routes(
                 model,
                 discovery_smoke(candidate["role"], timeout_seconds),
                 harness=harness,
-                opencode_db=opencode_db,
                 include_raw_errors=include_raw_errors,
                 smoke_cache=smoke_cache,
             )
@@ -961,32 +948,6 @@ def discover_profile_routes(
     if not candidates:
         failures.append(f"discover profile {profile_name} produced no candidate routes")
     return candidates, reports, failures, unvisited_routes
-
-
-def discover_available_routes(
-    config: dict[str, Any],
-    *,
-    harness_name: str,
-    providers: list[str],
-    model_filter: str | None,
-    max_candidates: int | None,
-    smoke: bool,
-    models_fixture: set[str] | None,
-    opencode_db: Path,
-    include_raw_errors: bool,
-    smoke_cache: dict[tuple[str, str, str], dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
-    harnesses = config.get("harnesses")
-    harness = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
-    if not isinstance(harness, dict):
-        return [], [], [f"discover harness {harness_name!r} is not configured"]
-    # The only harness kinds accepted by validate_harness_shape are
-    # {opencode-bridge, codex, generic-cli}; the legacy direct-"opencode" kind
-    # (and its provider model-list discovery) was removed in the bridge
-    # migration. Provider-seeded discovery therefore has no supported harness to
-    # walk and fails closed. --discover-profile remains the supported discovery
-    # path (see discover_profile_routes).
-    return [], [], [f"discover harness {harness_name!r} must be opencode"]
 
 
 def rejection_counts(rejected_routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1241,17 +1202,6 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         help="With --for-preflight, write a mechanically preflight-remediated config JSON.",
     )
-    parser.add_argument(
-        "--discover-provider",
-        action="append",
-        default=[],
-        help="Discover opencode candidate routes for this provider. Repeat for multiple providers.",
-    )
-    parser.add_argument(
-        "--discover-harness",
-        default="opencode",
-        help="Configured opencode harness name to use for discovery.",
-    )
     parser.add_argument("--discover-model-filter", help="Regex filter applied to discovered provider/model ids.")
     parser.add_argument("--discover-max", type=int, help="Maximum discovered candidates to validate.")
     parser.add_argument(
@@ -1291,7 +1241,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--models-output", type=Path, help="Use this opencode models output fixture instead of live CLI."
     )
-    parser.add_argument("--opencode-db", type=Path, default=opencode_db_path(), help="opencode session database path.")
     return parser
 
 
@@ -1329,7 +1278,7 @@ def build_check_context(args: argparse.Namespace) -> CheckContext:
         failures.append("--discover-max must be a positive integer")
     mode = report_mode(
         smoke_requested=args.smoke,
-        discover_requested=bool(args.discover_profile or args.discover_provider),
+        discover_requested=bool(args.discover_profile),
     )
     config_validation = get_config_validation_mode(config)
     command = report_command()
@@ -1351,7 +1300,6 @@ def run_for_preflight_mode(args: argparse.Namespace, ctx: CheckContext) -> tuple
     config = ctx.config
     contract = ctx.contract
     failures = ctx.failures
-    harnesses = ctx.harnesses
     mode = ctx.mode
     config_validation = ctx.config_validation
     command = ctx.command
@@ -1389,8 +1337,6 @@ def run_for_preflight_mode(args: argparse.Namespace, ctx: CheckContext) -> tuple
             "rejected_routes": reused["rejected_routes"],
             "skipped_routes": reused["skipped_routes"],
             "unvisited_routes": reused["unvisited_routes"],
-            "opencode_binary": resolve_binary("opencode") if isinstance(harnesses, dict) else None,
-            "opencode_db": args.opencode_db.as_posix(),
             "harnesses": reused["harnesses"],
             "failures": failures,
             "remediation": preflight_remediation,
@@ -1415,8 +1361,6 @@ def run_for_preflight_mode(args: argparse.Namespace, ctx: CheckContext) -> tuple
             "rejected_routes": [],
             "skipped_routes": [],
             "unvisited_routes": [],
-            "opencode_binary": resolve_binary("opencode") if isinstance(harnesses, dict) else None,
-            "opencode_db": args.opencode_db.as_posix(),
             "harnesses": [],
             "failures": failures,
             "remediation": preflight_remediation,
@@ -1432,7 +1376,6 @@ def run_discover_mode(
 ) -> int:
     config = ctx.config
     failures = ctx.failures
-    harnesses = ctx.harnesses
     models_fixture = ctx.models_fixture
     smoke_cache = ctx.smoke_cache
     mode = ctx.mode
@@ -1452,7 +1395,6 @@ def run_discover_mode(
             max_candidates=args.discover_max,
             smoke=args.smoke,
             models_fixture=models_fixture,
-            opencode_db=args.opencode_db,
             include_raw_errors=args.include_raw_errors,
             smoke_cache=smoke_cache,
             discover_all_candidates=args.discover_all_candidates,
@@ -1461,22 +1403,6 @@ def run_discover_mode(
         harness_reports.extend(profile_reports)
         discovery_failures.extend(profile_failures)
         unvisited_routes.extend(profile_unvisited)
-    if args.discover_provider:
-        dynamic_candidates, dynamic_reports, dynamic_failures = discover_available_routes(
-            config,
-            harness_name=args.discover_harness,
-            providers=args.discover_provider,
-            model_filter=args.discover_model_filter,
-            max_candidates=args.discover_max,
-            smoke=args.smoke,
-            models_fixture=models_fixture,
-            opencode_db=args.opencode_db,
-            include_raw_errors=args.include_raw_errors,
-            smoke_cache=smoke_cache,
-        )
-        candidates.extend(dynamic_candidates)
-        harness_reports.extend(dynamic_reports)
-        discovery_failures.extend(dynamic_failures)
     accepted_routes, rejected_routes = classify_routes(harness_reports, smoke_requested=args.smoke)
     failures.extend(discovery_failures)
     if not accepted_routes:
@@ -1491,8 +1417,6 @@ def run_discover_mode(
         "config_path": args.config.resolve().as_posix(),
         "profile": config.get("profile"),
         "discover_profile": args.discover_profile,
-        "discover_harness": args.discover_harness,
-        "discover_providers": args.discover_provider,
         "discover_model_filter": args.discover_model_filter,
         "candidate_routes": candidates,
         "checked_roles": [str(report["role"]) for report in harness_reports if isinstance(report.get("role"), str)],
@@ -1500,10 +1424,6 @@ def run_discover_mode(
         "rejected_routes": rejected_routes,
         "skipped_routes": classify_skipped_routes(harness_reports),
         "unvisited_routes": unvisited_routes,
-        "opencode_binary": resolve_binary(str(harnesses.get(args.discover_harness, {}).get("command", "opencode")))
-        if isinstance(harnesses, dict)
-        else None,
-        "opencode_db": args.opencode_db.as_posix(),
         "harnesses": harness_reports,
         "failures": failures,
     }
@@ -1587,7 +1507,6 @@ def collect_role_reports(args: argparse.Namespace, ctx: CheckContext) -> list[di
                     model,
                     smoke,
                     harness=harness,
-                    opencode_db=args.opencode_db,
                     include_raw_errors=args.include_raw_errors,
                     smoke_cache=smoke_cache,
                 )
@@ -1603,7 +1522,6 @@ def run_standard_mode(
 ) -> int:
     config = ctx.config
     failures = ctx.failures
-    harnesses = ctx.harnesses
     mode = ctx.mode
     config_validation = ctx.config_validation
     command = ctx.command
@@ -1622,8 +1540,6 @@ def run_standard_mode(
         "checked_roles": roles,
         "accepted_routes": accepted_routes,
         "rejected_routes": rejected_routes,
-        "opencode_binary": resolve_binary("opencode") if isinstance(harnesses, dict) else None,
-        "opencode_db": args.opencode_db.as_posix(),
         "harnesses": harness_reports,
         "failures": failures,
     }
@@ -1647,7 +1563,7 @@ def main() -> int:
         if exit_code is not None:
             return exit_code
 
-    if (args.discover_provider or args.discover_profile) and not failures:
+    if args.discover_profile and not failures:
         return run_discover_mode(args, ctx, preflight_remediation=preflight_remediation)
 
     return run_standard_mode(args, ctx, preflight_remediation=preflight_remediation)

@@ -349,7 +349,7 @@ def amender_telemetry_attempts(
         harness = harnesses.get(harness_name) if isinstance(harness_name, str) else None
         kind = harness.get("kind") if isinstance(harness, dict) else harness_name
         label = amender_event_label(alias)
-        event_suffix = "jsonl" if kind in {"codex", "opencode"} else "log"
+        event_suffix = "jsonl" if kind == "codex" else "log"
         command_binary = harness.get("command") if isinstance(harness, dict) else harness_name
         model = spec.get("model") or spec.get("alias") or alias
         command = f"{command_binary} {model}".strip()

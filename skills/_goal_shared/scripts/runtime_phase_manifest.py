@@ -50,7 +50,7 @@ PHASES: dict[str, dict[str, Any]] = {
             },
             {
                 "id": "create",
-                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --effort-profile balanced --validation-mode smoke --role-model lite_agent:opencode:provider/model --role-model demanding_agent:opencode:provider/model --harness-spec /abs/custom-harness.json --from-discovery /abs/goal-config-discovery.json --mapping auto --output /abs/goal.config.json --state-output /abs/goal-config-state.json",
+                "run": "python3 $GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py --preset opencode-deepseek-v4 --effort-profile balanced --validation-mode smoke --role-model lite_agent:opencode-bridge:deepseek/deepseek-v4-flash --role-model demanding_agent:opencode-bridge:deepseek/deepseek-v4-pro --harness-spec /abs/custom-harness.json --from-discovery /abs/goal-config-discovery.json --mapping auto --output /abs/goal.config.json --state-output /abs/goal-config-state.json",
                 "artifacts": ["goal.config.json"],
                 "agent_does": "translate captured preferences into explicit flags; omit --role-model or --harness-spec entries that the user did not request; keep user-supplied harness, provider, and model strings explicit; verify requested caps/timeouts/ladders are rendered and every role has harness_smokes",
             },

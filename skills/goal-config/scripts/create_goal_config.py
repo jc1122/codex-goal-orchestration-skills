@@ -419,12 +419,11 @@ def role_smoke_timeout(role: str, config: dict[str, Any]) -> int:
 
 
 def role_smoke_readback(role: str, config: dict[str, Any]) -> str:
-    model = config.get("models", {}).get(role, {})
-    harness_name = model.get("harness") if isinstance(model, dict) else None
-    harness = config.get("harnesses", {}).get(harness_name, {}) if isinstance(config.get("harnesses"), dict) else {}
-    kind = harness.get("kind") if isinstance(harness, dict) else None
-    if kind == "opencode":
-        return "opencode_session_db"
+    # Every supported harness smoke reads the harness stdout for the expected
+    # token. (The pre-bridge direct-"opencode" kind used an opencode-session-db
+    # readback; that kind was removed in the opencode-worker-bridge migration,
+    # so the readback is always "stdout".)
+    del role, config
     return "stdout"
 
 
