@@ -1257,7 +1257,11 @@ def validate_proposal(
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
         "protected_branch_ids": sorted(protected),
         "changed_branch_ids": changed_branch_ids,
-        "candidate_branch_ids": [branch["id"] for branch in candidate.get("branches", [])]
+        "candidate_branch_ids": [
+            branch["id"]
+            for branch in candidate.get("branches", [])
+            if isinstance(branch, dict) and isinstance(branch.get("id"), str)
+        ]
         if isinstance(candidate, dict) and isinstance(candidate.get("branches"), list)
         else [],
         "candidate_manifest_sha256": canonical_sha256(candidate) if candidate is not None and not defects else None,

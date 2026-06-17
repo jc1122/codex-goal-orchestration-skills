@@ -360,7 +360,9 @@ def ensure_skip_decision(
         "manifest_sha256": sha256_file(manifest_path),
         "scheduler_path": CONTRACT.MAIN_SCHEDULER_PATH,
         "scheduler_event_seq": scheduler_event_seq,
-        "active_branch_ids": branch_parallelism.get("active_ids", []),
+        "active_branch_ids": [
+            item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()
+        ],
         "terminal_branch_ids": sorted(terminal_statuses),
         "terminal_branch_statuses": {
             branch_id: terminal_statuses[branch_id] for branch_id in sorted(terminal_statuses)

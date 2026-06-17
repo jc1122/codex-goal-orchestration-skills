@@ -489,9 +489,11 @@ def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
     return records
 
 
-def changed_files_from_git(worktree: Path, base_ref: str) -> list[str]:
+def changed_files_from_git(worktree: Path, base_ref: str, blockers: list[str] | None = None) -> list[str]:
     result = run_git(["diff", "--name-only", f"{base_ref}...HEAD"], cwd=worktree)
     if result.returncode != 0:
+        if blockers is not None:
+            blockers.append(f"git diff --name-only {base_ref}...HEAD failed: {result.stdout.strip()}")
         return []
     return [
         line.strip()
@@ -782,14 +784,16 @@ def assemble(args: argparse.Namespace) -> tuple[Path, dict, list[str]]:
     diff_results = [(label, run_git(argv, cwd=worktree)) for label, argv in diff_commands]
     untracked_check_command = "git ls-files --others --exclude-standard + internal untracked trailing-whitespace scan"
     untracked_defects = untracked_whitespace_defects(worktree)
-    changed_files = list(args.changed_file) if args.changed_file else changed_files_from_git(worktree, base_ref)
-    dod_items = [item for item in args.dod_item if item.strip()]
-    if not dod_items:
-        dod_items = collect_manifest_dod(branch)
     blockers = list(args.blocker)
     blockers.extend(worker_blockers)
     blockers.extend(scheduler_defects)
     blockers.extend(review_blockers)
+    changed_files = (
+        list(args.changed_file) if args.changed_file else changed_files_from_git(worktree, base_ref, blockers)
+    )
+    dod_items = [item for item in args.dod_item if item.strip()]
+    if not dod_items:
+        dod_items = collect_manifest_dod(branch)
     for command, diff_result in diff_results:
         if diff_result.returncode != 0:
             blockers.append(f"{command} failed: {diff_result.stdout.strip()}")

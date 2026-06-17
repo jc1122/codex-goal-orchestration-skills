@@ -260,7 +260,9 @@ def resolve_promoted_changes(manifest: dict, branch: dict, item: dict, worktree:
         )
 
     item_owned = [owned for owned in item.get("owned_paths", []) if isinstance(owned, str) and owned.strip()]
-    promoted_changed = [path for path in changed_files if not item_owned or path_is_owned(path, item_owned)]
+    if not item_owned:
+        raise SystemExit("repair promotion target work item declares no owned paths; cannot scope promoted changes")
+    promoted_changed = [path for path in changed_files if path_is_owned(path, item_owned)]
     if not promoted_changed:
         raise SystemExit("repair promotion found no current changed files inside the target work item owned paths")
     return promoted_changed

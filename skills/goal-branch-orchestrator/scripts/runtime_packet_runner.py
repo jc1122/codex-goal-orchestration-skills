@@ -1381,7 +1381,9 @@ def worker_ownership_violations(config: dict[str, Any], changed_files: list[str]
         else []
     )
     if not owned_files:
-        return []
+        # A worker with no declared owned paths must not be able to touch arbitrary files:
+        # fail closed by treating every change as a violation. Other roles keep prior behavior.
+        return list(changed_files) if config.get("role") == "worker" else []
     violations: list[str] = []
     for changed in changed_files:
         if not path_is_owned(changed, owned_files):

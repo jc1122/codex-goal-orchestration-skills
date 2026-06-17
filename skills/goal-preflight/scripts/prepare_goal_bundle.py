@@ -708,7 +708,8 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         )
         return candidate
 
-    if remediated_config.exists() and original.get("remediation", {}).get("actions"):
+    original_remediation = original.get("remediation")
+    if remediated_config.exists() and isinstance(original_remediation, dict) and original_remediation.get("actions"):
         remediated_report = check_dir / f"{stem}.remediated.preflight-check.json"
         remediated_command = [
             sys.executable,

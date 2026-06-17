@@ -1,0 +1,93 @@
+{
+  "schema_version": 2,
+  "repo_root": "/home/jakub/projects/codex-goal-orchestration-skills",
+  "started_utc": "2026-06-17T09:34:00Z",
+  "finished_utc": "2026-06-17T10:35:00Z",
+  "orchestrator_skill_version": "repo-audit-refactor-optimize v0.12.1",
+  "run_id": "goal-skillset-review-20260617",
+  "branch": "opencode-worker-migration",
+  "scope": "goal skillset: skills/{_goal_shared,goal-preflight,goal-config,goal-main-orchestrator,goal-branch-orchestrator,goal-plan-amender}",
+  "definition_of_done": "no more actionable issues found by reviewer (review-driven loop, not just deterministic-wave convergence)",
+  "lanes": {
+    "code-health": {"status": "ok", "raw_findings": 1335, "actionable_after_accept": 0},
+    "security": {"status": "ok", "raw_findings": 137, "actionable_after_accept": 0},
+    "hygiene": {"status": "ok", "raw_findings": 0, "actionable_after_accept": 0},
+    "docs": {"status": "ok", "raw_findings": 0, "actionable_after_accept": 0},
+    "dependency": {"status": "ok", "raw_findings": 4, "actionable_after_accept": 0},
+    "hotspot": {"status": "ok", "raw_findings": 434, "actionable_after_accept": 0},
+    "review-correctness": {"status": "ok", "rounds": 3, "review_agents": 11, "actionable_remaining": 0}
+  },
+  "findings_totals": {
+    "deterministic_raw": 1910,
+    "deterministic_actionable": 0,
+    "deterministic_accepted_residuals": 1910,
+    "reviewer_findings_total": 13,
+    "reviewer_findings_fixed": 13,
+    "gate_integrity_fixes": 1
+  },
+  "backlog": {
+    "accepted": 1910,
+    "deferred": 0,
+    "coverage_gated": 0,
+    "wont_fix": 0
+  },
+  "batches": [
+    {
+      "id": "gate-0",
+      "title": "Gate integrity: stale committed agent-context-index.json regenerated",
+      "files": ["maintenance/agent-context-index.json"],
+      "detail": "Branch tip failed `npm run check` (check:context) on a clean tree; the convergence run-report commit 3b0ad98 modified a fingerprinted file without regenerating the index, while its own report claimed 'npm run check pass'. Regenerated; gate now green.",
+      "behavior_impact": false
+    },
+    {
+      "id": "round1",
+      "title": "Round 1 — 6 parallel correctness reviewers (one per subsystem) -> 10 fixes",
+      "fixes": [
+        {"sev": "P1", "file": "skills/_goal_shared/scripts/extract_telemetry.py", "issue": "blocked lite_advisor mislabeled accepted (substring guard missed real bridge-fail/capacity blocker messages)", "behavior_impact": true},
+        {"sev": "P2", "file": "skills/goal-preflight/scripts/prepare_goal_bundle.py", "issue": "unguarded .get() on non-dict remediation -> crash", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-config/scripts/check_goal_config.py", "issue": "non-dict telemetry -> uncaught AttributeError (debug validation)", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-config/scripts/check_goal_config.py", "issue": "non-dict effort -> uncaught AttributeError (discover-profile)", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-config/scripts/create_goal_config.py", "issue": "doubled provider prefix openai/anthropic/claude for non-implied harness + qualified model", "behavior_impact": true},
+        {"sev": "P2", "file": "skills/goal-main-orchestrator/scripts/run_prompt_audit_phase.py", "issue": "default-mode prompt audit exits 0 on blocked (sibling reuse path already hardened)", "behavior_impact": true},
+        {"sev": "P2", "file": "skills/goal-main-orchestrator/scripts/assemble_main_status.py", "issue": "active_branch_ids unfiltered vs validator's non-empty-string requirement -> self-reject", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "issue": "latent ValueError in validate_worker_ladder (allowed.index on empty allowed)", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py", "issue": "empty owned_paths treated as 'owns everything' (fail-open)", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-plan-amender/scripts/amendment_lib.py", "issue": "unguarded branch['id'] subscript -> crash on malformed manifest", "behavior_impact": false}
+      ]
+    },
+    {
+      "id": "round2",
+      "title": "Round 2 — diff-verifier + 2 fresh re-reviewers -> 3 fixes",
+      "fixes": [
+        {"sev": "P2", "file": "skills/goal-config/scripts/create_goal_config.py", "issue": "Fix #4 incomplete: same unguarded config.get('effort', {}) at build_model_policies:738,750 -> guarded effort_cfg local", "behavior_impact": false},
+        {"sev": "P2", "file": "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py", "issue": "changed_files_from_git silently returned [] on git failure -> now records a blocker (fail-closed, matches siblings)", "behavior_impact": true},
+        {"sev": "P2", "file": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "issue": "worker_ownership_violations bypassed when owned_files empty -> fail-closed for role==worker (other roles unchanged)", "behavior_impact": true}
+      ]
+    },
+    {
+      "id": "round3",
+      "title": "Round 3 — diff-verifier + dedicated fail-open-class re-scan -> CLEAN (DoD reached)",
+      "fixes": [],
+      "detail": "ROUND3-VERIFY: CLEAN and ROUND3-CORE: CLEAN. The one parenthetical reviewer note (extract_changed_files:1394 silent git-status swallow) was traced and determined benign: best-effort failure-evidence/fingerprint helper, git-nonzero already yields [] at worktree_status_lines (check=False), and the authoritative pre-review gate independently re-derives from git and fails closed."
+    }
+  ],
+  "verification": {
+    "py_compile_all_skills": "pass",
+    "npm_run_check": "pass",
+    "ruff_format_changed_files": "pass",
+    "git_diff_whitespace_check": "clean",
+    "forced_full_wave_actionable": 0,
+    "behavior_smokes": {
+      "extract_telemetry_blocked_lite_not_accepted": "pass",
+      "normalize_role_model_no_doubled_prefix": "pass",
+      "worker_ownership_empty_owned_fail_closed": "pass",
+      "worker_fixtures_unbroken_by_ownership_fix": "pass (npm run check:fixtures green)"
+    },
+    "behavior_identity_notes": "codex and opencode-bridge are implied-provider harnesses, so the create_goal_config provider fix only affects non-implied harnesses; shipped deepseek/codex profiles unchanged."
+  },
+  "warnings": [
+    "Pre-existing, OUT-OF-SCOPE (repo CI harness, not the goal skillset): 9 ruff F-errors in scripts/check_goal_config_fixtures.py (8x F841) and scripts/check_golden_smoke.py (1x F401). Confirmed identical on clean HEAD; none in changed files; CI ruff step is advisory (continue-on-error). Not fixed — outside the reviewed skills/ surface.",
+    "1910 deterministic findings remain documented residuals in .repo-audit/accept.json (hotspot repo-wide churn; idiom-floor complexity; string-literal E501; standalone-script duplication; docs base-path FPs; dependency sibling-import/dev-tool FPs; by-design subprocess + B105/B108 security FPs; 4 vulture dead-code FPs). Spot-checked as legitimate residuals, not concealed fixable bugs.",
+    "No commit made: changes left in the working tree on branch opencode-worker-migration pending user decision."
+  ]
+}

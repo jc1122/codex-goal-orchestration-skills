@@ -449,7 +449,9 @@ def validate_for_preflight(config: dict[str, Any], mode: str, contract: Any) -> 
     if validation_mode in {"smoke", "debug"} and mode not in {"smoke", "discover"}:
         failures.append(f"validation mode {validation_mode!r} requires smoke/discover check mode; got mode {mode!r}")
 
-    if validation_mode == "debug" and (config.get("telemetry", {}).get("mode") or "standard") != "debug":
+    telemetry_cfg = config.get("telemetry")
+    telemetry_mode = telemetry_cfg.get("mode") if isinstance(telemetry_cfg, dict) else None
+    if validation_mode == "debug" and (telemetry_mode or "standard") != "debug":
         failures.append("validation mode debug requires telemetry.mode=debug")
 
     failures.extend(normalize_telemetry_collect(config, contract))
@@ -882,7 +884,8 @@ def discover_profile_routes(
         max_candidates=max_candidates,
     )
     harnesses = config.get("harnesses") if isinstance(config.get("harnesses"), dict) else {}
-    timeout_seconds = int(config.get("effort", {}).get("lite_timeout_seconds") or 600)
+    effort_cfg = config.get("effort") if isinstance(config.get("effort"), dict) else {}
+    timeout_seconds = int(effort_cfg.get("lite_timeout_seconds") or 600)
     model_list_cache: dict[str, dict[str, Any]] = {}
     failures: list[str] = []
     reports: list[dict[str, Any]] = []

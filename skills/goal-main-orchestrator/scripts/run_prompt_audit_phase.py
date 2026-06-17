@@ -389,7 +389,9 @@ def main() -> int:
         print(f"status={status}")
         print(f"phase_report={phase_report_path}")
         print(f"next_action={result['next_action']}")
-    return 0 if status == "pass" or (status == "blocked" and not args.require_pass) else 1
+    # A blocked or failed audit must never exit 0 (mirrors the reuse path above): a caller
+    # gating only on the exit code would otherwise proceed past a blocked audit.
+    return 0 if status == "pass" else 1
 
 
 if __name__ == "__main__":

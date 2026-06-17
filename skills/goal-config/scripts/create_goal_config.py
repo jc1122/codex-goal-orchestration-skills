@@ -178,8 +178,11 @@ def normalize_role_model_for_harness(
         return provider, model_suffix
 
     if default_provider:
-        if provider_model.startswith(f"{default_provider}/"):
-            return provider, provider_model
+        if "/" in provider_model:
+            # Already provider-qualified: the listed provider is authoritative; do not
+            # re-prefix with --provider (which would double the prefix, e.g. "openai/anthropic/x").
+            listed_provider = provider_model.split("/", 1)[0]
+            return listed_provider, provider_model
         return provider, f"{default_provider}/{provider_model}"
 
     if "/" in provider_model:
@@ -705,6 +708,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
         "complex-code": worker,
         "custom": worker,
     }
+    effort_cfg = config.get("effort") if isinstance(config.get("effort"), dict) else {}
     return {
         "worker_model_policy": {
             "source": "goal_config",
@@ -732,7 +736,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             "ordering_rule": "Selected amender routes must be a non-empty ordered subsequence of allowed_routes.",
             "sandbox": "read-only",
             "timeout_seconds": int(
-                config.get("effort", {}).get("amender_timeout_seconds") or contract.AMENDER_ATTEMPT_TIMEOUT_SECONDS
+                effort_cfg.get("amender_timeout_seconds") or contract.AMENDER_ATTEMPT_TIMEOUT_SECONDS
             ),
         },
         "lite_model_policy": {
@@ -743,9 +747,7 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             "launcher": "create_lite_advice_packet.py",
             "selection_reason_required": False,
             "ordering_rule": "Lite advisors use configured goal_config routes only.",
-            "timeout_seconds": int(
-                config.get("effort", {}).get("lite_timeout_seconds") or contract.LITE_ATTEMPT_TIMEOUT_SECONDS
-            ),
+            "timeout_seconds": int(effort_cfg.get("lite_timeout_seconds") or contract.LITE_ATTEMPT_TIMEOUT_SECONDS),
         },
     }
 

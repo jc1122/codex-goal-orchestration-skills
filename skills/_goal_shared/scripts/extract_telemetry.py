@@ -204,10 +204,11 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
         if not isinstance(operations, list) or not operations:
             return None
     if role == "lite_advisor" and output.get("status") == "blocked":
-        blockers = output.get("blockers", [])
-        blocker_text = " ".join(item for item in blockers if isinstance(item, str))
-        if "command failed" in blocker_text or "did not produce valid advice JSON" in blocker_text:
-            return None
+        # A blocked Lite advisor never produced usable advice (bridge delegate failure,
+        # pool-capacity refill, or invalid advice JSON), so its attempt must not be marked
+        # accepted. Keying off the blocked status is robust; the prior substring guard missed
+        # the real blocker messages ("...bridge delegate failed...", "...capacity limit reached...").
+        return None
     return str(called[-1]["alias"])
 
 

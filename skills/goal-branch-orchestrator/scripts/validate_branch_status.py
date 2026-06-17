@@ -363,7 +363,8 @@ def validate_worker_ladder(
         seen.add(item)
         aliases.append(item)
         if order:
-            positions.append(order.index(item) if item in order else len(order) + allowed.index(item))
+            fallback = len(order) + (allowed.index(item) if item in allowed else len(allowed))
+            positions.append(order.index(item) if item in order else fallback)
     if positions != sorted(positions):
         defect(defects, path, "must preserve standard ladder order")
     return aliases
