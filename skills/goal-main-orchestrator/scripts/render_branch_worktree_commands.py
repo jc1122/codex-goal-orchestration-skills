@@ -10,6 +10,7 @@ import os
 import re
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 
 def _load_path_rules():
@@ -229,8 +230,7 @@ def validate_branch_dependencies(branches: list[dict]) -> dict[str, list[str]]:
     return dependencies
 
 
-def validate_branch_worker_contract(branch: dict) -> None:
-    bid = branch.get("id")
+def _require_work_items(branch: dict, bid: object) -> list:
     if "work_items" not in branch:
         raise SystemExit(f"branch {bid} missing work_items")
     work_items = branch.get("work_items")
@@ -238,8 +238,12 @@ def validate_branch_worker_contract(branch: dict) -> None:
         raise SystemExit(f"branch {bid} work_items must contain 1 to 4 worker packets")
     if any(not isinstance(item, dict) for item in work_items):
         raise SystemExit(f"branch {bid} work_items entries must be objects")
-    seen_work_item_ids = set()
-    work_item_order = {}
+    return work_items
+
+
+def _validate_work_item_fields(work_items: list, bid: object) -> tuple[set, dict]:
+    seen_work_item_ids: set = set()
+    work_item_order: dict = {}
     for index, item in enumerate(work_items):
         item_id = item.get("id")
         if not isinstance(item_id, str) or not SAFE_LABEL_RE.fullmatch(item_id):
@@ -272,6 +276,12 @@ def validate_branch_worker_contract(branch: dict) -> None:
             if key in {"owned_paths", "context_files"}:
                 for value in values:
                     require_relative_path(value, f"branch {bid} work_items[{index}].{key}")
+    return seen_work_item_ids, work_item_order
+
+
+def _validate_work_item_dependencies(
+    work_items: list, bid: object, seen_work_item_ids: set, work_item_order: dict
+) -> None:
     for index, item in enumerate(work_items):
         for dep in item.get("depends_on", []):
             if dep not in seen_work_item_ids:
@@ -280,6 +290,9 @@ def validate_branch_worker_contract(branch: dict) -> None:
                 raise SystemExit(
                     f"branch {bid} work_items[{index}] depends_on must reference only prior work item ids: {dep}"
                 )
+
+
+def _validate_worker_parallelism(branch: dict, bid: object) -> None:
     max_workers = branch.get("max_active_worker_packets")
     if not is_strict_int(max_workers) or max_workers < 1 or max_workers > MAX_WORKER_PACKETS_PER_BRANCH:
         raise SystemExit(f"branch {bid} max_active_worker_packets must be an integer from 1 to 4")
@@ -318,6 +331,14 @@ def validate_branch_worker_contract(branch: dict) -> None:
     slot_refill = worker_parallelism.get("slot_refill", "")
     if not isinstance(slot_refill, str) or "launch" not in slot_refill.lower():
         raise SystemExit(f"branch {bid} worker_parallelism.slot_refill must describe launching replacements")
+
+
+def validate_branch_worker_contract(branch: dict) -> None:
+    bid = branch.get("id")
+    work_items = _require_work_items(branch, bid)
+    seen_work_item_ids, work_item_order = _validate_work_item_fields(work_items, bid)
+    _validate_work_item_dependencies(work_items, bid, seen_work_item_ids, work_item_order)
+    _validate_worker_parallelism(branch, bid)
 
 
 def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> None:
@@ -737,7 +758,7 @@ def render_delegation_plan(
     }
 
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--repo-root", required=True)
@@ -791,8 +812,18 @@ def main() -> int:
     parser.add_argument(
         "--json", action="store_true", help="Print the branch delegation plan as JSON instead of shell/comments."
     )
-    args = parser.parse_args()
+    return parser
 
+
+class LoadedInputs(NamedTuple):
+    manifest_path: Path
+    repo_root: Path
+    audit_path: Path
+    manifest: dict
+    audit: dict
+
+
+def load_inputs(args: argparse.Namespace) -> LoadedInputs:
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
     audit_path = resolve_absolute_path(args.audit, "--audit", must_exist=True)
@@ -805,7 +836,10 @@ def main() -> int:
         raise SystemExit("prompt audit manifest identity does not match --manifest")
     if audit.get("repo_root") != repo_root.as_posix():
         raise SystemExit("prompt audit repo_root identity does not match --repo-root")
+    return LoadedInputs(manifest_path, repo_root, audit_path, manifest, audit)
 
+
+def validate_audit_pass(audit: dict, audit_path: Path, manifest: dict) -> None:
     if audit.get("status") != "pass" or audit.get("can_start") is not True:
         raise SystemExit("prompt audit did not pass; refusing to render branch creation commands")
     validate_audit_telemetry(audit_path)
@@ -842,6 +876,8 @@ def main() -> int:
         if not isinstance(manifest.get(key), str) or not manifest.get(key, "").strip():
             raise SystemExit(f"manifest {key} must be present and non-empty")
 
+
+def validate_manifest_parallelization(manifest: dict) -> tuple[int, list]:
     max_active = manifest.get("max_active_branch_agents", MAX_ACTIVE_BRANCH_AGENTS)
     if not is_strict_int(max_active) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:
         raise SystemExit("max_active_branch_agents must be an integer from 1 to 4")
@@ -881,7 +917,10 @@ def main() -> int:
     )
     if max_active < MAX_ACTIVE_BRANCH_AGENTS and not has_parallelization_reason:
         raise SystemExit("max_active_branch_agents below 4 requires serial_reasons or parallelization_rationale")
+    return max_active, serial_reasons
 
+
+def validate_manifest_waves(manifest: dict, serial_reasons: list) -> tuple[list, list]:
     waves = manifest.get("waves") or []
     if len(waves) > MAX_WAVES:
         raise SystemExit("manifest must not contain more than 5 waves")
@@ -908,6 +947,10 @@ def main() -> int:
         raise SystemExit("branch ids must not appear in more than one wave")
     if waves and set(wave_branch_ids) != set(manifest_branch_ids):
         raise SystemExit("waves must cover exactly the manifest branch ids")
+    return waves, manifest_branches
+
+
+def validate_manifest_branches(manifest: dict, manifest_path: Path, manifest_branches: list) -> dict:
     branch_dependencies = validate_branch_dependencies(
         [branch for branch in manifest_branches if isinstance(branch, dict)]
     )
@@ -933,12 +976,21 @@ def main() -> int:
             raise SystemExit(f"branch prompt does not exist: {prompt_path}")
         validate_branch_worker_contract(branch)
     validate_research_worker_policy(manifest, [branch for branch in manifest_branches if isinstance(branch, dict)])
+    return branch_dependencies
 
-    if args.list_waves:
-        for wave in waves:
-            print(f"{wave.get('id')}: {', '.join(wave.get('branches', []))}")
-        return 0
 
+class SchedulerSets(NamedTuple):
+    ordered_branch_ids: list
+    known_ids: set
+    completed: set
+    active: set
+    scheduler_non_pass: set
+    scheduler_relaunchable: set
+
+
+def resolve_branch_sets(
+    args: argparse.Namespace, manifest_path: Path, manifest_branches: list, max_active: int
+) -> SchedulerSets:
     ordered_branch_ids = [
         branch["id"] for branch in manifest_branches if isinstance(branch, dict) and isinstance(branch.get("id"), str)
     ]
@@ -989,44 +1041,63 @@ def main() -> int:
         raise SystemExit("--completed-branch and --active-branch must not overlap")
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be a positive integer")
-    if args.list_ready:
-        if args.wave or args.branch:
-            raise SystemExit("--list-ready cannot be combined with --wave or --branch")
-        available_capacity = max_active - len(active)
-        if available_capacity <= 0:
-            return 0
-        requested_limit = args.limit if args.limit is not None else available_capacity
-        limit = min(requested_limit, available_capacity)
-        ready = []
-        for branch in manifest_branches:
-            bid = branch.get("id")
-            if bid in completed or bid in active or (bid in scheduler_non_pass and bid not in scheduler_relaunchable):
-                continue
-            deps = branch_dependencies.get(bid, [])
-            if all(dep in completed for dep in deps):
-                ready.append(bid)
-        for bid in ready[:limit]:
-            print(bid)
-        return 0
+    return SchedulerSets(
+        ordered_branch_ids, known_ids, completed, active, scheduler_non_pass, scheduler_relaunchable
+    )
 
+
+def compute_ready_branches(
+    manifest_branches: list,
+    branch_dependencies: dict,
+    sets: SchedulerSets,
+    max_active: int,
+    limit_arg: int | None,
+) -> list:
+    available_capacity = max_active - len(sets.active)
+    if available_capacity <= 0:
+        return []
+    requested_limit = limit_arg if limit_arg is not None else available_capacity
+    limit = min(requested_limit, available_capacity)
+    ready = []
+    for branch in manifest_branches:
+        bid = branch.get("id")
+        if (
+            bid in sets.completed
+            or bid in sets.active
+            or (bid in sets.scheduler_non_pass and bid not in sets.scheduler_relaunchable)
+        ):
+            continue
+        deps = branch_dependencies.get(bid, [])
+        if all(dep in sets.completed for dep in deps):
+            ready.append(bid)
+    return ready[:limit]
+
+
+def _validate_selectable(bid: object, branch_dependencies: dict, sets: SchedulerSets) -> None:
+    deps = branch_dependencies.get(bid, [])
+    unresolved = [dep for dep in deps if dep not in sets.completed]
+    if unresolved:
+        raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
+    if bid in sets.completed:
+        raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
+    if bid in sets.active:
+        raise SystemExit(f"branch {bid} is already scheduler-active")
+    if bid in sets.scheduler_non_pass and bid not in sets.scheduler_relaunchable:
+        raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
+
+
+def resolve_selected_ids(
+    args: argparse.Namespace, waves: list, branch_dependencies: dict, sets: SchedulerSets, max_active: int
+) -> set | None:
     selected_ids = None
     if args.branch and args.wave:
         raise SystemExit("--branch cannot be combined with --wave")
     if args.branch:
         selected_ids = set()
         for bid in args.branch:
-            if bid not in known_ids:
+            if bid not in sets.known_ids:
                 raise SystemExit(f"--branch references unknown branch id: {bid}")
-            deps = branch_dependencies.get(bid, [])
-            unresolved = [dep for dep in deps if dep not in completed]
-            if unresolved:
-                raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
-            if bid in completed:
-                raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
-            if bid in active:
-                raise SystemExit(f"branch {bid} is already scheduler-active")
-            if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
-                raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
+            _validate_selectable(bid, branch_dependencies, sets)
             selected_ids.add(bid)
     elif waves and not args.wave:
         raise SystemExit("manifest has waves; pass --branch <branch-id>, --list-ready, or --wave <wave-id>")
@@ -1036,19 +1107,15 @@ def main() -> int:
             raise SystemExit(f"unknown wave: {args.wave}")
         selected_ids = set(matches[0].get("branches", []))
         for bid in sorted(selected_ids):
-            deps = branch_dependencies.get(bid, [])
-            unresolved = [dep for dep in deps if dep not in completed]
-            if unresolved:
-                raise SystemExit(f"branch {bid} is not ready; unresolved depends_on: {', '.join(unresolved)}")
-            if bid in completed:
-                raise SystemExit(f"branch {bid} already has passing scheduler/status evidence")
-            if bid in active:
-                raise SystemExit(f"branch {bid} is already scheduler-active")
-            if bid in scheduler_non_pass and bid not in scheduler_relaunchable:
-                raise SystemExit(f"branch {bid} has non-pass terminal scheduler evidence; do not render a new worktree")
-    if selected_ids is not None and len(active) + len(selected_ids) > max_active:
+            _validate_selectable(bid, branch_dependencies, sets)
+    if selected_ids is not None and len(sets.active) + len(selected_ids) > max_active:
         raise SystemExit("selected branches plus active branches would exceed max_active_branch_agents")
+    return selected_ids
 
+
+def collect_selected_branches(
+    manifest: dict, manifest_branches: list, repo_root: Path, selected_ids: set | None
+) -> tuple[str, list]:
     base_ref = manifest.get("base_ref", "main")
     if not safe_branch_name(base_ref):
         raise SystemExit(f"base_ref is not safe: {base_ref!r}")
@@ -1081,6 +1148,16 @@ def main() -> int:
         if worktree_path.exists():
             raise SystemExit(f"target worktree path already exists: {worktree_path}")
         selected_branches.append(branch)
+    return base_ref, selected_branches
+
+
+def emit_plan(
+    args: argparse.Namespace,
+    manifest_path: Path,
+    repo_root: Path,
+    base_ref: str,
+    selected_branches: list,
+) -> None:
     native_available, native_source = native_delegation_available(args.native_agent_available)
     selected_mode, fallback_reason = select_delegation_mode(
         args.delegation_mode,
@@ -1128,6 +1205,34 @@ def main() -> int:
             print(fallback["scheduler_launch_command"])
             print(fallback["launch_command"])
 
+
+def main() -> int:
+    args = build_arg_parser().parse_args()
+
+    inputs = load_inputs(args)
+    validate_audit_pass(inputs.audit, inputs.audit_path, inputs.manifest)
+    max_active, serial_reasons = validate_manifest_parallelization(inputs.manifest)
+    waves, manifest_branches = validate_manifest_waves(inputs.manifest, serial_reasons)
+    branch_dependencies = validate_manifest_branches(inputs.manifest, inputs.manifest_path, manifest_branches)
+
+    if args.list_waves:
+        for wave in waves:
+            print(f"{wave.get('id')}: {', '.join(wave.get('branches', []))}")
+        return 0
+
+    sets = resolve_branch_sets(args, inputs.manifest_path, manifest_branches, max_active)
+    if args.list_ready:
+        if args.wave or args.branch:
+            raise SystemExit("--list-ready cannot be combined with --wave or --branch")
+        for bid in compute_ready_branches(manifest_branches, branch_dependencies, sets, max_active, args.limit):
+            print(bid)
+        return 0
+
+    selected_ids = resolve_selected_ids(args, waves, branch_dependencies, sets, max_active)
+    base_ref, selected_branches = collect_selected_branches(
+        inputs.manifest, manifest_branches, inputs.repo_root, selected_ids
+    )
+    emit_plan(args, inputs.manifest_path, inputs.repo_root, base_ref, selected_branches)
     return 0
 
 
