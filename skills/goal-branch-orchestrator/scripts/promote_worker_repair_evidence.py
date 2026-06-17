@@ -10,6 +10,7 @@ import json
 import shutil
 import subprocess
 from pathlib import Path
+from typing import NamedTuple
 
 
 def _load_module(name: str, path: Path):
@@ -168,7 +169,33 @@ def run_scheduler_promotion(manifest_path: Path, branch_id: str, packet_id: str)
         raise SystemExit("scheduler repair promotion failed:\n" + result.stdout)
 
 
-def promote(args: argparse.Namespace) -> dict:
+class PromoteInputs(NamedTuple):
+    manifest_path: Path
+    worktree: Path
+    evidence_path: Path
+    branch_id: str
+    packet_id: str
+    bundle_dir: Path
+
+
+class ManifestTargets(NamedTuple):
+    manifest: dict
+    branch: dict
+    item: dict
+    branch_name: str
+    item_id: str
+
+
+class PromotionArchive(NamedTuple):
+    source_status: Path
+    previous_status: dict
+    packet_dir: Path
+    telemetry_path: Path
+    archived_status: Path
+    archived_telemetry: Path
+
+
+def resolve_promote_inputs(args: argparse.Namespace) -> PromoteInputs:
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True)
     evidence_path = resolve_absolute_path(args.evidence, "--evidence", must_exist=True)
@@ -179,7 +206,10 @@ def promote(args: argparse.Namespace) -> dict:
         evidence_path.resolve().relative_to((bundle_dir / "branches").resolve())
     except ValueError as exc:
         raise SystemExit("--evidence must be inside the bundle branches directory") from exc
+    return PromoteInputs(manifest_path, worktree, evidence_path, branch_id, packet_id, bundle_dir)
 
+
+def load_manifest_targets(manifest_path: Path, branch_id: str, packet_id: str) -> ManifestTargets:
     manifest = read_json(manifest_path)
     branch = branch_entry(manifest, branch_id)
     item = work_item(branch, packet_id)
@@ -189,8 +219,10 @@ def promote(args: argparse.Namespace) -> dict:
     item_id = item.get("id")
     if not isinstance(item_id, str) or not item_id.strip():
         raise SystemExit(f"manifest work item for {packet_id} is missing id")
+    return ManifestTargets(manifest, branch, item, branch_name, item_id)
 
-    evidence = read_json(evidence_path)
+
+def validate_evidence_identity(evidence: dict, branch_id: str, packet_id: str) -> None:
     if evidence.get("schema_version") != 1:
         raise SystemExit("repair evidence schema_version must be 1")
     if evidence.get("kind") != "worker-repair-promotion":
@@ -200,13 +232,18 @@ def promote(args: argparse.Namespace) -> dict:
     if evidence.get("code_integrated") is not True:
         raise SystemExit("repair evidence must record code_integrated=true")
 
+
+def verify_worktree_integration(worktree: Path, evidence: dict) -> str:
     head = run_git(worktree, "rev-parse", "HEAD")
     if evidence.get("integrated_commit") != head:
         raise SystemExit("repair evidence integrated_commit must match current worktree HEAD")
     status_output = run_git(worktree, "status", "--short", "--untracked-files=all")
     if status_output.strip():
         raise SystemExit("repair promotion requires a clean branch worktree:\n" + status_output)
+    return head
 
+
+def resolve_promoted_changes(manifest: dict, branch: dict, item: dict, worktree: Path) -> list[str]:
     base_ref = str(manifest.get("base_ref", "main"))
     changed_files = changed_files_from_git(worktree, base_ref)
     branch_owned = [
@@ -226,13 +263,15 @@ def promote(args: argparse.Namespace) -> dict:
     promoted_changed = [path for path in changed_files if not item_owned or path_is_owned(path, item_owned)]
     if not promoted_changed:
         raise SystemExit("repair promotion found no current changed files inside the target work item owned paths")
+    return promoted_changed
 
-    commands_run, tests = evidence_commands(evidence)
+
+def archive_source_status(bundle_dir: Path, packet_id: str, head: str, replace: bool) -> PromotionArchive:
     source_status = bundle_dir / "workers" / packet_id / "status.json"
     if not source_status.exists():
         raise SystemExit(f"canonical worker status does not exist: {source_status}")
     previous_status = read_json(source_status)
-    if previous_status.get("status") == "pass" and not args.replace:
+    if previous_status.get("status") == "pass" and not replace:
         raise SystemExit("canonical worker status is already pass; pass --replace to rewrite")
 
     packet_dir = source_status.parent
@@ -240,17 +279,22 @@ def promote(args: argparse.Namespace) -> dict:
     promotion_id = f"promotion-{head[:12]}"
     archived_status = promotion_dir / f"{promotion_id}.source-status.json"
     archived_telemetry = promotion_dir / f"{promotion_id}.source-telemetry.json"
-    if archived_status.exists() and not args.replace:
+    if archived_status.exists() and not replace:
         raise SystemExit(f"repair promotion already exists: {archived_status}")
     promotion_dir.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(source_status, archived_status)
     telemetry_path = packet_dir / "telemetry.json"
     if telemetry_path.exists():
         shutil.copyfile(telemetry_path, archived_telemetry)
+    return PromotionArchive(
+        source_status, previous_status, packet_dir, telemetry_path, archived_status, archived_telemetry
+    )
 
+
+def resolve_route_selection(previous_status: dict, item: dict) -> tuple[list[str], str]:
     source_ladder = previous_status.get("selected_ladder")
     selected_ladder = (
-        [item for item in source_ladder if isinstance(item, str)] if isinstance(source_ladder, list) else []
+        [value for value in source_ladder if isinstance(value, str)] if isinstance(source_ladder, list) else []
     )
     if not selected_ladder:
         selected_ladder = ["deterministic-repair"]
@@ -259,21 +303,37 @@ def promote(args: argparse.Namespace) -> dict:
         if isinstance(previous_status.get("route_class"), str)
         else item.get("route_class", "normal-code")
     )
-    worker_status = {
-        "packet_id": packet_id,
+    return selected_ladder, route_class
+
+
+def build_worker_status(
+    inputs: PromoteInputs,
+    targets: ManifestTargets,
+    archive: PromotionArchive,
+    evidence: dict,
+    head: str,
+    promoted_changed: list[str],
+    commands_run: list[str],
+    tests: list[str],
+    selected_ladder: list[str],
+    route_class: str,
+) -> dict:
+    bundle_dir = inputs.bundle_dir
+    return {
+        "packet_id": inputs.packet_id,
         "role": "worker",
         "status": "pass",
-        "branch_id": branch_id,
-        "work_item_id": item_id,
-        "manifest_hash": sha256_file(manifest_path),
+        "branch_id": inputs.branch_id,
+        "work_item_id": targets.item_id,
+        "manifest_hash": sha256_file(inputs.manifest_path),
         "manifest_epoch": "current",
-        "worktree_path": worktree.as_posix(),
-        "route_id": f"{packet_id}:{route_class}:{','.join(selected_ladder)}",
+        "worktree_path": inputs.worktree.as_posix(),
+        "route_id": f"{inputs.packet_id}:{route_class}:{','.join(selected_ladder)}",
         "evidence_summary": evidence.get("evidence_summary")
         if isinstance(evidence.get("evidence_summary"), str) and evidence.get("evidence_summary").strip()
         else "Command-verified branch repair evidence promoted this worker after route failures.",
-        "branch": branch_name,
-        "worktree": worktree.as_posix(),
+        "branch": targets.branch_name,
+        "worktree": inputs.worktree.as_posix(),
         "route_class": route_class,
         "selected_ladder": selected_ladder,
         "selection_reason": "Deterministic repair promotion after route failures; see repair_evidence_path.",
@@ -284,18 +344,22 @@ def promote(args: argparse.Namespace) -> dict:
         "handoff": evidence.get("handoff")
         if isinstance(evidence.get("handoff"), str) and evidence.get("handoff").strip()
         else "Worker promoted by validated repair evidence.",
-        "repair_evidence_path": safe_bundle_rel_path(bundle_dir, evidence_path),
+        "repair_evidence_path": safe_bundle_rel_path(bundle_dir, inputs.evidence_path),
         "repair_promotion": {
             "kind": "worker-repair-promotion",
-            "source_status_path": safe_bundle_rel_path(bundle_dir, archived_status),
-            "source_telemetry_path": safe_bundle_rel_path(bundle_dir, archived_telemetry)
-            if archived_telemetry.exists()
+            "source_status_path": safe_bundle_rel_path(bundle_dir, archive.archived_status),
+            "source_telemetry_path": safe_bundle_rel_path(bundle_dir, archive.archived_telemetry)
+            if archive.archived_telemetry.exists()
             else None,
             "integrated_commit": head,
             "validated_by": "promote_worker_repair_evidence.py",
         },
     }
-    write_json(source_status, worker_status)
+
+
+def write_route_artifact(
+    packet_dir: Path, packet_id: str, route_class: str, selected_ladder: list[str], selection_reason: str
+) -> None:
     route_path = packet_dir / "route.json"
     route = read_json(route_path) if route_path.exists() else {}
     route.update(
@@ -305,7 +369,7 @@ def promote(args: argparse.Namespace) -> dict:
             "role": "worker",
             "route_class": route_class,
             "selected_ladder": selected_ladder,
-            "selection_reason": worker_status["selection_reason"],
+            "selection_reason": selection_reason,
             "policy_router": route.get("policy_router", "deterministic-repair-promotion"),
             "policy_version": route.get("policy_version", "goal-worker-route-policy-v1"),
             "route_policy_version": route.get("route_policy_version", "goal-route-policy-v2"),
@@ -314,6 +378,19 @@ def promote(args: argparse.Namespace) -> dict:
         }
     )
     write_json(route_path, route)
+
+
+def write_packet_artifacts(
+    inputs: PromoteInputs,
+    archive: PromotionArchive,
+    packet_id: str,
+    route_class: str,
+    selected_ladder: list[str],
+    selection_reason: str,
+) -> None:
+    bundle_dir = inputs.bundle_dir
+    packet_dir = archive.packet_dir
+    telemetry_path = archive.telemetry_path
     write_json(
         packet_dir / "launcher-state.json",
         {
@@ -329,7 +406,7 @@ def promote(args: argparse.Namespace) -> dict:
                     "dirty": False,
                     "returncode": 0,
                     "output_nonempty": True,
-                    "repair_evidence_path": safe_bundle_rel_path(bundle_dir, evidence_path),
+                    "repair_evidence_path": safe_bundle_rel_path(bundle_dir, inputs.evidence_path),
                 }
             ],
         },
@@ -342,7 +419,7 @@ def promote(args: argparse.Namespace) -> dict:
             "role": "worker",
             "route_class": route_class,
             "selected_ladder": selected_ladder,
-            "selection_reason": worker_status["selection_reason"],
+            "selection_reason": selection_reason,
             "output_path": "status.json",
             "output_exists": True,
             "output_status": "pass",
@@ -358,19 +435,55 @@ def promote(args: argparse.Namespace) -> dict:
                     "alias": "deterministic-repair",
                     "state": "pass",
                     "failure_class": "none",
-                    "repair_evidence_path": safe_bundle_rel_path(bundle_dir, evidence_path),
+                    "repair_evidence_path": safe_bundle_rel_path(bundle_dir, inputs.evidence_path),
                 }
             ],
-            "repair_evidence_path": safe_bundle_rel_path(bundle_dir, evidence_path),
+            "repair_evidence_path": safe_bundle_rel_path(bundle_dir, inputs.evidence_path),
         },
     )
-    run_scheduler_promotion(manifest_path, branch_id, packet_id)
+
+
+def promote(args: argparse.Namespace) -> dict:
+    inputs = resolve_promote_inputs(args)
+    targets = load_manifest_targets(inputs.manifest_path, inputs.branch_id, inputs.packet_id)
+
+    evidence = read_json(inputs.evidence_path)
+    validate_evidence_identity(evidence, inputs.branch_id, inputs.packet_id)
+
+    head = verify_worktree_integration(inputs.worktree, evidence)
+
+    promoted_changed = resolve_promoted_changes(targets.manifest, targets.branch, targets.item, inputs.worktree)
+
+    commands_run, tests = evidence_commands(evidence)
+    archive = archive_source_status(inputs.bundle_dir, inputs.packet_id, head, args.replace)
+
+    selected_ladder, route_class = resolve_route_selection(archive.previous_status, targets.item)
+    worker_status = build_worker_status(
+        inputs,
+        targets,
+        archive,
+        evidence,
+        head,
+        promoted_changed,
+        commands_run,
+        tests,
+        selected_ladder,
+        route_class,
+    )
+    write_json(archive.source_status, worker_status)
+    write_route_artifact(
+        archive.packet_dir, inputs.packet_id, route_class, selected_ladder, worker_status["selection_reason"]
+    )
+    write_packet_artifacts(
+        inputs, archive, inputs.packet_id, route_class, selected_ladder, worker_status["selection_reason"]
+    )
+    run_scheduler_promotion(inputs.manifest_path, inputs.branch_id, inputs.packet_id)
     return {
         "status": "pass",
-        "worker_status_path": source_status.as_posix(),
-        "repair_evidence_path": evidence_path.as_posix(),
-        "packet_id": packet_id,
-        "branch_id": branch_id,
+        "worker_status_path": archive.source_status.as_posix(),
+        "repair_evidence_path": inputs.evidence_path.as_posix(),
+        "packet_id": inputs.packet_id,
+        "branch_id": inputs.branch_id,
         "integrated_commit": head,
     }
 
