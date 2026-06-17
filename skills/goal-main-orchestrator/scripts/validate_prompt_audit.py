@@ -102,6 +102,9 @@ def validate_prompt_audit(audit_path: Path, manifest_path: Path, repo_root: Path
     checked_files = require_string_list(defects, audit.get("checked_files"), "$.checked_files")
     commands_run = require_string_list(defects, audit.get("commands_run"), "$.commands_run", min_items=1)
     missing_dod = require_string_list(defects, audit.get("missing_dod_items"), "$.missing_dod_items")
+    # Required by the audit schema and every artifact writer; the standalone validator is the
+    # contract-named `--require-pass` gate, so it must enforce the field too.
+    require_string(defects, audit.get("actionability_verdict"), "$.actionability_verdict")
     validate_defects(defects, audit.get("defects"))
     if status == "pass":
         if audit.get("can_start") is not True:

@@ -121,7 +121,8 @@ def root_worktree_state_from_manifest(
 
     parsed = parse_git_status(status_result.stdout)
     branch_paths = []
-    for branch in manifest.get("branches", []):
+    manifest_branches = manifest.get("branches")
+    for branch in manifest_branches if isinstance(manifest_branches, list) else []:
         if not isinstance(branch, dict):
             continue
         worktree_path = branch.get("worktree_path")
@@ -166,7 +167,8 @@ def checked_prompt_files(bundle_dir: Path, manifest: dict[str, Any]) -> list[Pat
     if isinstance(main_prompt, str):
         paths.append(bundle_dir / main_prompt)
     paths.append(bundle_dir / "goal-bootloader.md")
-    for branch in manifest.get("branches", []):
+    manifest_branches = manifest.get("branches")
+    for branch in manifest_branches if isinstance(manifest_branches, list) else []:
         if isinstance(branch, dict) and isinstance(branch.get("prompt"), str):
             paths.append(bundle_dir / branch["prompt"])
     return paths

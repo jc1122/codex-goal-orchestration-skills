@@ -109,6 +109,10 @@ def add_number(target: dict[str, Any], key: str, value: object) -> None:
         target[key] = target.get(key, 0) + value
 
 
+def _nonnegative_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def read_attempt_launch_events(launcher_state_path: Path) -> dict[int, dict[str, Any]]:
     data = read_json_object(launcher_state_path)
     if data is None:
@@ -296,8 +300,6 @@ def attempt_provenance_level(attempt: dict[str, Any], launch_event: dict[str, An
         has_known_usage = False
     if has_known_usage:
         return "high"
-    if launch_event is not None and isinstance(launch_event, dict):
-        return "low"
     return "low"
 
 
@@ -377,8 +379,6 @@ def classify_attempt_outcome(
         return OUTCOME_KEY_MANUAL
     if timed_out is True or failure_class == "timeout":
         return OUTCOME_KEY_TIMEOUT
-    if failure_class in {"manual", "kill", "manual_interrupt", "manual_abort"}:
-        return OUTCOME_KEY_MANUAL
     if manual_or_kill:
         return OUTCOME_KEY_MANUAL
     if failure_subclass == OUTCOME_KEY_TRANSPORT or route_transport_disconnect:
@@ -391,10 +391,7 @@ def classify_attempt_outcome(
         return OUTCOME_KEY_DIRTY
     if state in {"fail-dirty", "fail-clean", "blocked", "partial", "pass"} and "dirty" in stop_text:
         return OUTCOME_KEY_DIRTY
-    if timed_out is True or failure_class == "timeout":
-        return OUTCOME_KEY_TIMEOUT
-
-    if state == "timeout" or timed_out is True:
+    if state == "timeout":
         return OUTCOME_KEY_TIMEOUT
     if state in {"blocked", "fail-clean", "fail-dirty"}:
         return OUTCOME_KEY_UNKNOWN
@@ -616,7 +613,19 @@ def iter_debug_event_trace_events(bundle_dir: Path) -> list[dict[str, Any]]:
         if not root.is_dir():
             continue
         for path in sorted(root.glob(f"**/{DEBUG_EVENTS_FILENAME}")):
-            for line_no, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                append_trace_event(
+                    events,
+                    {
+                        "event_type": "trace_defect",
+                        "source": rel_path(bundle_dir, path),
+                        "message": "debug event file is not readable",
+                    },
+                )
+                continue
+            for line_no, line in enumerate(text.splitlines(), start=1):
                 if not line.strip():
                     continue
                 try:
@@ -1917,7 +1926,10 @@ def accumulate_debug_overhead(acc: DebugAccumulators, path: Path) -> None:
     acc.text_totals["debug_overhead_chars"] += len(debug_text)
     debug_events_path = path.parent / DEBUG_EVENTS_FILENAME
     if debug_events_path.exists():
-        events_text = debug_events_path.read_text(encoding="utf-8", errors="replace")
+        try:
+            events_text = debug_events_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
         acc.text_totals["debug_overhead_chars"] += len(events_text)
         acc.time_totals["debug_event_files"] += 1
         for line in events_text.splitlines():
@@ -1944,26 +1956,26 @@ def accumulate_debug_text_metrics(acc: DebugAccumulators, text_metrics: dict[str
 def debug_packet_success_metrics(success_metrics: dict[str, Any], attempts: list[Any]) -> DebugPacketSuccess:
     """Resolve the packet's success-metric scalars, preferring recorded values."""
     attempts_declared = (
-        int(success_metrics.get("attempts_declared"))
-        if isinstance(success_metrics.get("attempts_declared"), int)
+        max(0, int(success_metrics["attempts_declared"]))
+        if _nonnegative_int(success_metrics.get("attempts_declared"))
         else len(attempts)
     )
     attempts_called = (
-        int(success_metrics.get("attempts_called"))
-        if isinstance(success_metrics.get("attempts_called"), int)
+        max(0, int(success_metrics["attempts_called"]))
+        if _nonnegative_int(success_metrics.get("attempts_called"))
         else sum(1 for item in attempts if isinstance(item, dict) and item.get("called") is True)
     )
     accepted_attempts = (
-        int(success_metrics.get("accepted_attempts"))
-        if isinstance(success_metrics.get("accepted_attempts"), int)
+        max(0, int(success_metrics["accepted_attempts"]))
+        if _nonnegative_int(success_metrics.get("accepted_attempts"))
         else sum(1 for item in attempts if isinstance(item, dict) and item.get("accepted") is True)
     )
     accepted_alias = (
         success_metrics.get("accepted_alias") if isinstance(success_metrics.get("accepted_alias"), str) else None
     )
     fallback_count = (
-        int(success_metrics.get("fallback_count"))
-        if isinstance(success_metrics.get("fallback_count"), int)
+        max(0, int(success_metrics["fallback_count"]))
+        if _nonnegative_int(success_metrics.get("fallback_count"))
         else max(0, attempts_called - 1)
     )
     return DebugPacketSuccess(

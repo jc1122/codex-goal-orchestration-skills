@@ -532,6 +532,7 @@ def write_audit(bundle: Path) -> None:
         ],
         "missing_dod_items": [],
         "defects": [],
+        "actionability_verdict": "pass",
         "summary": "Synthetic prompt audit pass for golden offline smoke.",
     }
     write_json(audit_dir / "prompt-audit.json", audit)

@@ -1168,11 +1168,15 @@ def main() -> int:
 
     status_path = resolve_absolute_path(args.status, "--status", must_exist=True)
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
-    status_data = load_json(status_path)
-    defects = validate_main_status(
+    # The validator is the fail-closed gate: a malformed status or manifest must produce a
+    # structured `failed` result with defects, not an unhandled JSONDecodeError traceback.
+    boot_defects: list[str] = []
+    status_data = load_json_artifact(boot_defects, status_path, "$")
+    manifest_data = load_json_artifact(boot_defects, manifest_path, "$.manifest")
+    defects = boot_defects + validate_main_status(
         status_data,
         job_id=args.job_id,
-        manifest=load_json(manifest_path),
+        manifest=manifest_data,
         manifest_path=manifest_path,
     )
     result = {

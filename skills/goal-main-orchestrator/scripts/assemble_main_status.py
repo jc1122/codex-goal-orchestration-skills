@@ -62,6 +62,24 @@ def write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def safe_load_object(path: Path, blockers: list[str], label: str) -> dict:
+    """Load a semi-trusted runtime artifact as an object.
+
+    Branch/audit/amendment/scheduler artifacts are produced by branch agents and CLI
+    workers, so a malformed or non-object file must degrade to a conservative blocker
+    rather than crash this assembler with an unhandled traceback.
+    """
+    try:
+        data = load_json(path)
+    except Exception as exc:  # noqa: BLE001 - tolerant read: any parse/IO failure is a blocker
+        blockers.append(f"{label} is not readable JSON at {path}: {exc}")
+        return {}
+    if not isinstance(data, dict):
+        blockers.append(f"{label} must be a JSON object at {path}")
+        return {}
+    return data
+
+
 def branch_entries(manifest: dict) -> list[dict]:
     branches = manifest.get("branches")
     if not isinstance(branches, list) or not branches:
@@ -101,7 +119,7 @@ def audit_status(bundle_dir: Path, blockers: list[str]) -> str:
     if not path.exists():
         blockers.append(f"prompt audit artifact is missing: {path}")
         return "missing"
-    data = load_json(path)
+    data = safe_load_object(path, blockers, "prompt audit artifact")
     status = data.get("status")
     if status not in {"pass", "failed", "blocked"}:
         blockers.append(f"prompt audit artifact has invalid status: {status!r}")
@@ -157,7 +175,7 @@ def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]
         if not status_path.exists():
             blockers.append(f"branch status artifact is missing for {branch_id}: {status_path}")
             continue
-        status_data = load_json(status_path)
+        status_data = safe_load_object(status_path, blockers, f"branch {branch_id} status artifact")
         status_value = status_data.get("status")
         review_status = status_data.get("review_status", "missing")
         if status_value not in STATUSES:
@@ -195,7 +213,11 @@ def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]
         if recovered_by:
             summary["recovery_status"] = "pending"
         status_rel = str(summary.get("status_path", ""))
-        status_data = load_json(bundle_dir / status_rel) if status_rel and (bundle_dir / status_rel).exists() else {}
+        status_data = (
+            safe_load_object(bundle_dir / status_rel, blockers, f"branch {branch_id} status artifact")
+            if status_rel and (bundle_dir / status_rel).exists()
+            else {}
+        )
         for item in status_data.get("blockers", []):
             if isinstance(item, str) and item.strip():
                 blockers.append(f"{branch_id}: {item.strip()}")
@@ -265,7 +287,7 @@ def current_amendment_records(
     covered_branch_ids: set[str] = set()
     ignored: list[str] = []
     for path in sorted(amendments_dir.glob("*.decision.json")):
-        data = load_json(path)
+        data = safe_load_object(path, blockers, f"amendment decision {path.name}")
         amendment_id = data.get("amendment_id")
         decision = data.get("decision")
         if not isinstance(amendment_id, str) or decision not in CONTRACT.AMENDMENT_DECISIONS:
@@ -338,18 +360,16 @@ def ensure_skip_decision(
     all_pass = all(value == "pass" for value in terminal_statuses.values())
     if not all_pass:
         return [], set(), ignored
-    reason_code = "no_adaptation_needed" if all_pass else "finalization_still_plausible"
-    reason = (
-        "All terminal branch checkpoints are pass; no future-work amendment is needed."
-        if all_pass
-        else "Deterministic main closeout recorded a non-pass terminal state without launching future-work adaptation."
-    )
+    # Past the guard above, every terminal status is pass; non-pass terminals are routed to
+    # amendment_decision_blockers instead of an auto-written skip decision.
+    reason_code = "no_adaptation_needed"
+    reason = "All terminal branch checkpoints are pass; no future-work amendment is needed."
     amendments_dir = manifest_path.parent / "amendments"
     decision_path = amendments_dir / f"{amendment_id}.decision.json"
     events_path = manifest_path.parent / CONTRACT.MAIN_SCHEDULER_PATH
     scheduler_event_seq = None
     if events_path.exists():
-        events = load_json(events_path).get("events")
+        events = safe_load_object(events_path, blockers, "main scheduler ledger").get("events")
         if isinstance(events, list):
             seqs = [event.get("seq") for event in events if isinstance(event, dict)]
             ints = [seq for seq in seqs if isinstance(seq, int) and not isinstance(seq, bool)]
@@ -464,7 +484,12 @@ def aggregate_review_status(branch_statuses: list[dict], expected_branch_count: 
 
 
 def assemble(manifest_path: Path, *, out_path: Path, write_decision: bool, summary_text: str | None) -> dict:
-    manifest = load_json(manifest_path)
+    try:
+        manifest = load_json(manifest_path)
+    except Exception as exc:  # noqa: BLE001 - manifest is the trusted input contract: fail clean, not traceback
+        raise SystemExit(f"manifest is not readable JSON: {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise SystemExit(f"manifest must be a JSON object: {manifest_path}")
     branches = branch_entries(manifest)
     blockers: list[str] = []
     audit = audit_status(manifest_path.parent, blockers)

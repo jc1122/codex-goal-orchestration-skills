@@ -104,8 +104,11 @@ def branch_checked_out_in_worktree(repo_root: Path, name: str) -> bool:
 
 
 def load_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -610,8 +613,8 @@ def bounded_cli_launch_plan(
             "- Do not read, tail, grep, cat, or otherwise inspect your own redirected branch log or final-message file while running.",
             "- Do not read memory files, create memory citations, or answer the user directly; all useful output must be packet/status/review/scheduler artifacts.",
             "- If the worker scheduler has ready work and no matching worker packet/status, run the ready-workers and worker-packets phases now instead of monitoring yourself.",
-            "- Before any final response, either validate branches/{branch_id}.status.json against the manifest or write validator-visible structured blocked/partial branch evidence.",
-            "- Never return only prose while workers are ready/unlaunched or while branches/{branch_id}.status.json is missing.",
+            f"- Before any final response, either validate branches/{branch_id}.status.json against the manifest or write validator-visible structured blocked/partial branch evidence.",
+            f"- Never return only prose while workers are ready/unlaunched or while branches/{branch_id}.status.json is missing.",
             heredoc_label,
             f"cat {shell_quote(prompt_path.as_posix())} >> {shell_quote(launch_prompt_path.as_posix())}",
         ]
@@ -774,7 +777,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Branch id whose status has completed and been accepted.",
     )
     parser.add_argument(
-        "--active-branch", action="append", default=[], help="Branch id already active; used only with --list-ready."
+        "--active-branch",
+        action="append",
+        default=[],
+        help="Branch id already active; counted against capacity in --list-ready and selected-branch rendering.",
     )
     parser.add_argument("--list-ready", action="store_true", help="Print eligible unstarted branch ids, one per line.")
     parser.add_argument(

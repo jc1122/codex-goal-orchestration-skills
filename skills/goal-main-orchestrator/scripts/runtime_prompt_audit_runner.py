@@ -346,7 +346,8 @@ def terminal_message(config: dict[str, Any], key: str) -> str:
 def failure_summary(packet_dir: Path, config: dict[str, Any]) -> str:
     parts = []
     for attempt in list_value(config, "attempts"):
-        label = str(attempt.get("alias", "attempt"))
+        # Match the run loop's event-log naming (dots replaced) so the fallback path agrees.
+        label = str(attempt.get("alias", "attempt")).replace(".", "-")
         log_path = first_log_path(packet_dir, attempt, f"events-{label}.jsonl")
         if not log_path.exists():
             parts.append(f"{log_path.name}: missing")
