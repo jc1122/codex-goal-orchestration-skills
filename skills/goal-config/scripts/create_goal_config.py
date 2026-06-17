@@ -65,6 +65,8 @@ EFFORT_PROFILES: dict[str, dict[str, int]] = {
 }
 
 VALIDATION_MODES = {"model-check", "smoke", "debug"}
+# Alias substrings marking a premium/demanding route; used to derive cheaper ladders.
+PREMIUM_ROUTE_MARKERS = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
 
 
 def load_contract() -> Any:
@@ -650,16 +652,16 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
         require_roles(config, name, ladder)
 
     def cheaper_worker_ladder(values: list[str]) -> list[str]:
-        premium_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
-        cheap = [alias for alias in values if not any(marker in str(alias).lower() for marker in premium_markers)]
+        cheap = [alias for alias in values if not any(marker in str(alias).lower() for marker in PREMIUM_ROUTE_MARKERS)]
         if cheap:
             return cheap[-2:]
         return values[-1:]
 
     def cheaper_review_ladder(*candidate_ladders: list[str]) -> list[str]:
-        premium_markers = ("demanding", "heavy", "premium", "pro", "gpt-5.5", "gpt-5.4")
         candidates = unique([alias for ladder in candidate_ladders for alias in ladder])
-        cheap = [alias for alias in candidates if not any(marker in str(alias).lower() for marker in premium_markers)]
+        cheap = [
+            alias for alias in candidates if not any(marker in str(alias).lower() for marker in PREMIUM_ROUTE_MARKERS)
+        ]
         if cheap:
             return cheap[-2:]
         return candidates[-1:] if candidates else reviewer[-1:]
