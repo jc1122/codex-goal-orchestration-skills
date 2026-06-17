@@ -9,6 +9,7 @@ import json
 import os
 import re
 from pathlib import Path
+from typing import NamedTuple
 
 
 def _load_shared_script(module_name: str, script_name: str, label: str):
@@ -2590,7 +2591,7 @@ def compact_launch_config(
     return None
 
 
-def main() -> int:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--role", choices=["worker", "research-worker", "reviewer"], required=True)
     parser.add_argument("--packet-id", required=True)
@@ -2649,8 +2650,23 @@ def main() -> int:
     parser.add_argument(
         "--replace", action="store_true", help="Archive an existing packet directory under attempts/ and recreate it."
     )
-    args = parser.parse_args()
+    return parser
 
+
+class CommonInputs(NamedTuple):
+    packet_id: str
+    branch: str
+    manifest_branch_id: str
+    manifest: dict | None
+    manifest_path: Path | None
+    telemetry_debug: bool
+    worktree: Path
+    owned_files: list[str]
+    context_files: list[str]
+    task_file: Path | None
+
+
+def resolve_common_inputs(args: argparse.Namespace) -> CommonInputs:
     packet_id = require_safe_label(args.packet_id, "packet-id")
     branch = args.branch
     if not safe_branch_name(branch):
@@ -2686,166 +2702,266 @@ def main() -> int:
         raise SystemExit("research-worker and reviewer packets must not set worker route options")
     if args.model_catalog and args.role != "worker":
         raise SystemExit("--model-catalog is only valid for worker packets")
-    review_route: dict | None = None
-    review_semantic_hashes: dict[str, str] | None = None
-    review_reuse_policy: dict | None = None
-    if args.role == "reviewer":
-        if not args.manifest:
-            raise SystemExit("reviewer packets require --manifest")
-        if not args.pre_review_gate:
-            raise SystemExit("reviewer packets require --pre-review-gate")
-        manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
-        gate_path = resolve_absolute_path(args.pre_review_gate, "--pre-review-gate", must_exist=True)
-        manifest = load_json(manifest_path)
-        telemetry_debug = CONTRACT.telemetry_debug_enabled(manifest)
-        gate = load_json(gate_path)
-        branch_id = packet_id.split("-R", 1)[0] if "-R" in packet_id else ""
-        manifest_branch_id = branch_id or manifest_branch_id
-        defects: list[str] = []
-        STATUS_VALIDATION.validate_pre_review_gate_artifact(
-            defects,
-            gate_path,
-            "pre_review_gate",
-            manifest_path=manifest_path,
-            branch_id=branch_id,
-            review_packet_id=packet_id,
-            required_input_paths=branch_validator().required_pre_review_input_paths(
-                branch_entry(manifest, branch_id),
-                branch_id,
-                bundle_dir=manifest_path.parent,
-            ),
-        )
-        if defects:
-            raise SystemExit("pre-review gate failed; refusing reviewer packet generation:\n" + "\n".join(defects))
-        gate_reuse_policy = gate.get("reuse_policy") if isinstance(gate.get("reuse_policy"), dict) else {}
-        if gate_reuse_policy.get("accepted") is True and gate_reuse_policy.get("source_telemetry_path"):
-            print("pre-review gate accepted reviewer reuse with telemetry; no reviewer model packet generated")
-            return 0
-        review_route = select_review_route(
-            manifest,
-            gate,
-            branch_id=branch_id,
-            packet_id=packet_id,
-            manifest_path=manifest_path,
-        )
-        review_semantic_hashes = (
-            {
-                key: value
-                for key, value in gate.get("semantic_input_hashes", {}).items()
-                if isinstance(key, str) and isinstance(value, str)
-            }
-            if isinstance(gate.get("semantic_input_hashes"), dict)
-            else {}
-        )
-        review_reuse_policy = {
-            "mode": "new",
-            "accepted": False,
-            "semantic_hashes_match": False,
-            "source_review_path": None,
-            "source_telemetry_path": None,
-        }
-        if gate_reuse_policy.get("accepted") is True:
-            review_reuse_policy = dict(gate_reuse_policy)
-    selected_ladder: list[str] | None = None
-    route_class = DEFAULT_WORKER_ROUTE_CLASS
-    selection_reason = ""
-    model_catalog: dict | None = None
-    manifest_work_item: dict | None = None
-    worker_route_policy: dict | None = None
-    goal_config: dict | None = None
-    if args.role == "worker":
-        normalized_worker_routes: list[str] = []
-        for item in args.worker_route:
-            if isinstance(item, str):
-                normalized_worker_routes.append(item)
-            else:
-                normalized_worker_routes.extend(item)
-        manifest_context = find_manifest_context(context_files, manifest_branch_id, packet_id)
-        if manifest_context is not None:
-            _manifest_path, _manifest, _branch_data, manifest_work_item = manifest_context
-            manifest = _manifest
-            manifest_path = _manifest_path
-            telemetry_debug = telemetry_debug or CONTRACT.telemetry_debug_enabled(_manifest)
-        worker_policy = worker_policy_from_manifest(manifest)
-        goal_config = goal_config_from_manifest(manifest, manifest_path)
-        manifest_configured_worker_policy = worker_policy_is_manifest_configured(manifest, worker_policy)
-        worker_default_ladder = policy_default_ladder(worker_policy)
-        worker_allowed_routes = policy_allowed_routes(worker_policy)
-        explicit_worker_routes = bool(normalized_worker_routes)
-        manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
-        route_class = normalize_route_class(
-            args.route_class
-            or manifest_route_class
-            or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS)
-        )
-        selected_ladder = (
-            normalize_worker_ladder(
-                normalized_worker_routes,
-                default_ladder=worker_default_ladder,
-                allowed_routes=worker_allowed_routes,
-            )
-            if normalized_worker_routes
-            else ladder_for_route_class(route_class, worker_policy)
-        )
-        explicit_route_prunes_configured_ladder = explicit_route_would_prune_configured_ladder(
-            selected_ladder,
-            route_class=route_class,
-            worker_policy=worker_policy,
-            explicit_routes=explicit_worker_routes and manifest_configured_worker_policy,
-        )
-        selected_ladder, restored_configured_ladder = restore_configured_ladder_when_unpruned(
-            selected_ladder,
-            route_class=route_class,
-            worker_policy=worker_policy,
-            explicit_routes=explicit_worker_routes and manifest_configured_worker_policy,
-            allow_route_pruning=args.allow_route_pruning,
-        )
-        catalog_path = (
-            resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
-            if args.model_catalog
-            else None
-        )
-        selected_ladder, model_catalog = apply_model_catalog_to_worker_ladder(
-            selected_ladder,
-            catalog_path=catalog_path,
-            explicit_routes=bool(normalized_worker_routes),
-        )
-        selection_reason = nonempty_text(args.selection_reason)
-        if args.worker_route and not selection_reason:
-            raise SystemExit("--selection-reason is required when --worker-route is supplied")
-        if not selection_reason:
-            if manifest_configured_worker_policy:
-                selection_reason = (
-                    f"{route_class} route class selected from manifest worker_model_policy: "
-                    + ", ".join(selected_ladder)
-                )
-            else:
-                selection_reason = default_selection_reason(route_class)
-        if restored_configured_ladder:
-            selection_reason += (
-                " Explicit worker route was expanded to the full configured route-class ladder; "
-                "use --allow-route-pruning with a pruning reason to keep a shorter ladder."
-            )
-        if args.allow_route_pruning and explicit_route_prunes_configured_ladder:
-            validate_route_pruning_reason(selection_reason)
-        if model_catalog and model_catalog.get("filtered_aliases"):
-            aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
-            selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
-        validate_route_class_selection(
-            route_class,
-            selected_ladder,
-            selection_reason,
-            worker_policy if manifest_configured_worker_policy else None,
-        )
-        worker_route_policy = route_policy_metadata(
-            route_class=route_class,
-            worker_policy=worker_policy,
-            explicit_routes=explicit_worker_routes,
-            allow_route_pruning=args.allow_route_pruning,
-            pruned_configured_ladder=explicit_route_prunes_configured_ladder and not restored_configured_ladder,
-            restored_configured_ladder=restored_configured_ladder,
-        )
+    return CommonInputs(
+        packet_id=packet_id,
+        branch=branch,
+        manifest_branch_id=manifest_branch_id,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        telemetry_debug=telemetry_debug,
+        worktree=worktree,
+        owned_files=owned_files,
+        context_files=context_files,
+        task_file=task_file,
+    )
 
+
+class ReviewerResolution(NamedTuple):
+    early_return: bool
+    manifest: dict | None
+    manifest_path: Path | None
+    manifest_branch_id: str
+    telemetry_debug: bool
+    gate_path: Path | None
+    gate: dict | None
+    review_route: dict | None
+    review_semantic_hashes: dict[str, str] | None
+    review_reuse_policy: dict | None
+
+
+def resolve_reviewer_route(args: argparse.Namespace, *, packet_id: str, manifest_branch_id: str) -> ReviewerResolution:
+    if not args.manifest:
+        raise SystemExit("reviewer packets require --manifest")
+    if not args.pre_review_gate:
+        raise SystemExit("reviewer packets require --pre-review-gate")
+    manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
+    gate_path = resolve_absolute_path(args.pre_review_gate, "--pre-review-gate", must_exist=True)
+    manifest = load_json(manifest_path)
+    telemetry_debug = CONTRACT.telemetry_debug_enabled(manifest)
+    gate = load_json(gate_path)
+    branch_id = packet_id.split("-R", 1)[0] if "-R" in packet_id else ""
+    manifest_branch_id = branch_id or manifest_branch_id
+    defects: list[str] = []
+    STATUS_VALIDATION.validate_pre_review_gate_artifact(
+        defects,
+        gate_path,
+        "pre_review_gate",
+        manifest_path=manifest_path,
+        branch_id=branch_id,
+        review_packet_id=packet_id,
+        required_input_paths=branch_validator().required_pre_review_input_paths(
+            branch_entry(manifest, branch_id),
+            branch_id,
+            bundle_dir=manifest_path.parent,
+        ),
+    )
+    if defects:
+        raise SystemExit("pre-review gate failed; refusing reviewer packet generation:\n" + "\n".join(defects))
+    gate_reuse_policy = gate.get("reuse_policy") if isinstance(gate.get("reuse_policy"), dict) else {}
+    if gate_reuse_policy.get("accepted") is True and gate_reuse_policy.get("source_telemetry_path"):
+        print("pre-review gate accepted reviewer reuse with telemetry; no reviewer model packet generated")
+        return ReviewerResolution(
+            early_return=True,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            manifest_branch_id=manifest_branch_id,
+            telemetry_debug=telemetry_debug,
+            gate_path=gate_path,
+            gate=gate,
+            review_route=None,
+            review_semantic_hashes=None,
+            review_reuse_policy=None,
+        )
+    review_route = select_review_route(
+        manifest,
+        gate,
+        branch_id=branch_id,
+        packet_id=packet_id,
+        manifest_path=manifest_path,
+    )
+    review_semantic_hashes = (
+        {
+            key: value
+            for key, value in gate.get("semantic_input_hashes", {}).items()
+            if isinstance(key, str) and isinstance(value, str)
+        }
+        if isinstance(gate.get("semantic_input_hashes"), dict)
+        else {}
+    )
+    review_reuse_policy = {
+        "mode": "new",
+        "accepted": False,
+        "semantic_hashes_match": False,
+        "source_review_path": None,
+        "source_telemetry_path": None,
+    }
+    if gate_reuse_policy.get("accepted") is True:
+        review_reuse_policy = dict(gate_reuse_policy)
+    return ReviewerResolution(
+        early_return=False,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        manifest_branch_id=manifest_branch_id,
+        telemetry_debug=telemetry_debug,
+        gate_path=gate_path,
+        gate=gate,
+        review_route=review_route,
+        review_semantic_hashes=review_semantic_hashes,
+        review_reuse_policy=review_reuse_policy,
+    )
+
+
+class WorkerRouting(NamedTuple):
+    selected_ladder: list[str]
+    route_class: str
+    selection_reason: str
+    model_catalog: dict | None
+    manifest: dict | None
+    manifest_path: Path | None
+    telemetry_debug: bool
+    manifest_work_item: dict | None
+    worker_route_policy: dict | None
+    goal_config: dict | None
+
+
+def resolve_worker_routing(
+    args: argparse.Namespace,
+    *,
+    packet_id: str,
+    manifest_branch_id: str,
+    manifest: dict | None,
+    manifest_path: Path | None,
+    telemetry_debug: bool,
+    context_files: list[str],
+) -> WorkerRouting:
+    normalized_worker_routes: list[str] = []
+    for item in args.worker_route:
+        if isinstance(item, str):
+            normalized_worker_routes.append(item)
+        else:
+            normalized_worker_routes.extend(item)
+    manifest_work_item: dict | None = None
+    manifest_context = find_manifest_context(context_files, manifest_branch_id, packet_id)
+    if manifest_context is not None:
+        _manifest_path, _manifest, _branch_data, manifest_work_item = manifest_context
+        manifest = _manifest
+        manifest_path = _manifest_path
+        telemetry_debug = telemetry_debug or CONTRACT.telemetry_debug_enabled(_manifest)
+    worker_policy = worker_policy_from_manifest(manifest)
+    goal_config = goal_config_from_manifest(manifest, manifest_path)
+    manifest_configured_worker_policy = worker_policy_is_manifest_configured(manifest, worker_policy)
+    worker_default_ladder = policy_default_ladder(worker_policy)
+    worker_allowed_routes = policy_allowed_routes(worker_policy)
+    explicit_worker_routes = bool(normalized_worker_routes)
+    manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
+    route_class = normalize_route_class(
+        args.route_class
+        or manifest_route_class
+        or ("custom" if normalized_worker_routes else DEFAULT_WORKER_ROUTE_CLASS)
+    )
+    selected_ladder = (
+        normalize_worker_ladder(
+            normalized_worker_routes,
+            default_ladder=worker_default_ladder,
+            allowed_routes=worker_allowed_routes,
+        )
+        if normalized_worker_routes
+        else ladder_for_route_class(route_class, worker_policy)
+    )
+    explicit_route_prunes_configured_ladder = explicit_route_would_prune_configured_ladder(
+        selected_ladder,
+        route_class=route_class,
+        worker_policy=worker_policy,
+        explicit_routes=explicit_worker_routes and manifest_configured_worker_policy,
+    )
+    selected_ladder, restored_configured_ladder = restore_configured_ladder_when_unpruned(
+        selected_ladder,
+        route_class=route_class,
+        worker_policy=worker_policy,
+        explicit_routes=explicit_worker_routes and manifest_configured_worker_policy,
+        allow_route_pruning=args.allow_route_pruning,
+    )
+    catalog_path = (
+        resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
+        if args.model_catalog
+        else None
+    )
+    selected_ladder, model_catalog = apply_model_catalog_to_worker_ladder(
+        selected_ladder,
+        catalog_path=catalog_path,
+        explicit_routes=bool(normalized_worker_routes),
+    )
+    selection_reason = nonempty_text(args.selection_reason)
+    if args.worker_route and not selection_reason:
+        raise SystemExit("--selection-reason is required when --worker-route is supplied")
+    if not selection_reason:
+        if manifest_configured_worker_policy:
+            selection_reason = (
+                f"{route_class} route class selected from manifest worker_model_policy: "
+                + ", ".join(selected_ladder)
+            )
+        else:
+            selection_reason = default_selection_reason(route_class)
+    if restored_configured_ladder:
+        selection_reason += (
+            " Explicit worker route was expanded to the full configured route-class ladder; "
+            "use --allow-route-pruning with a pruning reason to keep a shorter ladder."
+        )
+    if args.allow_route_pruning and explicit_route_prunes_configured_ladder:
+        validate_route_pruning_reason(selection_reason)
+    if model_catalog and model_catalog.get("filtered_aliases"):
+        aliases = ", ".join(str(item.get("alias")) for item in model_catalog["filtered_aliases"])
+        selection_reason += f" Model catalog pruned unavailable Codex route(s): {aliases}."
+    validate_route_class_selection(
+        route_class,
+        selected_ladder,
+        selection_reason,
+        worker_policy if manifest_configured_worker_policy else None,
+    )
+    worker_route_policy = route_policy_metadata(
+        route_class=route_class,
+        worker_policy=worker_policy,
+        explicit_routes=explicit_worker_routes,
+        allow_route_pruning=args.allow_route_pruning,
+        pruned_configured_ladder=explicit_route_prunes_configured_ladder and not restored_configured_ladder,
+        restored_configured_ladder=restored_configured_ladder,
+    )
+    return WorkerRouting(
+        selected_ladder=selected_ladder,
+        route_class=route_class,
+        selection_reason=selection_reason,
+        model_catalog=model_catalog,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        telemetry_debug=telemetry_debug,
+        manifest_work_item=manifest_work_item,
+        worker_route_policy=worker_route_policy,
+        goal_config=goal_config,
+    )
+
+
+class PacketSchema(NamedTuple):
+    schema_name: str
+    output_name: str
+    schema: dict
+    worker_attribution: dict[str, str]
+
+
+def build_packet_schema(
+    args: argparse.Namespace,
+    *,
+    packet_id: str,
+    branch: str,
+    worktree: Path,
+    manifest: dict | None,
+    manifest_path: Path | None,
+    manifest_branch_id: str,
+    manifest_work_item: dict | None,
+    selected_ladder: list[str] | None,
+    route_class: str,
+    review_semantic_hashes: dict[str, str] | None,
+    review_reuse_policy: dict | None,
+) -> PacketSchema:
     worker_attribution: dict[str, str] = {}
     if args.role == "reviewer":
         schema_name = "review.schema.json"
@@ -2886,13 +3002,43 @@ def main() -> int:
             manifest_epoch=manifest_epoch,
             route_id=route_id,
         )
+    return PacketSchema(
+        schema_name=schema_name,
+        output_name=output_name,
+        schema=schema,
+        worker_attribution=worker_attribution,
+    )
 
-    validate_openai_strict_schema(schema, schema_name)
-    task_text = load_task(task_file)
-    out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
-    if out_dir.name == packet_id:
-        raise SystemExit("--out-dir must be the parent packet directory; this script appends --packet-id automatically")
-    packet_dir = out_dir / packet_id
+
+class PacketContext(NamedTuple):
+    task_text: str
+    context_files: list[str]
+    owned_files: list[str]
+    packet_context: dict | None
+    packet_context_path: str
+    packet_context_inline: str
+
+
+def build_packet_context(
+    args: argparse.Namespace,
+    *,
+    packet_id: str,
+    manifest_branch_id: str,
+    worktree: Path,
+    manifest: dict | None,
+    manifest_path: Path | None,
+    manifest_work_item: dict | None,
+    gate_path: Path | None,
+    gate: dict | None,
+    review_route: dict | None,
+    schema_name: str,
+    output_name: str,
+    packet_dir: Path,
+    task_text: str,
+    owned_files: list[str],
+    context_files: list[str],
+    task_file: Path | None,
+) -> PacketContext:
     packet_context: dict | None = None
     packet_context_path = ""
     if args.role == "reviewer":
@@ -2935,6 +3081,194 @@ def main() -> int:
         manifest_path=manifest_path,
         manifest_work_item=manifest_work_item,
     )
+    return PacketContext(
+        task_text=task_text,
+        context_files=context_files,
+        owned_files=owned_files,
+        packet_context=packet_context,
+        packet_context_path=packet_context_path,
+        packet_context_inline=packet_context_inline,
+    )
+
+
+def build_worker_route_artifact(
+    *,
+    packet_id: str,
+    branch: str,
+    manifest_branch_id: str,
+    route_class: str,
+    selected_ladder: list[str] | None,
+    selection_reason: str,
+    manifest: dict | None,
+    worker_route_policy: dict | None,
+    model_catalog: dict | None,
+    context_budget: dict,
+) -> dict:
+    return {
+        "schema_version": 1,
+        "packet_id": packet_id,
+        "role": "worker",
+        "branch_id": manifest_branch_id,
+        "branch": branch,
+        "route_class": route_class,
+        "selected_ladder": selected_ladder,
+        "selection_reason": selection_reason,
+        "policy_router": worker_policy_from_manifest(manifest).get("router", "goal-config-v1"),
+        "policy_version": worker_policy_from_manifest(manifest).get("version", ROUTE_POLICY_VERSION),
+        "route_policy_version": ROUTE_POLICY_VERSION,
+        "default_ladder": policy_default_ladder(worker_policy_from_manifest(manifest)),
+        "allowed_aliases": policy_allowed_routes(worker_policy_from_manifest(manifest)),
+        "route_catalog_sha256": model_catalog.get("sha256") if isinstance(model_catalog, dict) else None,
+        "route_catalog_source": model_catalog.get("source") if isinstance(model_catalog, dict) else None,
+        "model_catalog": model_catalog or {},
+        "route_policy": worker_route_policy or {},
+        "context_budget": context_budget,
+    }
+
+
+def emit_packet_files(
+    packet_dir: Path,
+    *,
+    schema_name: str,
+    schema: dict,
+    packet_context: dict | None,
+    prompt_text: str,
+    route: dict | None,
+    launch_config: dict | None,
+    launch_script: str,
+) -> None:
+    packet_dir.mkdir(parents=True, exist_ok=True)
+
+    write_json(packet_dir / schema_name, schema)
+    if packet_context is not None:
+        write_json(packet_dir / "packet-context.json", packet_context)
+    (packet_dir / "prompt.md").write_text(prompt_text, encoding="utf-8")
+    if route is not None:
+        write_json(packet_dir / "route.json", route)
+    if launch_config is not None:
+        write_json(packet_dir / "launch-config.json", launch_config)
+    launch_path = packet_dir / "launch.sh"
+    launch_path.write_text(launch_script, encoding="utf-8")
+    os.chmod(launch_path, 0o755)
+
+
+def main() -> int:
+    parser = build_arg_parser()
+    args = parser.parse_args()
+
+    common = resolve_common_inputs(args)
+    packet_id = common.packet_id
+    branch = common.branch
+    manifest_branch_id = common.manifest_branch_id
+    manifest = common.manifest
+    manifest_path = common.manifest_path
+    telemetry_debug = common.telemetry_debug
+    worktree = common.worktree
+    owned_files = common.owned_files
+    context_files = common.context_files
+    task_file = common.task_file
+
+    review_route: dict | None = None
+    review_semantic_hashes: dict[str, str] | None = None
+    review_reuse_policy: dict | None = None
+    gate_path: Path | None = None
+    gate: dict | None = None
+    if args.role == "reviewer":
+        reviewer = resolve_reviewer_route(
+            args,
+            packet_id=packet_id,
+            manifest_branch_id=manifest_branch_id,
+        )
+        manifest = reviewer.manifest
+        manifest_path = reviewer.manifest_path
+        manifest_branch_id = reviewer.manifest_branch_id
+        telemetry_debug = reviewer.telemetry_debug
+        gate_path = reviewer.gate_path
+        gate = reviewer.gate
+        if reviewer.early_return:
+            return 0
+        review_route = reviewer.review_route
+        review_semantic_hashes = reviewer.review_semantic_hashes
+        review_reuse_policy = reviewer.review_reuse_policy
+    selected_ladder: list[str] | None = None
+    route_class = DEFAULT_WORKER_ROUTE_CLASS
+    selection_reason = ""
+    model_catalog: dict | None = None
+    manifest_work_item: dict | None = None
+    worker_route_policy: dict | None = None
+    goal_config: dict | None = None
+    if args.role == "worker":
+        routing = resolve_worker_routing(
+            args,
+            packet_id=packet_id,
+            manifest_branch_id=manifest_branch_id,
+            manifest=manifest,
+            manifest_path=manifest_path,
+            telemetry_debug=telemetry_debug,
+            context_files=context_files,
+        )
+        selected_ladder = routing.selected_ladder
+        route_class = routing.route_class
+        selection_reason = routing.selection_reason
+        model_catalog = routing.model_catalog
+        manifest = routing.manifest
+        manifest_path = routing.manifest_path
+        telemetry_debug = routing.telemetry_debug
+        manifest_work_item = routing.manifest_work_item
+        worker_route_policy = routing.worker_route_policy
+        goal_config = routing.goal_config
+
+    packet_schema = build_packet_schema(
+        args,
+        packet_id=packet_id,
+        branch=branch,
+        worktree=worktree,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        manifest_branch_id=manifest_branch_id,
+        manifest_work_item=manifest_work_item,
+        selected_ladder=selected_ladder,
+        route_class=route_class,
+        review_semantic_hashes=review_semantic_hashes,
+        review_reuse_policy=review_reuse_policy,
+    )
+    schema_name = packet_schema.schema_name
+    output_name = packet_schema.output_name
+    schema = packet_schema.schema
+    worker_attribution = packet_schema.worker_attribution
+
+    validate_openai_strict_schema(schema, schema_name)
+    task_text = load_task(task_file)
+    out_dir = resolve_absolute_path(args.out_dir, "--out-dir", must_exist=False)
+    if out_dir.name == packet_id:
+        raise SystemExit("--out-dir must be the parent packet directory; this script appends --packet-id automatically")
+    packet_dir = out_dir / packet_id
+
+    context = build_packet_context(
+        args,
+        packet_id=packet_id,
+        manifest_branch_id=manifest_branch_id,
+        worktree=worktree,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        manifest_work_item=manifest_work_item,
+        gate_path=gate_path,
+        gate=gate,
+        review_route=review_route,
+        schema_name=schema_name,
+        output_name=output_name,
+        packet_dir=packet_dir,
+        task_text=task_text,
+        owned_files=owned_files,
+        context_files=context_files,
+        task_file=task_file,
+    )
+    task_text = context.task_text
+    context_files = context.context_files
+    owned_files = context.owned_files
+    packet_context = context.packet_context
+    packet_context_path = context.packet_context_path
+    packet_context_inline = context.packet_context_inline
 
     prompt_text = prompt_for(
         args.role,
@@ -2965,26 +3299,18 @@ def main() -> int:
 
     route: dict | None = None
     if args.role == "worker":
-        route = {
-            "schema_version": 1,
-            "packet_id": packet_id,
-            "role": "worker",
-            "branch_id": manifest_branch_id,
-            "branch": branch,
-            "route_class": route_class,
-            "selected_ladder": selected_ladder,
-            "selection_reason": selection_reason,
-            "policy_router": worker_policy_from_manifest(manifest).get("router", "goal-config-v1"),
-            "policy_version": worker_policy_from_manifest(manifest).get("version", ROUTE_POLICY_VERSION),
-            "route_policy_version": ROUTE_POLICY_VERSION,
-            "default_ladder": policy_default_ladder(worker_policy_from_manifest(manifest)),
-            "allowed_aliases": policy_allowed_routes(worker_policy_from_manifest(manifest)),
-            "route_catalog_sha256": model_catalog.get("sha256") if isinstance(model_catalog, dict) else None,
-            "route_catalog_source": model_catalog.get("source") if isinstance(model_catalog, dict) else None,
-            "model_catalog": model_catalog or {},
-            "route_policy": worker_route_policy or {},
-            "context_budget": context_budget,
-        }
+        route = build_worker_route_artifact(
+            packet_id=packet_id,
+            branch=branch,
+            manifest_branch_id=manifest_branch_id,
+            route_class=route_class,
+            selected_ladder=selected_ladder,
+            selection_reason=selection_reason,
+            manifest=manifest,
+            worker_route_policy=worker_route_policy,
+            model_catalog=model_catalog,
+            context_budget=context_budget,
+        )
     elif args.role == "reviewer" and review_route is not None:
         route = review_route
     scheduler_path = worker_scheduler_path(manifest_path, manifest_branch_id) if args.role == "worker" else None
@@ -3034,34 +3360,30 @@ def main() -> int:
                 if isinstance(attempt, dict) and isinstance(attempt.get("alias"), str)
             ],
         }
-    packet_dir.mkdir(parents=True, exist_ok=True)
 
-    write_json(packet_dir / schema_name, schema)
-    if packet_context is not None:
-        write_json(packet_dir / "packet-context.json", packet_context)
-    (packet_dir / "prompt.md").write_text(prompt_text, encoding="utf-8")
-    if route is not None:
-        write_json(packet_dir / "route.json", route)
-    if launch_config is not None:
-        write_json(packet_dir / "launch-config.json", launch_config)
-    launch_path = packet_dir / "launch.sh"
-    launch_path.write_text(
-        launch_for(
-            args.role,
-            packet_id,
-            branch,
-            str(worktree),
-            schema_name,
-            output_name,
-            selected_ladder,
-            selection_reason,
-            review_route=review_route,
-            review_semantic_hashes=review_semantic_hashes,
-            review_reuse_policy=review_reuse_policy,
-        ),
-        encoding="utf-8",
+    launch_script = launch_for(
+        args.role,
+        packet_id,
+        branch,
+        str(worktree),
+        schema_name,
+        output_name,
+        selected_ladder,
+        selection_reason,
+        review_route=review_route,
+        review_semantic_hashes=review_semantic_hashes,
+        review_reuse_policy=review_reuse_policy,
     )
-    os.chmod(launch_path, 0o755)
+    emit_packet_files(
+        packet_dir,
+        schema_name=schema_name,
+        schema=schema,
+        packet_context=packet_context,
+        prompt_text=prompt_text,
+        route=route,
+        launch_config=launch_config,
+        launch_script=launch_script,
+    )
     print(packet_dir)
     return 0
 
