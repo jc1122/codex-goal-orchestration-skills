@@ -1,0 +1,57 @@
+{
+  "schema_version": 2,
+  "repo_root": "/home/jakub/projects/codex-goal-orchestration-skills",
+  "run_id": "goal-skillset-reaudit-20260617",
+  "branch": "main",
+  "scope": "Re-run of repo-audit-refactor-optimize over the goal skillset (all six skills + supporting scripts). Read-only diagnosis wave across six lanes (code-health, security, hygiene, docs, dependency, hotspot). No new remediation was authored: the working tree already held the complete, uncommitted Round-2 correctness batch from goal-skillset-audit-20260617; this run verified, committed, and self-consistency-checked it.",
+  "started_utc": "2026-06-17T19:02:00Z",
+  "finished_utc": "2026-06-17T19:20:00Z",
+  "orchestrator_skill_version": "repo-audit-refactor-optimize v0.12.1",
+  "definition_of_done": "Bootstrap green on all blocking lanes; diagnosis wave reports 0 actionable findings; full `npm run check` green on the committed state; the pending in-tree Round-2 batch committed to main with a self-consistent agent-context-index.",
+  "lanes": {
+    "code-health": { "raw_findings": 1680, "actionable": 0, "status": "converged" },
+    "security": { "raw_findings": 213, "actionable": 0, "status": "converged" },
+    "hygiene": { "raw_findings": 0, "actionable": 0, "status": "ok" },
+    "docs": { "raw_findings": 0, "actionable": 0, "status": "ok" },
+    "dependency": { "raw_findings": 7, "actionable": 0, "status": "converged" },
+    "hotspot": { "raw_findings": 428, "actionable": 0, "status": "converged" }
+  },
+  "findings_totals": {
+    "raw": 2328,
+    "actionable": 0,
+    "accepted_residuals": 2328,
+    "stale_accept_entries": 0
+  },
+  "backlog": [],
+  "batches": [],
+  "round2_batch": {
+    "description": "Pre-existing uncommitted Round-2 fail-closed correctness remediation found in the working tree; verified green and committed in this run (commit 4f5aff3).",
+    "commit": "4f5aff3",
+    "files_changed": 22,
+    "insertions": 581,
+    "deletions": 37,
+    "fixes": [
+      "extract_telemetry: blocked/failed worker never marked accepted (status-blind fail-open)",
+      "validate_branch_status: empty owned_paths fails closed",
+      "assemble_main_status: accept archived manifest sha; 'reject' review verdict rolls up as blocked",
+      "create_blocker_repair_packet: idempotency - skip already recovered/superseded terminals",
+      "lint_goal_bundle: serial_reasons no longer waives cross-branch owned_paths overlap",
+      "render_goal_bootloader: never-linted/never-gated bundle no longer launch_allowed",
+      "scheduler_tick: dependency-stuck closeout emits explicit dependency_failed events",
+      "orchestration_contract: route-ladder ordering made deterministic (frozenset hash-order bug)"
+    ],
+    "tests_added": ["test_blocker_repair_idempotent.py", "test_readiness_gate.py", "test_round2_fixes.py", "test_scheduler_dependency_failed.py", "test_bug_classes.py additions"],
+    "housekeeping": "regen agent-context-index; accept.json - 4 dead-code rule acceptances refactored into 2 path globs (tests/**, maintenance/reports/**), stale entries pruned"
+  },
+  "verification": {
+    "npm_run_check": "green (exit 0)",
+    "pytest": "29 passed",
+    "diagnosis_wave_actionable": 0,
+    "post_commit_index_fix": "check:context flagged agent-context-index.json stale after the new test files + audit dir became git-tracked (the index fingerprints tracked files and had been generated while they were untracked); regenerated via `npm run generate:context` and folded into commit 4f5aff3; gate re-run green.",
+    "working_tree": "clean"
+  },
+  "warnings": [
+    "performance lane blocked: no benchmark surface (structural to a CLI-script repo, not a tooling gap)",
+    "Skill-registry description: drift - orchestrator SKILL.md frontmatter still names a 'Gemini Pro -> Gemini Flash' worker ladder, while the implementation routes DeepSeek via opencode-worker-bridge (ds-pro-max / ds-flash-max) with Codex fallback. Documentation-only; not an actionable code-health finding."
+  ]
+}
