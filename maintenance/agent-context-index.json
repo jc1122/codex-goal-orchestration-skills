@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:c4df4f4c2e3f6e373869027583d99706ddf1c59a6608358bac6395d7572b3d6d"
+    "source_fingerprint": "sha256:48345ceb1687811088a643f330767224a8c2b066f3874ecae0d0e488d2a5c11d"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -68,14 +68,14 @@
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2568,
-      "approx_tokens": 29543,
+      "lines": 2791,
+      "approx_tokens": 31323,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1325:lint:1157l",
-        "799:validate_preflight_lite_records:189l",
-        "1177:validate_runtime_metadata:146l",
-        "1054:validate_goal_config_manifest:121l"
+        "2133:_lint_branch_worker_parallelism:133l",
+        "1097:validate_goal_config_manifest:121l",
+        "2595:lint:110l",
+        "1526:_lint_model_policies:107l"
       ]
     }
   ],
