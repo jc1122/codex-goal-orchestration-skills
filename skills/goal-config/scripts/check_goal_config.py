@@ -56,7 +56,10 @@ DISCOVERY_PROFILES: dict[str, dict[str, Any]] = {
 
 
 def load_json(path: Path) -> dict[str, Any]:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"could not read config JSON {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"config must be a JSON object: {path}")
     return data
@@ -76,6 +79,8 @@ def load_contract() -> Any:
 # Single source of truth for harness kinds (orchestration_contract); kept in lockstep
 # with the runtime launcher's dispatchable kinds by scripts/check_harness_contract.py.
 HARNESS_KIND_VALUES = frozenset(load_contract().SUPPORTED_HARNESS_KINDS)
+BRIDGE_HARNESS_KIND = load_contract().BRIDGE_HARNESS_KIND
+BRIDGE_ROUTE_MODEL_IDS = frozenset(load_contract().BRIDGE_ROUTE_MODELS.values())
 
 
 def command_result(command: list[str], *, timeout_seconds: int | None = None) -> dict[str, Any]:
@@ -618,7 +623,10 @@ def run_harness_smoke(
         failures.append(f"{role} smoke prompt is missing")
     if not isinstance(expected, str) or not expected:
         failures.append(f"{role} smoke expected text is missing")
-    timeout_seconds = int(smoke.get("timeout_seconds") or 600)
+    try:
+        timeout_seconds = int(smoke.get("timeout_seconds") or 600)
+    except (TypeError, ValueError):
+        timeout_seconds = 600
     if failures:
         return {"status": "failed"}, failures
 
@@ -802,15 +810,36 @@ def profile_discovery_candidates(
     return candidates
 
 
+def _bridge_route_failures(model: dict[str, Any]) -> list[str]:
+    # Contract (configuration-contract "Harness Checks"): for opencode-bridge roles the exact
+    # provider/model must be a known bridge route, accepting nested provider ids such as
+    # openrouter/deepseek/deepseek-v4-pro (the trailing model segment must match).
+    provider_model = model.get("model")
+    if not isinstance(provider_model, str) or not provider_model:
+        return []  # already reported as "missing model" by check_non_opencode_model
+    leaf = provider_model.rsplit("/", 1)[-1]
+    if provider_model in BRIDGE_ROUTE_MODEL_IDS or leaf in BRIDGE_ROUTE_MODEL_IDS:
+        return []
+    return [f"opencode-bridge model {provider_model!r} is not a known bridge route {sorted(BRIDGE_ROUTE_MODEL_IDS)}"]
+
+
 def check_model_for_harness(
     model: dict[str, Any],
     *,
     harness: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
     kind = harness.get("kind")
-    if kind in HARNESS_KIND_VALUES:
-        return check_non_opencode_model(model, harness=harness)
-    return {"status": "failed", "reason": f"unsupported harness kind: {kind}"}, [f"unsupported harness kind: {kind}"]
+    if kind not in HARNESS_KIND_VALUES:
+        return {"status": "failed", "reason": f"unsupported harness kind: {kind}"}, [
+            f"unsupported harness kind: {kind}"
+        ]
+    result, failures = check_non_opencode_model(model, harness=harness)
+    if kind == BRIDGE_HARNESS_KIND:
+        bridge_failures = _bridge_route_failures(model)
+        if bridge_failures:
+            failures = [*failures, *bridge_failures]
+            result["status"] = "failed"
+    return result, failures
 
 
 def discover_profile_routes(
@@ -831,7 +860,10 @@ def discover_profile_routes(
     )
     harnesses = config.get("harnesses") if isinstance(config.get("harnesses"), dict) else {}
     effort_cfg = config.get("effort") if isinstance(config.get("effort"), dict) else {}
-    timeout_seconds = int(effort_cfg.get("lite_timeout_seconds") or 600)
+    try:
+        timeout_seconds = int(effort_cfg.get("lite_timeout_seconds") or 600)
+    except (TypeError, ValueError):
+        timeout_seconds = 600
     failures: list[str] = []
     reports: list[dict[str, Any]] = []
     unvisited_routes: list[dict[str, Any]] = []
