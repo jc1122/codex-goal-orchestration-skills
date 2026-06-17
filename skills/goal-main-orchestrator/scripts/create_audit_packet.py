@@ -74,8 +74,14 @@ def resolve_repo_path(repo_root: Path, value: object, field: str) -> Path:
 
 
 def load_manifest(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"manifest must be a JSON object: {path}")
+    return data
 
 
 def archive_existing_packet_dir(packet_dir: Path, *, replace: bool) -> None:

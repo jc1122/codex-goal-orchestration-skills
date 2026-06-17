@@ -16,6 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 from conftest import REPO, load_module
 
 rgb = load_module("skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py", "rgb_mo")
@@ -23,6 +24,19 @@ ams = load_module("skills/goal-main-orchestrator/scripts/assemble_main_status.py
 vpa = load_module("skills/goal-main-orchestrator/scripts/validate_prompt_audit.py", "vpa_mo")
 dpa = load_module("skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py", "dpa_mo")
 stl = load_module("skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "stl_mo")
+cap = load_module("skills/goal-main-orchestrator/scripts/create_audit_packet.py", "cap_mo")
+
+
+# --- 2026-06-18 re-review residual: create_audit_packet.load_manifest fails closed ---
+def test_create_audit_packet_load_manifest_fails_closed(tmp_path):
+    bad = tmp_path / "job.manifest.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        cap.load_manifest(bad)
+    arr = tmp_path / "arr.json"
+    arr.write_text("[]", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        cap.load_manifest(arr)  # non-dict manifest must fail closed, not AttributeError later
 
 
 # --- C1: the generated branch launch prompt interpolates the real branch id ---
