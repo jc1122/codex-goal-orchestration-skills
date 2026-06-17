@@ -520,7 +520,16 @@ def normalize_route_ladder(
                 flattened.append(item)
     if not flattened:
         raise ValueError(f"{route_name} route must contain at least one route alias")
-    allowed = tuple(allowed_routes)
+    # Ordering reference for the "standard ladder order" check below. allowed_routes may be an
+    # unordered set/frozenset (e.g. ALLOWED_WORKER_ROUTES = frozenset(DEFAULT_WORKER_LADDER)); in
+    # that case tuple(allowed_routes) is hash-iteration order (arbitrary, PYTHONHASHSEED-dependent),
+    # which would both reject valid subsequences and accept out-of-order ladders. Derive a stable
+    # order from default_ladder (always an ordered tuple), appending any extra allowed aliases in
+    # sorted order. Ordered callers (list/tuple) keep their exact prior behavior.
+    if isinstance(allowed_routes, (set, frozenset)):
+        allowed = tuple(default_ladder) + tuple(sorted(set(allowed_routes) - set(default_ladder)))
+    else:
+        allowed = tuple(allowed_routes)
     seen = set()
     positions = []
     for alias in flattened:

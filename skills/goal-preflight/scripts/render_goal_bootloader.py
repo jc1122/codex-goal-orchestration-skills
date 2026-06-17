@@ -737,6 +737,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         ),
         lint_bundle=lint_bundle,
         repair_gate=repair_gate,
+        defer_missing_reports=False,
     )
     if not launch_blockers and _bootloader_launch_handoff_is_stale(bootloader_text, lint_bundle, repair_gate):
         launch_blockers = ["bootloader launch handoff stale"]
@@ -829,6 +830,7 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         ),
         lint_bundle=lint_bundle,
         repair_gate=repair_gate,
+        defer_missing_reports=False,
     )
     if not launch_blockers and _bootloader_launch_handoff_is_stale(bootloader_text, lint_bundle, repair_gate):
         launch_blockers = ["bootloader launch handoff stale"]
@@ -1007,8 +1009,14 @@ def _bootloader_launch_blockers(
     *,
     lint_bundle: dict[str, object],
     repair_gate: dict[str, object],
+    defer_missing_reports: bool = True,
 ) -> list[str]:
-    deferred = set(_BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS)
+    # `defer_missing_reports` defers absent bundle-lint / repair-gate reports ("... missing").
+    # Only the pre-lint bootloader-markdown render keeps it True (chicken-and-egg: the launch
+    # handoff phrase must already be present in the bootloader before lint runs). The authoritative
+    # readiness gate passes False: a bundle that was NEVER linted / repair-gated must not be
+    # launch_allowed (otherwise a never-validated bundle is more launchable than a linted-failed one).
+    deferred: set[str] = set(_BOOTLOADER_DEFERRED_LAUNCH_BLOCKERS) if defer_missing_reports else set()
     if "bundle lint failed" in launch_blockers and _has_only_bootloader_launch_phrase_defects(lint_bundle):
         deferred.add("bundle lint failed")
     if (

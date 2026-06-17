@@ -222,6 +222,11 @@ def scheduler_rollup(
         dependencies=branch_dependencies(branches),
         capacity=max_active,
         manifest_path=manifest_path,
+        # Accept the pre-amendment (archived) manifest sha like validate_main_scheduler does;
+        # otherwise a legitimately-passing post-amendment run is downgraded to "partial" by a
+        # spurious "manifest_sha256 must match current job.manifest.json" blocker the validator
+        # (using archived shas) never raises.
+        allowed_manifest_sha256s=STATUS_VALIDATION.archived_manifest_sha256s(manifest_path),
         require_all_launched=status == "pass",
     )
     blockers.extend(f"main scheduler: {item}" for item in defects)
@@ -451,7 +456,9 @@ def aggregate_review_status(branch_statuses: list[dict], expected_branch_count: 
     }
     if review_statuses == {"mergeable"}:
         return "mergeable"
-    if "failed" in review_statuses or "blocked" in review_statuses:
+    # A "reject" verdict is a hard-negative review and must roll up as blocked (it previously
+    # fell through to "missing", i.e. was reported as merely unreviewed).
+    if review_statuses & {"failed", "blocked", "reject"}:
         return "blocked"
     return "missing"
 

@@ -823,7 +823,7 @@ def main() -> int:
                 "--state-output",
                 for_preflight_state_path.as_posix(),
             ],
-        ).stdout
+        )
         for_preflight_default = json.loads(for_preflight_report_path.read_text(encoding="utf-8"))
         require(for_preflight_default["status"] == "pass", "default config should pass preflight compatibility")
         require(

@@ -1,0 +1,104 @@
+{
+  "schema_version": 2,
+  "repo_root": "/home/jakub/projects/codex-goal-orchestration-skills",
+  "run_id": "goal-skillset-audit-20260617",
+  "branch": "main",
+  "scope": "Full repo-audit-refactor-optimize over the goal skillset (all six skills + supporting scripts), forced-full all lanes, plus a parallel per-skill correctness review using one subagent per skill.",
+  "started_utc": "2026-06-17T11:30:43Z",
+  "finished_utc": "2026-06-17T14:46:17Z",
+  "orchestrator_skill_version": "repo-audit-refactor-optimize v0.12.1",
+  "definition_of_done": "Forced-full diagnosis wave reports 0 actionable + 0 stale; full `npm run check` green; every genuine correctness finding from the per-skill subagent review either fixed (with a regression test) or triaged with a documented rationale. Two review rounds were run (round 2 used fresh angles: concurrency, write-atomicity, path-safety, writer/validator contract drift, boundary/determinism).",
+  "lanes": {
+    "code-health": {"raw_findings": 1681, "actionable": 0, "status": "converged"},
+    "security": {"raw_findings": 194, "actionable": 0, "status": "converged"},
+    "hygiene": {"raw_findings": 0, "actionable": 0, "status": "ok"},
+    "docs": {"raw_findings": 0, "actionable": 0, "status": "ok"},
+    "dependency": {"raw_findings": 7, "actionable": 0, "status": "converged"},
+    "hotspot": {"raw_findings": 428, "actionable": 0, "status": "converged"},
+    "performance": {"status": "blocked", "note": "No benchmark surface / no deterministic perf surface in this CLI-script repo; structural, not a tooling gap. Continued degraded as in prior runs."},
+    "correctness-review": {"status": "manual", "note": "6 parallel subagents (one per goal skill); 21 findings surfaced (5-6 P1, rest P2)."}
+  },
+  "findings_totals": {
+    "deterministic_wave_actionable_initial": 31,
+    "deterministic_wave_actionable_final": 0,
+    "deterministic_wave_accepted_residuals": 2310,
+    "deterministic_wave_stale": 0,
+    "correctness_review_round1_total": 21,
+    "correctness_review_round2_total": 21,
+    "correctness_review_round2_P0": 1,
+    "correctness_review_round2_P1": 6,
+    "correctness_fixes_shipped_total": 9,
+    "deterministic_wave_accepted_residuals_final": 2327
+  },
+  "backlog": {
+    "accepted": [
+      "deterministic-wave: 2310 documented residuals in .repo-audit/accept.json, each with a reason (hotspot churn, complexity floor, E501 string literals, by-design bandit B105/B603/B607/B404/B112/B103/B108, standalone-script duplication idiom, docs base-path FPs, dependency dev-tool/sibling-import FPs).",
+      "deterministic-wave: 24 bandit B101 (assert_used) accepted via two path globs (tests/** = pytest assertions; maintenance/reports/** = archived audit-report snapshot, already ruff-excluded by the repo).",
+      "review: assemble_main_status.py:605 main() returns 0 on blocked/failed status — NOT a bug; the assemble_* contract is artifact-writer (exit = assembly succeeded, status lives in the JSON; consistent with assemble_branch_status). Fixtures 10017/10064/10172/10255 assert exit 0 on blocked/invalid/partial assemblies."
+    ],
+    "deferred": [
+      "review P1 runtime_packet_runner.py worktree_status_lines/extract_changed_files: silent git failure (returncode ignored) -> empty changed-files -> vacuous worker-ownership pass. Real fail-open but invasive (worktree_status_lines has many tolerant callers) and low-probability (git failing mid-run); needs a git-failure sentinel threaded through the helper chain. Recommend fixing in a focused follow-up.",
+      "review P1 script_only_repair_gate.py: status='pass'/exit 0 while launch_allowed=False when only the runtime_launch_gate blocks (e.g. base_ref missing). The blocked signal IS authoritatively carried in the launch_allowed field (checked by consumers/fixtures 6664/6704), so impact is bounded; folding it into status/exit risks the artifact contract + repair-gate fixtures. Recommend a deliberate decision on the gate's exit-code semantics.",
+      "review P2 (robustness, fail-closed-crash -> clean-error): non-dict guards in assemble_main_status.py (104/160/263), create_goal_bundle.py load_json+_resolve_waves, check_goal_config.py validate_config_shape per-entry, create_goal_config.py load_harness_spec inline-JSON routing. All currently raise a traceback instead of a clean SystemExit on malformed JSON input (operator error); no wrong-success.",
+      "review P2 amendment_lib.py: no single-recoverer/single-superseder uniqueness defect in apply_operations_to_manifest (enabler of the now-fixed create_blocker_repair duplicate); forward-only depends_on rewrite in replace/split assumes topological ordering.",
+      "review P2 promote_worker_repair_evidence.py:256 branch-scope containment vacuous when branch_owned is empty (item-level check still fails closed; requires a degenerate manifest).",
+      "review P2 assemble_main_status.py aggregate_review_status: trusts a non-pass branch's self-reported review_status (primary status gate still holds; only the secondary review_complete signal is affected).",
+      "review P2 scheduler_tick.py interim ticks: printed status/exit use flag-gated defects so an interim tick can print pass while the persisted validation_status is invalid (bounded; finalize gates with --validate-final).",
+      "review P2 lint_goal_bundle.py multi-owner masking: only owners[0] checked for a multi-candidate `python -m pkg.mod` reference (narrow two-branch path-spelling edge)."
+    ],
+    "coverage_gated": [],
+    "wont_fix": []
+  },
+  "batches": [
+    {
+      "id": "deterministic-remediation",
+      "summary": "Drove the forced-full wave actionable backlog 31 -> 0.",
+      "changes": [
+        "Fixed 7 real ruff-quality findings in scripts/ tooling (behavior-preserving): UP022 x3 (capture_output), UP035 (collections.abc.Callable), SIM102 (collapsed if), B904 (raise ... from None), B018 (dropped a useless `.stdout` attribute access).",
+        "Added two path-glob accept entries (tests/**, maintenance/reports/**) for the 24 bandit B101 false positives.",
+        "Pruned 2 stale dead-code accept entries (is_worktree_dirty, clear_git_stdout_cache) confirmed referenced by the preparedness fixtures -> 0 stale."
+      ]
+    },
+    {
+      "id": "correctness-remediation",
+      "summary": "Fixed 3 unambiguous P1 fail-opens found by the per-skill subagent review, each with a regression test.",
+      "changes": [
+        "_goal_shared/scripts/extract_telemetry.py accepted_alias: a blocked/failed WORKER is now status-keyed to None (was substring-marker only -> mislabeled accepted). Synced to all 5 dispatch wrappers. Tests: test_blocked_or_failed_worker_never_accepted (x2), test_passing_worker_is_accepted.",
+        "goal-branch-orchestrator/scripts/validate_branch_status.py validate_worker_changed_files: dropped the `owned_paths and` short-circuit so an empty owned_paths fails closed (consistent with runtime_packet_runner.worker_ownership_violations). Tests: test_worker_empty_owned_paths_flags_out_of_scope_change, test_worker_owned_paths_allows_owned_change.",
+        "goal-plan-amender/scripts/create_blocker_repair_packet.py generate_proposal: skip terminals already recovered/superseded by an existing manifest branch (idempotency; was emitting a duplicate repair branch). Tests: tests/test_blocker_repair_idempotent.py (red-green verified)."
+      ]
+    }
+  ],
+  "round2_batch": {
+    "id": "correctness-remediation-round2",
+    "summary": "Fresh-angle per-skill review (concurrency, write-atomicity, path-safety, writer/validator contract drift, boundary/determinism) found a P0 + 6 P1; fixed the clear high-value ones, each verified.",
+    "fixed": [
+      "P0 render_goal_bootloader.py: authoritative readiness no longer defers absent bundle-lint / repair-gate reports (new defer_missing_reports flag, False on the readiness path, True only for the pre-lint bootloader render). A never-linted/repair-gated bundle now reports launch_allowed=false. Test: tests/test_readiness_gate.py (end-to-end).",
+      "P1 assemble_main_status.scheduler_rollup: now passes allowed_manifest_sha256s=archived_manifest_sha256s(manifest_path) (matching validate_main_scheduler) so a post-amendment pass is not downgraded to partial by a spurious manifest_sha256 blocker.",
+      "P1 lint_goal_bundle._lint_branch_overlap: dropped parallelization.serial_reasons from the cross-branch owned_paths overlap waiver (a scheduling-capacity note, near-always present, that silently waived every cross-branch file collision); now waived only by a real dependency or per-branch contention_reason.",
+      "P1 orchestration_contract.normalize_route_ladder: derive the ladder-order reference from default_ladder (ordered) when allowed_routes is a set/frozenset, instead of tuple(frozenset) hash order; deterministic across PYTHONHASHSEED 0/1/2/7. Tests in tests/test_round2_fixes.py.",
+      "P1 scheduler_tick.close_from_artifacts: emit a blocked event with reason_code=dependency_failed for each unlaunched item whose upstream dependency closed non-pass (or is itself blocked), so `--close-from-artifacts --validate-final` certifies a normal 'upstream failed -> downstream blocked' run. Tests: tests/test_scheduler_dependency_failed.py.",
+      "P2 assemble_main_status.aggregate_review_status: a 'reject' verdict now rolls up as blocked instead of falling through to 'missing'. Test in tests/test_round2_fixes.py.",
+      "Pruned the now-obsolete normalize_route_ladder dead-code accept (a real test caller now covers it); wave back to 0 stale."
+    ],
+    "deferred_with_rationale": [
+      "P1 create_goal_config.build_model_policies --from-discovery mechanical/docs use worker[-1] (possibly premium). A surgical cheaper_ladder swap is a NO-OP because premium detection matches the alias name and discovered routes carry generic aliases; a correct fix needs MODEL-level cost awareness + a terminal-ladder design decision. Cost-efficiency, not safety. (The no-op attempt was reverted, not shipped.)",
+      "P2 carried/new: runtime_packet_runner silent git-failure (invasive), script_only_repair_gate exit/status (field-authoritative), amendment_lib uniqueness + forward-dep, promote branch-scope, status-recompute-after-amendment-blockers (self-validation flips it), preflight.lint.json rollback restore, normalize_role_model_for_harness conflicting-provider drop, reusable_smoke_route_report dedup, scheduler_tick interim status, append_scheduler_event ledger append-race, lint_goal_bundle multi-owner masking."
+    ]
+  },
+  "verification": {
+    "py_compile_all_changed": "pass",
+    "npm_run_check": "pass (GATE_EXIT=0: ruff lint+format, sync_goal_shared no-drift, config/fixtures/golden/release/maintenance/context/models, 29 pytest)",
+    "ruff_audit_rules_repo_wide": "pass",
+    "validate_accept": "pass",
+    "forced_full_wave_actionable": "0 actionable, 0 stale, 2327 accepted (after round 2)",
+    "regression_tests": "29 passed (was 15 at session start; +14 across both rounds)",
+    "round2_targeted_repros": "render_goal_bootloader (un-linted bundle -> launch_allowed=false), normalize_route_ladder (deterministic across hash seeds), scheduler_tick (validate_final clean for upstream-failure) all verified directly.",
+    "behavior_identity_notes": "Deterministic lint fixes are behavior-preserving. Correctness fixes only change wrong-result/fail-open paths; normal/passing paths verified unchanged via the regression suite + green preparedness/config/golden fixtures. The create_goal_config no-op was reverted rather than shipped."
+  },
+  "warnings": [
+    "performance lane blocked (no benchmark surface) — structural to this CLI-script repo, continued degraded.",
+    "Two P1 review findings (runtime_packet_runner silent-git-failure, script_only_repair_gate exit semantics) and several P2s were deferred with documented rationale — see backlog.deferred. They are not gated by the deterministic wave and need a deliberate decision before changing the (fixture-asserted) artifact/exit contracts.",
+    "Local checkout is on `main`; changes are in the working tree (not committed) pending user review."
+  ]
+}

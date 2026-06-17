@@ -35,7 +35,7 @@ BOOTSTRAP_SOURCE_PATHS = {
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    result = subprocess.run(command, cwd=ROOT, text=True, capture_output=True, check=False)
     if result.returncode != 0:
         if result.stderr:
             print(result.stderr, file=sys.stderr)

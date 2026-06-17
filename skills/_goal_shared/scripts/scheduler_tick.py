@@ -1052,6 +1052,43 @@ def close_from_artifacts(
         if progressed:
             continue
 
+        # Dependency-stuck closeout: an item that can never launch because an upstream dependency
+        # closed non-pass (or is itself blocked) must carry an explicit dependency_failed blocked
+        # event. status_validation._validate_ledger_final_state requires exactly this for every
+        # unlaunched item with a failed dependency; without it, `--close-from-artifacts
+        # --validate-final` reports a normal "upstream failed -> downstream blocked" run as failed
+        # with un-self-repairable defects (and reconcile's dependency-failed recovery path stays
+        # dead). Each item is blocked at most once, so the loop still converges.
+        state = replay(ledger, item_ids, dependencies, capacity, allow_relaunch=allow_relaunch)
+        closed = set(state["closed"])
+        blocked = set(state["blocked"])
+        active = set(state["active"])
+        for item_id in item_ids:
+            if item_id in closed or item_id in blocked or item_id in active:
+                continue
+            stuck_deps = [
+                dep
+                for dep in dependencies.get(item_id, [])
+                if (dep in closed and terminal_statuses.get(dep) in {"partial", "blocked", "failed"}) or dep in blocked
+            ]
+            if stuck_deps:
+                appended.append(
+                    append_event(
+                        ledger,
+                        event="blocked",
+                        runtime_ref=runtime_ref,
+                        timestamp_value=timestamp_value,
+                        manifest_sha256=manifest_sha,
+                        manifest_epoch_value=manifest_epoch_value,
+                        id=item_id,
+                        reason_code="dependency_failed",
+                        reason=f"dependency did not pass: {', '.join(stuck_deps)}",
+                    )
+                )
+                progressed = True
+        if progressed:
+            continue
+
         return appended, state
 
     raise SystemExit("--close-from-artifacts did not converge; inspect scheduler ledger")

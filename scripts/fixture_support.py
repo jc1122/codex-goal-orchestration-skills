@@ -11,9 +11,10 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Callable
+from typing import Any
 
 
 _MODULE_CACHE: dict[Path, ModuleType] = {}
@@ -87,9 +88,8 @@ def _script_path(command: list[str], *, root: Path, cwd: Path) -> Path | None:
     candidates = [raw] if raw.is_absolute() else [cwd / raw, root / raw]
     for candidate in candidates:
         resolved = candidate.resolve()
-        if resolved.is_file() and resolved.suffix == ".py":
-            if _is_safe_repo_or_installed_skill_script(resolved, root):
-                return resolved
+        if resolved.is_file() and resolved.suffix == ".py" and _is_safe_repo_or_installed_skill_script(resolved, root):
+            return resolved
     return None
 
 

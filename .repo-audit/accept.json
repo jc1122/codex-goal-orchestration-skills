@@ -62,20 +62,16 @@
       "reason": "By design: /dev/shm is used as a faster scratch root ONLY when writable (mkdir + exist_ok, writability-gated) with a packet-local fallback; it is a directory root, not a predictable-filename temp file (CWE-377 does not apply)."
     },
     {
+      "match": {"kind": "path", "glob": "tests/**"},
+      "reason": "False positive: bandit B101 (assert_used) flags pytest assertions in the repo's own regression suite (tests/test_bug_classes.py, tests/test_owned_paths_guard.py). assert is pytest's assertion mechanism, not an -O-stripped runtime guard. The diagnosis wave already excludes tests/ from source lanes by default; the bandit security lane is the only leaf that reaches into it."
+    },
+    {
+      "match": {"kind": "path", "glob": "maintenance/reports/**"},
+      "reason": "Archived audit-report artifacts (a captured git-worktree snapshot under maintenance/reports/toyoptimization-*/), not package source. The repo's own ruff config already sets extend-exclude=[\"maintenance/reports\"]; bandit B101 (assert_used) hits inside the snapshot's test_toyopt.py are doubly out of scope."
+    },
+    {
       "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_route_class_ladder", "metric": "dead_code_confidence"},
       "reason": "False positive: public orchestration_contract API consumed by the skill runtimes (route-class ladder accessor); vulture cannot see cross-script importlib consumers."
-    },
-    {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "normalize_route_ladder", "metric": "dead_code_confidence"},
-      "reason": "False positive: public orchestration_contract API consumed by the skill runtimes (ladder normalization/validation); vulture cannot see cross-script importlib consumers."
-    },
-    {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "symbol": "is_worktree_dirty", "metric": "dead_code_confidence"},
-      "reason": "False positive: exercised by the preparedness fixtures (dirty-stop salvage path); vulture min-confidence 60 over-flags it."
-    },
-    {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "symbol": "clear_git_stdout_cache", "metric": "dead_code_confidence"},
-      "reason": "False positive: git-stdout cache invalidator retained as part of the cache API and referenced by preparedness fixtures; vulture over-flags."
     }
   ]
 }

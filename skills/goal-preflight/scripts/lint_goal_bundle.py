@@ -2422,7 +2422,7 @@ def _lint_branches(
     return tally
 
 
-def _lint_cross_branch_ownership(defect, branches: list, serial_reasons: list) -> None:
+def _lint_cross_branch_ownership(defect, branches: list) -> None:
     """Validate cross-branch context/ownership, verification command ownership, and branch overlap."""
     branch_owned_paths: dict[str, list[str]] = {}
     branch_deps: dict[str, list[str]] = {}
@@ -2471,7 +2471,7 @@ def _lint_cross_branch_ownership(defect, branches: list, serial_reasons: list) -
                 )
         allowed_branch_ids = {bid, *dependency_closure(bid, branch_deps)}
         _lint_branch_verification_ownership(defect, bid, work_items, branch_owned_paths, allowed_branch_ids)
-    _lint_branch_overlap(defect, branch_owned_paths, branch_deps, branch_contention, serial_reasons)
+    _lint_branch_overlap(defect, branch_owned_paths, branch_deps, branch_contention)
 
 
 def _lint_branch_verification_ownership(
@@ -2523,7 +2523,6 @@ def _lint_branch_overlap(
     branch_owned_paths: dict[str, list[str]],
     branch_deps: dict[str, list[str]],
     branch_contention: dict[str, object],
-    serial_reasons: list,
 ) -> None:
     """Validate cross-branch owned_paths overlaps require a dependency or contention reason."""
     branch_ids_for_overlap = list(branch_owned_paths)
@@ -2538,10 +2537,14 @@ def _lint_branch_overlap(
             if not overlaps:
                 continue
             dependency_serialized = left_id in branch_deps.get(right_id, []) or right_id in branch_deps.get(left_id, [])
+            # Only a genuine per-pair signal waives a cross-branch owned_paths overlap: an actual
+            # dependency relationship (above) or a real contention_reason on one of the two
+            # branches. Manifest-level parallelization.serial_reasons (scheduling-capacity notes,
+            # auto-populated for single-branch / low-cap / narrow-DAG bundles) must NOT waive it,
+            # or two concurrently-running branch worktrees could write the same file undetected.
             if not dependency_serialized and not has_contention_reason(
                 branch_contention.get(left_id),
                 branch_contention.get(right_id),
-                serial_reasons,
             ):
                 overlap_text = ", ".join(f"{left_path} vs {right_path}" for left_path, right_path in overlaps)
                 defect(
@@ -2708,7 +2711,7 @@ def lint(bundle_dir: Path) -> dict:
             "research_worker_policy is required when any work item uses worker_type='research-worker'",
         )
 
-    _lint_cross_branch_ownership(defect, branches, serial_reasons)
+    _lint_cross_branch_ownership(defect, branches)
 
     return result(
         defects,

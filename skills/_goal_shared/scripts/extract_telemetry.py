@@ -175,6 +175,12 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
     if not called or output is None:
         return None
     if role == "worker":
+        if output.get("status") in {"blocked", "failed"}:
+            # A blocked/failed worker never landed a usable change, so its route attempt
+            # must not be marked accepted. Key off the authoritative status field: the
+            # substring-marker guard below missed real blocker messages outside the marker
+            # list (the same fail-open already fixed for lite_advisor / prompt-auditor).
+            return None
         blockers = output.get("blockers", [])
         blocker_text = " ".join(item for item in blockers if isinstance(item, str))
         terminal_markers = [

@@ -7320,8 +7320,7 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ],
         cwd=ROOT,
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         check=False,
     )
     if failing_pipeline.returncode != 1:
@@ -9427,7 +9426,7 @@ def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
         process.kill()
-        raise SystemExit("audit launcher did not exit after SIGTERM")
+        raise SystemExit("audit launcher did not exit after SIGTERM") from None
     run(
         [
             "python3",

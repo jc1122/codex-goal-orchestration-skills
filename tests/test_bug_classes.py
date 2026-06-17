@@ -108,3 +108,35 @@ def test_validate_for_preflight_nondict_telemetry_no_crash():
     # pre-fix: config.get("telemetry", {}).get("mode") raised AttributeError on a non-dict telemetry.
     failures = ccg.validate_for_preflight(config, "smoke", _CONTRACT)
     assert any("telemetry" in failure for failure in failures)
+
+
+# --- extract_telemetry: a blocked/failed WORKER must never be marked accepted (status-keyed) ---
+@pytest.mark.parametrize("status", ["blocked", "failed"])
+def test_blocked_or_failed_worker_never_accepted(status):
+    attempts = [{"alias": "ds-pro-max", "called": True}]
+    # Blocker prose intentionally does NOT match the terminal_markers list; pre-fix the
+    # substring-only guard returned the alias (accepted) for this blocked/failed worker.
+    out = {"status": status, "blockers": ["bridge delegate failed; see run-dir artifacts"]}
+    assert et.accepted_alias("worker", out, attempts) is None
+
+
+def test_passing_worker_is_accepted():
+    attempts = [{"alias": "ds-pro-max", "called": True}]
+    out = {"status": "pass", "blockers": []}
+    assert et.accepted_alias("worker", out, attempts) == "ds-pro-max"
+
+
+# --- validate_worker_changed_files: empty owned_paths must fail closed (was a vacuous pass) ---
+def test_worker_empty_owned_paths_flags_out_of_scope_change():
+    defects: list[str] = []
+    artifact = {"status": "pass", "changed_files": ["src/secrets.py"]}
+    # pre-fix: the `owned_paths and ...` short-circuit skipped the check entirely -> 0 defects.
+    vb.validate_worker_changed_files(defects, artifact, "$.item", owned_paths=[])
+    assert defects, "a passing worker with no owned_paths must not silently land arbitrary changes"
+
+
+def test_worker_owned_paths_allows_owned_change():
+    defects: list[str] = []
+    artifact = {"status": "pass", "changed_files": ["src/x.py"]}
+    vb.validate_worker_changed_files(defects, artifact, "$.item", owned_paths=["src/"])
+    assert defects == []

@@ -1070,7 +1070,11 @@ def validate_worker_changed_files(
                 f"{item_path}.changed_files[{changed_index}]",
                 "must not include runtime cache or bytecode paths",
             )
-        elif artifact.get("status") == "pass" and owned_paths and not path_is_owned(changed, owned_paths):
+        elif artifact.get("status") == "pass" and not path_is_owned(changed, owned_paths):
+            # Fail closed when owned_paths is empty: a passing worker that declares no owned
+            # paths must not be able to land arbitrary changes. Dropping the `owned_paths and`
+            # short-circuit makes the validator consistent with runtime_packet_runner's
+            # worker_ownership_violations (which already treats empty owned as "owns nothing").
             defect(
                 defects,
                 f"{item_path}.changed_files[{changed_index}]",

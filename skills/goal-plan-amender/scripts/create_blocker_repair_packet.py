@@ -346,12 +346,26 @@ def generate_proposal(input_data: dict) -> dict:
     bundle_dir = manifest_path.parent
     branches = branch_map(manifest)
     existing_owned = all_owned_paths(manifest)
+    already_recovered = {
+        target
+        for branch in branches.values()
+        if isinstance(branch, dict)
+        for key in ("recovers_from", "supersedes")
+        for target in (branch.get(key) or [])
+        if isinstance(target, str)
+    }
     operations = []
     terminal_ids = [item for item in input_data.get("terminal_branch_ids", []) if isinstance(item, str)]
     branch_offset = 0
     for terminal_branch_id in terminal_ids:
         branch = branches.get(terminal_branch_id)
         if not isinstance(branch, dict):
+            continue
+        if terminal_branch_id in already_recovered:
+            # Idempotency: this terminal is already recovered/superseded by an existing manifest
+            # branch (e.g. a prior deterministic blocker-repair run). Re-proposing would create a
+            # duplicate repair branch with the same recovers_from/supersedes target, which the
+            # apply-operations validator does not reject.
             continue
         status_path_value = branch.get("status_path")
         if not isinstance(status_path_value, str) or relative_path_defect(

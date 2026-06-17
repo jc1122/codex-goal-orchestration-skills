@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:c63f5fec750ecf795ceb7037d554d83dbd82f4a7b6973c312ddce4f5d55856f2"
+    "source_fingerprint": "sha256:bcd267eff5f2edfde35fd10afb3c8c4c194258b1cf6e6e9c216857272c8f7d8e"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,13 +16,13 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 10650,
-      "approx_tokens": 120172,
+      "lines": 10649,
+      "approx_tokens": 120166,
       "rule": "failures/function search; table repeats",
       "top_functions": [
         "4824:run_runtime_packet_fixtures:1618l",
-        "7215:run_base_ref_default_fixture:1491l",
-        "9642:run_branch_status_negative_fixtures:964l",
+        "7215:run_base_ref_default_fixture:1490l",
+        "9641:run_branch_status_negative_fixtures:964l",
         "3900:run_launch_ready_helper_fixtures:434l"
       ]
     },
@@ -68,13 +68,13 @@
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2808,
-      "approx_tokens": 31329,
+      "lines": 2811,
+      "approx_tokens": 31422,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "2139:_lint_branch_worker_parallelism:135l",
         "1097:validate_goal_config_manifest:121l",
-        "2614:lint:108l",
+        "2617:lint:108l",
         "1526:_lint_model_policies:107l"
       ]
     }
