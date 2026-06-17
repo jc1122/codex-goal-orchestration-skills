@@ -434,7 +434,10 @@ def route_availability_verified(candidate: dict | None) -> bool:
     path = Path(str(candidate["selected_check_path"]))
     if not path.exists():
         return False
-    check = read_json(path)
+    try:
+        check = read_json(path)
+    except Exception:  # noqa: BLE001
+        return False
     summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
     if summary.get("route_verification_status") == "routes_verified":
         return True

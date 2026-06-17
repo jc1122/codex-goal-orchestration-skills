@@ -1713,9 +1713,15 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
     waves = manifest.get("waves", [])
     wave_branch_ids = []
     wave_ids = []
+    if not isinstance(waves, list):
+        defect("job.manifest.json", "critical", "waves must be a JSON array")
+        waves = []
     if len(waves) > MAX_WAVES:
         defect("job.manifest.json", "critical", "more than 5 waves is not allowed")
     for wave in waves:
+        if not isinstance(wave, dict):
+            defect("job.manifest.json", "critical", "each wave must be a JSON object")
+            continue
         wid = wave.get("id")
         wave_ids.append(wid)
         if not isinstance(wid, str) or not SAFE_LABEL_RE.fullmatch(wid):
@@ -2689,7 +2695,16 @@ def lint(bundle_dir: Path) -> dict:
     if manifest.get("adaptation_policy") != CONTRACT.ADAPTATION_POLICY:
         defect("job.manifest.json", "critical", "adaptation_policy must match the shared amendment proposal policy")
 
-    branches = manifest.get("branches", [])
+    raw_branches = manifest.get("branches", [])
+    if not isinstance(raw_branches, list):
+        defect("job.manifest.json", "critical", "branches must be a JSON array")
+        raw_branches = []
+    branches = []
+    for branch in raw_branches:
+        if isinstance(branch, dict):
+            branches.append(branch)
+        else:
+            defect("job.manifest.json", "critical", f"each branch must be a JSON object, got {type(branch).__name__}")
     _lint_branch_concurrency(defect, parallelization, branches, max_active, serial_reasons, has_serial_reason)
 
     compatibility_status = _lint_model_policies(defect, manifest, goal_config, compatibility_status)
