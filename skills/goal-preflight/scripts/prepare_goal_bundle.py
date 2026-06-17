@@ -126,8 +126,11 @@ def worker_policy_roles(config: dict) -> list[str]:
         if not isinstance(values, list):
             return
         for value in values:
-            if isinstance(value, str) and value.strip() and value not in roles:
-                roles.append(value)
+            if not isinstance(value, str):
+                continue
+            stripped = value.strip()
+            if stripped and stripped not in roles:
+                roles.append(stripped)
 
     add(worker_policy.get("default_ladder"))
     add(worker_policy.get("allowed_routes"))

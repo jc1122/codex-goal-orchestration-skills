@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:b361801855269acefaaf1bf0088b993d8c887209d0b9a06249beda57a681c75d"
+    "source_fingerprint": "sha256:fb7fc39d1c776b4c583935b42195bd262f1d731229601c5a05a7cfbce86877fd"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,14 +29,14 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3528,
-      "approx_tokens": 39460,
+      "lines": 3523,
+      "approx_tokens": 39406,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1838:normalize_brief:109l",
-        "3120:render_branch_prompt_text:105l",
-        "2506:build_runtime_index:96l",
-        "2930:manifest_from_normalized_brief:94l"
+        "1833:normalize_brief:109l",
+        "3115:render_branch_prompt_text:105l",
+        "2501:build_runtime_index:96l",
+        "2925:manifest_from_normalized_brief:94l"
       ]
     },
     {
@@ -68,14 +68,14 @@
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2811,
-      "approx_tokens": 31422,
+      "lines": 2821,
+      "approx_tokens": 31520,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2139:_lint_branch_worker_parallelism:135l",
-        "1097:validate_goal_config_manifest:121l",
-        "2617:lint:108l",
-        "1526:_lint_model_policies:107l"
+        "2138:_lint_branch_worker_parallelism:135l",
+        "1096:validate_goal_config_manifest:121l",
+        "2616:lint:119l",
+        "1525:_lint_model_policies:107l"
       ]
     }
   ],

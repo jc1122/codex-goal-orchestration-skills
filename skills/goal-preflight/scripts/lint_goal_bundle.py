@@ -510,7 +510,6 @@ def lint_validator_command_snippets(defect, path: str, text: str, expected_statu
                     "major",
                     f"line {lineno}: {script_name} command snippet must {action} on same line",
                 )
-                continue
 
 
 def require_text_phrases(
@@ -2638,6 +2637,17 @@ def lint(bundle_dir: Path) -> dict:
         manifest = load_json(manifest_path)
     except Exception as exc:  # noqa: BLE001
         defect("job.manifest.json", "critical", f"manifest is not valid JSON: {exc}")
+        return result(
+            defects,
+            bundle_dir=bundle_dir,
+            manifest_path=manifest_path,
+            branch_count=0,
+            config_check_status="not_available",
+            compatibility_status="not_applicable",
+            git_repo_status=git_status,
+        )
+    if not isinstance(manifest, dict):
+        defect("job.manifest.json", "critical", "manifest must be a JSON object")
         return result(
             defects,
             bundle_dir=bundle_dir,

@@ -63,7 +63,6 @@ MAX_WAVES = CONTRACT.MAX_WAVES
 DEFAULT_TOTAL_BRANCH_CAP = CONTRACT.DEFAULT_TOTAL_BRANCH_CAP
 DEFAULT_WORKER_LADDER = CONTRACT.DEFAULT_WORKER_LADDER
 DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
-WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
 MANIFEST_WORKER_ROUTE_CLASSES = CONTRACT.MANIFEST_WORKER_ROUTE_CLASSES
 RESEARCH_WORKER_TYPE = CONTRACT.RESEARCH_WORKER_TYPE
 WORKER_MODEL_POLICY = CONTRACT.WORKER_MODEL_POLICY
@@ -1440,10 +1439,6 @@ def derived_owned_paths(work_items: list[dict]) -> list[str]:
     return paths
 
 
-def ready_width(items: list[dict]) -> int:
-    return len([item for item in items if not item.get("depends_on")])
-
-
 def max_ready_width(items: list[dict], *, id_field: str = "id", depends_on_field: str = "depends_on") -> int:
     remaining: dict[str, dict] = {
         str(item.get(id_field)): item for item in items if isinstance(item, dict) and str(item.get(id_field))
@@ -1473,7 +1468,7 @@ def ready_width_metadata(
     item_count: int, current_ready_width: int, capacity: int, *, scope: str, identifier: str | None = None
 ) -> dict[str, object]:
     usable_capacity = min(max(capacity, 1), item_count) if item_count else 0
-    if identifier and scope in {"branch", "worker"} or identifier:
+    if identifier:
         scope_name = f"{scope} {identifier}"
     else:
         scope_name = scope
