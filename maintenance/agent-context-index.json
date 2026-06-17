@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:46054fc78b58ffcb39dda6faf843ed9e789cb335a7e1474e6cc95a9adef2fd0d"
+    "source_fingerprint": "sha256:4a7d23013a49090a637d597b1e639d5710c992256b7d45657acb657eb4d3aada"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -113,7 +113,7 @@
       "bin/install-goal-skills.js"
     ],
     "npm_scripts": {
-      "check": "npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance",
+      "check": "npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance && npm run check:tests",
       "check:config": "python3 scripts/check_goal_config_fixtures.py",
       "check:context": "python3 scripts/generate_agent_context_index.py --check",
       "check:fixtures": "python3 scripts/check_preparedness_fixtures.py",
@@ -125,6 +125,7 @@
       "check:quality": "ruff check . && pyright",
       "check:release": "python3 scripts/check_release.py",
       "check:shared": "python3 scripts/sync_goal_shared.py",
+      "check:tests": "python3 -B -m pytest tests -q",
       "context:index": "python3 scripts/generate_agent_context_index.py --json",
       "generate:context": "python3 scripts/generate_agent_context_index.py --write",
       "lint:ruff": "ruff check .",

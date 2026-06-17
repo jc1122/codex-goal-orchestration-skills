@@ -5,4 +5,5 @@ npm-debug.log*
 __pycache__/
 *.py[cod]
 .ruff_cache/
+.pytest_cache/
 maintenance/reports/
