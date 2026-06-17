@@ -659,9 +659,7 @@ def _readiness_next_commands(
     return commands
 
 
-def _cleanup_plan(
-    manifest: dict, bundle_dir: Path, repo_root: Path | None, warnings: list[dict[str, object]]
-) -> dict[str, object]:
+def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[str, object]]) -> dict[str, object]:
     warning_paths = [
         str(warning.get("path"))
         for warning in warnings
@@ -757,7 +755,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         verified_routes=verified_routes,
         utilization=utilization,
     )
-    cleanup_plan = _cleanup_plan(manifest, bundle_dir, resolved_repo_root, warnings)
+    cleanup_plan = _cleanup_plan(bundle_dir, resolved_repo_root, warnings)
     prompt_size = _prompt_size_report(bundle_dir, manifest)
     artifact_size = _artifact_size_report(bundle_dir, manifest, prompt_size)
     manifest_path = bundle_dir / "job.manifest.json"
@@ -864,7 +862,7 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         "verified_routes": verified_routes,
         "branch_utilization": utilization,
         "warnings": warnings,
-        "cleanup_plan": _cleanup_plan(manifest, bundle_dir, resolved_repo_root, warnings),
+        "cleanup_plan": _cleanup_plan(bundle_dir, resolved_repo_root, warnings),
         "prompt_size_report": prompt_size,
         "artifact_size_report": artifact_size,
         "branch_dag": _collect_bundle_dag(manifest),

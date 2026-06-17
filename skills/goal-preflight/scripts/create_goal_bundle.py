@@ -1165,7 +1165,7 @@ def ordered_worker_policy_roles(worker_policy: dict) -> list[str]:
     return roles
 
 
-def route_coverage_summary(goal_config: dict | None, goal_config_check: dict | None, worker_policy: dict) -> dict:
+def route_coverage_summary(goal_config_check: dict | None, worker_policy: dict) -> dict:
     required = ordered_worker_policy_roles(worker_policy)
     accepted = sorted(accepted_route_roles(goal_config_check))
     accepted_set = set(accepted)
@@ -2035,7 +2035,7 @@ def preflight_compatibility_summary(config: dict | None, check: dict | None) -> 
 
     policies = config.get("model_policies") if isinstance(config.get("model_policies"), dict) else {}
     worker_policy = normalize_worker_model_policy(policies.get("worker_model_policy", WORKER_MODEL_POLICY))
-    route_coverage = route_coverage_summary(config, check, worker_policy)
+    route_coverage = route_coverage_summary(check, worker_policy)
     telemetry = config.get("telemetry") if isinstance(config.get("telemetry"), dict) else {}
     token_summary = {}
     if isinstance(check, dict):
@@ -2474,7 +2474,7 @@ def build_route_contract(
 ) -> dict:
     summary = compact_goal_config_check_summary(goal_config_check or {}) if isinstance(goal_config_check, dict) else {}
     accepted_route_count = summary.get("accepted_route_count")
-    coverage = route_coverage_summary(None, goal_config_check, worker_policy)
+    coverage = route_coverage_summary(goal_config_check, worker_policy)
     missing_worker_roles = coverage.get("missing_worker_roles", [])
     verified = route_availability_verified_from_check(goal_config_check)
     if missing_worker_roles:

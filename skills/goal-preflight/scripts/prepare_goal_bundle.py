@@ -60,7 +60,7 @@ def safe_name(path: Path) -> str:
     return value or "goal-config"
 
 
-def config_path_from_report(report: dict, config: Path) -> Path | None:
+def config_path_from_report(report: dict) -> Path | None:
     value = report.get("config_path")
     if not isinstance(value, str) or not value:
         return None
@@ -71,7 +71,7 @@ def config_path_from_report(report: dict, config: Path) -> Path | None:
 
 
 def report_matches_config(report: dict, config: Path, config_sha256: str | None = None) -> bool:
-    report_config = config_path_from_report(report, config)
+    report_config = config_path_from_report(report)
     config_sha = config_sha256
     if config_sha is None:
         config_sha = sha256_file(config)
