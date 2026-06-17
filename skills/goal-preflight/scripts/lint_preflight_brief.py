@@ -39,7 +39,11 @@ resolve_absolute_path = PATH_RULES.resolve_absolute_path
 is_repo_relative_path = PATH_RULES.is_repo_relative_path
 
 SEVERITY_ORDER = {"minor": 1, "major": 2, "critical": 3}
-PLACEHOLDER_RE = re.compile(r"(<(?!bundle\b)[^>\n]+>|\b(?:TODO|TBD|FIXME|XXX)\b|\?\?\?)", re.IGNORECASE)
+# The angle-bracket arm matches fill-in placeholders like <your goal> or <JOB_ID>
+# while excluding comparison operators ("a < b ... >"), "<=" forms, and emails
+# (<x@y.com>): the first inner char may not be whitespace/operator and the body
+# may not contain '@'.
+PLACEHOLDER_RE = re.compile(r"(<(?!bundle\b)(?![=<>\s/@])[^>\n@]*>|\b(?:TODO|TBD|FIXME|XXX)\b|\?\?\?)", re.IGNORECASE)
 WEAK_DOD_RE = re.compile(
     r"^(done|complete|completed|implemented|works|working|tests pass|fix it|ship it|as needed)\.?$", re.IGNORECASE
 )

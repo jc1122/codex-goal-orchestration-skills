@@ -1,0 +1,56 @@
+"""Regression tests for the 2026-06-17 deep-review fixes (goal-preflight)."""
+
+import shlex
+import sys
+
+from conftest import REPO, load_module
+
+sys.path.insert(0, str(REPO / "skills" / "_goal_shared" / "scripts"))
+sys.path.insert(0, str(REPO / "skills" / "goal-preflight" / "scripts"))
+
+lpb = load_module("skills/goal-preflight/scripts/lint_preflight_brief.py", "lpb_dr")
+rgb = load_module("skills/goal-preflight/scripts/render_goal_bootloader.py", "rgb_dr")
+
+
+# --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
+def test_placeholder_regex_ignores_operators_and_emails():
+    clean = [
+        "a < b and c > d",  # comparison operators, not a placeholder
+        "x <= 5 >= 1",  # <= / >= operator forms
+        "<jakub@example.com>",  # angle-wrapped email address
+        "Ship the binary when CI is green.",  # ordinary prose
+    ]
+    for text in clean:
+        assert not lpb.PLACEHOLDER_RE.search(text), f"false positive on: {text!r}"
+
+
+def test_placeholder_regex_still_catches_real_placeholders():
+    placeholders = [
+        "<your goal here>",
+        "<JOB_ID>",
+        "<...>",
+        "describe the fix ??? then ship",
+        "TODO finish this",
+    ]
+    for text in placeholders:
+        assert lpb.PLACEHOLDER_RE.search(text), f"missed placeholder in: {text!r}"
+
+
+# --- _cleanup_plan: the generated commands must not delete the config it preserves ---
+def test_cleanup_plan_preserves_existing_config(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "goal.config.json").write_text("{}", encoding="utf-8")
+    plan = rgb._cleanup_plan(bundle, None, [])
+    assert "goal.config.json" in plan["preserve_config_artifacts"]
+    blanket = f"rm -rf {shlex.quote(bundle.as_posix())}"
+    assert blanket not in plan["cleanup_commands"], "blanket rm -rf would delete the preserved config"
+
+
+def test_cleanup_plan_blunt_remove_when_no_config(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    plan = rgb._cleanup_plan(bundle, None, [])
+    assert plan["preserve_config_artifacts"] == []
+    blanket = f"rm -rf {shlex.quote(bundle.as_posix())}"
+    assert blanket in plan["cleanup_commands"]

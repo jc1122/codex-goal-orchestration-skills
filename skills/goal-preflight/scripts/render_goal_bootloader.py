@@ -684,17 +684,32 @@ def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[
         "telemetry.summary.json",
         "orchestration.state.json",
         "resume.report.json",
+        "goal-config-selection.json",
     ]
-    config_artifacts = [
-        name
-        for name in ["goal.config.json", "goal-config.check.json", "goal-config-selection.json"]
-        if (bundle_dir / name).exists() or name == "goal-config-selection.json"
-    ]
+    config_artifacts = ["goal.config.json", "goal-config.check.json"]
+    preserve_config = [name for name in config_artifacts if (bundle_dir / name).exists()]
     commands: list[str] = []
     if bundle_rel:
         commands.append(f"printf '%s\\n' {shlex.quote(bundle_rel + '/')} >> .git/info/exclude")
-    commands.append(f"rm -rf {shlex.quote(bundle_dir.as_posix())}")
-    preserve_config = [path for path in config_artifacts if (bundle_dir / path).exists()]
+    if preserve_config:
+        # Remove disposable artifacts individually so the preserved config
+        # artifacts stay in place; a blanket `rm -rf` of the bundle dir would
+        # delete the very files the plan says it preserves.
+        for dirname in runtime_dirs:
+            commands.append(f"rm -rf {shlex.quote((bundle_dir / dirname).as_posix())}")
+        for artifact in generated_artifacts:
+            commands.append(f"rm -f {shlex.quote((bundle_dir / artifact).as_posix())}")
+        note = (
+            "Generated bundle/runtime artifacts are removed individually so the "
+            "preserved config artifacts stay in place; delete the bundle directory "
+            "manually once you no longer need them."
+        )
+    else:
+        commands.append(f"rm -rf {shlex.quote(bundle_dir.as_posix())}")
+        note = (
+            "Generated bundle/runtime artifacts are disposable after the run report "
+            "is captured; no config artifacts are present to preserve."
+        )
     return {
         "status": "needs_ignore_or_cleanup" if bundle_rel else "ok",
         "bundle_inside_git_worktree_not_ignored": bool(bundle_rel),
@@ -706,7 +721,7 @@ def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[
         "preserve_config_artifacts": preserve_config,
         "suggested_ignore_patterns": [bundle_rel + "/"] if bundle_rel else [],
         "cleanup_commands": commands,
-        "note": "Generated bundle/runtime artifacts are disposable after the run report is captured; config artifacts are listed separately so users can preserve or reuse them.",
+        "note": note,
     }
 
 
