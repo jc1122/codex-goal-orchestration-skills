@@ -669,7 +669,17 @@ def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[
         and str(warning.get("path")).strip()
     ]
     bundle_rel = warning_paths[0] if warning_paths else None
-    runtime_dirs = ["audit", "workers", "research", "reviewers", "lite", "schedulers", "amendments", "branches"]
+    runtime_dirs = [
+        "audit",
+        "workers",
+        "research",
+        "reviewers",
+        "lite",
+        "schedulers",
+        "amendments",
+        "branches",
+        "config-checks",
+    ]
     generated_artifacts = [
         "job.manifest.json",
         "main.prompt.md",

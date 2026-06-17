@@ -58,10 +58,12 @@ def test_cleanup_plan_removes_all_disposable_root_artifacts(tmp_path):
     disposable = ("runtime.index.json", "create-bundle-result.json", "job.manifest.json")
     for name in disposable:
         (bundle / name).write_text("{}", encoding="utf-8")
+    (bundle / "config-checks").mkdir()  # disposable dir written by prepare
     plan = rgb._cleanup_plan(bundle, None, [])
     cmds = "\n".join(plan["cleanup_commands"])
     for name in disposable:
         assert (bundle / name).as_posix() in cmds, f"{name} not removed by cleanup"
+    assert (bundle / "config-checks").as_posix() in cmds, "config-checks dir not removed by cleanup"
     assert (bundle / "goal.config.json").as_posix() not in cmds
 
 
