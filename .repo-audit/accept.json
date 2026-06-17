@@ -70,8 +70,60 @@
       "reason": "Archived audit-report artifacts (a captured git-worktree snapshot under maintenance/reports/toyoptimization-*/), not package source. The repo's own ruff config already sets extend-exclude=[\"maintenance/reports\"]; bandit B101 (assert_used) hits inside the snapshot's test_toyopt.py are doubly out of scope."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_route_class_ladder", "metric": "dead_code_confidence"},
-      "reason": "False positive: public orchestration_contract API consumed by the skill runtimes (route-class ladder accessor); vulture cannot see cross-script importlib consumers."
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_ladder_list", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script by sibling skills via the importlib bootstrap (CONTRACT.worker_ladder_list in goal-preflight lint_goal_bundle); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_route_class_reason", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.worker_route_class_reason in goal-branch-orchestrator create_runtime_packet); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "format_worker_ladder", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script via the importlib bootstrap (CONTRACT.format_worker_ladder); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "review_route_for_tier", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script via the importlib bootstrap (CONTRACT.review_route_for_tier); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "codex_telemetry_attempts", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.codex_telemetry_attempts in create_audit_packet and runtime runners); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "research_policy_defects", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.research_policy_defects in render_branch_worktree_commands and lint_goal_bundle); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "telemetry_shell_function", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.telemetry_shell_function in create_runtime_packet and create_adaptation_packet); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/path_rules.py", "symbol": "require_relative_path", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared path-rule API consumed cross-script by many skill scripts via the importlib bootstrap (31 repo-wide uses); vulture cannot trace importlib consumers. Verified consumed 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/path_rules.py", "symbol": "require_branch_name", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared path-rule API consumed cross-script (require_branch_name in create_goal_bundle / lint_goal_bundle / amendment_lib); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_telemetry_artifact", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_telemetry_artifact in validate_main_status / validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "archived_manifest_hashes_by_rel_path", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared validation API consumed cross-script via the importlib bootstrap (STATUS_VALIDATION.archived_manifest_hashes_by_rel_path); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_scheduler_rollup", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_scheduler_rollup in validate_main_status and assemble_main_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_pre_review_gate_artifact", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_pre_review_gate_artifact in validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_runtime_lite_advice_entries", "metric": "dead_code_confidence"},
+      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_runtime_lite_advice_entries in validate_main_status / validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
     }
   ]
 }

@@ -44,8 +44,11 @@ def skills_root() -> Path:
 
 
 def load_json(path: Path) -> object:
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            return json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
 
 
 def run(command: list[str], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:

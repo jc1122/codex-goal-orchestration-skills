@@ -516,7 +516,6 @@ class LedgerState(NamedTuple):
     deferred_reason_codes: dict[str, str]
     blocked: dict[str, str]
     blocked_reason_codes: dict[str, str]
-    repair_relaunch_ids: set[str]
     under_capacity: dict[str, str]
     under_capacity_reason_codes: dict[str, str]
     deferred_excuses: set[str]
@@ -547,7 +546,6 @@ def _new_ledger_state(
         deferred_reason_codes={},
         blocked={},
         blocked_reason_codes={},
-        repair_relaunch_ids=set(),
         under_capacity={},
         under_capacity_reason_codes={},
         deferred_excuses=set(),
@@ -849,8 +847,6 @@ def _handle_blocked_event(defects: list[str], state: LedgerState, event: dict, e
         state.blocked[str(event_id)] = reason
         state.blocked_reason_codes[str(event_id)] = reason_code
         state.blocked_excuses.add(str(event_id))
-        if any(marker in reason.lower() for marker in ("repair", "retry", "amendment", "reviewer-feedback")):
-            state.repair_relaunch_ids.add(str(event_id))
 
 
 def _handle_under_capacity_event(

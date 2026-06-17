@@ -1400,10 +1400,11 @@ def _branch_reuse_map(
         branch["branch_id"]: branch["validation"]["status"] == "pass" and branch["status_path"]["exists"]
         for branch in branch_reports
     }
+    branch_ids = set(branch_reuse)
     stale_branch_owners = {
         str(item.get("owner"))
         for item in effective_stale_or_unreconciled
-        if isinstance(item.get("owner"), str) and str(item.get("owner")).startswith("B")
+        if isinstance(item.get("owner"), str) and item.get("owner") in branch_ids
     }
     return {
         branch_id: reusable and branch_id not in stale_branch_owners for branch_id, reusable in branch_reuse.items()
@@ -1432,12 +1433,6 @@ def _compute_resume_state(
     main_status_value = main_status_data.get("status") if isinstance(main_status_data, dict) else None
     status = _resume_status(pre_dispatch, hard_issue_count, main_status_value)
     branch_reuse = _branch_reuse_map(branch_reports, effective_stale_or_unreconciled)
-    choose_resume_action(
-        overall_safe_to_reuse=False,
-        missing_artifacts=missing_artifacts,
-        stale_or_unreconciled=stale_or_unreconciled,
-        validation_defects=validation_defects,
-    )
     final_state_status = "incomplete" if pre_dispatch else "pass" if hard_issue_count == 0 else "failed"
     overall_safe_to_reuse = (
         status in {"pass", "partial", "blocked", "failed"}

@@ -181,7 +181,8 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
             # substring-marker guard below missed real blocker messages outside the marker
             # list (the same fail-open already fixed for lite_advisor / prompt-auditor).
             return None
-        blockers = output.get("blockers", [])
+        blockers = output.get("blockers")
+        blockers = blockers if isinstance(blockers, list) else []
         blocker_text = " ".join(item for item in blockers if isinstance(item, str))
         terminal_markers = [
             "All selected worker route attempts failed",
@@ -459,8 +460,18 @@ def build_telemetry(
     )
     attempts = []
     for index, spec in enumerate(attempt_specs):
-        event_logs = [file_stats(packet_dir / str(path)) for path in spec.get("event_logs", [])]
-        probe_logs = [file_stats(packet_dir / str(path)) for path in spec.get("probe_logs", [])]
+        raw_event_logs = spec.get("event_logs")
+        raw_probe_logs = spec.get("probe_logs")
+        event_logs = [
+            file_stats(packet_dir / path)
+            for path in (raw_event_logs if isinstance(raw_event_logs, list) else [])
+            if isinstance(path, str)
+        ]
+        probe_logs = [
+            file_stats(packet_dir / path)
+            for path in (raw_probe_logs if isinstance(raw_probe_logs, list) else [])
+            if isinstance(path, str)
+        ]
         retry_ordinal = _infer_retry_ordinal(packet_dir, spec.get("retry_ordinal"))
         called = any(item["exists"] for item in event_logs + probe_logs)
         not_executed_reason = _normalize_not_executed_reason(

@@ -483,10 +483,6 @@ def worker_ladder_list() -> list[str]:
     return list(DEFAULT_WORKER_LADDER)
 
 
-def worker_route_class_ladder(route_class: str) -> list[str]:
-    return list(WORKER_ROUTE_CLASS_LADDERS.get(route_class, WORKER_ROUTE_CLASS_LADDERS[DEFAULT_WORKER_ROUTE_CLASS]))
-
-
 def worker_route_class_reason(route_class: str) -> str:
     return WORKER_ROUTE_CLASS_REASONS.get(route_class, WORKER_ROUTE_CLASS_REASONS[DEFAULT_WORKER_ROUTE_CLASS])
 

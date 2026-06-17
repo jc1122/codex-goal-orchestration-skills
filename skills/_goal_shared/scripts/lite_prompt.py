@@ -70,7 +70,15 @@ def build_lite_prompt(
     the two copies is exactly the class of bug this consolidation prevents).
     """
     base_dir = str(base_dir)
-    source_lines = "\n".join(f"- {item['path']} ({item['sha256']}, {item['size_bytes']} bytes)" for item in sources)
+    # Tolerate malformed recorded source_files (non-dict items / missing keys): the validator
+    # regenerates this prompt from the recorded envelope before shape-checking it, so a hard
+    # subscript here would crash the in-process status validators instead of emitting a defect.
+    # For well-formed packets `.get` is byte-identical, so the regenerated hash is unchanged.
+    source_lines = "\n".join(
+        f"- {item.get('path')} ({item.get('sha256')}, {item.get('size_bytes')} bytes)"
+        for item in sources
+        if isinstance(item, dict)
+    )
     example_sources = json.dumps(sources, indent=2, sort_keys=True)
     command = bridge_advice_command(
         control_script=control_script,

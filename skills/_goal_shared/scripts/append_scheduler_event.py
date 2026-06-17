@@ -42,7 +42,10 @@ REASON_CODES = {
 def load_ledger(path: Path) -> dict:
     if not path.exists():
         raise SystemExit(f"scheduler ledger does not exist: {path}")
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"scheduler ledger must be a JSON object: {path}")
     events = data.get("events")

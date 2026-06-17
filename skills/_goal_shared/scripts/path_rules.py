@@ -121,7 +121,8 @@ def safe_branch_name(value: object) -> bool:
     return not (
         any(char in INVALID_BRANCH_CHARS for char in value)
         or any(char.isspace() for char in value)
-        or value.startswith(("/", "."))
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        or value.startswith(("/", ".", "-"))
         or value.endswith(("/", ".", ".lock"))
         or ".." in value
         or "@{" in value
