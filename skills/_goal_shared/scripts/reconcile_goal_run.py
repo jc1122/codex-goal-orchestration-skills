@@ -9,7 +9,7 @@ import importlib.util
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -518,62 +518,90 @@ def packet_artifact_summary(bundle_dir: Path, packet_id: str, role: str) -> dict
     }
 
 
-def branch_summary(
-    *,
-    bundle_dir: Path,
-    repo_root: Path | None,
-    manifest_path: Path,
-    manifest: dict[str, Any],
-    branch: dict[str, Any],
-    missing_artifacts: list[dict[str, Any]],
-    stale_or_unreconciled: list[dict[str, Any]],
-    next_commands: list[str],
-    dependency_failed_events: dict[str, dict[str, Any]],
-) -> dict[str, Any]:
-    branch_id = str(branch.get("id", ""))
-    dependency_failed_event = dependency_failed_events.get(branch_id)
-    dependency_failed_terminal = dependency_failed_event is not None
-    status_path = bundle_path(bundle_dir, branch.get("status_path"), f"branches/{branch_id}.status.json")
-    review_path = bundle_path(bundle_dir, branch.get("review_path"), f"branches/{branch_id}.review.json")
-    prompt_path = bundle_path(bundle_dir, branch.get("prompt"), f"branches/{branch_id}.prompt.md")
-    pre_review_gate_path = bundle_path(
-        bundle_dir, branch.get("pre_review_gate_path"), f"branches/{branch_id}.pre_review_gate.json"
+class _BranchPaths(NamedTuple):
+    status_path: Path
+    review_path: Path
+    prompt_path: Path
+    pre_review_gate_path: Path
+    worktree_path: Path | None
+
+
+class _BranchStatusState(NamedTuple):
+    status_data: dict[str, Any] | None
+    status_error: str | None
+    status_value: object
+    review_status: object
+
+
+def _branch_paths(bundle_dir: Path, repo_root: Path | None, branch_id: str, branch: dict[str, Any]) -> _BranchPaths:
+    return _BranchPaths(
+        status_path=bundle_path(bundle_dir, branch.get("status_path"), f"branches/{branch_id}.status.json"),
+        review_path=bundle_path(bundle_dir, branch.get("review_path"), f"branches/{branch_id}.review.json"),
+        prompt_path=bundle_path(bundle_dir, branch.get("prompt"), f"branches/{branch_id}.prompt.md"),
+        pre_review_gate_path=bundle_path(
+            bundle_dir, branch.get("pre_review_gate_path"), f"branches/{branch_id}.pre_review_gate.json"
+        ),
+        worktree_path=repo_or_bundle_path(bundle_dir, repo_root, branch.get("worktree_path")),
     )
-    worktree_path = repo_or_bundle_path(bundle_dir, repo_root, branch.get("worktree_path"))
+
+
+def _branch_status_state(status_path: Path, dependency_failed_terminal: bool) -> _BranchStatusState:
     status_data, status_error = read_json_or_none(status_path) if status_path.exists() else (None, None)
     status_value = status_data.get("status") if isinstance(status_data, dict) else None
     review_status = status_data.get("review_status") if isinstance(status_data, dict) else None
     if status_value is None and dependency_failed_terminal:
         status_value = "blocked"
         review_status = "missing"
-    if not status_path.exists() and not dependency_failed_terminal:
+    return _BranchStatusState(status_data, status_error, status_value, review_status)
+
+
+def _record_branch_missing_artifacts(
+    *,
+    bundle_dir: Path,
+    branch_id: str,
+    paths: _BranchPaths,
+    dependency_failed_terminal: bool,
+    missing_artifacts: list[dict[str, Any]],
+) -> None:
+    if not paths.status_path.exists() and not dependency_failed_terminal:
         add_issue(
             missing_artifacts,
             code="missing_branch_status",
-            path=rel_path(bundle_dir, status_path),
+            path=rel_path(bundle_dir, paths.status_path),
             kind="branch_status",
             owner=branch_id,
             message=f"manifest branch {branch_id} has no status artifact",
         )
-    if not prompt_path.exists():
+    if not paths.prompt_path.exists():
         add_issue(
             missing_artifacts,
             code="missing_branch_prompt",
-            path=rel_path(bundle_dir, prompt_path),
+            path=rel_path(bundle_dir, paths.prompt_path),
             kind="branch_prompt",
             owner=branch_id,
             message=f"manifest branch {branch_id} prompt is missing",
         )
-    if worktree_path is not None and not worktree_path.exists() and not dependency_failed_terminal:
+    if paths.worktree_path is not None and not paths.worktree_path.exists() and not dependency_failed_terminal:
         add_issue(
             missing_artifacts,
             code="missing_branch_worktree",
-            path=worktree_path.as_posix(),
+            path=paths.worktree_path.as_posix(),
             kind="worktree",
             owner=branch_id,
             message=f"manifest branch {branch_id} worktree is missing",
         )
-    outputs = reviewer_outputs(bundle_dir, branch_id)
+
+
+def _reconcile_branch_review(
+    *,
+    bundle_dir: Path,
+    branch_id: str,
+    review_path: Path,
+    outputs: list[dict[str, Any]],
+    status_value: object,
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> bool:
     branch_needs_reassemble = False
     if outputs and not review_path.exists():
         add_issue(
@@ -606,17 +634,31 @@ def branch_summary(
             owner=branch_id,
             message=f"passing branch {branch_id} requires a canonical branch review artifact",
         )
+    return branch_needs_reassemble
 
+
+def _branch_validation_defects(
+    *,
+    bundle_dir: Path,
+    branch_id: str,
+    branch: dict[str, Any],
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    status_path: Path,
+    state: _BranchStatusState,
+    worktree_path: Path | None,
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> list[str]:
     validation_defects: list[str] = []
-    if status_data is not None:
+    if state.status_data is not None:
         validation_defects = BRANCH_VALIDATOR.validate_branch_status(
-            status_data,
+            state.status_data,
             branch_id=branch_id,
-            branch=status_data.get("branch")
-            if isinstance(status_data.get("branch"), str)
+            branch=state.status_data.get("branch")
+            if isinstance(state.status_data.get("branch"), str)
             else branch.get("branch_name"),
-            worktree=status_data.get("worktree")
-            if isinstance(status_data.get("worktree"), str)
+            worktree=state.status_data.get("worktree")
+            if isinstance(state.status_data.get("worktree"), str)
             else (worktree_path.as_posix() if worktree_path else None),
             manifest=manifest,
             manifest_path=manifest_path,
@@ -632,9 +674,22 @@ def branch_summary(
                 owner=branch_id,
                 message=f"branch status validator failed with {len(validation_defects)} defect(s)",
             )
-    elif status_error:
-        validation_defects = [status_error]
+    elif state.status_error:
+        validation_defects = [state.status_error]
+    return validation_defects
 
+
+def _branch_worker_scheduler(
+    *,
+    bundle_dir: Path,
+    branch_id: str,
+    branch: dict[str, Any],
+    manifest_path: Path,
+    status_value: object,
+    dependency_failed_terminal: bool,
+    dependency_failed_event: dict[str, Any] | None,
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> dict[str, Any]:
     worker_ids, worker_deps = worker_dependencies(branch)
     scheduler_rel = "schedulers/" + f"{branch_id}.worker.scheduler.json"
     worker_parallelism = branch.get("worker_parallelism") if isinstance(branch.get("worker_parallelism"), dict) else {}
@@ -683,7 +738,21 @@ def branch_summary(
             owner=branch_id,
             message=f"worker scheduler has {len(scheduler_defects)} validation defect(s)",
         )
+    return scheduler
 
+
+def _append_branch_next_commands(
+    *,
+    bundle_dir: Path,
+    repo_root: Path | None,
+    branch_id: str,
+    manifest_path: Path,
+    status_path: Path,
+    worktree_path: Path | None,
+    branch_needs_reassemble: bool,
+    dependency_failed_terminal: bool,
+    next_commands: list[str],
+) -> None:
     if branch_needs_reassemble and status_path.exists() and worktree_path is not None:
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'assemble_branch_status.py'} "
@@ -710,6 +779,8 @@ def branch_summary(
                 f"--audit-dir {(bundle_dir / 'audit').as_posix()} --deterministic --require-pass"
             )
 
+
+def _branch_worker_summaries(bundle_dir: Path, branch: dict[str, Any]) -> list[dict[str, Any]]:
     workers = []
     if isinstance(branch.get("work_items"), list):
         for item in branch["work_items"]:
@@ -717,23 +788,99 @@ def branch_summary(
                 workers.append(
                     packet_artifact_summary(bundle_dir, str(item["packet_id"]), str(item.get("worker_type", "worker")))
                 )
+    return workers
+
+
+def branch_summary(
+    *,
+    bundle_dir: Path,
+    repo_root: Path | None,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    branch: dict[str, Any],
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+    next_commands: list[str],
+    dependency_failed_events: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    branch_id = str(branch.get("id", ""))
+    dependency_failed_event = dependency_failed_events.get(branch_id)
+    dependency_failed_terminal = dependency_failed_event is not None
+    paths = _branch_paths(bundle_dir, repo_root, branch_id, branch)
+    state = _branch_status_state(paths.status_path, dependency_failed_terminal)
+    status_value = state.status_value
+    review_status = state.review_status
+    _record_branch_missing_artifacts(
+        bundle_dir=bundle_dir,
+        branch_id=branch_id,
+        paths=paths,
+        dependency_failed_terminal=dependency_failed_terminal,
+        missing_artifacts=missing_artifacts,
+    )
+    outputs = reviewer_outputs(bundle_dir, branch_id)
+    branch_needs_reassemble = _reconcile_branch_review(
+        bundle_dir=bundle_dir,
+        branch_id=branch_id,
+        review_path=paths.review_path,
+        outputs=outputs,
+        status_value=status_value,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+    )
+
+    validation_defects = _branch_validation_defects(
+        bundle_dir=bundle_dir,
+        branch_id=branch_id,
+        branch=branch,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        status_path=paths.status_path,
+        state=state,
+        worktree_path=paths.worktree_path,
+        stale_or_unreconciled=stale_or_unreconciled,
+    )
+
+    scheduler = _branch_worker_scheduler(
+        bundle_dir=bundle_dir,
+        branch_id=branch_id,
+        branch=branch,
+        manifest_path=manifest_path,
+        status_value=status_value,
+        dependency_failed_terminal=dependency_failed_terminal,
+        dependency_failed_event=dependency_failed_event,
+        stale_or_unreconciled=stale_or_unreconciled,
+    )
+
+    _append_branch_next_commands(
+        bundle_dir=bundle_dir,
+        repo_root=repo_root,
+        branch_id=branch_id,
+        manifest_path=manifest_path,
+        status_path=paths.status_path,
+        worktree_path=paths.worktree_path,
+        branch_needs_reassemble=branch_needs_reassemble,
+        dependency_failed_terminal=dependency_failed_terminal,
+        next_commands=next_commands,
+    )
+
+    workers = _branch_worker_summaries(bundle_dir, branch)
 
     return {
         "branch_id": branch_id,
         "branch_name": branch.get("branch_name"),
         "status": status_value,
-        "schema_status": "pass" if status_data is not None else "missing",
+        "schema_status": "pass" if state.status_data is not None else "missing",
         "runtime_status": status_value if status_value in RUNTIME_STATUS_VALUES else "missing",
         "review_status": review_status if review_status in REVIEW_STATUS_VALUES else "missing",
         "resume_action": "reuse_terminal_status"
-        if status_data is not None and not validation_defects
+        if state.status_data is not None and not validation_defects
         else "repair_or_reassemble",
-        "status_path": artifact_ref(bundle_dir, status_path),
-        "review_path": artifact_ref(bundle_dir, review_path),
-        "prompt_path": artifact_ref(bundle_dir, prompt_path),
-        "pre_review_gate_path": artifact_ref(bundle_dir, pre_review_gate_path),
-        "worktree_path": worktree_path.as_posix() if worktree_path else None,
-        "worktree_exists": worktree_path.exists() if worktree_path else None,
+        "status_path": artifact_ref(bundle_dir, paths.status_path),
+        "review_path": artifact_ref(bundle_dir, paths.review_path),
+        "prompt_path": artifact_ref(bundle_dir, paths.prompt_path),
+        "pre_review_gate_path": artifact_ref(bundle_dir, paths.pre_review_gate_path),
+        "worktree_path": paths.worktree_path.as_posix() if paths.worktree_path else None,
+        "worktree_exists": paths.worktree_path.exists() if paths.worktree_path else None,
         "reviewer_outputs": outputs,
         "dependency_failed_terminal": dependency_failed_terminal,
         "dependency_failed_event": dependency_failed_event,
@@ -974,13 +1121,52 @@ def stale_active_branch_ids(main_scheduler: dict[str, Any], branch_reports: list
     return result
 
 
-def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, Any]:
-    bundle_dir = manifest_path.parent
-    manifest = read_json(manifest_path)
-    branches = branch_entries(manifest)
-    missing_artifacts: list[dict[str, Any]] = []
-    stale_or_unreconciled: list[dict[str, Any]] = []
-    next_commands: list[str] = []
+class _BundleScan(NamedTuple):
+    manifest_checks: list[dict[str, Any]]
+    telemetry: dict[str, Any]
+    stale_index: dict[str, Any]
+    branch_ids: list[str]
+    main_scheduler_rel: str
+    branch_reports: list[dict[str, Any]]
+    pre_dispatch: bool
+
+
+class _MainStatusState(NamedTuple):
+    path: Path
+    data: dict[str, Any] | None
+    error: str | None
+    validation_defects: list[str]
+
+
+class _SchedulerState(NamedTuple):
+    main_scheduler: dict[str, Any]
+    main_scheduler_defects: list[str]
+    pre_dispatch: bool
+
+
+class _ResumeState(NamedTuple):
+    status: str
+    main_status_value: object
+    final_state_status: str
+    overall_safe_to_reuse: bool
+    resume_action: str
+    hard_issue_count: int
+    branch_reuse: dict[str, bool]
+    effective_missing_artifacts: list[dict[str, Any]]
+    effective_stale_or_unreconciled: list[dict[str, Any]]
+
+
+def _scan_bundle(
+    *,
+    manifest_path: Path,
+    bundle_dir: Path,
+    repo_root: Path | None,
+    manifest: dict[str, Any],
+    branches: list[dict[str, Any]],
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+    next_commands: list[str],
+) -> _BundleScan:
     manifest_checks = manifest_path_checks(
         bundle_dir=bundle_dir,
         repo_root=repo_root,
@@ -1019,7 +1205,26 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         for branch in branches
     ]
     pre_dispatch = pre_branch_dispatch_phase(bundle_dir, branch_reports)
+    return _BundleScan(
+        manifest_checks=manifest_checks,
+        telemetry=telemetry,
+        stale_index=stale_index,
+        branch_ids=branch_ids,
+        main_scheduler_rel=main_scheduler_rel,
+        branch_reports=branch_reports,
+        pre_dispatch=pre_dispatch,
+    )
 
+
+def _evaluate_main_status(
+    *,
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    pre_dispatch: bool,
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> _MainStatusState:
     main_status_path = bundle_dir / "main.status.json"
     main_status_data, main_status_error = (
         read_json_or_none(main_status_path) if main_status_path.exists() else (None, None)
@@ -1052,7 +1257,21 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
                 owner="main",
                 message=f"main status validator failed with {len(main_validation_defects)} defect(s)",
             )
+    return _MainStatusState(main_status_path, main_status_data, main_status_error, main_validation_defects)
 
+
+def _evaluate_main_scheduler(
+    *,
+    bundle_dir: Path,
+    manifest: dict[str, Any],
+    manifest_path: Path,
+    branches: list[dict[str, Any]],
+    branch_ids: list[str],
+    main_scheduler_rel: str,
+    main_status_data: dict[str, Any] | None,
+    pre_dispatch: bool,
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> _SchedulerState:
     main_scheduler_defects: list[str] = []
     main_scheduler = validate_scheduler(
         defects=main_scheduler_defects,
@@ -1078,7 +1297,18 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             owner="main",
             message=f"main scheduler has {len(main_scheduler_defects)} validation defect(s)",
         )
+    return _SchedulerState(main_scheduler, main_scheduler_defects, pre_dispatch)
 
+
+def _branch_recovery_commands(
+    *,
+    manifest_path: Path,
+    main_scheduler: dict[str, Any],
+    main_scheduler_rel: str,
+    branch_reports: list[dict[str, Any]],
+    pre_dispatch: bool,
+    stale_or_unreconciled: list[dict[str, Any]],
+) -> list[str]:
     recovery_commands: list[str] = []
     if not pre_dispatch:
         for branch_id in stale_active_branch_ids(main_scheduler, branch_reports):
@@ -1104,7 +1334,18 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
                     ),
                 )
             )
+    return recovery_commands
 
+
+def _append_main_next_commands(
+    *,
+    bundle_dir: Path,
+    manifest_path: Path,
+    main_status_path: Path,
+    telemetry: dict[str, Any],
+    stale_or_unreconciled: list[dict[str, Any]],
+    next_commands: list[str],
+) -> None:
     if not main_status_path.exists():
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-main-orchestrator' / 'scripts' / 'assemble_main_status.py'} "
@@ -1123,6 +1364,13 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         f"--manifest {manifest_path.as_posix()} --status {main_status_path.as_posix()}"
     )
 
+
+def _aggregate_validation_defects(
+    *,
+    main_validation_defects: list[str],
+    main_scheduler_defects: list[str],
+    branch_reports: list[dict[str, Any]],
+) -> list[str]:
     validation_defects = [
         *[f"main_status: {item}" for item in main_validation_defects],
         *[f"main_scheduler: {item}" for item in main_scheduler_defects],
@@ -1132,7 +1380,45 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         validation_defects.extend(
             f"{branch['branch_id']} scheduler: {item}" for item in branch["worker_scheduler"]["validation_defects"]
         )
+    return validation_defects
 
+
+def _resume_status(pre_dispatch: bool, hard_issue_count: int, main_status_value: object) -> str:
+    status = (
+        "incomplete" if pre_dispatch else "pass" if hard_issue_count == 0 and main_status_value == "pass" else "blocked"
+    )
+    if not pre_dispatch and hard_issue_count == 0 and main_status_value in {"partial", "blocked", "failed"}:
+        status = str(main_status_value)
+    return status
+
+
+def _branch_reuse_map(
+    branch_reports: list[dict[str, Any]],
+    effective_stale_or_unreconciled: list[dict[str, Any]],
+) -> dict[str, bool]:
+    branch_reuse = {
+        branch["branch_id"]: branch["validation"]["status"] == "pass" and branch["status_path"]["exists"]
+        for branch in branch_reports
+    }
+    stale_branch_owners = {
+        str(item.get("owner"))
+        for item in effective_stale_or_unreconciled
+        if isinstance(item.get("owner"), str) and str(item.get("owner")).startswith("B")
+    }
+    return {
+        branch_id: reusable and branch_id not in stale_branch_owners for branch_id, reusable in branch_reuse.items()
+    }
+
+
+def _compute_resume_state(
+    *,
+    pre_dispatch: bool,
+    main_status_data: dict[str, Any] | None,
+    branch_reports: list[dict[str, Any]],
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+    validation_defects: list[str],
+) -> _ResumeState:
     effective_missing_artifacts = [
         item for item in missing_artifacts if not (pre_dispatch and suppress_pre_dispatch_issue(item))
     ]
@@ -1144,25 +1430,9 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         len(effective_missing_artifacts) + len(effective_stale_or_unreconciled) + len(effective_validation_defects)
     )
     main_status_value = main_status_data.get("status") if isinstance(main_status_data, dict) else None
-    status = (
-        "incomplete" if pre_dispatch else "pass" if hard_issue_count == 0 and main_status_value == "pass" else "blocked"
-    )
-    if not pre_dispatch and hard_issue_count == 0 and main_status_value in {"partial", "blocked", "failed"}:
-        status = str(main_status_value)
-
-    branch_reuse = {
-        branch["branch_id"]: branch["validation"]["status"] == "pass" and branch["status_path"]["exists"]
-        for branch in branch_reports
-    }
-    stale_branch_owners = {
-        str(item.get("owner"))
-        for item in effective_stale_or_unreconciled
-        if isinstance(item.get("owner"), str) and str(item.get("owner")).startswith("B")
-    }
-    branch_reuse = {
-        branch_id: reusable and branch_id not in stale_branch_owners for branch_id, reusable in branch_reuse.items()
-    }
-    resume_action = choose_resume_action(
+    status = _resume_status(pre_dispatch, hard_issue_count, main_status_value)
+    branch_reuse = _branch_reuse_map(branch_reports, effective_stale_or_unreconciled)
+    choose_resume_action(
         overall_safe_to_reuse=False,
         missing_artifacts=missing_artifacts,
         stale_or_unreconciled=stale_or_unreconciled,
@@ -1182,7 +1452,72 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         stale_or_unreconciled=stale_or_unreconciled,
         validation_defects=validation_defects,
     )
+    return _ResumeState(
+        status=status,
+        main_status_value=main_status_value,
+        final_state_status=final_state_status,
+        overall_safe_to_reuse=overall_safe_to_reuse,
+        resume_action=resume_action,
+        hard_issue_count=hard_issue_count,
+        branch_reuse=branch_reuse,
+        effective_missing_artifacts=effective_missing_artifacts,
+        effective_stale_or_unreconciled=effective_stale_or_unreconciled,
+    )
 
+
+def _blocked_work_remaining(
+    *,
+    branch_reports: list[dict[str, Any]],
+    blocked_work: list[dict[str, Any]],
+    blocked_branches: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    return [
+        *blocked_work,
+        *[
+            {
+                "code": "terminal_branch_nonpass",
+                "owner": item["branch_id"],
+                "kind": "branch_status",
+                "path": next(
+                    (
+                        branch.get("status_path", {}).get("path")
+                        for branch in branch_reports
+                        if branch.get("branch_id") == item["branch_id"]
+                    ),
+                    None,
+                ),
+                "message": f"branch {item['branch_id']} runtime_status is {item['runtime_status']}",
+            }
+            for item in blocked_branches
+        ],
+    ]
+
+
+class _CompletionState(NamedTuple):
+    terminal_branch_ids: list[str]
+    recovered_ids: set[str]
+    blocked_branches: list[dict[str, Any]]
+    missing_branch_ids: list[str]
+    safe_branch_ids: list[str]
+    blocked_work: list[dict[str, Any]]
+    pending_work: list[dict[str, Any]]
+    blocked_work_remaining: list[dict[str, Any]]
+    goal_complete: bool
+
+
+def _derive_completion_state(
+    *,
+    status: str,
+    final_state_status: str,
+    pre_dispatch: bool,
+    branches: list[dict[str, Any]],
+    branch_reports: list[dict[str, Any]],
+    branch_reuse: dict[str, bool],
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+    effective_missing_artifacts: list[dict[str, Any]],
+    effective_stale_or_unreconciled: list[dict[str, Any]],
+) -> _CompletionState:
     terminal_branch_ids = [
         branch["branch_id"]
         for branch in branch_reports
@@ -1218,28 +1553,50 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         if pre_dispatch
         else []
     )
-    blocked_work_remaining = [
-        *blocked_work,
-        *[
-            {
-                "code": "terminal_branch_nonpass",
-                "owner": item["branch_id"],
-                "kind": "branch_status",
-                "path": next(
-                    (
-                        branch.get("status_path", {}).get("path")
-                        for branch in branch_reports
-                        if branch.get("branch_id") == item["branch_id"]
-                    ),
-                    None,
-                ),
-                "message": f"branch {item['branch_id']} runtime_status is {item['runtime_status']}",
-            }
-            for item in blocked_branches
-        ],
-    ]
+    blocked_work_remaining = _blocked_work_remaining(
+        branch_reports=branch_reports,
+        blocked_work=blocked_work,
+        blocked_branches=blocked_branches,
+    )
     goal_complete = status == "pass" and final_state_status == "pass" and not blocked_work_remaining
-    report = {
+    return _CompletionState(
+        terminal_branch_ids=terminal_branch_ids,
+        recovered_ids=recovered_ids,
+        blocked_branches=blocked_branches,
+        missing_branch_ids=missing_branch_ids,
+        safe_branch_ids=safe_branch_ids,
+        blocked_work=blocked_work,
+        pending_work=pending_work,
+        blocked_work_remaining=blocked_work_remaining,
+        goal_complete=goal_complete,
+    )
+
+
+def _assemble_report(
+    *,
+    bundle_dir: Path,
+    manifest_path: Path,
+    manifest: dict[str, Any],
+    scan: _BundleScan,
+    main_status_path: Path,
+    main_status_data: dict[str, Any] | None,
+    main_status_value: object,
+    main_validation_defects: list[str],
+    main_scheduler: dict[str, Any],
+    branch_reports: list[dict[str, Any]],
+    resume: _ResumeState,
+    completion: _CompletionState,
+    pre_dispatch: bool,
+    validation_defects: list[str],
+    missing_artifacts: list[dict[str, Any]],
+    stale_or_unreconciled: list[dict[str, Any]],
+    recovery_commands: list[str],
+    next_commands: list[str],
+) -> dict[str, Any]:
+    status = resume.status
+    final_state_status = resume.final_state_status
+    overall_safe_to_reuse = resume.overall_safe_to_reuse
+    return {
         "schema_version": 1,
         "status": status,
         "schema_status": final_state_status,
@@ -1250,22 +1607,22 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             if isinstance(main_status_data, dict) and isinstance(main_status_data.get("review_status"), str)
             else "missing"
         ),
-        "resume_action": resume_action,
+        "resume_action": resume.resume_action,
         "execution_phase": "pre_branch_dispatch" if pre_dispatch else "runtime_or_finalization",
         "artifact_reuse_safe": overall_safe_to_reuse,
-        "goal_complete": goal_complete,
-        "blocked_branches": blocked_branches,
-        "recovered_branches": sorted(recovered_ids),
-        "blocked_work_remaining": blocked_work_remaining,
-        "pending_work": pending_work,
-        "next_required_action": resume_action,
+        "goal_complete": completion.goal_complete,
+        "blocked_branches": completion.blocked_branches,
+        "recovered_branches": sorted(completion.recovered_ids),
+        "blocked_work_remaining": completion.blocked_work_remaining,
+        "pending_work": completion.pending_work,
+        "next_required_action": resume.resume_action,
         "generated_at": utc_now(),
         "bundle_dir": bundle_dir.as_posix(),
         "manifest_path": manifest_path.as_posix(),
         "manifest": {
             "job_id": manifest.get("job_id"),
             "sha256": sha256_file(manifest_path),
-            "branch_ids": branch_ids,
+            "branch_ids": scan.branch_ids,
         },
         "main_status": {
             "path": "main.status.json",
@@ -1285,23 +1642,23 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         "branches": branch_reports,
         "current_state": {
             "branch_counts": branch_state_counts(branch_reports),
-            "terminal_branch_ids": terminal_branch_ids,
-            "missing_branch_ids": missing_branch_ids,
-            "safe_to_reuse_branch_ids": safe_branch_ids,
-            "blocked_work": blocked_work,
-            "pending_work": pending_work,
+            "terminal_branch_ids": completion.terminal_branch_ids,
+            "missing_branch_ids": completion.missing_branch_ids,
+            "safe_to_reuse_branch_ids": completion.safe_branch_ids,
+            "blocked_work": completion.blocked_work,
+            "pending_work": completion.pending_work,
             "main_status_exists": main_status_path.exists(),
             "main_scheduler_status": main_scheduler.get("validation_status"),
-            "telemetry_summary_exists": telemetry.get("summary_exists"),
+            "telemetry_summary_exists": scan.telemetry.get("summary_exists"),
         },
-        "telemetry": telemetry,
-        "stale_artifact_index": stale_index,
-        "manifest_path_checks": manifest_checks,
+        "telemetry": scan.telemetry,
+        "stale_artifact_index": scan.stale_index,
+        "manifest_path_checks": scan.manifest_checks,
         "missing_artifacts": missing_artifacts,
         "stale_or_unreconciled": stale_or_unreconciled,
         "safe_to_reuse": {
             "overall": overall_safe_to_reuse,
-            "branches": branch_reuse,
+            "branches": resume.branch_reuse,
             "interpretation": "artifact reuse safety only; inspect goal_complete and blocked_work_remaining for completion state",
         },
         "next_commands": list(dict.fromkeys([*recovery_commands, *next_commands])),
@@ -1313,7 +1670,119 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
             "stale_or_unreconciled_count": len(stale_or_unreconciled),
         },
     }
-    return report
+
+
+def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, Any]:
+    bundle_dir = manifest_path.parent
+    manifest = read_json(manifest_path)
+    branches = branch_entries(manifest)
+    missing_artifacts: list[dict[str, Any]] = []
+    stale_or_unreconciled: list[dict[str, Any]] = []
+    next_commands: list[str] = []
+    scan = _scan_bundle(
+        manifest_path=manifest_path,
+        bundle_dir=bundle_dir,
+        repo_root=repo_root,
+        manifest=manifest,
+        branches=branches,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+        next_commands=next_commands,
+    )
+    branch_reports = scan.branch_reports
+    pre_dispatch = scan.pre_dispatch
+
+    main_status = _evaluate_main_status(
+        bundle_dir=bundle_dir,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        pre_dispatch=pre_dispatch,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+    )
+    main_status_path = main_status.path
+    main_status_data = main_status.data
+    main_validation_defects = main_status.validation_defects
+
+    scheduler_state = _evaluate_main_scheduler(
+        bundle_dir=bundle_dir,
+        manifest=manifest,
+        manifest_path=manifest_path,
+        branches=branches,
+        branch_ids=scan.branch_ids,
+        main_scheduler_rel=scan.main_scheduler_rel,
+        main_status_data=main_status_data,
+        pre_dispatch=pre_dispatch,
+        stale_or_unreconciled=stale_or_unreconciled,
+    )
+    main_scheduler = scheduler_state.main_scheduler
+    main_scheduler_defects = scheduler_state.main_scheduler_defects
+    pre_dispatch = scheduler_state.pre_dispatch
+
+    recovery_commands = _branch_recovery_commands(
+        manifest_path=manifest_path,
+        main_scheduler=main_scheduler,
+        main_scheduler_rel=scan.main_scheduler_rel,
+        branch_reports=branch_reports,
+        pre_dispatch=pre_dispatch,
+        stale_or_unreconciled=stale_or_unreconciled,
+    )
+
+    _append_main_next_commands(
+        bundle_dir=bundle_dir,
+        manifest_path=manifest_path,
+        main_status_path=main_status_path,
+        telemetry=scan.telemetry,
+        stale_or_unreconciled=stale_or_unreconciled,
+        next_commands=next_commands,
+    )
+
+    validation_defects = _aggregate_validation_defects(
+        main_validation_defects=main_validation_defects,
+        main_scheduler_defects=main_scheduler_defects,
+        branch_reports=branch_reports,
+    )
+
+    resume = _compute_resume_state(
+        pre_dispatch=pre_dispatch,
+        main_status_data=main_status_data,
+        branch_reports=branch_reports,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+        validation_defects=validation_defects,
+    )
+    completion = _derive_completion_state(
+        status=resume.status,
+        final_state_status=resume.final_state_status,
+        pre_dispatch=pre_dispatch,
+        branches=branches,
+        branch_reports=branch_reports,
+        branch_reuse=resume.branch_reuse,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+        effective_missing_artifacts=resume.effective_missing_artifacts,
+        effective_stale_or_unreconciled=resume.effective_stale_or_unreconciled,
+    )
+    return _assemble_report(
+        bundle_dir=bundle_dir,
+        manifest_path=manifest_path,
+        manifest=manifest,
+        scan=scan,
+        main_status_path=main_status_path,
+        main_status_data=main_status_data,
+        main_status_value=resume.main_status_value,
+        main_validation_defects=main_validation_defects,
+        main_scheduler=main_scheduler,
+        branch_reports=branch_reports,
+        resume=resume,
+        completion=completion,
+        pre_dispatch=pre_dispatch,
+        validation_defects=validation_defects,
+        missing_artifacts=missing_artifacts,
+        stale_or_unreconciled=stale_or_unreconciled,
+        recovery_commands=recovery_commands,
+        next_commands=next_commands,
+    )
 
 
 def main() -> int:
