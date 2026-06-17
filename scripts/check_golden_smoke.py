@@ -20,7 +20,6 @@ from fixture_support import (
     assert_compact_lite_launcher,
     assert_compact_runtime_launcher,
     assert_contains,
-    assert_lean_codex_attempts,
     assert_mixed_worker_route,
     assert_research_worker_preserves_user_config,
     assert_shell_syntax,
@@ -102,8 +101,22 @@ def create_runtime_packet(
 
 def install_temp_skills(tmp_path: Path) -> Path:
     skills_root = tmp_path / "skills"
-    run(["node", (CHECKOUT_ROOT / "bin" / "install-goal-skills.js").as_posix(), "--dest", skills_root.as_posix(), "--force"])
-    for name in ["_goal_shared", "goal-preflight", "goal-main-orchestrator", "goal-branch-orchestrator", "goal-plan-amender"]:
+    run(
+        [
+            "node",
+            (CHECKOUT_ROOT / "bin" / "install-goal-skills.js").as_posix(),
+            "--dest",
+            skills_root.as_posix(),
+            "--force",
+        ]
+    )
+    for name in [
+        "_goal_shared",
+        "goal-preflight",
+        "goal-main-orchestrator",
+        "goal-branch-orchestrator",
+        "goal-plan-amender",
+    ]:
         if not (skills_root / name).is_dir():
             raise SystemExit(f"temp skill install missing {name}: {skills_root}")
     return skills_root.resolve()
@@ -112,7 +125,9 @@ def install_temp_skills(tmp_path: Path) -> Path:
 def create_temp_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     run(["git", "init", "-b", "main", repo.as_posix()])
-    (repo / "README.md").write_text("# Golden Smoke Repo\n\nFixture README for installed-skill smoke testing.\n", encoding="utf-8")
+    (repo / "README.md").write_text(
+        "# Golden Smoke Repo\n\nFixture README for installed-skill smoke testing.\n", encoding="utf-8"
+    )
     run(["git", "-C", repo.as_posix(), "config", "user.email", "golden-smoke@example.invalid"])
     run(["git", "-C", repo.as_posix(), "config", "user.name", "Golden Smoke"])
     run(["git", "-C", repo.as_posix(), "add", "README.md"])
@@ -122,7 +137,7 @@ def create_temp_repo(tmp_path: Path) -> Path:
 
 def _expand_prompt_path(value: str, variables: dict[str, str]) -> str:
     token = value.strip()
-    if len(token) >= 2 and token[0] == token[-1] and token[0] in {"\"", "'"}:
+    if len(token) >= 2 and token[0] == token[-1] and token[0] in {'"', "'"}:
         token = token[1:-1]
     changed = True
     while changed:
@@ -150,7 +165,7 @@ def _collect_render_command_from_prompt(prompt_path: Path, bundle: Path) -> tupl
         match = assignment_re.match(line.strip())
         if match:
             variable = match.group(2)
-            if len(variable) >= 2 and variable[0] == variable[-1] and variable[0] in {"\"", "'"}:
+            if len(variable) >= 2 and variable[0] == variable[-1] and variable[0] in {'"', "'"}:
                 variable = variable[1:-1]
             variables[match.group(1)] = variable
 
@@ -199,7 +214,9 @@ def assert_prompt_render_command_uses_absolute_paths(bundle: Path) -> None:
     if ready.stdout.strip().splitlines() != ["B01"]:
         raise SystemExit(f"main prompt render command did not resolve B01 as branch-ready: {ready.stdout!r}")
 
-    def _assert_bad_relative_render_command(label: str, manifest_value: str, audit_value: str, expected_diag: str) -> None:
+    def _assert_bad_relative_render_command(
+        label: str, manifest_value: str, audit_value: str, expected_diag: str
+    ) -> None:
         bad = subprocess.run(
             [
                 "python3",
@@ -224,9 +241,7 @@ def assert_prompt_render_command_uses_absolute_paths(bundle: Path) -> None:
             raise SystemExit(f"known-bad {label} render command unexpectedly succeeded")
         message = bad.stdout.strip()
         if expected_diag not in message:
-            raise SystemExit(
-                f"known-bad {label} render command produced unexpected diagnostic: {message!r}"
-            )
+            raise SystemExit(f"known-bad {label} render command produced unexpected diagnostic: {message!r}")
 
     _assert_bad_relative_render_command(
         "manifest-relative",
@@ -336,7 +351,9 @@ def create_amendment_decision(
         "amendment_id": amendment_id,
         "decision": decision,
         "decision_path": f"amendments/{amendment_id}.decision.json",
-        "packet_validation_path": f"amendments/{amendment_id}.packet/packet.validation.json" if decision == "launch" else None,
+        "packet_validation_path": f"amendments/{amendment_id}.packet/packet.validation.json"
+        if decision == "launch"
+        else None,
     }
 
 
@@ -1102,7 +1119,13 @@ def make_partial_branch_bundle(source_bundle: Path, target_bundle: Path, worker:
                 scheduler_event(1, "ready", id=WORKER_PACKET),
                 scheduler_event(2, "ready", id=RESEARCH_PACKET),
                 scheduler_event(3, "launch", id=WORKER_PACKET),
-                scheduler_event(4, "blocked", id=RESEARCH_PACKET, reason_code="operator_requested", reason="Partial fixture leaves research packet unlaunched with structured evidence."),
+                scheduler_event(
+                    4,
+                    "blocked",
+                    id=RESEARCH_PACKET,
+                    reason_code="operator_requested",
+                    reason="Partial fixture leaves research packet unlaunched with structured evidence.",
+                ),
                 scheduler_event(5, "finish", id=WORKER_PACKET, status="pass"),
                 scheduler_event(6, "close", id=WORKER_PACKET),
             ],
@@ -1161,7 +1184,9 @@ def make_refill_assembly_bundle(source_bundle: Path, target_bundle: Path) -> Non
     branch = manifest["branches"][0]
     branch["max_active_worker_packets"] = 1
     branch["worker_parallelism"]["max_active_worker_packets"] = 1
-    branch["worker_parallelism"]["serial_reasons"] = ["Golden smoke serializes workers to exercise refill status assembly."]
+    branch["worker_parallelism"]["serial_reasons"] = [
+        "Golden smoke serializes workers to exercise refill status assembly."
+    ]
     write_json(target_bundle / "job.manifest.json", manifest)
     manifest_sha = sha256_file(target_bundle / "job.manifest.json")
     worker_artifact = read_json(target_bundle / "workers" / WORKER_PACKET / "status.json")
@@ -1400,7 +1425,15 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
         ["Status: initial_epoch_only", "Accepted amendment: A001", "runtime.index.json"],
         "amended preflight report epoch notice",
     )
-    run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
+    run(
+        [
+            "python3",
+            skill_script("goal-preflight", "lint_goal_bundle.py"),
+            "--bundle-dir",
+            target_bundle.as_posix(),
+            "--no-write",
+        ]
+    )
     ready = run(
         [
             "python3",
@@ -1437,7 +1470,11 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
         ],
         expect=1,
     )
-    assert_any_contains(strict_branch.stdout, ["manifest_sha256", "semantic_input_hashes.job.manifest.json"], "strict branch stale manifest fixture")
+    assert_any_contains(
+        strict_branch.stdout,
+        ["manifest_sha256", "semantic_input_hashes.job.manifest.json"],
+        "strict branch stale manifest fixture",
+    )
     run(
         [
             "python3",
@@ -1511,7 +1548,14 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
             "--json",
         ]
     )
-    run(["python3", skill_script("goal-main-orchestrator", "summarize_telemetry.py"), "--bundle-dir", target_bundle.as_posix()])
+    run(
+        [
+            "python3",
+            skill_script("goal-main-orchestrator", "summarize_telemetry.py"),
+            "--bundle-dir",
+            target_bundle.as_posix(),
+        ]
+    )
     summary = read_json(target_bundle / "telemetry.summary.json")
     if "amendments/A001.packet/telemetry.json" not in summary.get("telemetry_files", []):
         raise SystemExit("amended golden smoke telemetry summary omitted plan-amender telemetry")
@@ -1570,11 +1614,7 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
     packet_dir = target_bundle / "amendments" / "A002.packet"
     assert_shell_syntax(packet_dir / "launch.sh")
     packet_input = read_json(packet_dir / "input-files.json")
-    source_labels = [
-        item.get("label")
-        for item in packet_input.get("source_files", [])
-        if isinstance(item, dict)
-    ]
+    source_labels = [item.get("label") for item in packet_input.get("source_files", []) if isinstance(item, dict)]
     if f"terminal branch review {BRANCH_ID}" not in source_labels:
         raise SystemExit("deterministic repair packet did not record terminal branch review as a source file")
     review_record = packet_input.get("terminal_branch_reviews", {}).get(BRANCH_ID)
@@ -1661,7 +1701,15 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
         raise SystemExit("deterministic blocker repair missing lineage artifact")
     lineage = read_json(lineage_path)
     stages = [item.get("stage") for item in lineage.get("stages", []) if isinstance(item, dict)]
-    required = ["generated_proposal", "deterministic_repair", "final_proposal", "validation", "manifest_before", "manifest_after", "acceptance"]
+    required = [
+        "generated_proposal",
+        "deterministic_repair",
+        "final_proposal",
+        "validation",
+        "manifest_before",
+        "manifest_after",
+        "acceptance",
+    ]
     if stages[-7:] != required:
         raise SystemExit(f"deterministic blocker repair lineage tail mismatch: {stages!r}")
     if accepted.get("lineage_path") != lineage_path.as_posix():
@@ -1678,7 +1726,15 @@ def run_blocker_repair_smoke(source_bundle: Path, target_bundle: Path) -> None:
                 f"deterministic repair lineage parent hash broken at {current.get('stage')!r}: "
                 f"{current_parent!r} != {previous_sha!r}"
             )
-    run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", target_bundle.as_posix(), "--no-write"])
+    run(
+        [
+            "python3",
+            skill_script("goal-preflight", "lint_goal_bundle.py"),
+            "--bundle-dir",
+            target_bundle.as_posix(),
+            "--no-write",
+        ]
+    )
 
 
 def assert_summary(bundle: Path) -> None:
@@ -1729,7 +1785,15 @@ def main() -> int:
                 bundle.as_posix(),
             ]
         )
-        run(["python3", skill_script("goal-preflight", "lint_goal_bundle.py"), "--bundle-dir", bundle.as_posix(), "--no-write"])
+        run(
+            [
+                "python3",
+                skill_script("goal-preflight", "lint_goal_bundle.py"),
+                "--bundle-dir",
+                bundle.as_posix(),
+                "--no-write",
+            ]
+        )
 
         run(
             [
@@ -1852,7 +1916,9 @@ def main() -> int:
         if not reviewer_attempts or reviewer_attempts[0].get("harness_kind") != "opencode-bridge":
             raise SystemExit(f"reviewer launch-config should lead with a bridge attempt: {reviewer_attempts!r}")
         if reviewer_attempts[0].get("alias") != "ds-flash-max":
-            raise SystemExit(f"reviewer launch-config should use the light bridge reviewer route: {reviewer_attempts!r}")
+            raise SystemExit(
+                f"reviewer launch-config should use the light bridge reviewer route: {reviewer_attempts!r}"
+            )
         if not isinstance(reviewer_attempts[0].get("bridge"), dict):
             raise SystemExit(f"reviewer bridge attempt must carry a bridge block: {reviewer_attempts[0]!r}")
         write_review(bundle, input_hashes)
@@ -1893,14 +1959,19 @@ def main() -> int:
             ]
         )
         reconcile_report = json.loads(reconcile_result.stdout)
-        if reconcile_report.get("status") != "pass" or reconcile_report.get("final_state_validation", {}).get("status") != "pass":
+        if (
+            reconcile_report.get("status") != "pass"
+            or reconcile_report.get("final_state_validation", {}).get("status") != "pass"
+        ):
             raise SystemExit(f"reconcile_goal_run should pass on golden bundle: {reconcile_report!r}")
         if reconcile_report.get("resume_action") != "reuse_terminal_status":
             raise SystemExit(f"reconcile_goal_run did not expose reusable terminal resume action: {reconcile_report!r}")
         if reconcile_report.get("schema_status") != "pass" or reconcile_report.get("runtime_status") != "pass":
             raise SystemExit(f"reconcile_goal_run did not expose top-level status dimensions: {reconcile_report!r}")
         golden_state = reconcile_report.get("current_state", {})
-        if golden_state.get("terminal_branch_ids") != [BRANCH_ID] or golden_state.get("safe_to_reuse_branch_ids") != [BRANCH_ID]:
+        if golden_state.get("terminal_branch_ids") != [BRANCH_ID] or golden_state.get("safe_to_reuse_branch_ids") != [
+            BRANCH_ID
+        ]:
             raise SystemExit(f"reconcile_goal_run did not summarize reusable terminal branch state: {golden_state!r}")
         for rel_path in ["orchestration.state.json", "resume.report.json"]:
             if not (bundle / rel_path).exists():
@@ -1935,7 +2006,9 @@ def main() -> int:
         if not (unpromoted_bundle / "resume.report.json").exists():
             raise SystemExit("reconcile_goal_run --write did not write blocked resume.report.json")
         if unpromoted_report.get("final_state_validation", {}).get("status") != "failed":
-            raise SystemExit(f"reconcile_goal_run should fail final validation for missing review: {unpromoted_report!r}")
+            raise SystemExit(
+                f"reconcile_goal_run should fail final validation for missing review: {unpromoted_report!r}"
+            )
         if unpromoted_report.get("safe_to_reuse", {}).get("overall") is not False:
             raise SystemExit(f"reconcile_goal_run must not mark failed final state reusable: {unpromoted_report!r}")
 
@@ -1967,7 +2040,9 @@ def main() -> int:
         if regen.get("status") != "pass":
             raise SystemExit(f"pre-review gate regeneration should tolerate missing stale gate evidence: {regen!r}")
         regen_gate = read_json(pre_review_regen_bundle / "branches" / "B01.pre_review_gate.json")
-        allowed_status_defects = regen_gate.get("checks", {}).get("status_validation", {}).get("bootstrap_allowed_defects")
+        allowed_status_defects = (
+            regen_gate.get("checks", {}).get("status_validation", {}).get("bootstrap_allowed_defects")
+        )
         if not allowed_status_defects:
             raise SystemExit(f"pre-review regeneration should record allowed stale status defects: {regen_gate!r}")
 
@@ -1990,10 +2065,14 @@ def main() -> int:
         if missing_branch_status_report.get("status") != "blocked":
             raise SystemExit(f"missing branch status should reconcile to blocked: {missing_branch_status_report!r}")
         if missing_branch_status_report.get("resume_action") != "launch_or_resume_branches":
-            raise SystemExit(f"missing branch status should route to branch launch/resume: {missing_branch_status_report!r}")
+            raise SystemExit(
+                f"missing branch status should route to branch launch/resume: {missing_branch_status_report!r}"
+            )
         missing_state = missing_branch_status_report.get("current_state", {})
         if BRANCH_ID not in missing_state.get("missing_branch_ids", []):
-            raise SystemExit(f"missing branch status should be listed in current_state.missing_branch_ids: {missing_state!r}")
+            raise SystemExit(
+                f"missing branch status should be listed in current_state.missing_branch_ids: {missing_state!r}"
+            )
         if missing_branch_status_report.get("final_state_validation", {}).get("status") != "failed":
             raise SystemExit(f"missing branch status should fail final validation: {missing_branch_status_report!r}")
         if missing_branch_status_report.get("safe_to_reuse", {}).get("overall") is not False:
@@ -2066,7 +2145,11 @@ def main() -> int:
         telemetry_data["accepted_alias"] = "gpt-5.5"
         write_json(route_mismatch_bundle / "reviewers" / REVIEW_PACKET / "telemetry.json", telemetry_data)
         route_mismatch_result = validate_branch(route_mismatch_bundle, expect=1)
-        assert_any_contains(route_mismatch_result.stdout, ["route.json selected_ladder", "must be one of"], "reviewer route/telemetry mismatch fixture")
+        assert_any_contains(
+            route_mismatch_result.stdout,
+            ["route.json selected_ladder", "must be one of"],
+            "reviewer route/telemetry mismatch fixture",
+        )
 
         model_mismatch_bundle = tmp_path / "reviewer-alias-model-mismatch"
         shutil.copytree(bundle, model_mismatch_bundle)
@@ -2132,7 +2215,11 @@ def main() -> int:
                 item["route_id"] = expensive_route_id
         write_json(worker_cost_misuse_bundle / "branches" / "B01.status.json", worker_cost_status)
         worker_cost_result = validate_branch(worker_cost_misuse_bundle, expect=1)
-        assert_all_contains(worker_cost_result.stdout, ["route_class 'normal-code'", "premium/full"], "worker route-class cost misuse fixture")
+        assert_all_contains(
+            worker_cost_result.stdout,
+            ["route_class 'normal-code'", "premium/full"],
+            "worker route-class cost misuse fixture",
+        )
 
         missing_worker_gate_bundle = tmp_path / "pre-review-gate-missing-worker-evidence"
         shutil.copytree(bundle, missing_worker_gate_bundle)
@@ -2141,7 +2228,9 @@ def main() -> int:
         missing_worker_gate["checks"].pop("worker_evidence", None)
         write_json(missing_worker_gate_bundle / "branches" / "B01.pre_review_gate.json", missing_worker_gate)
         missing_worker_gate_result = validate_branch(missing_worker_gate_bundle, expect=1)
-        assert_contains(missing_worker_gate_result.stdout, "worker_evidence", "pre-review gate missing worker evidence fixture")
+        assert_contains(
+            missing_worker_gate_result.stdout, "worker_evidence", "pre-review gate missing worker evidence fixture"
+        )
 
         missing_launch_config_bundle = tmp_path / "missing-launch-config"
         shutil.copytree(bundle, missing_launch_config_bundle)
@@ -2168,7 +2257,9 @@ def main() -> int:
         rewrite_copied_branch_paths(missing_reuse_source_bundle)
         (missing_reuse_source_bundle / "reviewers" / "B01-R00" / "telemetry.json").unlink()
         missing_reuse_result = validate_branch(missing_reuse_source_bundle, expect=1)
-        assert_contains(missing_reuse_result.stdout, "source_telemetry_path", "reviewer reuse missing telemetry fixture")
+        assert_contains(
+            missing_reuse_result.stdout, "source_telemetry_path", "reviewer reuse missing telemetry fixture"
+        )
 
         partial_branch_bundle = tmp_path / "partial-branch-subset"
         make_partial_branch_bundle(bundle, partial_branch_bundle, worker)
@@ -2228,7 +2319,9 @@ def main() -> int:
         shutil.copytree(bundle, freshness_bundle)
         rewrite_copied_branch_paths(freshness_bundle)
         original_readme = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        (REPO_ROOT / "README.md").write_text(original_readme + "\nUnreviewed freshness fixture change.\n", encoding="utf-8")
+        (REPO_ROOT / "README.md").write_text(
+            original_readme + "\nUnreviewed freshness fixture change.\n", encoding="utf-8"
+        )
         freshness_result = validate_branch(freshness_bundle, expect=1)
         assert_contains(freshness_result.stdout, "worktree_freshness", "worktree freshness fixture")
 

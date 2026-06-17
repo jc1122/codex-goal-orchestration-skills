@@ -160,7 +160,9 @@ def recommended_actions(warnings: list[dict[str, Any]]) -> list[str]:
         return ["No dependency-policy action needed."]
     actions = []
     if any(item.get("rule") == "runtime-npm-dependencies" for item in warnings):
-        actions.append("Avoid runtime dependencies; if one is necessary, add it to the policy allowlist with a rationale.")
+        actions.append(
+            "Avoid runtime dependencies; if one is necessary, add it to the policy allowlist with a rationale."
+        )
     if any(item.get("rule") == "dependabot-coverage" for item in warnings):
         actions.append("Add missing ecosystems to .github/dependabot.yml before relying on automated dependency PRs.")
     if any(item.get("rule") == "npm-lockfile" for item in warnings):

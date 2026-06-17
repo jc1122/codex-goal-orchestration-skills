@@ -55,7 +55,11 @@ def sha256_json(value: object) -> str:
 def mark_worker_routes_verified(manifest: dict, accepted_roles: list[str]) -> str | None:
     old_sha = manifest.get("route_contract_sha256") if isinstance(manifest.get("route_contract_sha256"), str) else None
     manifest["goal_config_check_summary"] = {
-        **(manifest.get("goal_config_check_summary") if isinstance(manifest.get("goal_config_check_summary"), dict) else {}),
+        **(
+            manifest.get("goal_config_check_summary")
+            if isinstance(manifest.get("goal_config_check_summary"), dict)
+            else {}
+        ),
         "status": "pass",
         "accepted_route_count": len(accepted_roles),
         "accepted_route_roles": list(accepted_roles),
@@ -99,7 +103,9 @@ def refresh_route_contract_artifacts(bundle: Path, manifest: dict, old_sha: str 
         for prompt_path in prompt_paths:
             if prompt_path.exists():
                 prompt_path.write_text(
-                    prompt_path.read_text(encoding="utf-8").replace(old_sha, str(manifest.get("route_contract_sha256"))),
+                    prompt_path.read_text(encoding="utf-8").replace(
+                        old_sha, str(manifest.get("route_contract_sha256"))
+                    ),
                     encoding="utf-8",
                 )
 
@@ -114,10 +120,10 @@ def fake_pytest_env(bundle: Path) -> dict[str, str]:
     (package / "__init__.py").write_text("", encoding="utf-8")
     (package / "__main__.py").write_text("print('fake pytest full suite passed')\n", encoding="utf-8")
     shim = bin_dir / "pytest"
-    shim.write_text("#!/usr/bin/env sh\npython3 -m pytest \"$@\"\n", encoding="utf-8")
+    shim.write_text('#!/usr/bin/env sh\npython3 -m pytest "$@"\n', encoding="utf-8")
     shim.chmod(0o755)
     python_shim = bin_dir / "python"
-    python_shim.write_text("#!/usr/bin/env sh\nexec python3 \"$@\"\n", encoding="utf-8")
+    python_shim.write_text('#!/usr/bin/env sh\nexec python3 "$@"\n', encoding="utf-8")
     python_shim.chmod(0o755)
     env = os.environ.copy()
     env["PYTHONPATH"] = f"{package_root.as_posix()}{os.pathsep}{env.get('PYTHONPATH', '')}"
@@ -235,7 +241,10 @@ def run_pre_review_manifest_command_fixture(tmp_path: Path, bundle: Path) -> Non
     declared_gate = read_json(declared_only_bundle / "branches" / "B01.pre_review_gate.json")
     declared_tests = declared_gate.get("checks", {}).get("tests", {})
     declared_dod = declared_gate.get("checks", {}).get("dod_evidence", {})
-    if declared_tests.get("status") != "failed" or declared_tests.get("declared_status_tests_are_evidence") is not False:
+    if (
+        declared_tests.get("status") != "failed"
+        or declared_tests.get("declared_status_tests_are_evidence") is not False
+    ):
         raise SystemExit(f"declared status tests must not pass pre-review gate: {declared_tests!r}")
     if declared_dod.get("status") != "failed" or declared_dod.get("declared_items_are_evidence") is not False:
         raise SystemExit(f"declared DoD checklist must not pass pre-review gate: {declared_dod!r}")
@@ -341,7 +350,9 @@ def run_pre_review_manifest_command_fixture(tmp_path: Path, bundle: Path) -> Non
     target_gate = read_json(target_probe_bundle / "branches" / "B01.pre_review_gate.json")
     target_semantic_probes = target_gate.get("checks", {}).get("semantic_probes", {})
     if target_semantic_probes.get("status") != "pass" or target_semantic_probes.get("targets") != ["goal_fixture_api"]:
-        raise SystemExit(f"targeted semantic probe fixture should pass with declared target: {target_semantic_probes!r}")
+        raise SystemExit(
+            f"targeted semantic probe fixture should pass with declared target: {target_semantic_probes!r}"
+        )
 
     all_probe_bundle = tmp_path / "pre-review-all-semantic-probe"
     shutil.copytree(bundle, all_probe_bundle)
@@ -680,7 +691,9 @@ def write_valid_research_fixture(bundle: Path) -> None:
             "worktree": ROOT.as_posix(),
             "schema_name": "research.schema.json",
             "output_name": "research.json",
-            "telemetry_script": (ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "extract_telemetry.py").as_posix(),
+            "telemetry_script": (
+                ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "extract_telemetry.py"
+            ).as_posix(),
             "attempts": [
                 {
                     "alias": "codex-research",
@@ -725,9 +738,7 @@ def write_valid_research_fixture(bundle: Path) -> None:
             "schema_version": 1,
             "packet_id": "B01-W01",
             "terminal_state": "pass",
-            "events": [
-                {"attempt_index": 0, "state": "pass", "returncode": 0, "dirty": False, "output_nonempty": True}
-            ],
+            "events": [{"attempt_index": 0, "state": "pass", "returncode": 0, "dirty": False, "output_nonempty": True}],
         },
     )
     packet_summary = {
@@ -799,7 +810,9 @@ def validate_branch(bundle: Path, *, expect: int = 0) -> subprocess.CompletedPro
     )
 
 
-def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None = None, diff_stats: dict | None = None) -> Path:
+def write_review_gate_variant(
+    bundle: Path, packet_id: str, *, tier: str | None = None, diff_stats: dict | None = None
+) -> Path:
     gate = json.loads((bundle / "branches" / "B01.pre_review_gate.json").read_text(encoding="utf-8"))
     gate["review_packet_id"] = packet_id
     if tier is not None:
@@ -814,11 +827,9 @@ def write_review_gate_variant(bundle: Path, packet_id: str, *, tier: str | None 
 def write_mergeable_reviewer_packet(bundle: Path, packet_id: str, semantic_hashes: dict) -> None:
     packet_dir = bundle / "reviewers" / packet_id
     route = read_json(packet_dir / "route.json")
-    aliases = [
-        item
-        for item in route.get("selected_ladder", [])
-        if isinstance(item, str) and item.strip()
-    ] or ["gpt-5.4"]
+    aliases = [item for item in route.get("selected_ladder", []) if isinstance(item, str) and item.strip()] or [
+        "gpt-5.4"
+    ]
     attempts = []
     for index, alias in enumerate(aliases):
         attempts.append(
@@ -1042,7 +1053,9 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     serial_manifest = read_json(serial_chain_bundle / "job.manifest.json")
     serial_reasons = serial_manifest.get("parallelization", {}).get("serial_reasons", [])
     if not serial_reasons or not any("dependency" in item for item in serial_reasons):
-        raise SystemExit(f"serial-chain topology fixture did not synthesize dependency serial_reasons: {serial_reasons!r}")
+        raise SystemExit(
+            f"serial-chain topology fixture did not synthesize dependency serial_reasons: {serial_reasons!r}"
+        )
     serial_waves = serial_manifest.get("waves", [])
     serial_wave_by_branch = {
         branch_id: {"wave": wave.get("id"), "dependency_level": wave.get("dependency_level")}
@@ -1080,8 +1093,12 @@ def run_topology_fixtures(tmp_path: Path) -> None:
     )
     if serial_readiness.get("branch_utilization", {}).get("max_ready_width") != 1:
         raise SystemExit(f"readiness should report serial branch max_ready_width=1: {serial_readiness!r}")
-    if not any(item.get("code") == "parallelization_rationale_dag_mismatch" for item in serial_readiness.get("warnings", [])):
-        raise SystemExit(f"readiness should warn when rationale overstates serial DAG parallelism: {serial_readiness!r}")
+    if not any(
+        item.get("code") == "parallelization_rationale_dag_mismatch" for item in serial_readiness.get("warnings", [])
+    ):
+        raise SystemExit(
+            f"readiness should warn when rationale overstates serial DAG parallelism: {serial_readiness!r}"
+        )
 
     overlap_brief = {
         "job_id": "topology-cross-overlap",
@@ -1107,7 +1124,13 @@ def run_topology_fixtures(tmp_path: Path) -> None:
         ]
     )
     result = run(
-        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", overlap_bundle.as_posix(), "--no-write"],
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            overlap_bundle.as_posix(),
+            "--no-write",
+        ],
         expect=1,
     )
     assert_contains(result.stdout, "branch owned_paths overlap", "cross-branch overlap topology fixture")
@@ -1149,7 +1172,13 @@ def run_topology_fixtures(tmp_path: Path) -> None:
         ]
     )
     owner_result = run(
-        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", verification_owner_bundle.as_posix(), "--no-write"],
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            verification_owner_bundle.as_posix(),
+            "--no-write",
+        ],
         expect=1,
     )
     assert_all_contains(
@@ -1213,7 +1242,15 @@ def run_topology_fixtures(tmp_path: Path) -> None:
         "Dependency context:",
         "dependency context branch prompt",
     )
-    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", dependency_context_bundle.as_posix(), "--no-write"])
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            dependency_context_bundle.as_posix(),
+            "--no-write",
+        ]
+    )
 
 
 def run_preflight_brief_lint_fixtures(tmp_path: Path) -> None:
@@ -1544,7 +1581,9 @@ The branch that implements data must compare against the exact payload above bef
         raise SystemExit(f"runtime_cap normalization defects should be path-specific: {invalid_runtime_cap!r}")
 
 
-def amendment_branch(branch_id: str, owned_path: str, *, depends_on: list[str] | None = None, branch_name: str | None = None) -> dict:
+def amendment_branch(
+    branch_id: str, owned_path: str, *, depends_on: list[str] | None = None, branch_name: str | None = None
+) -> dict:
     return {
         "id": branch_id,
         "title": f"Amendment {branch_id}",
@@ -1610,7 +1649,15 @@ def create_amendment_bundle(tmp_path: Path, name: str) -> Path:
             bundle.as_posix(),
         ]
     )
-    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            bundle.as_posix(),
+            "--no-write",
+        ]
+    )
     return bundle
 
 
@@ -1769,8 +1816,12 @@ def run_python_interpreter_normalization_fixture(tmp_path: Path) -> None:
     if command != expected_command:
         raise SystemExit(f"python interpreter normalization fixture mismatch: {command!r}")
     if "ft10_solver/__init__.py" in work_item.get("owned_paths", []):
-        raise SystemExit(f"package skeleton should be context-only unless explicitly owned: {work_item.get('owned_paths')!r}")
-    assert_contains((bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8"), command, "python interpreter prompt")
+        raise SystemExit(
+            f"package skeleton should be context-only unless explicitly owned: {work_item.get('owned_paths')!r}"
+        )
+    assert_contains(
+        (bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8"), command, "python interpreter prompt"
+    )
 
 
 def run_package_skeleton_context_fixture(tmp_path: Path) -> None:
@@ -1786,7 +1837,9 @@ def run_package_skeleton_context_fixture(tmp_path: Path) -> None:
         "base_ref": "main",
         "goal": "Validate package skeletons are added as context only when pre-existing.",
         "source_summary": "Worker-owned modules in existing packages should infer parent __init__.py only as context evidence.",
-        "required_evidence": ["Generated manifest lists the existing package skeleton in context_files and not owned_paths."],
+        "required_evidence": [
+            "Generated manifest lists the existing package skeleton in context_files and not owned_paths."
+        ],
         "final_dod": ["Package skeleton context inference should preserve deterministic ownership separation."],
         "max_active_branch_agents": 1,
         "branches": [
@@ -1809,7 +1862,7 @@ def run_package_skeleton_context_fixture(tmp_path: Path) -> None:
                         "context_files": ["README.md"],
                         "verification": ["python3 -m py_compile src/fixture_pkg/second_worker.py"],
                         "dod": ["package skeleton context is available to every worker that edits the package"],
-                    }
+                    },
                 ],
             }
         ],
@@ -1868,7 +1921,9 @@ def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
             "Fixture exercises a cheaper recovery-planning route.",
         ]
     )
-    custom_route = json.loads((custom_route_bundle / "amendments" / "A002.packet" / "route.json").read_text(encoding="utf-8"))
+    custom_route = json.loads(
+        (custom_route_bundle / "amendments" / "A002.packet" / "route.json").read_text(encoding="utf-8")
+    )
     if custom_route.get("selected_ladder") != ["ds-flash-max"]:
         raise SystemExit("custom amender route was not recorded")
     missing_reason = run(
@@ -2164,7 +2219,11 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
         ],
         expect=1,
     )
-    assert_contains(missing_packet_apply.stdout, "missing route-bound amender packet validation", "missing packet validation apply fixture")
+    assert_contains(
+        missing_packet_apply.stdout,
+        "missing route-bound amender packet validation",
+        "missing packet validation apply fixture",
+    )
     if missing_packet_before != sha256_file(missing_packet_bundle / "job.manifest.json"):
         raise SystemExit("missing packet validation apply mutated the live manifest")
 
@@ -2341,7 +2400,9 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
 def run_amendment_fixtures(tmp_path: Path) -> None:
     bundle = create_amendment_bundle(tmp_path, "amendment-fixture")
     write_json(bundle / "branches" / "B01.status.json", {"branch_id": "B01", "status": "blocked"})
-    amendment_lib = load_script_module("preparedness_amendment_lib", "skills/goal-plan-amender/scripts/amendment_lib.py")
+    amendment_lib = load_script_module(
+        "preparedness_amendment_lib", "skills/goal-plan-amender/scripts/amendment_lib.py"
+    )
     runtime_metadata_bundle = tmp_path / "amendment-runtime-metadata-fixture"
     shutil.copytree(bundle, runtime_metadata_bundle)
     runtime_metadata_manifest = read_json(runtime_metadata_bundle / "job.manifest.json")
@@ -2376,7 +2437,12 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         "schema_version": 1,
         "models": {"lite_agent": {"alias": "lite_agent", "provider": "codex", "model": "gpt-5.4-mini"}},
         "harnesses": {"codex": {"kind": "codex", "command": "codex"}},
-        "model_ladders": {"worker": ["lite_agent"], "reviewer": ["lite_agent"], "amender": ["lite_agent"], "lite": ["lite_agent"]},
+        "model_ladders": {
+            "worker": ["lite_agent"],
+            "reviewer": ["lite_agent"],
+            "amender": ["lite_agent"],
+            "lite": ["lite_agent"],
+        },
         "model_policies": {
             "worker_model_policy": lite_worker_policy,
             "review_model_policy": runtime_metadata_manifest["review_model_policy"],
@@ -2388,7 +2454,13 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     runtime_goal_config_check = {
         "status": "pass",
         "accepted_routes": [
-            {"role": "lite_agent", "alias": "lite_agent", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"}
+            {
+                "role": "lite_agent",
+                "alias": "lite_agent",
+                "harness": "codex",
+                "provider": "openai",
+                "model": "gpt-5.4-mini",
+            }
         ],
         "summary": {
             "accepted_route_count": 1,
@@ -2400,20 +2472,35 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     write_json(runtime_metadata_bundle / "goal-config.check.json", runtime_goal_config_check)
     runtime_metadata_manifest["goal_config_path"] = "goal.config.json"
     runtime_metadata_manifest["goal_config_check_path"] = "goal-config.check.json"
-    runtime_metadata_manifest["goal_config_sha256"] = sha256_file(runtime_metadata_bundle / "goal.config.json").removeprefix("sha256:")
-    runtime_metadata_manifest["goal_config_check_sha256"] = sha256_file(runtime_metadata_bundle / "goal-config.check.json").removeprefix("sha256:")
+    runtime_metadata_manifest["goal_config_sha256"] = sha256_file(
+        runtime_metadata_bundle / "goal.config.json"
+    ).removeprefix("sha256:")
+    runtime_metadata_manifest["goal_config_check_sha256"] = sha256_file(
+        runtime_metadata_bundle / "goal-config.check.json"
+    ).removeprefix("sha256:")
     normalized_metadata_manifest, _normalized_metadata_brief = amendment_lib.normalize_candidate_manifest(
         runtime_metadata_manifest,
         runtime_metadata_bundle,
     )
     if normalized_metadata_manifest.get("execution_strategy") != custom_execution_strategy:
-        raise SystemExit(f"amender normalization must preserve existing execution_strategy: {normalized_metadata_manifest.get('execution_strategy')!r}")
+        raise SystemExit(
+            f"amender normalization must preserve existing execution_strategy: {normalized_metadata_manifest.get('execution_strategy')!r}"
+        )
     if normalized_metadata_manifest.get("repo_status") != runtime_metadata_manifest["repo_status"]:
-        raise SystemExit(f"amender normalization must preserve repo_status: {normalized_metadata_manifest.get('repo_status')!r}")
-    if normalized_metadata_manifest.get("goal_config_check_sha256") != runtime_metadata_manifest["goal_config_check_sha256"]:
-        raise SystemExit(f"amender normalization must preserve goal-config check provenance: {normalized_metadata_manifest!r}")
+        raise SystemExit(
+            f"amender normalization must preserve repo_status: {normalized_metadata_manifest.get('repo_status')!r}"
+        )
+    if (
+        normalized_metadata_manifest.get("goal_config_check_sha256")
+        != runtime_metadata_manifest["goal_config_check_sha256"]
+    ):
+        raise SystemExit(
+            f"amender normalization must preserve goal-config check provenance: {normalized_metadata_manifest!r}"
+        )
     if normalized_metadata_manifest.get("route_contract", {}).get("route_recommendations_enabled") is not True:
-        raise SystemExit(f"amender normalization must keep configured route verification: {normalized_metadata_manifest.get('route_contract')!r}")
+        raise SystemExit(
+            f"amender normalization must keep configured route verification: {normalized_metadata_manifest.get('route_contract')!r}"
+        )
     if "goal_config" in normalized_metadata_manifest or "goal_config_check" in normalized_metadata_manifest:
         raise SystemExit("amender normalization must not embed full goal-config artifacts in job.manifest.json")
     recommendation_result = run(
@@ -2459,7 +2546,9 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"empty blocker repair should write a terminal no-op record: {no_op_record!r}")
     no_op_decision = read_json(bundle / "amendments" / "A000.decision.json")
     if no_op_decision.get("decision") != "skip" or no_op_decision.get("reason_code") != "no_legal_future_work":
-        raise SystemExit(f"empty blocker repair should rewrite launch decision to skip/no_legal_future_work: {no_op_decision!r}")
+        raise SystemExit(
+            f"empty blocker repair should rewrite launch decision to skip/no_legal_future_work: {no_op_decision!r}"
+        )
     if (bundle / "amendments" / "A000.packet").exists():
         raise SystemExit("empty blocker repair must not leave a launched packet directory")
     create_amendment_decision(
@@ -2485,9 +2574,15 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         ]
     )
     packet_dir = bundle / "amendments" / "A001.packet"
-    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Terminal branch ids: B01", "adaptation packet")
+    assert_contains(
+        (packet_dir / "task.md").read_text(encoding="utf-8"), "Terminal branch ids: B01", "adaptation packet"
+    )
     # B7 routes the amender through the bridge: ds-pro-max -> ds-flash-max.
-    assert_contains((packet_dir / "task.md").read_text(encoding="utf-8"), "Selected amender ladder: ds-pro-max, ds-flash-max", "adaptation packet route")
+    assert_contains(
+        (packet_dir / "task.md").read_text(encoding="utf-8"),
+        "Selected amender ladder: ds-pro-max, ds-flash-max",
+        "adaptation packet route",
+    )
     assert_shell_syntax(packet_dir / "launch.sh")
     route = json.loads((packet_dir / "route.json").read_text(encoding="utf-8"))
     if route.get("selected_ladder") != ["ds-pro-max", "ds-flash-max"] or route.get("role") != "plan_amender":
@@ -2529,7 +2624,9 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         ],
         expect=1,
     )
-    assert_contains(missing_accepted.stdout, "accepted plan-amender attempt", "amender telemetry accepted attempt fixture")
+    assert_contains(
+        missing_accepted.stdout, "accepted plan-amender attempt", "amender telemetry accepted attempt fixture"
+    )
     write_amender_telemetry(bundle, "A001", ["ds-pro-max", "ds-flash-max"])
     run(
         [
@@ -2572,7 +2669,9 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     if not isinstance(new_runtime_index_sha, str) or new_runtime_index_sha == old_runtime_index_sha:
         raise SystemExit(f"accepted amendment should update runtime_index_sha256: {new_runtime_index_sha!r}")
     if new_runtime_index_sha not in b02_prompt_after or old_runtime_index_sha in b02_prompt_after:
-        raise SystemExit("accepted amendment should refresh unchanged future branch prompts with the new runtime index sha")
+        raise SystemExit(
+            "accepted amendment should refresh unchanged future branch prompts with the new runtime index sha"
+        )
     for rel_path in [
         "amendments/A001.accepted.json",
         "amendments/A001.lineage.json",
@@ -2584,15 +2683,24 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
     accepted = read_json(bundle / "amendments" / "A001.accepted.json")
     if accepted.get("lineage_path") != (bundle / "amendments" / "A001.lineage.json").as_posix():
         raise SystemExit(f"accepted amendment did not preserve lineage path: {accepted!r}")
-    if "branches/B02.prompt.md" not in accepted.get("regenerated_prompts", []) or "branches/B01.prompt.md" in accepted.get("regenerated_prompts", []):
+    if "branches/B02.prompt.md" not in accepted.get(
+        "regenerated_prompts", []
+    ) or "branches/B01.prompt.md" in accepted.get("regenerated_prompts", []):
         raise SystemExit(f"accepted amendment should report regenerated future prompts only: {accepted!r}")
     lineage = read_json(bundle / "amendments" / "A001.lineage.json")
     stages = [item.get("stage") for item in lineage.get("stages", []) if isinstance(item, dict)]
     expected_tail = ["final_proposal", "validation", "manifest_before", "manifest_after", "acceptance"]
     if stages[-5:] != expected_tail:
-        raise SystemExit(f"A001 lineage tail should record final proposal -> validation -> manifest mutation -> acceptance, got {stages!r}")
-    validation_stage = next((item for item in lineage.get("stages", []) if isinstance(item, dict) and item.get("stage") == "validation"), None)
-    if not isinstance(validation_stage, dict) or validation_stage.get("sha256") != sha256_file(bundle / "amendments" / "A001.validation.json"):
+        raise SystemExit(
+            f"A001 lineage tail should record final proposal -> validation -> manifest mutation -> acceptance, got {stages!r}"
+        )
+    validation_stage = next(
+        (item for item in lineage.get("stages", []) if isinstance(item, dict) and item.get("stage") == "validation"),
+        None,
+    )
+    if not isinstance(validation_stage, dict) or validation_stage.get("sha256") != sha256_file(
+        bundle / "amendments" / "A001.validation.json"
+    ):
         raise SystemExit(f"A001 lineage validation stage must hash the written validation artifact: {lineage!r}")
     for index in range(1, len(stages)):
         current = lineage["stages"][index]
@@ -2602,8 +2710,18 @@ def run_amendment_fixtures(tmp_path: Path) -> None:
         current_parent = current.get("parent_sha256")
         previous_sha = previous.get("sha256")
         if current_parent is not None and current_parent != previous_sha:
-            raise SystemExit(f"A001 lineage parent hash is broken at stage {current.get('stage')!r}: {current_parent!r} != {previous_sha!r}")
-    run(["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", bundle.as_posix(), "--no-write"])
+            raise SystemExit(
+                f"A001 lineage parent hash is broken at stage {current.get('stage')!r}: {current_parent!r} != {previous_sha!r}"
+            )
+    run(
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            bundle.as_posix(),
+            "--no-write",
+        ]
+    )
 
     run_amender_route_selection_fixtures(tmp_path)
     run_negative_amendment_fixtures(tmp_path)
@@ -2689,7 +2807,13 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(3, "ready", id="B03"),
             scheduler_event(4, "launch", id="B01"),
             scheduler_event(5, "launch", id="B02"),
-            scheduler_event(6, "blocked", id="B01", reason_code="process_exited_blocked", reason="B01 launcher returned blocked with captured status."),
+            scheduler_event(
+                6,
+                "blocked",
+                id="B01",
+                reason_code="process_exited_blocked",
+                reason="B01 launcher returned blocked with captured status.",
+            ),
             scheduler_event(7, "finish", id="B01", status="blocked"),
             scheduler_event(8, "close", id="B01"),
             scheduler_event(9, "refill", eligible_ids=["B03"]),
@@ -2716,7 +2840,13 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(3, "ready", id="B01-W03"),
             scheduler_event(4, "launch", id="B01-W01"),
             scheduler_event(5, "launch", id="B01-W02"),
-            scheduler_event(6, "blocked", id="B01-W01", reason_code="process_exited_blocked", reason="Worker returned blocked but slot was closed."),
+            scheduler_event(
+                6,
+                "blocked",
+                id="B01-W01",
+                reason_code="process_exited_blocked",
+                reason="Worker returned blocked but slot was closed.",
+            ),
             scheduler_event(7, "finish", id="B01-W01", status="blocked"),
             scheduler_event(8, "close", id="B01-W01"),
             scheduler_event(9, "refill", eligible_ids=["B01-W03"]),
@@ -2734,7 +2864,13 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         "events": [
             scheduler_event(1, "ready", id="B01-W01"),
             scheduler_event(2, "launch", id="B01-W01"),
-            scheduler_event(3, "blocked", id="B01-W01", reason_code="process_exited_blocked", reason="First attempt needs reviewer-feedback repair."),
+            scheduler_event(
+                3,
+                "blocked",
+                id="B01-W01",
+                reason_code="process_exited_blocked",
+                reason="First attempt needs reviewer-feedback repair.",
+            ),
             scheduler_event(4, "finish", id="B01-W01", status="blocked"),
             scheduler_event(5, "close", id="B01-W01"),
             scheduler_event(6, "refill", eligible_ids=["B01-W01"]),
@@ -2809,9 +2945,7 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
     missing_wall_clock = {
         **multi_branch_refill,
         "events": [
-            {key: value for key, value in event.items() if key != "wall_clock_timestamp"}
-            if index == 0
-            else event
+            {key: value for key, value in event.items() if key != "wall_clock_timestamp"} if index == 0 else event
             for index, event in enumerate(multi_branch_refill["events"])
         ],
     }
@@ -2823,8 +2957,12 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(3, "blocked", id="B01", reason="free-form reason without reason_code"),
             scheduler_event(4, "finish", id="B01", status="blocked"),
             scheduler_event(5, "close", id="B01"),
-            scheduler_event(6, "blocked", id="B02", reason_code="operator_requested", reason="not reached in negative fixture"),
-            scheduler_event(7, "blocked", id="B03", reason_code="operator_requested", reason="not reached in negative fixture"),
+            scheduler_event(
+                6, "blocked", id="B02", reason_code="operator_requested", reason="not reached in negative fixture"
+            ),
+            scheduler_event(
+                7, "blocked", id="B03", reason_code="operator_requested", reason="not reached in negative fixture"
+            ),
         ],
     }
     dependency_failed = {
@@ -2833,17 +2971,23 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         "events": [
             scheduler_event(1, "ready", id="B01"),
             scheduler_event(2, "launch", id="B01"),
-            scheduler_event(3, "blocked", id="B01", reason_code="process_exited_blocked", reason="B01 returned blocked."),
+            scheduler_event(
+                3, "blocked", id="B01", reason_code="process_exited_blocked", reason="B01 returned blocked."
+            ),
             scheduler_event(4, "finish", id="B01", status="blocked"),
             scheduler_event(5, "close", id="B01"),
-            scheduler_event(6, "blocked", id="B02", reason_code="dependency_failed", reason="B02 depends on non-pass B01."),
+            scheduler_event(
+                6, "blocked", id="B02", reason_code="dependency_failed", reason="B02 depends on non-pass B01."
+            ),
         ],
     }
     dependency_failed_wrong_reason = {
         **dependency_failed,
         "events": [
             *dependency_failed["events"][:5],
-            scheduler_event(6, "blocked", id="B02", reason_code="dependency_pending", reason="Wrong reason for non-pass dependency."),
+            scheduler_event(
+                6, "blocked", id="B02", reason_code="dependency_pending", reason="Wrong reason for non-pass dependency."
+            ),
         ],
     }
     stale_active_closeout = {
@@ -2854,7 +2998,13 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(1, "ready", id="B01"),
             scheduler_event(2, "ready", id="B02"),
             scheduler_event(3, "launch", id="B01"),
-            scheduler_event(4, "blocked", id="B01", reason_code="stale_active", reason="Native agent state was unreachable after watchdog limit."),
+            scheduler_event(
+                4,
+                "blocked",
+                id="B01",
+                reason_code="stale_active",
+                reason="Native agent state was unreachable after watchdog limit.",
+            ),
             scheduler_event(5, "finish", id="B01", status="blocked"),
             scheduler_event(6, "close", id="B01"),
             scheduler_event(7, "refill", eligible_ids=["B02"]),
@@ -2870,7 +3020,13 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         "events": [
             scheduler_event(1, "ready", id="B01"),
             scheduler_event(2, "launch", id="B01"),
-            scheduler_event(3, "blocked", id="B01", reason_code="stale_active", reason="Native agent state was unreachable after watchdog limit."),
+            scheduler_event(
+                3,
+                "blocked",
+                id="B01",
+                reason_code="stale_active",
+                reason="Native agent state was unreachable after watchdog limit.",
+            ),
             scheduler_event(4, "finish", id="B01", status="blocked"),
             scheduler_event(5, "close", id="B01"),
             scheduler_event(6, "refill", eligible_ids=["B01"]),
@@ -2887,8 +3043,20 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
             scheduler_event(2, "ready", id="B02"),
             scheduler_event(3, "ready", id="B03"),
             scheduler_event(4, "launch", id="B01"),
-            scheduler_event(5, "blocked", id="B02", reason_code="operator_requested", reason="Partial fixture leaves B02 unlaunched with terminal evidence."),
-            scheduler_event(6, "blocked", id="B03", reason_code="operator_requested", reason="Partial fixture leaves B03 unlaunched with terminal evidence."),
+            scheduler_event(
+                5,
+                "blocked",
+                id="B02",
+                reason_code="operator_requested",
+                reason="Partial fixture leaves B02 unlaunched with terminal evidence.",
+            ),
+            scheduler_event(
+                6,
+                "blocked",
+                id="B03",
+                reason_code="operator_requested",
+                reason="Partial fixture leaves B03 unlaunched with terminal evidence.",
+            ),
             scheduler_event(7, "finish", id="B01", status="pass"),
             scheduler_event(8, "close", id="B01"),
         ],
@@ -2906,7 +3074,15 @@ def run_scheduler_fixtures(manifest_path: Path) -> None:
         ("missing-wall-clock-timestamp", missing_wall_clock, main_ids, main_deps, 2, False, True),
         ("vague-reason-code-rejection", vague_reason, main_ids, main_deps, 2, False, False),
         ("dependency-failed-blocking", dependency_failed, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, True, False),
-        ("dependency-failed-wrong-reason", dependency_failed_wrong_reason, ["B01", "B02"], {"B01": [], "B02": ["B01"]}, 2, False, False),
+        (
+            "dependency-failed-wrong-reason",
+            dependency_failed_wrong_reason,
+            ["B01", "B02"],
+            {"B01": [], "B02": ["B01"]},
+            2,
+            False,
+            False,
+        ),
         ("stale-active-closeout-refill", stale_active_closeout, ["B01", "B02"], {"B01": [], "B02": []}, 1, True, True),
         ("stale-active-main-relaunch", stale_active_relaunch, ["B01"], {"B01": []}, 1, True, True),
         ("partial-subset-structured-closeout", partial_subset, main_ids, main_deps, 2, True, False),
@@ -2977,7 +3153,9 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
         ]
     )
     ledger = json.loads((fixture_dir / "schedulers" / "main.scheduler.json").read_text(encoding="utf-8"))
-    refill_events = [event for event in ledger.get("events", []) if isinstance(event, dict) and event.get("event") == "refill"]
+    refill_events = [
+        event for event in ledger.get("events", []) if isinstance(event, dict) and event.get("event") == "refill"
+    ]
     if not refill_events or refill_events[-1].get("eligible_ids") != ["B03"]:
         raise SystemExit("scheduler_tick fixture did not emit refill evidence for B03")
     run(
@@ -3079,7 +3257,20 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
     )
     run([*stale_relaunch_common, "--finish", "B01", "--status", "blocked", "--close", "B01"])
     stale_relaunch_result = json.loads(
-        run([*stale_relaunch_common, "--launch", "B01", "--finish", "B01", "--status", "pass", "--close", "B01", "--json"]).stdout
+        run(
+            [
+                *stale_relaunch_common,
+                "--launch",
+                "B01",
+                "--finish",
+                "B01",
+                "--status",
+                "pass",
+                "--close",
+                "B01",
+                "--json",
+            ]
+        ).stdout
     )
     if stale_relaunch_result["state"]["finished_status"].get("B01") != "pass":
         raise SystemExit(f"scheduler_tick should allow relaunch after stale-active closeout: {stale_relaunch_result!r}")
@@ -3193,7 +3384,9 @@ def run_scheduler_tick_fixture(tmp_path: Path) -> None:
     if len(finish_events) < 2:
         raise SystemExit(f"scheduler_tick worker closeout should emit two finish events, got {len(finish_events)}")
     if auto_worker_data["state"]["max_observed_active"] != 2:
-        raise SystemExit("scheduler_tick worker closeout should close all terminal artifacts under open worker capacity")
+        raise SystemExit(
+            "scheduler_tick worker closeout should close all terminal artifacts under open worker capacity"
+        )
     append_ledgers = []
     for suffix in ["a", "b"]:
         append_dir = tmp_path / f"append-scheduler-event-repeat-{suffix}"
@@ -3330,7 +3523,9 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
             "worktree": repo.as_posix(),
             "schema_name": "status.schema.json",
             "output_name": "status.json",
-            "telemetry_script": (ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "extract_telemetry.py").as_posix(),
+            "telemetry_script": (
+                ROOT / "skills" / "goal-branch-orchestrator" / "scripts" / "extract_telemetry.py"
+            ).as_posix(),
             "selected_ladder": ["codex-spark"],
             "attempts": [
                 {
@@ -3375,7 +3570,10 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
             ],
         ),
     )
-    write_json(packet_dir / "launcher-state.json", {"schema_version": 1, "packet_id": "B01-W01", "terminal_state": "blocked", "events": []})
+    write_json(
+        packet_dir / "launcher-state.json",
+        {"schema_version": 1, "packet_id": "B01-W01", "terminal_state": "blocked", "events": []},
+    )
     write_json(
         packet_dir / "packet.summary.json",
         {
@@ -3405,7 +3603,21 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
         "--runtime-ref",
         "repair-promotion-fixture",
     ]
-    run([*worker_tick, "--init", "--record-ready", "--launch", "B01-W01", "--finish", "B01-W01", "--status", "blocked", "--close", "B01-W01"])
+    run(
+        [
+            *worker_tick,
+            "--init",
+            "--record-ready",
+            "--launch",
+            "B01-W01",
+            "--finish",
+            "B01-W01",
+            "--status",
+            "blocked",
+            "--close",
+            "B01-W01",
+        ]
+    )
     issue059_bundle = tmp_path / "worker-repair-promotion-issue059"
     shutil.copytree(bundle, issue059_bundle)
     issue059_partial_validation = [
@@ -3426,7 +3638,11 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
             "packet_id": "B01-W01",
             "canonical_status": "blocked",
             "reason": "Final W01 verification packet route failures blocked canonical status, but route-scope validators passed.",
-            "route_evidence": ["worker_primary transport error", "worker_fallback stream disconnect", "lite_agent dirty artifact violation"],
+            "route_evidence": [
+                "worker_primary transport error",
+                "worker_fallback stream disconnect",
+                "lite_agent dirty artifact violation",
+            ],
         },
         "integrated_commit": head,
     }
@@ -3450,10 +3666,19 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
     if issue059_assemble.get("branch_status") not in {"partial", "blocked"}:
         raise SystemExit(f"issue-059 partial evidence should produce non-pass branch status: {issue059_assemble!r}")
     issue059_worker_status = read_json(issue059_bundle / "workers" / "B01-W01" / "status.json")
-    if issue059_worker_status.get("status") != "pass" or issue059_worker_status.get("repair_evidence_path") != "branches/B01.B01-W01.repair-evidence.json":
-        raise SystemExit(f"issue-059 partial evidence should promote canonical worker status: {issue059_worker_status!r}")
+    if (
+        issue059_worker_status.get("status") != "pass"
+        or issue059_worker_status.get("repair_evidence_path") != "branches/B01.B01-W01.repair-evidence.json"
+    ):
+        raise SystemExit(
+            f"issue-059 partial evidence should promote canonical worker status: {issue059_worker_status!r}"
+        )
     issue059_branch_status = read_json(issue059_bundle / "branches" / "B01.status.json")
-    if any("finished 'blocked'" in blocker for blocker in issue059_branch_status.get("blockers", []) if isinstance(blocker, str)):
+    if any(
+        "finished 'blocked'" in blocker
+        for blocker in issue059_branch_status.get("blockers", [])
+        if isinstance(blocker, str)
+    ):
         raise SystemExit(f"issue-059 partial evidence should remove blocked-worker blocker: {issue059_branch_status!r}")
     issue059_validation = run(
         [
@@ -3480,20 +3705,22 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
     issue059_weak_partial = dict(issue059_partial)
     issue059_weak_partial["local_validation"] = [{"command": "git diff --check base...HEAD", "result": "pass"}]
     write_json(issue059_weak_bundle / "branches" / "B01.partial.evidence.json", issue059_weak_partial)
-    issue059_weak_assemble = json.loads(run(
-        [
-            "python3",
-            "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
-            "--manifest",
-            (issue059_weak_bundle / "job.manifest.json").as_posix(),
-            "--branch-id",
-            "B01",
-            "--worktree",
-            repo.as_posix(),
-            "--replace",
-            "--json",
-        ]
-    ).stdout)
+    issue059_weak_assemble = json.loads(
+        run(
+            [
+                "python3",
+                "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
+                "--manifest",
+                (issue059_weak_bundle / "job.manifest.json").as_posix(),
+                "--branch-id",
+                "B01",
+                "--worktree",
+                repo.as_posix(),
+                "--replace",
+                "--json",
+            ]
+        ).stdout
+    )
     if issue059_weak_assemble.get("branch_status") != "partial":
         raise SystemExit(f"weak issue-059 evidence should leave branch partial: {issue059_weak_assemble!r}")
     weak_worker_status = read_json(issue059_weak_bundle / "workers" / "B01-W01" / "status.json")
@@ -3547,7 +3774,10 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
     if promote_result.get("status") != "pass":
         raise SystemExit(f"repair promotion should pass: {promote_result!r}")
     promoted_status = read_json(packet_dir / "status.json")
-    if promoted_status.get("status") != "pass" or promoted_status.get("repair_evidence_path") != "branches/B01.B01-W01.repair-evidence.json":
+    if (
+        promoted_status.get("status") != "pass"
+        or promoted_status.get("repair_evidence_path") != "branches/B01.B01-W01.repair-evidence.json"
+    ):
         raise SystemExit(f"repair promotion did not write canonical pass status: {promoted_status!r}")
     assemble_result = json.loads(
         run(
@@ -3568,7 +3798,11 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
     if assemble_result.get("status") != "pass":
         raise SystemExit(f"repair-promoted branch status should validate: {assemble_result!r}")
     branch_status_data = read_json(bundle / "branches" / "B01.status.json")
-    if any("finished 'blocked'" in blocker for blocker in branch_status_data.get("blockers", []) if isinstance(blocker, str)):
+    if any(
+        "finished 'blocked'" in blocker
+        for blocker in branch_status_data.get("blockers", [])
+        if isinstance(blocker, str)
+    ):
         raise SystemExit(f"repair promotion should remove blocked-worker blocker: {branch_status_data!r}")
     weak_evidence = bundle / "branches" / "B01.B01-W01.weak-repair-evidence.json"
     write_json(
@@ -3616,7 +3850,9 @@ def write_prompt_audit_fixture(bundle: Path) -> Path:
             "status": "pass",
             "can_start": True,
             "checked_files": ["job.manifest.json", "main.prompt.md"],
-            "commands_run": ["python3 skills/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir fixture --no-write"],
+            "commands_run": [
+                "python3 skills/goal-preflight/scripts/lint_goal_bundle.py --bundle-dir fixture --no-write"
+            ],
             "defects": [],
             "missing_dod_items": [],
         },
@@ -3871,10 +4107,16 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         ]
     )
     native_plan = json.loads(native_plan_result.stdout)
-    if native_plan.get("preferred_delegation") != "native_agent" or native_plan.get("selected_delegation") != "native_agent":
+    if (
+        native_plan.get("preferred_delegation") != "native_agent"
+        or native_plan.get("selected_delegation") != "native_agent"
+    ):
         raise SystemExit(f"native delegation should be preferred when available: {native_plan!r}")
     native_branch = native_plan.get("branches", [{}])[0]
-    if native_branch.get("selected_delegation") != "native_agent" or native_branch.get("cli_fallback_reason") is not None:
+    if (
+        native_branch.get("selected_delegation") != "native_agent"
+        or native_branch.get("cli_fallback_reason") is not None
+    ):
         raise SystemExit(f"native branch plan should not carry a fallback reason: {native_branch!r}")
     native_scheduler_launch = native_branch.get("scheduler_launch_command", "")
     if (
@@ -3882,18 +4124,34 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         or "--launch B02" not in native_scheduler_launch
         or "--record-ready" not in native_scheduler_launch
     ):
-        raise SystemExit(f"native branch plan should require scheduler launch evidence before branch start: {native_branch!r}")
+        raise SystemExit(
+            f"native branch plan should require scheduler launch evidence before branch start: {native_branch!r}"
+        )
     native_cli_fallback = native_branch.get("cli_worktree_fallback", {})
     if native_cli_fallback.get("stdout_policy") != "redirect_stdout_stderr_to_log":
         raise SystemExit(f"native fallback metadata should still carry bounded CLI policy: {native_cli_fallback!r}")
-    if native_cli_fallback.get("execution_order") != ["command", "launch_prompt_command", "scheduler_launch_command", "launch_command"]:
-        raise SystemExit(f"native fallback execution order should include scheduler launch before branch CLI launch: {native_cli_fallback!r}")
+    if native_cli_fallback.get("execution_order") != [
+        "command",
+        "launch_prompt_command",
+        "scheduler_launch_command",
+        "launch_command",
+    ]:
+        raise SystemExit(
+            f"native fallback execution order should include scheduler launch before branch CLI launch: {native_cli_fallback!r}"
+        )
     if native_cli_fallback.get("scheduler_launch_command") != native_scheduler_launch:
         raise SystemExit(f"native fallback should reuse the branch scheduler launch command: {native_cli_fallback!r}")
-    if " > " not in native_cli_fallback.get("launch_command", "") or "2>&1" not in native_cli_fallback.get("launch_command", ""):
+    if " > " not in native_cli_fallback.get("launch_command", "") or "2>&1" not in native_cli_fallback.get(
+        "launch_command", ""
+    ):
         raise SystemExit(f"bounded CLI fallback launch command should redirect output: {native_cli_fallback!r}")
-    if native_cli_fallback.get("codex_model") != "gpt-5.4-mini" or native_cli_fallback.get("codex_model_source") != "default":
-        raise SystemExit(f"native fallback metadata should default branch-control Codex to mini: {native_cli_fallback!r}")
+    if (
+        native_cli_fallback.get("codex_model") != "gpt-5.4-mini"
+        or native_cli_fallback.get("codex_model_source") != "default"
+    ):
+        raise SystemExit(
+            f"native fallback metadata should default branch-control Codex to mini: {native_cli_fallback!r}"
+        )
     if "codex exec -m gpt-5.4-mini" not in native_cli_fallback.get("launch_command", ""):
         raise SystemExit(f"native fallback launch command should pin the branch-control model: {native_cli_fallback!r}")
     native_text_result = run(
@@ -3913,13 +4171,21 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     )
     native_text_lines = native_text_result.stdout.splitlines()
     if any(line.startswith("git worktree add ") for line in native_text_lines):
-        raise SystemExit(f"native delegation stdout must not emit runnable CLI fallback commands: {native_text_result.stdout!r}")
+        raise SystemExit(
+            f"native delegation stdout must not emit runnable CLI fallback commands: {native_text_result.stdout!r}"
+        )
     if not any(line.startswith("# git worktree add -b ") for line in native_text_lines):
-        raise SystemExit(f"native delegation stdout should preserve commented CLI fallback context: {native_text_result.stdout!r}")
+        raise SystemExit(
+            f"native delegation stdout should preserve commented CLI fallback context: {native_text_result.stdout!r}"
+        )
     if not any("codex exec -m gpt-5.4-mini" in line and "2>&1" in line for line in native_text_lines):
-        raise SystemExit(f"native delegation stdout should preserve commented bounded CLI launch context: {native_text_result.stdout!r}")
+        raise SystemExit(
+            f"native delegation stdout should preserve commented bounded CLI launch context: {native_text_result.stdout!r}"
+        )
     if not any("scheduler_tick.py" in line and "--launch B02" in line for line in native_text_lines):
-        raise SystemExit(f"native delegation stdout should preserve commented scheduler launch context: {native_text_result.stdout!r}")
+        raise SystemExit(
+            f"native delegation stdout should preserve commented scheduler launch context: {native_text_result.stdout!r}"
+        )
     fallback_report = main_bundle / "branches" / "B02.delegation.json"
     fallback_result = run(
         [
@@ -3942,7 +4208,10 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
         raise SystemExit(f"CLI should be an explicit fallback when native delegation is unavailable: {fallback_plan!r}")
     if fallback_plan.get("cli_fallback_reason") != "native_agent_delegation_unavailable":
         raise SystemExit(f"CLI fallback plan should record a reason: {fallback_plan!r}")
-    if fallback_plan.get("cli_branch_control_model") != "gpt-5.4-mini" or fallback_plan.get("cli_branch_control_model_source") != "default":
+    if (
+        fallback_plan.get("cli_branch_control_model") != "gpt-5.4-mini"
+        or fallback_plan.get("cli_branch_control_model_source") != "default"
+    ):
         raise SystemExit(f"CLI fallback plan should record the branch-control Codex model: {fallback_plan!r}")
     if not fallback_result.stdout.strip().startswith("git worktree add -b "):
         raise SystemExit(f"CLI fallback should still render the worktree command: {fallback_result.stdout!r}")
@@ -3950,15 +4219,24 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     fallback_cli = fallback_branch.get("cli_worktree_fallback", {})
     if fallback_cli.get("stdout_policy") != "redirect_stdout_stderr_to_log":
         raise SystemExit(f"CLI fallback report should include bounded output policy: {fallback_cli!r}")
-    if fallback_cli.get("execution_order") != ["command", "launch_prompt_command", "scheduler_launch_command", "launch_command"]:
-        raise SystemExit(f"CLI fallback execution order should include scheduler launch before branch CLI launch: {fallback_cli!r}")
+    if fallback_cli.get("execution_order") != [
+        "command",
+        "launch_prompt_command",
+        "scheduler_launch_command",
+        "launch_command",
+    ]:
+        raise SystemExit(
+            f"CLI fallback execution order should include scheduler launch before branch CLI launch: {fallback_cli!r}"
+        )
     if (
         "scheduler_tick.py" not in fallback_cli.get("scheduler_launch_command", "")
         or "--manifest" not in fallback_cli.get("scheduler_launch_command", "")
         or "--launch B02" not in fallback_cli.get("scheduler_launch_command", "")
     ):
         raise SystemExit(f"CLI fallback report should include a scheduler launch command for B02: {fallback_cli!r}")
-    if fallback_cli.get("codex_model") != "gpt-5.4-mini" or "codex exec -m gpt-5.4-mini" not in fallback_cli.get("launch_command", ""):
+    if fallback_cli.get("codex_model") != "gpt-5.4-mini" or "codex exec -m gpt-5.4-mini" not in fallback_cli.get(
+        "launch_command", ""
+    ):
         raise SystemExit(f"CLI fallback launch should pin the branch-control model: {fallback_cli!r}")
     fallback_prompt_command = fallback_cli.get("launch_prompt_command", "")
     assert_all_contains(
@@ -3992,7 +4270,14 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     original_branch_manifest = json.loads(json.dumps(existing_branch_manifest))
     existing_branch_name = "goal-fixture-existing-branch-test"
     existing_worktree_path = ".worktrees/goal-fixture-existing-branch-test"
-    if subprocess.run(["git", "branch", "--list", existing_branch_name], cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False).stdout.strip():
+    if subprocess.run(
+        ["git", "branch", "--list", existing_branch_name],
+        cwd=ROOT,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    ).stdout.strip():
         raise SystemExit(f"temporary fixture branch already exists: {existing_branch_name}")
     for branch in existing_branch_manifest["branches"]:
         if branch.get("id") == "B02":
@@ -4019,7 +4304,13 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
             expect=1,
         )
     finally:
-        subprocess.run(["git", "branch", "-D", existing_branch_name], cwd=ROOT, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+        subprocess.run(
+            ["git", "branch", "-D", existing_branch_name],
+            cwd=ROOT,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
         write_json(main_bundle / "job.manifest.json", original_branch_manifest)
     assert_contains(
         existing_branch_result.stdout,
@@ -4031,10 +4322,15 @@ def run_launch_ready_helper_fixtures(tmp_path: Path) -> None:
     run(["bash", "-lc", fallback_cli["scheduler_launch_command"]], env=scheduler_env)
     main_scheduler = read_json(main_bundle / "schedulers" / "main.scheduler.json")
     scheduler_events = main_scheduler.get("events", [])
-    if not any(isinstance(event, dict) and event.get("event") == "launch" and event.get("id") == "B02" for event in scheduler_events):
+    if not any(
+        isinstance(event, dict) and event.get("event") == "launch" and event.get("id") == "B02"
+        for event in scheduler_events
+    ):
         raise SystemExit(f"generated scheduler launch command did not record B02 launch evidence: {main_scheduler!r}")
     if main_scheduler.get("max_observed_active", 0) < 1:
-        raise SystemExit(f"generated scheduler launch command did not update active branch accounting: {main_scheduler!r}")
+        raise SystemExit(
+            f"generated scheduler launch command did not update active branch accounting: {main_scheduler!r}"
+        )
 
 
 def load_script_module(name: str, relative_path: str):
@@ -4100,7 +4396,9 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
     }
     normalization_notes = module.normalize_status_before_validation(missing_evidence_status, {"role": "worker"})
     if normalization_notes != ["normalized missing evidence_summary from handoff"]:
-        raise SystemExit(f"worker status normalization should record evidence_summary recovery: {normalization_notes!r}")
+        raise SystemExit(
+            f"worker status normalization should record evidence_summary recovery: {normalization_notes!r}"
+        )
     module.validate_instance(
         missing_evidence_status,
         {
@@ -4113,7 +4411,9 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         },
     )
     if missing_evidence_status.get("evidence_summary") != missing_evidence_status["handoff"]:
-        raise SystemExit(f"worker status normalization should derive evidence_summary from handoff: {missing_evidence_status!r}")
+        raise SystemExit(
+            f"worker status normalization should derive evidence_summary from handoff: {missing_evidence_status!r}"
+        )
     normalization_packet = tmp_path / "normalization-packet"
     normalization_packet.mkdir()
     normalization_schema = normalization_packet / "status.schema.json"
@@ -4145,7 +4445,9 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         {"role": "worker", "output_name": "status.json"},
         parse_report=normalization_parse_report,
     ):
-        raise SystemExit(f"worker status extraction should recover evidence_summary from handoff: {normalization_parse_report!r}")
+        raise SystemExit(
+            f"worker status extraction should recover evidence_summary from handoff: {normalization_parse_report!r}"
+        )
     normalized_status = read_json(normalization_packet / "status.json")
     if normalized_status.get("evidence_summary") != normalized_status.get("handoff"):
         raise SystemExit(f"worker status extraction should write normalized evidence_summary: {normalized_status!r}")
@@ -4273,7 +4575,9 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
         parse_report=empty_report,
     )
     if failure_class != "schema_or_output_readback" or not module._parse_failure_detected(empty_report):
-        raise SystemExit(f"empty assistant output should be a schema/readback failure: {failure_class!r} {empty_report!r}")
+        raise SystemExit(
+            f"empty assistant output should be a schema/readback failure: {failure_class!r} {empty_report!r}"
+        )
     provider_error_report = {
         "failure_class": "provider_api_error",
         "failure_subclass": module.OPENCODE_PROVIDER_API_ERROR_SUBCLASS,
@@ -4291,9 +4595,7 @@ def test_launcher_state_classifier(tmp_path: Path) -> None:
             f"{provider_failure_class!r} {provider_error_report!r}"
         )
     # detect_provider_error_code still recognizes capacity error codes from event lines.
-    capacity_code = module.detect_provider_error_code(
-        [json.dumps({"code": next(iter(module.CAPACITY_ERROR_CODES))})]
-    )
+    capacity_code = module.detect_provider_error_code([json.dumps({"code": next(iter(module.CAPACITY_ERROR_CODES))})])
     if capacity_code not in module.CAPACITY_ERROR_CODES:
         raise SystemExit(f"capacity error code detection should recognize known codes: {capacity_code!r}")
 
@@ -4328,7 +4630,9 @@ def test_route_health_skipped_attempt_prefix() -> None:
     effective_ladder = module.effective_ladder_for_called_attempts(selected_ladder, telemetry_attempts)
     expected_ladder = ["worker_primary", "worker_fallback", "lite_agent"]
     if effective_ladder != expected_ladder:
-        raise SystemExit(f"route-health skipped aliases should not break fallback prefix validation: {effective_ladder!r}")
+        raise SystemExit(
+            f"route-health skipped aliases should not break fallback prefix validation: {effective_ladder!r}"
+        )
     called_aliases = [attempt["alias"] for attempt in telemetry_attempts if attempt.get("called") is True]
     if called_aliases != effective_ladder[: len(called_aliases)]:
         raise SystemExit(f"called aliases should be a prefix after removing route-health skips: {called_aliases!r}")
@@ -4344,7 +4648,9 @@ def test_route_health_skipped_attempt_prefix() -> None:
         {"alias": "worker_fallback", "called": True},
     ]
     if module.is_route_health_skipped_attempt(ordinary_uncalled[1]):
-        raise SystemExit(f"ordinary uncalled attempts must not be treated as route-health skips: {ordinary_uncalled[1]!r}")
+        raise SystemExit(
+            f"ordinary uncalled attempts must not be treated as route-health skips: {ordinary_uncalled[1]!r}"
+        )
     if module.effective_ladder_for_called_attempts(selected_ladder, ordinary_uncalled) != selected_ladder:
         raise SystemExit("ordinary uncalled attempts must preserve the configured selected_ladder")
 
@@ -4573,8 +4879,14 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         extra_args=["--route-class", "custom"],
     )
     mixed_config = assert_compact_runtime_launcher(packet_root / "B01-W04", "worker")
-    assert_mixed_worker_route(mixed_config, "mixed worker", selection_reason="Fixture route selected to validate worker bridge+native metadata.")
-    packet_module = load_script_module("preparedness_create_runtime_packet", "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py")
+    assert_mixed_worker_route(
+        mixed_config,
+        "mixed worker",
+        selection_reason="Fixture route selected to validate worker bridge+native metadata.",
+    )
+    packet_module = load_script_module(
+        "preparedness_create_runtime_packet", "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py"
+    )
     packet_module.validate_launch_config_adapter(mixed_config)
     # B4 replaced the legacy external probe arm with the opencode-bridge launch contract: a bridge
     # attempt must carry its `bridge` launch block. The adapter rejects a bridge attempt
@@ -4582,7 +4894,11 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     # missing-probe_model test exercised).
     missing_bridge_config = json.loads(json.dumps(mixed_config))
     bridge_attempt = next(
-        (item for item in missing_bridge_config.get("attempts", []) if isinstance(item, dict) and item.get("harness_kind") == "opencode-bridge"),
+        (
+            item
+            for item in missing_bridge_config.get("attempts", [])
+            if isinstance(item, dict) and item.get("harness_kind") == "opencode-bridge"
+        ),
         None,
     )
     if not isinstance(bridge_attempt, dict):
@@ -4633,10 +4949,7 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         },
     )
     configured_codex_attempt = configured_codex_config.get("attempts", [{}])[0]
-    if (
-        configured_codex_attempt.get("harness_kind") != "codex"
-        or configured_codex_attempt.get("model") != "gpt-5.4"
-    ):
+    if configured_codex_attempt.get("harness_kind") != "codex" or configured_codex_attempt.get("model") != "gpt-5.4":
         raise SystemExit(f"configured Codex attempts should carry the configured model: {configured_codex_config!r}")
     packet_module.validate_launch_config_adapter(configured_codex_config)
     # B1/B4: reviewer routes diversify across the bridge deepseek route plus the native
@@ -4661,9 +4974,13 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         if isinstance(attempt, dict)
     ]
     if configured_reviewer_providers != ["opencode-bridge", "codex"]:
-        raise SystemExit(f"configured reviewer ladder should diversify bridge + native Codex: {configured_reviewer_config!r}")
+        raise SystemExit(
+            f"configured reviewer ladder should diversify bridge + native Codex: {configured_reviewer_config!r}"
+        )
     if not isinstance(configured_reviewer_attempts[0].get("bridge"), dict):
-        raise SystemExit(f"configured reviewer bridge attempt must carry a bridge block: {configured_reviewer_config!r}")
+        raise SystemExit(
+            f"configured reviewer bridge attempt must carry a bridge block: {configured_reviewer_config!r}"
+        )
     packet_module.validate_launch_config_adapter(configured_reviewer_config)
     configured_codex_config = packet_module.compact_launch_config(
         "worker",
@@ -4795,7 +5112,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if "runtime packet pre-launch validation failed" not in dependency_check.stdout:
         raise SystemExit(f"dependency pre-launch validation should fail before launch: {dependency_check.stdout}")
     if "dependency B00 status_path does not exist as a file" not in dependency_check.stdout:
-        raise SystemExit(f"dependency status-path pre-launch validation should include missing file: {dependency_check.stdout}")
+        raise SystemExit(
+            f"dependency status-path pre-launch validation should include missing file: {dependency_check.stdout}"
+        )
     worker_model_catalog = tmp_path / "worker-model-catalog.json"
     write_json(
         worker_model_catalog,
@@ -4841,12 +5160,12 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     # (not catalog-checked) leads the surviving ladder.
     expected_catalog_ladder = ["ds-flash-max"]
     if catalog_config.get("selected_ladder") != expected_catalog_ladder:
-        raise SystemExit(f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}")
+        raise SystemExit(
+            f"worker model catalog did not prune Spark from default ladder: {catalog_config.get('selected_ladder')!r}"
+        )
     catalog_meta = catalog_config.get("model_catalog", {})
     filtered_aliases = [
-        item.get("alias")
-        for item in catalog_meta.get("filtered_aliases", [])
-        if isinstance(item, dict)
+        item.get("alias") for item in catalog_meta.get("filtered_aliases", []) if isinstance(item, dict)
     ]
     if filtered_aliases != ["codex-spark"]:
         raise SystemExit(f"worker model catalog filtered aliases mismatch: {filtered_aliases!r}")
@@ -4886,9 +5205,13 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     manifest_worker_prompt = (manifest_packet_dir / "prompt.md").read_text(encoding="utf-8")
     manifest_worker_config = read_json(manifest_packet_dir / "launch-config.json")
     if manifest_worker_config.get("branch") != "preparedness-research-fixture":
-        raise SystemExit(f"worker --manifest did not normalize branch id to branch_name: {manifest_worker_config.get('branch')!r}")
+        raise SystemExit(
+            f"worker --manifest did not normalize branch id to branch_name: {manifest_worker_config.get('branch')!r}"
+        )
     if manifest_worker_config.get("owned_files") != ["README.md"]:
-        raise SystemExit(f"worker --manifest did not propagate manifest owned paths: {manifest_worker_config.get('owned_files')!r}")
+        raise SystemExit(
+            f"worker --manifest did not propagate manifest owned paths: {manifest_worker_config.get('owned_files')!r}"
+        )
     manifest_worker_schema = read_json(manifest_packet_dir / "status.schema.json")
     assert_openai_strict_schema(manifest_packet_dir / "status.schema.json", "manifest worker status schema")
     branch_const = manifest_worker_schema.get("properties", {}).get("branch", {}).get("const")
@@ -4896,10 +5219,16 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         raise SystemExit(f"worker --manifest status schema branch mismatch: {branch_const!r}")
     selected_ladder_schema = manifest_worker_schema.get("properties", {}).get("selected_ladder", {})
     if "const" in selected_ladder_schema:
-        raise SystemExit(f"worker status schema must not use array const for selected_ladder: {selected_ladder_schema!r}")
+        raise SystemExit(
+            f"worker status schema must not use array const for selected_ladder: {selected_ladder_schema!r}"
+        )
     selected_ladder_config = manifest_worker_config.get("selected_ladder")
-    if selected_ladder_schema.get("minItems") != len(selected_ladder_config) or selected_ladder_schema.get("maxItems") != len(selected_ladder_config):
-        raise SystemExit(f"worker status schema should preserve exact selected_ladder length: {selected_ladder_schema!r}")
+    if selected_ladder_schema.get("minItems") != len(selected_ladder_config) or selected_ladder_schema.get(
+        "maxItems"
+    ) != len(selected_ladder_config):
+        raise SystemExit(
+            f"worker status schema should preserve exact selected_ladder length: {selected_ladder_schema!r}"
+        )
     selected_ladder_enum = selected_ladder_schema.get("items", {}).get("enum")
     if selected_ladder_enum != selected_ladder_config:
         raise SystemExit(f"worker status schema should enumerate selected_ladder aliases: {selected_ladder_schema!r}")
@@ -4953,13 +5282,42 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         {
             "schema_version": 1,
             "models": {
-                "worker_primary": {"role": "worker_primary", "alias": "worker_primary", "harness": "codex", "provider": "openai", "model": "gpt-5.3-codex-spark"},
-                "worker_secondary": {"role": "worker_secondary", "alias": "worker_secondary", "harness": "codex", "provider": "openai", "model": "gpt-5.4"},
-                "worker_fallback": {"role": "worker_fallback", "alias": "worker_fallback", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"},
-                "worker_cheap": {"role": "worker_cheap", "alias": "worker_cheap", "harness": "codex", "provider": "openai", "model": "gpt-5.4-mini"},
+                "worker_primary": {
+                    "role": "worker_primary",
+                    "alias": "worker_primary",
+                    "harness": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.3-codex-spark",
+                },
+                "worker_secondary": {
+                    "role": "worker_secondary",
+                    "alias": "worker_secondary",
+                    "harness": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.4",
+                },
+                "worker_fallback": {
+                    "role": "worker_fallback",
+                    "alias": "worker_fallback",
+                    "harness": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                },
+                "worker_cheap": {
+                    "role": "worker_cheap",
+                    "alias": "worker_cheap",
+                    "harness": "codex",
+                    "provider": "openai",
+                    "model": "gpt-5.4-mini",
+                },
             },
             "harnesses": {
-                "codex": {"kind": "codex", "command": "codex", "run_args": ["exec", "-m", "{model}", "{prompt}"], "run_readback": "stdout"},
+                "codex": {
+                    "kind": "codex",
+                    "command": "codex",
+                    "run_args": ["exec", "-m", "{model}", "{prompt}"],
+                    "run_readback": "stdout",
+                },
             },
         },
     )
@@ -4979,7 +5337,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if restored_route.get("selected_ladder") != configured_ladder:
         raise SystemExit(f"configured route-class ladder should retain final fallback: {restored_route!r}")
     restored_policy = restored_route.get("route_policy", {})
-    if restored_policy.get("restored_configured_ladder") is not True or restored_policy.get("allow_route_pruning") is not False:
+    if (
+        restored_policy.get("restored_configured_ladder") is not True
+        or restored_policy.get("allow_route_pruning") is not False
+    ):
         raise SystemExit(f"restored worker route should record route-policy restoration: {restored_policy!r}")
     restored_launch = read_json(configured_route_root / "B01-W01" / "launch-config.json")
     if restored_launch.get("selected_ladder") != configured_ladder:
@@ -5039,7 +5400,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if pruned_route.get("selected_ladder") != ["worker_primary", "worker_secondary", "worker_fallback"]:
         raise SystemExit(f"--allow-route-pruning should preserve the explicit shorter ladder: {pruned_route!r}")
     pruned_policy = pruned_route.get("route_policy", {})
-    if pruned_policy.get("pruned_configured_ladder") is not True or pruned_policy.get("restored_configured_ladder") is not False:
+    if (
+        pruned_policy.get("pruned_configured_ladder") is not True
+        or pruned_policy.get("restored_configured_ladder") is not False
+    ):
         raise SystemExit(f"--allow-route-pruning should record explicit pruning metadata: {pruned_policy!r}")
     weak_prune_result = create_runtime_packet(
         role="worker",
@@ -5054,7 +5418,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         extra_args=["--allow-route-pruning"],
         expect=1,
     )
-    if "--allow-route-pruning requires --selection-reason to state a concrete external reason" not in weak_prune_result.stdout:
+    if (
+        "--allow-route-pruning requires --selection-reason to state a concrete external reason"
+        not in weak_prune_result.stdout
+    ):
         raise SystemExit(f"weak pruning reason should fail closed: {weak_prune_result.stdout}")
     oversized_task = tmp_path / "oversized-runtime-task.md"
     oversized_task.write_text("# Oversized Task\n\n" + ("x" * 50000), encoding="utf-8")
@@ -5071,7 +5438,11 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         selection_reason="Fixture verifies packet context budget enforcement.",
         expect=1,
     )
-    assert_contains(oversized_result.stdout, "runtime packet context budget exceeded before launch", "oversized packet budget fixture")
+    assert_contains(
+        oversized_result.stdout,
+        "runtime packet context budget exceeded before launch",
+        "oversized packet budget fixture",
+    )
     if (oversized_root / "B01-W98" / "launch.sh").exists():
         raise SystemExit("oversized packet context budget must fail before writing launch.sh")
     replace_failure_root = tmp_path / "replace-failure-packets"
@@ -5101,7 +5472,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         extra_args=["--replace"],
         expect=1,
     )
-    assert_contains(replace_failure.stdout, "runtime packet context budget exceeded before launch", "failed replace budget fixture")
+    assert_contains(
+        replace_failure.stdout, "runtime packet context budget exceeded before launch", "failed replace budget fixture"
+    )
     if not (replace_failure_dir / "launch.sh").exists() or not (replace_failure_dir / "current-marker.txt").exists():
         raise SystemExit("failed packet replacement must leave the current packet directory intact")
     if (replace_failure_dir / "attempts" / "attempt-001").exists():
@@ -5135,7 +5508,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     )
     stale_index = read_json(excerpt_packet_root / "B01-W99" / "stale-artifacts.index.json")
     stale_entries = stale_index.get("entries", [])
-    if not stale_entries or not all(item.get("excluded_from_current_evidence") is True for item in stale_entries if isinstance(item, dict)):
+    if not stale_entries or not all(
+        item.get("excluded_from_current_evidence") is True for item in stale_entries if isinstance(item, dict)
+    ):
         raise SystemExit(f"packet replacement should write stale-artifact exclusion index: {stale_index!r}")
     if any(
         not item.get("superseding_artifact") and not item.get("terminal_reason")
@@ -5193,7 +5568,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if manifest_worker_status.get("branch") != "preparedness-research-fixture":
         raise SystemExit(f"worker runtime did not preserve normalized branch label: {manifest_worker_status!r}")
     if manifest_worker_status.get("worktree") != manifest_worker_status.get("worktree_path"):
-        raise SystemExit(f"worker runtime did not normalize missing worktree from worktree_path: {manifest_worker_status!r}")
+        raise SystemExit(
+            f"worker runtime did not normalize missing worktree from worktree_path: {manifest_worker_status!r}"
+        )
     raw_status_path = manifest_packet_dir / "status.json.raw"
     if raw_status_path.exists():
         raw_status_text = raw_status_path.read_text(encoding="utf-8")
@@ -5202,7 +5579,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     manifest_worker_telemetry = read_json(manifest_packet_dir / "telemetry.json")
     usage = manifest_worker_telemetry.get("totals", {}).get("known_usage", {})
     if manifest_worker_telemetry.get("accepted_alias") != "codex-mini" or usage.get("input_tokens") != 321:
-        raise SystemExit(f"worker runtime did not extract accepted Codex telemetry after marker normalization: {manifest_worker_telemetry!r}")
+        raise SystemExit(
+            f"worker runtime did not extract accepted Codex telemetry after marker normalization: {manifest_worker_telemetry!r}"
+        )
     if manifest_worker_telemetry.get("route_class") != "normal-code":
         raise SystemExit(f"worker telemetry did not preserve route_class: {manifest_worker_telemetry!r}")
     manifest_worker_summary = read_json(manifest_packet_dir / "packet.summary.json")
@@ -5286,7 +5665,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     )
     direct_schema_status = read_json(direct_schema_packet / "status.json")
     if direct_schema_status.get("status") != "pass" or direct_schema_status.get("changed_files") != direct_owned_files:
-        raise SystemExit(f"worker runtime should accept direct schema output despite nonzero exit: {direct_schema_status!r}")
+        raise SystemExit(
+            f"worker runtime should accept direct schema output despite nonzero exit: {direct_schema_status!r}"
+        )
     direct_schema_summary = read_json(direct_schema_packet / "packet.summary.json")
     if (
         direct_schema_summary.get("output_status") != "pass"
@@ -5314,15 +5695,14 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     standalone_packet = standalone_blocked_root / "B99-W01"
     standalone_config = read_json(standalone_packet / "launch-config.json")
     if standalone_config.get("work_item_id") != "" or standalone_config.get("manifest_hash") != "":
-        raise SystemExit(f"standalone worker fixture should have empty manifest attribution fields: {standalone_config!r}")
+        raise SystemExit(
+            f"standalone worker fixture should have empty manifest attribution fields: {standalone_config!r}"
+        )
     fake_failed_codex_dir = tmp_path / "fake-codex-standalone-blocked"
     fake_failed_codex_dir.mkdir()
     fake_failed_codex = fake_failed_codex_dir / "codex"
     fake_failed_codex.write_text(
-        "#!/usr/bin/env python3\n"
-        "import sys\n"
-        "print('standalone no-manifest worker failed cleanly')\n"
-        "sys.exit(1)\n",
+        "#!/usr/bin/env python3\nimport sys\nprint('standalone no-manifest worker failed cleanly')\nsys.exit(1)\n",
         encoding="utf-8",
     )
     fake_failed_codex.chmod(0o755)
@@ -5337,7 +5717,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         or standalone_status.get("work_item_id") != ""
         or standalone_status.get("manifest_hash") != ""
     ):
-        raise SystemExit(f"standalone no-manifest worker should write blocked status with empty attribution fields: {standalone_status!r}")
+        raise SystemExit(
+            f"standalone no-manifest worker should write blocked status with empty attribution fields: {standalone_status!r}"
+        )
     standalone_summary = read_json(standalone_packet / "packet.summary.json")
     if standalone_summary.get("output_status") != "blocked" or standalone_summary.get("terminal_state") != "blocked":
         raise SystemExit(f"standalone no-manifest worker should write blocked packet summary: {standalone_summary!r}")
@@ -5388,7 +5770,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if dirty_salvage_context.get("patch", {}).get("has_content") is not False:
         raise SystemExit(f"untracked-only dirty stop should not claim patch content: {dirty_salvage_context!r}")
     if "copy files from dirty-stop-untracked-files" not in dirty_salvage_context.get("relaunch_recommendation", ""):
-        raise SystemExit(f"dirty-stop recommendation should reference untracked salvage copies: {dirty_salvage_context!r}")
+        raise SystemExit(
+            f"dirty-stop recommendation should reference untracked salvage copies: {dirty_salvage_context!r}"
+        )
     for rel_path in dirty_salvage_files:
         if not (dirty_salvage_packet / "dirty-stop-untracked-files" / rel_path).is_file():
             raise SystemExit(f"dirty-stop salvage missing copied file: {rel_path}")
@@ -5493,7 +5877,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     ):
         raise SystemExit(f"cache-only fallback should summarize generated-artifact cleanup: {cache_fallback_summary!r}")
     first_attempt_cleanup = cache_fallback_summary.get("attempts", [{}])[0].get("generated_artifact_cleanup", {})
-    if first_attempt_cleanup.get("removed_count", 0) < 4 or first_attempt_cleanup.get("generated_artifacts_only") is not True:
+    if (
+        first_attempt_cleanup.get("removed_count", 0) < 4
+        or first_attempt_cleanup.get("generated_artifacts_only") is not True
+    ):
         raise SystemExit(f"first fallback attempt should record generated-only cleanup: {cache_fallback_summary!r}")
     cleanup_artifact = read_json(cache_fallback_packet / "generated-artifact-cleanup.json")
     cleanup_records = cleanup_artifact.get("attempts", [])
@@ -5592,7 +5979,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     # and re-generates the two __pycache__ dirs so the runner's cleanup/freshness/
     # promotion path is exercised for real (honest regression test).
     reviewer_cache_bridge_root = tmp_path / "fake-bridge-reviewer-cache-cleanup"
-    reviewer_semantic_hashes = read_json(reviewer_cache_bundle / "branches" / "B01.pre_review_gate.json").get("semantic_input_hashes", {})
+    reviewer_semantic_hashes = read_json(reviewer_cache_bundle / "branches" / "B01.pre_review_gate.json").get(
+        "semantic_input_hashes", {}
+    )
     reviewer_cache_base_ref = read_json(reviewer_cache_bundle / "job.manifest.json").get("base_ref", "main")
     reviewer_cache_generated_dirs = ["src/ft10_solver/__pycache__", "tests/__pycache__"]
     build_fake_opencode_bridge_driver(
@@ -5629,7 +6018,11 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     reviewer_launcher = read_json(reviewer_cache_packet / "launcher-state.json")
     if reviewer_launcher.get("terminal_state") != "pass":
         raise SystemExit(f"reviewer cache-only cleanup should pass: {reviewer_launcher!r}")
-    if any(event.get("dirty") for event in reviewer_launcher.get("events", []) if isinstance(event, dict) and event.get("state") == "pass"):
+    if any(
+        event.get("dirty")
+        for event in reviewer_launcher.get("events", [])
+        if isinstance(event, dict) and event.get("state") == "pass"
+    ):
         raise SystemExit(f"reviewer cache cleanup should not leave dirty=true pass event: {reviewer_launcher!r}")
     reviewer_cleanup = read_json(reviewer_cache_packet / "generated-artifact-cleanup.json")
     if reviewer_cleanup.get("removed_count", 0) < 2 or reviewer_cleanup.get("failed_count") != 0:
@@ -5747,7 +6140,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         or stale_output_summary.get("attempts", [{}])[0].get("failure_class") != "schema_or_output_readback"
         or stale_output_summary.get("attempts", [{}, {}, {}])[2].get("state") != "pass"
     ):
-        raise SystemExit(f"stale invalid output fallback summary should preserve all route attempts: {stale_output_summary!r}")
+        raise SystemExit(
+            f"stale invalid output fallback summary should preserve all route attempts: {stale_output_summary!r}"
+        )
 
     shared_dirty_worktree = tmp_path / "shared-dirty-worktree"
     shared_dirty_worktree.mkdir()
@@ -5930,7 +6325,10 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     if ownership_status.get("status") != "blocked" or ownership_status.get("changed_files") != ["outside.txt"]:
         raise SystemExit(f"ownership violation should write blocked status with offending path: {ownership_status!r}")
     ownership_summary = read_json(ownership_packet / "packet.summary.json")
-    if ownership_summary.get("output_status") != "blocked" or ownership_summary.get("next_action") != "close_blocked_or_create_repair":
+    if (
+        ownership_summary.get("output_status") != "blocked"
+        or ownership_summary.get("next_action") != "close_blocked_or_create_repair"
+    ):
         raise SystemExit(f"ownership packet summary should preserve blocked next action: {ownership_summary!r}")
     if ownership_summary.get("attempts", [{}])[0].get("failure_class") != "ownership":
         raise SystemExit(f"ownership packet summary should classify ownership blocker: {ownership_summary!r}")
@@ -5974,7 +6372,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
     ownership_status_after_assemble = read_json(ownership_bundle / "branches" / "B01.status.json")
     ownership_serial_reasons = ownership_status_after_assemble.get("worker_parallelism", {}).get("serial_reasons", [])
     if not any("Worker changed files outside owned paths" in str(reason) for reason in ownership_serial_reasons):
-        raise SystemExit(f"branch status should preserve scheduler blocked reasons: {ownership_status_after_assemble!r}")
+        raise SystemExit(
+            f"branch status should preserve scheduler blocked reasons: {ownership_status_after_assemble!r}"
+        )
     scheduler_no_refill_bundle = tmp_path / "scheduler-no-terminal-refill"
     shutil.copytree(ownership_bundle, scheduler_no_refill_bundle)
     scheduler_no_refill_path = scheduler_no_refill_bundle / "schedulers" / "B01.worker.scheduler.json"
@@ -6035,7 +6435,9 @@ def run_runtime_packet_fixtures(tmp_path: Path, bundle: Path) -> tuple[Path, Pat
         task_file=task_file,
     )
     research_config = assert_compact_runtime_launcher(packet_root / "B01-W03", "research-worker", 1200)
-    assert_research_worker_preserves_user_config(research_config, expected_event_logs=["events-primary.jsonl", "events-fallback.jsonl"])
+    assert_research_worker_preserves_user_config(
+        research_config, expected_event_logs=["events-primary.jsonl", "events-fallback.jsonl"]
+    )
     return packet_root, task_file
 
 
@@ -6256,7 +6658,9 @@ def create_goal_fixture_bundle(tmp_path: Path) -> Path:
     ):
         raise SystemExit(f"lint report should expose git repo status metadata: {git_repo_status!r}")
     if lint_report.get("compatibility_status") != "not_applicable":
-        raise SystemExit(f"lint report should expose compatibility status metadata: {lint_report.get('compatibility_status')!r}")
+        raise SystemExit(
+            f"lint report should expose compatibility status metadata: {lint_report.get('compatibility_status')!r}"
+        )
     if lint_report.get("schema_lint_status") != "pass" or lint_report.get("runtime_launch_allowed") is not True:
         raise SystemExit(f"lint report should distinguish schema lint from runtime launch readiness: {lint_report!r}")
     # The downstream pre-review / worktree-freshness fixtures run their gates against the
@@ -6356,8 +6760,14 @@ def run_repair_gate_fixture(bundle: Path) -> None:
     action_kinds = [item.get("kind") for item in branch_decision.get("actions", []) if isinstance(item, dict)]
     if any(kind in {"amendment_eligibility", "blocker_repair_candidate"} for kind in action_kinds):
         raise SystemExit(f"branch repair gate leaked amender actions: {branch_decision!r}")
-    telemetry_check = next((item for item in branch_decision.get("checks", []) if item.get("name") == "telemetry_summary"), None)
-    if not telemetry_check or telemetry_check.get("status") != "pass" or "branch scope" not in telemetry_check.get("reason", ""):
+    telemetry_check = next(
+        (item for item in branch_decision.get("checks", []) if item.get("name") == "telemetry_summary"), None
+    )
+    if (
+        not telemetry_check
+        or telemetry_check.get("status") != "pass"
+        or "branch scope" not in telemetry_check.get("reason", "")
+    ):
         raise SystemExit(f"branch repair gate should skip bundle-wide telemetry freshness: {branch_decision!r}")
 
     amender_bundle = bundle.parent / "amender-repair-gate"
@@ -6407,7 +6817,9 @@ def run_repair_gate_fixture(bundle: Path) -> None:
     if "--status" in blocker_command or "--branch-id" in blocker_command:
         raise SystemExit(f"amender blocker repair command must not use stale helper flags: {blocker_command}")
     if not any("--write-decision --replace" in command for command in amender_commands):
-        raise SystemExit(f"amender repair gate should emit a decision-writing command before packet creation: {amender_commands!r}")
+        raise SystemExit(
+            f"amender repair gate should emit a decision-writing command before packet creation: {amender_commands!r}"
+        )
     if context_index.get("severity") != "info":
         raise SystemExit(f"context_index skip must be severity info: {context_index!r}")
 
@@ -6434,10 +6846,23 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
     )
     stale_prompt.write_text(stale_text, encoding="utf-8")
     stale_lint = run(
-        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", stale_validator_bundle.as_posix(), "--no-write"],
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            stale_validator_bundle.as_posix(),
+            "--no-write",
+        ],
         expect=1,
     )
-    assert_all_contains(stale_lint.stdout, ["validate_branch_status.py command snippet must include", "validate_main_status.py command snippet must include"], "stale validator command lint")
+    assert_all_contains(
+        stale_lint.stdout,
+        [
+            "validate_branch_status.py command snippet must include",
+            "validate_main_status.py command snippet must include",
+        ],
+        "stale validator command lint",
+    )
     wrong_target_validator_bundle = tmp_path / "wrong-target-validator-command"
     shutil.copytree(bundle, wrong_target_validator_bundle)
     wrong_target_prompt = wrong_target_validator_bundle / "main.prompt.md"
@@ -6461,10 +6886,20 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
     )
     wrong_target_branch_prompt.write_text(wrong_target_branch_text, encoding="utf-8")
     wrong_target_lint = run(
-        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", wrong_target_validator_bundle.as_posix(), "--no-write"],
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            wrong_target_validator_bundle.as_posix(),
+            "--no-write",
+        ],
         expect=1,
     )
-    assert_all_contains(wrong_target_lint.stdout, ["branches/Bxx.status.json", "branches/B01.status.json", "validate_main_status.py command snippet"], "wrong validator status target")
+    assert_all_contains(
+        wrong_target_lint.stdout,
+        ["branches/Bxx.status.json", "branches/B01.status.json", "validate_main_status.py command snippet"],
+        "wrong validator status target",
+    )
     stale_audit_dir = tmp_path / "stale-validator-audit"
     run(
         [
@@ -6529,7 +6964,9 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
     warning_audit = read_json(warning_audit_dir / "prompt-audit.json")
     warning_severities = {item.get("severity") for item in warning_audit.get("defects", []) if isinstance(item, dict)}
     if warning_audit.get("status") != "pass" or "warning" in warning_severities or "minor" not in warning_severities:
-        raise SystemExit(f"deterministic prompt audit should normalize warning-only defects to minor: {warning_audit!r}")
+        raise SystemExit(
+            f"deterministic prompt audit should normalize warning-only defects to minor: {warning_audit!r}"
+        )
     run(
         [
             "python3",
@@ -6563,11 +7000,25 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     ).stdout
     if len(compact_phase_manifest) >= len(full_phase_manifest):
         raise SystemExit("compact runtime phase manifest should be shorter than default markdown")
-    assert_all_contains(compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest")
+    assert_all_contains(
+        compact_phase_manifest, ["--manifest /abs/bundle/job.manifest.json", "rg/grep"], "compact phase manifest"
+    )
     assert_all_contains(preflight_phase_manifest, ["telemetry_mode=debug", "debug mode"], "preflight phase manifest")
-    assert_all_contains(main_phase_manifest, ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit", "reconcile_goal_run.py"], "main phase manifest")
-    assert_all_contains(amender_phase_manifest, ["--main-prompt /abs/bundle/main.prompt.md", "--repo-root /abs/repo"], "amender phase manifest")
-    assert_all_contains(full_phase_manifest, ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"], "branch phase manifest")
+    assert_all_contains(
+        main_phase_manifest,
+        ["watchdog", "orchestration_watchdog.main_no_completion_wait_limit", "reconcile_goal_run.py"],
+        "main phase manifest",
+    )
+    assert_all_contains(
+        amender_phase_manifest,
+        ["--main-prompt /abs/bundle/main.prompt.md", "--repo-root /abs/repo"],
+        "amender phase manifest",
+    )
+    assert_all_contains(
+        full_phase_manifest,
+        ["watchdog", "orchestration_watchdog.branch_no_completion_wait_limit"],
+        "branch phase manifest",
+    )
     readiness = run(
         [
             "python3",
@@ -6622,15 +7073,15 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     if json.loads(readiness_with_output) != json.loads(readiness_output.read_text(encoding="utf-8")):
         raise SystemExit("render_goal_bootloader.py --output should write the same readiness JSON it prints")
     for key in [
-            "status",
-            "launch_allowed",
-            "launch_blockers",
-            "bundle_dir",
-            "bootloader_exists",
-            "route_policy",
-            "verified_routes",
-            "prompt_size_report",
-            "caps",
+        "status",
+        "launch_allowed",
+        "launch_blockers",
+        "bundle_dir",
+        "bootloader_exists",
+        "route_policy",
+        "verified_routes",
+        "prompt_size_report",
+        "caps",
         "branch_dag",
         "lint_status",
         "repair_gate",
@@ -6648,10 +7099,18 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     if "accepted_routes" in readiness_json:
         raise SystemExit("readiness JSON should not call unverified route policy accepted_routes")
     cleanup_plan = readiness_json.get("cleanup_plan", {})
-    if not isinstance(cleanup_plan, dict) or "config_artifacts" not in cleanup_plan or "generated_artifact_roots" not in cleanup_plan:
-        raise SystemExit(f"readiness cleanup plan should distinguish config and generated runtime artifacts: {cleanup_plan!r}")
+    if (
+        not isinstance(cleanup_plan, dict)
+        or "config_artifacts" not in cleanup_plan
+        or "generated_artifact_roots" not in cleanup_plan
+    ):
+        raise SystemExit(
+            f"readiness cleanup plan should distinguish config and generated runtime artifacts: {cleanup_plan!r}"
+        )
     if readiness_json.get("lint_status", {}).get("brief_lint", {}).get("status") != "pass":
-        raise SystemExit(f"readiness should find canonical preflight.brief.lint.json: {readiness_json.get('lint_status')!r}")
+        raise SystemExit(
+            f"readiness should find canonical preflight.brief.lint.json: {readiness_json.get('lint_status')!r}"
+        )
     if readiness_json.get("repair_gate", {}).get("status") != "pass":
         raise SystemExit(f"readiness should find canonical repair-gate.json: {readiness_json.get('repair_gate')!r}")
     manifest = read_json(bundle / "job.manifest.json")
@@ -6680,7 +7139,9 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
     if not isinstance(manifest.get("route_contract", {}).get("catalog_refresh_required"), bool):
         raise SystemExit(f"route contract must expose catalog refresh requirement: {manifest.get('route_contract')!r}")
     if manifest.get("ownership_feasibility", {}).get("status") not in {"pass", "needs_review"}:
-        raise SystemExit(f"manifest must expose ownership feasibility status: {manifest.get('ownership_feasibility')!r}")
+        raise SystemExit(
+            f"manifest must expose ownership feasibility status: {manifest.get('ownership_feasibility')!r}"
+        )
     if manifest.get("execution_strategy", {}).get("schema_version") != 1:
         raise SystemExit(f"manifest execution strategy must be schema v1: {manifest.get('execution_strategy')!r}")
     prompt_size = readiness_json.get("prompt_size_report", {})
@@ -6689,7 +7150,9 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
         raise SystemExit(f"readiness prompt-size report should include runtime-rules.md: {prompt_size!r}")
     if prompt_size.get("duplicated_section_counts", {}).get("shared_runtime_rules_extracted") is not True:
         raise SystemExit(f"readiness should report extracted shared runtime rules: {prompt_size!r}")
-    assert_all_contains(json.dumps(readiness_json["lint_status"], sort_keys=True), ["bundle_lint", "brief_lint"], "readiness lint keys")
+    assert_all_contains(
+        json.dumps(readiness_json["lint_status"], sort_keys=True), ["bundle_lint", "brief_lint"], "readiness lint keys"
+    )
     assert_all_contains(
         (bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8"),
         ["Waves are dependency-aware scheduling/order groups", "Runtime readiness gate: pass", "depends_on", "branch"],
@@ -6715,7 +7178,9 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
         "branch prompt compact validator/cap wording",
     )
     assert_not_contains(branch_prompt, "## Tests And Validators", "branch prompt stale validators heading")
-    assert_not_contains(branch_prompt, "small-edit/normal-code -> Codex Spark then Codex mini", "branch prompt stale route aliases")
+    assert_not_contains(
+        branch_prompt, "small-edit/normal-code -> Codex Spark then Codex mini", "branch prompt stale route aliases"
+    )
     dod_tail = branch_prompt.split("## Definition of Done", 1)[1]
     assert_not_contains(dod_tail, "\n- none", "branch prompt DoD stray none")
     brief_schema = json.loads(
@@ -6737,7 +7202,9 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
         raise SystemExit("brief schema should expose dependency_context_reason guidance")
     context_guidance = str(brief_schema.get("work_item_optional", {}).get("context_files", ""))
     if "must already exist" not in context_guidance or "owned_paths" not in context_guidance:
-        raise SystemExit(f"brief schema should distinguish context_files from future owned outputs: {context_guidance!r}")
+        raise SystemExit(
+            f"brief schema should distinguish context_files from future owned outputs: {context_guidance!r}"
+        )
     lint_schema = json.loads(
         run(["python3", "skills/goal-preflight/scripts/lint_preflight_brief.py", "--brief-schema-json"]).stdout
     )
@@ -6801,7 +7268,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     branch_default_manifest = read_json(branch_default_bundle / "job.manifest.json")
     if branch_default_manifest.get("base_ref") != "trunk":
-        raise SystemExit(f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}")
+        raise SystemExit(
+            f"create_goal_bundle should default base_ref to current git branch: {branch_default_manifest.get('base_ref')!r}"
+        )
 
     pipeline_brief = json.loads(json.dumps(branch_default_brief))
     pipeline_brief.update(
@@ -6809,7 +7278,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "job_id": "preflight-pipeline-fixture",
             "goal": "Run the canonical one-shot preflight pipeline fixture.",
             "source_summary": "The pipeline fixture uses a tiny git repository with README.md as concrete context.",
-            "required_evidence": ["Canonical brief lint, bundle lint, repair gate, readiness, and bootloader artifacts exist."],
+            "required_evidence": [
+                "Canonical brief lint, bundle lint, repair gate, readiness, and bootloader artifacts exist."
+            ],
             "final_dod": ["The one-shot preflight pipeline returns status pass."],
             "source_attachments": [
                 {"path": "README.md", "label": "Fixture README", "kind": "benchmark-data"},
@@ -6854,7 +7325,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         check=False,
     )
     if failing_pipeline.returncode != 1:
-        raise SystemExit(f"failing preflight pipeline should return 1: {failing_pipeline.returncode} {failing_pipeline.stdout} {failing_pipeline.stderr}")
+        raise SystemExit(
+            f"failing preflight pipeline should return 1: {failing_pipeline.returncode} {failing_pipeline.stdout} {failing_pipeline.stderr}"
+        )
     assert_all_contains(
         failing_pipeline.stderr + failing_pipeline.stdout,
         ["goal-preflight pipeline failed: phase=brief_lint", "pipeline_result=", "top_defects:", "$.runtime_cap"],
@@ -6879,7 +7352,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if pipeline_result.get("status") != "pass" or pipeline_result.get("readiness", {}).get("status") != "pass":
         raise SystemExit(f"prepare_goal_bundle.py should pass for a git-backed fixture: {pipeline_result!r}")
     if pipeline_result.get("launch_allowed") is not True:
-        raise SystemExit(f"prepare_goal_bundle.py should expose launch_allowed=true for git-backed fixture: {pipeline_result!r}")
+        raise SystemExit(
+            f"prepare_goal_bundle.py should expose launch_allowed=true for git-backed fixture: {pipeline_result!r}"
+        )
     if "readiness_full" in pipeline_result or "config_selection_full" in pipeline_result:
         raise SystemExit(f"prepare_goal_bundle.py should keep default pipeline output compact: {pipeline_result!r}")
     degraded_telemetry_bundle = tmp_path / "preflight-degraded-token-telemetry"
@@ -6887,7 +7362,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     degraded_manifest_path = degraded_telemetry_bundle / "job.manifest.json"
     degraded_manifest = read_json(degraded_manifest_path)
     default_worker_roles = degraded_manifest.get("worker_model_policy", {}).get("default_ladder", [])
-    old_route_sha = mark_worker_routes_verified(degraded_manifest, [role for role in default_worker_roles if isinstance(role, str)])
+    old_route_sha = mark_worker_routes_verified(
+        degraded_manifest, [role for role in default_worker_roles if isinstance(role, str)]
+    )
     degraded_manifest["goal_config_check_summary"]["token_telemetry"] = {
         "available_routes": 1,
         "unavailable_routes": 1,
@@ -6924,7 +7401,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             branch_default_repo.as_posix(),
         ]
     ).stdout
-    assert_contains(blocked_bootloader_text, "BLOCKED READINESS", "pre-waiver degraded telemetry bootloader should be blocked")
+    assert_contains(
+        blocked_bootloader_text, "BLOCKED READINESS", "pre-waiver degraded telemetry bootloader should be blocked"
+    )
     degraded_manifest["route_policy_degraded_telemetry_waiver"] = {
         "accepted": True,
         "reason": "Fixture explicitly accepts partial token telemetry for launch readiness.",
@@ -6977,14 +7456,18 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         or refreshed_degraded_pipeline.get("readiness_status") != "pass"
         or refreshed_degraded_pipeline.get("launch_allowed") is not True
     ):
-        raise SystemExit(f"canonical readiness rerun should refresh stale preflight pipeline: {refreshed_degraded_pipeline!r}")
+        raise SystemExit(
+            f"canonical readiness rerun should refresh stale preflight pipeline: {refreshed_degraded_pipeline!r}"
+        )
     refreshed_report = (degraded_telemetry_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
     assert_all_contains(
         refreshed_report,
         ["Final pipeline state:", "- Readiness: pass", "- Launch allowed: true"],
         "refreshed degraded telemetry preflight report",
     )
-    assert_not_contains(refreshed_report, "route_token_telemetry_degraded_without_waiver", "refreshed preflight report stale blocker")
+    assert_not_contains(
+        refreshed_report, "route_token_telemetry_degraded_without_waiver", "refreshed preflight report stale blocker"
+    )
     (degraded_telemetry_bundle / "goal-bootloader.md").write_text(blocked_bootloader_text, encoding="utf-8")
     stale_handoff_readiness = json.loads(
         run(
@@ -7001,11 +7484,17 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ).stdout
     )
     if stale_handoff_readiness.get("launch_allowed") is not False:
-        raise SystemExit(f"stale blocked bootloader handoff should not be launch-allowed before --write: {stale_handoff_readiness!r}")
+        raise SystemExit(
+            f"stale blocked bootloader handoff should not be launch-allowed before --write: {stale_handoff_readiness!r}"
+        )
     if "bootloader launch handoff stale" not in stale_handoff_readiness.get("launch_blockers", []):
-        raise SystemExit(f"stale blocked bootloader should advertise a bootloader refresh blocker: {stale_handoff_readiness!r}")
+        raise SystemExit(
+            f"stale blocked bootloader should advertise a bootloader refresh blocker: {stale_handoff_readiness!r}"
+        )
     if not any("--write" in str(command) for command in stale_handoff_readiness.get("next_commands", [])):
-        raise SystemExit(f"stale blocked bootloader readiness should include a --write repair command: {stale_handoff_readiness!r}")
+        raise SystemExit(
+            f"stale blocked bootloader readiness should include a --write repair command: {stale_handoff_readiness!r}"
+        )
     run(
         [
             "python3",
@@ -7018,8 +7507,14 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ]
     )
     waived_bootloader = (degraded_telemetry_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
-    assert_not_contains(waived_bootloader, "BLOCKED READINESS", "waived degraded telemetry bootloader should be launch-ready")
-    assert_contains(waived_bootloader, "Use $goal-main-orchestrator", "waived degraded telemetry bootloader should include main orchestrator handoff")
+    assert_not_contains(
+        waived_bootloader, "BLOCKED READINESS", "waived degraded telemetry bootloader should be launch-ready"
+    )
+    assert_contains(
+        waived_bootloader,
+        "Use $goal-main-orchestrator",
+        "waived degraded telemetry bootloader should include main orchestrator handoff",
+    )
     waived_lint = json.loads(
         run(
             [
@@ -7033,7 +7528,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ).stdout
     )
     if waived_lint.get("status") != "pass":
-        raise SystemExit(f"waived degraded telemetry bundle lint should pass after launch-ready bootloader render: {waived_lint!r}")
+        raise SystemExit(
+            f"waived degraded telemetry bundle lint should pass after launch-ready bootloader render: {waived_lint!r}"
+        )
     if any(
         isinstance(defect, dict)
         and defect.get("file") == "goal-bootloader.md"
@@ -7059,13 +7556,17 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if waived_repair_gate.get("status") != "pass":
         raise SystemExit(f"waived degraded telemetry repair gate should pass after convergence: {waived_repair_gate!r}")
     if waived_repair_gate.get("action_count", 0) != 0:
-        raise SystemExit(f"waived degraded telemetry repair gate should not return bundle-lint actions: {waived_repair_gate!r}")
+        raise SystemExit(
+            f"waived degraded telemetry repair gate should not return bundle-lint actions: {waived_repair_gate!r}"
+        )
 
     degraded_blocked_bundle = tmp_path / "preflight-degraded-token-telemetry-blocked-bundle"
     shutil.copytree(pipeline_bundle, degraded_blocked_bundle)
     blocked_manifest = read_json(degraded_blocked_bundle / "job.manifest.json")
     default_worker_roles = blocked_manifest.get("worker_model_policy", {}).get("default_ladder", [])
-    old_route_sha = mark_worker_routes_verified(blocked_manifest, [role for role in default_worker_roles if isinstance(role, str)])
+    old_route_sha = mark_worker_routes_verified(
+        blocked_manifest, [role for role in default_worker_roles if isinstance(role, str)]
+    )
     blocked_manifest["goal_config_check_summary"]["token_telemetry"] = {
         "available_routes": 1,
         "unavailable_routes": 1,
@@ -7106,17 +7607,33 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     degraded_bootloader = (degraded_blocked_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
     assert_contains(degraded_bootloader, "BLOCKED READINESS", "degraded telemetry blocked bundle bootloader")
-    assert_not_contains(degraded_bootloader, "Use $goal-main-orchestrator", "degraded telemetry bootloader should not handoff")
-    assert_not_contains(degraded_bootloader, "run_prompt_audit_phase.py", "degraded telemetry blocked bootloader should not include main prompt-audit")
+    assert_not_contains(
+        degraded_bootloader, "Use $goal-main-orchestrator", "degraded telemetry bootloader should not handoff"
+    )
+    assert_not_contains(
+        degraded_bootloader,
+        "run_prompt_audit_phase.py",
+        "degraded telemetry blocked bootloader should not include main prompt-audit",
+    )
     blocked_pipeline = read_json(degraded_blocked_bundle / "preflight.pipeline.json")
     if blocked_pipeline.get("blocked_reason") != "route_token_telemetry_degraded_without_waiver":
         raise SystemExit(f"degraded telemetry blocked pipeline should explain launch blocker: {blocked_pipeline!r}")
     if blocked_pipeline.get("result_kind") != "blocked_readiness_usable_bundle":
-        raise SystemExit(f"degraded telemetry blocked pipeline should report readiness-blocked usability: {blocked_pipeline!r}")
+        raise SystemExit(
+            f"degraded telemetry blocked pipeline should report readiness-blocked usability: {blocked_pipeline!r}"
+        )
     if blocked_pipeline.get("readiness_status") != "blocked":
         raise SystemExit(f"degraded telemetry blocked pipeline should keep readiness blocked: {blocked_pipeline!r}")
     commands = pipeline_result.get("commands", [])
-    expected_phases = ["brief_lint", "runtime_gate", "config_selection", "create_bundle", "bundle_lint", "repair_gate", "readiness"]
+    expected_phases = [
+        "brief_lint",
+        "runtime_gate",
+        "config_selection",
+        "create_bundle",
+        "bundle_lint",
+        "repair_gate",
+        "readiness",
+    ]
     if [item.get("phase") for item in commands] != expected_phases:
         raise SystemExit(f"prepare_goal_bundle.py should record every canonical phase: {commands!r}")
     for item in commands:
@@ -7142,7 +7659,11 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             raise SystemExit(f"preflight should lazy-create runtime-only directory, not create {runtime_dir}/")
     pipeline_manifest = read_json(pipeline_bundle / "job.manifest.json")
     source_attachments = pipeline_manifest.get("source_attachments", [])
-    if not source_attachments or source_attachments[0].get("path") != "README.md" or not source_attachments[0].get("sha256"):
+    if (
+        not source_attachments
+        or source_attachments[0].get("path") != "README.md"
+        or not source_attachments[0].get("sha256")
+    ):
         raise SystemExit(f"source_attachments should be normalized and hashed in manifest: {source_attachments!r}")
     pipeline_main_prompt = (pipeline_bundle / "main.prompt.md").read_text(encoding="utf-8")
     assert_all_contains(
@@ -7161,25 +7682,46 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     assert_not_contains(pipeline_main_prompt, "/absolute/path/to/", "main prompt concrete paths")
     runtime_rules = (pipeline_bundle / "runtime-rules.md").read_text(encoding="utf-8")
-    assert_all_contains(runtime_rules, ["Shared Branch Runtime Rules", "Worker Parallelism", "Reviewer Requirement", "Lite Advisors"], "runtime rules appendix")
-    if pipeline_manifest.get("runtime_rules_path") != "runtime-rules.md" or not pipeline_manifest.get("runtime_rules_sha256"):
+    assert_all_contains(
+        runtime_rules,
+        ["Shared Branch Runtime Rules", "Worker Parallelism", "Reviewer Requirement", "Lite Advisors"],
+        "runtime rules appendix",
+    )
+    if pipeline_manifest.get("runtime_rules_path") != "runtime-rules.md" or not pipeline_manifest.get(
+        "runtime_rules_sha256"
+    ):
         raise SystemExit(f"manifest should pin runtime-rules.md by path and sha: {pipeline_manifest!r}")
     pipeline_prompt = (pipeline_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
-    assert_contains(pipeline_prompt, "deferred - route availability is unverified", "no-goal-config route recommendations should be deferred")
+    assert_contains(
+        pipeline_prompt,
+        "deferred - route availability is unverified",
+        "no-goal-config route recommendations should be deferred",
+    )
     assert_not_contains(pipeline_prompt, "/absolute/path/to/", "branch prompt concrete paths")
     pipeline_readiness = read_json(pipeline_bundle / "readiness.json")
     if pipeline_readiness.get("route_policy", {}).get("worker_recommendations_suppressed") is not True:
-        raise SystemExit(f"readiness should suppress worker route recommendations when route availability is unverified: {pipeline_readiness!r}")
+        raise SystemExit(
+            f"readiness should suppress worker route recommendations when route availability is unverified: {pipeline_readiness!r}"
+        )
     if pipeline_readiness.get("route_policy", {}).get("worker") != []:
-        raise SystemExit(f"readiness active worker route policy should omit unverified aliases: {pipeline_readiness.get('route_policy')!r}")
+        raise SystemExit(
+            f"readiness active worker route policy should omit unverified aliases: {pipeline_readiness.get('route_policy')!r}"
+        )
     if not pipeline_readiness.get("route_policy", {}).get("unverified_config_aliases", {}).get("worker"):
-        raise SystemExit(f"readiness should preserve unverified worker aliases separately: {pipeline_readiness.get('route_policy')!r}")
+        raise SystemExit(
+            f"readiness should preserve unverified worker aliases separately: {pipeline_readiness.get('route_policy')!r}"
+        )
     optional_artifacts = pipeline_readiness.get("artifact_size_report", {}).get("optional_machine_artifacts", {})
     present_optional = optional_artifacts.get("present", [])
     if "readiness.json" not in present_optional or "preflight.pipeline.json" not in present_optional:
         raise SystemExit(f"final readiness should count final optional artifacts when present: {optional_artifacts!r}")
-    if any(item.get("exists") is False for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])):
-        raise SystemExit(f"artifact size report should not count absent optional artifacts as missing entries: {pipeline_readiness!r}")
+    if any(
+        item.get("exists") is False
+        for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])
+    ):
+        raise SystemExit(
+            f"artifact size report should not count absent optional artifacts as missing entries: {pipeline_readiness!r}"
+        )
     machine_artifacts = {
         item.get("path"): item
         for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])
@@ -7190,7 +7732,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         if not entry or entry.get("chars") != len((pipeline_bundle / rel_path).read_text(encoding="utf-8")):
             raise SystemExit(f"final readiness size should match {rel_path}: {entry!r}")
     if pipeline_readiness.get("caps", {}).get("max_active_worker_packets_by_branch", {}).get("B01") != 4:
-        raise SystemExit(f"readiness caps should report branch worker caps, not branch wave caps: {pipeline_readiness.get('caps')!r}")
+        raise SystemExit(
+            f"readiness caps should report branch worker caps, not branch wave caps: {pipeline_readiness.get('caps')!r}"
+        )
     spaced_repo = tmp_path / "branch default repo with spaces"
     spaced_bundle = tmp_path / "preflight pipeline bundle with spaces"
     shutil.copytree(branch_default_repo, spaced_repo)
@@ -7249,7 +7793,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ]
     )
     if quiet_result.stdout.strip() != quiet_readiness.as_posix():
-        raise SystemExit(f"render_goal_bootloader.py --output should print only the output path by default: {quiet_result.stdout!r}")
+        raise SystemExit(
+            f"render_goal_bootloader.py --output should print only the output path by default: {quiet_result.stdout!r}"
+        )
     if not quiet_readiness.read_text(encoding="utf-8").startswith("Compact readiness summary:"):
         raise SystemExit("render_goal_bootloader.py --output did not write the readiness payload")
 
@@ -7271,12 +7817,16 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ).stdout
     )
     if inside_repo_result.get("status") != "pass":
-        raise SystemExit(f"inside-repo preflight bundle should still pass with git-ignore warning: {inside_repo_result!r}")
+        raise SystemExit(
+            f"inside-repo preflight bundle should still pass with git-ignore warning: {inside_repo_result!r}"
+        )
     inside_lint = read_json(inside_repo_bundle / "preflight.lint.json")
     if not any("not ignored" in item.get("message", "") for item in inside_lint.get("defects", [])):
         raise SystemExit(f"lint JSON should surface the git-ignore warning: {inside_lint!r}")
     inside_readiness = read_json(inside_repo_bundle / "readiness.json")
-    if not any(item.get("code") == "bundle_inside_git_worktree_not_ignored" for item in inside_readiness.get("warnings", [])):
+    if not any(
+        item.get("code") == "bundle_inside_git_worktree_not_ignored" for item in inside_readiness.get("warnings", [])
+    ):
         raise SystemExit(f"readiness JSON should surface the git-ignore warning: {inside_readiness!r}")
     cleanup_commands = inside_readiness.get("cleanup_plan", {}).get("cleanup_commands", [])
     expected_ignore_command = (
@@ -7317,8 +7867,12 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             ]
         ).stdout
     )
-    if any(item.get("code") == "bundle_inside_git_worktree_not_ignored" for item in ignored_readiness.get("warnings", [])):
-        raise SystemExit(f"readiness should drop stale unignored-bundle warnings after git check-ignore passes: {ignored_readiness!r}")
+    if any(
+        item.get("code") == "bundle_inside_git_worktree_not_ignored" for item in ignored_readiness.get("warnings", [])
+    ):
+        raise SystemExit(
+            f"readiness should drop stale unignored-bundle warnings after git check-ignore passes: {ignored_readiness!r}"
+        )
 
     large_source = branch_default_repo / "large-source.txt"
     large_source.write_text("exact operation list fixture\n" + ("0123456789abcdef\n" * 700), encoding="utf-8")
@@ -7376,7 +7930,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if not promotions or promotions[0].get("path") != "large-source.txt":
         raise SystemExit(f"large repeated context file should be promoted: {promotions!r}")
     promoted_attachments = promoted_manifest.get("source_attachments", [])
-    promoted_label = next((item.get("label") for item in promoted_attachments if item.get("path") == "large-source.txt"), None)
+    promoted_label = next(
+        (item.get("label") for item in promoted_attachments if item.get("path") == "large-source.txt"), None
+    )
     if not promoted_label:
         raise SystemExit(f"promoted source attachment missing label: {promoted_attachments!r}")
     for item in promoted_manifest["branches"][0]["work_items"]:
@@ -7384,7 +7940,11 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             raise SystemExit(f"promoted large source should not remain in work item context_files: {item!r}")
         if promoted_label not in item.get("source_attachment_refs", []):
             raise SystemExit(f"work item should reference promoted source attachment label: {item!r}")
-    assert_contains((promoted_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8"), "Source attachment refs:", "promoted source branch prompt")
+    assert_contains(
+        (promoted_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8"),
+        "Source attachment refs:",
+        "promoted source branch prompt",
+    )
 
     debug_mode_brief = {**branch_default_brief, "job_id": "debug-mode-shorthand-fixture", "telemetry_mode": "debug"}
     debug_mode_brief_path = tmp_path / "debug-mode-brief.json"
@@ -7412,7 +7972,11 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         "validator_runs",
         "artifact_hashes",
     ]
-    if debug_policy.get("mode") != "debug" or debug_policy.get("raw_text") is not False or debug_policy.get("collect") != expected_collect:
+    if (
+        debug_policy.get("mode") != "debug"
+        or debug_policy.get("raw_text") is not False
+        or debug_policy.get("collect") != expected_collect
+    ):
         raise SystemExit(f"telemetry_mode=debug did not expand to full safe debug policy: {debug_policy!r}")
 
     debug_pipeline_brief = json.loads(json.dumps(pipeline_brief))
@@ -7438,13 +8002,27 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     if debug_pipeline_result.get("status") != "pass":
         raise SystemExit(f"debug preflight pipeline fixture should pass: {debug_pipeline_result!r}")
-    run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", debug_pipeline_bundle.as_posix(), "--debug"])
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
+            "--bundle-dir",
+            debug_pipeline_bundle.as_posix(),
+            "--debug",
+        ]
+    )
     debug_pipeline_summary = read_json(debug_pipeline_bundle / "telemetry.debug.summary.json")
     debug_pipeline_preflight = debug_pipeline_summary.get("preflight_pipeline", {})
     if debug_pipeline_preflight.get("phase_count") != len(debug_pipeline_result.get("commands", [])):
-        raise SystemExit(f"debug summary should include preflight pipeline phase telemetry: {debug_pipeline_preflight!r}")
-    if debug_pipeline_summary.get("time_metrics", {}).get("preflight_phase_count") != debug_pipeline_preflight.get("phase_count"):
-        raise SystemExit(f"debug time metrics should expose preflight phase count: {debug_pipeline_summary.get('time_metrics')!r}")
+        raise SystemExit(
+            f"debug summary should include preflight pipeline phase telemetry: {debug_pipeline_preflight!r}"
+        )
+    if debug_pipeline_summary.get("time_metrics", {}).get("preflight_phase_count") != debug_pipeline_preflight.get(
+        "phase_count"
+    ):
+        raise SystemExit(
+            f"debug time metrics should expose preflight phase count: {debug_pipeline_summary.get('time_metrics')!r}"
+        )
     debug_trace = debug_pipeline_summary.get("trace", {})
     if debug_trace.get("event_types", {}).get("preflight_phase") != debug_pipeline_preflight.get("phase_count"):
         raise SystemExit(f"debug run trace should include preflight phase events: {debug_trace!r}")
@@ -7530,7 +8108,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     config_debug_manifest = read_json(config_debug_bundle / "job.manifest.json")
     config_debug_policy = config_debug_manifest.get("telemetry_policy", {})
     if config_debug_policy.get("mode") != "debug" or config_debug_policy.get("raw_text") is not False:
-        raise SystemExit(f"goal_config preflight_intent telemetry_mode=debug should produce safe debug policy: {config_debug_policy!r}")
+        raise SystemExit(
+            f"goal_config preflight_intent telemetry_mode=debug should produce safe debug policy: {config_debug_policy!r}"
+        )
     config_debug_compat = config_debug_manifest.get("preflight_compatibility", {}).get("telemetry", {})
     if config_debug_compat.get("policy_transformation") != "none":
         raise SystemExit(f"goal_config raw_text policy transformation should be none: {config_debug_compat!r}")
@@ -7539,7 +8119,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     # (lite_agent) plus native Codex spark/mini fallbacks (worker_primary/worker_fallback).
     expected_current_default_worker = ["lite_agent", "worker_primary", "worker_fallback"]
     if config_debug_worker_policy.get("default_ladder") != expected_current_default_worker:
-        raise SystemExit(f"goal_config worker default ladder should lead with the bridge route: {config_debug_worker_policy!r}")
+        raise SystemExit(
+            f"goal_config worker default ladder should lead with the bridge route: {config_debug_worker_policy!r}"
+        )
     if config_debug_worker_policy.get("route_classes", {}).get("normal-code") != expected_current_default_worker:
         raise SystemExit(f"preflight should preserve explicit normal-code route class: {config_debug_worker_policy!r}")
     if config_debug_worker_policy.get("route_classes", {}).get("small-edit") != [
@@ -7562,8 +8144,20 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "config_validation_mode": "smoke",
             "config_path": config_debug_path.as_posix(),
             "accepted_routes": [
-                {"role": "lite_agent", "alias": "ds-flash-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-flash"},
-                {"role": "demanding_agent", "alias": "ds-pro-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-pro"},
+                {
+                    "role": "lite_agent",
+                    "alias": "ds-flash-max",
+                    "harness": "opencode-bridge",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                },
+                {
+                    "role": "demanding_agent",
+                    "alias": "ds-pro-max",
+                    "harness": "opencode-bridge",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-pro",
+                },
             ],
             "summary": {
                 "route_verification_status": "routes_verified",
@@ -7599,13 +8193,19 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             f"prepare should auto-reuse colocated route-verified smoke check: {colocated_selection.get('selected_check_path')!r}"
         )
     if colocated_selection.get("route_model_availability_verified") is not True:
-        raise SystemExit(f"prepare should expose colocated smoke route verification as verified: {colocated_selection!r}")
+        raise SystemExit(
+            f"prepare should expose colocated smoke route verification as verified: {colocated_selection!r}"
+        )
     colocated_readiness = read_json(colocated_smoke_bundle / "readiness.json")
     if "config_schema_pass_routes_unverified" in colocated_readiness.get("launch_blockers", []):
-        raise SystemExit(f"colocated route-verified smoke check should prevent schema_pass_routes_unverified: {colocated_readiness!r}")
+        raise SystemExit(
+            f"colocated route-verified smoke check should prevent schema_pass_routes_unverified: {colocated_readiness!r}"
+        )
     colocated_manifest = read_json(colocated_smoke_bundle / "job.manifest.json")
     if colocated_manifest.get("worker_model_policy", {}).get("default_ladder") != ["lite_agent"]:
-        raise SystemExit(f"partial smoke evidence should prune unverified worker aliases: {colocated_manifest.get('worker_model_policy')!r}")
+        raise SystemExit(
+            f"partial smoke evidence should prune unverified worker aliases: {colocated_manifest.get('worker_model_policy')!r}"
+        )
     pruning = colocated_manifest.get("goal_config_summary", {}).get("route_policy_pruning", {})
     # Only lite_agent is verified, so the native Codex worker roles are pruned.
     if pruning.get("status") != "pruned" or "worker_primary" not in pruning.get("removed_worker_roles", []):
@@ -7648,7 +8248,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if alias_readiness.get("status") != "pass":
         raise SystemExit(f"byte-identical alias config with verified smoke should pass readiness: {alias_readiness!r}")
     if alias_readiness.get("launch_allowed") is not True:
-        raise SystemExit(f"byte-identical alias config with verified smoke should be launch-allowed: {alias_readiness!r}")
+        raise SystemExit(
+            f"byte-identical alias config with verified smoke should be launch-allowed: {alias_readiness!r}"
+        )
 
     partial_telemetry_check = tmp_path / "goal-config-partial-token-telemetry-smoke.json"
     write_json(
@@ -7660,8 +8262,20 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "config_validation_mode": "debug",
             "config_path": config_debug_path.as_posix(),
             "accepted_routes": [
-                {"role": "lite_agent", "alias": "ds-flash-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-flash"},
-                {"role": "demanding_agent", "alias": "ds-pro-max", "harness": "opencode-bridge", "provider": "deepseek", "model": "deepseek-v4-pro"},
+                {
+                    "role": "lite_agent",
+                    "alias": "ds-flash-max",
+                    "harness": "opencode-bridge",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-flash",
+                },
+                {
+                    "role": "demanding_agent",
+                    "alias": "ds-pro-max",
+                    "harness": "opencode-bridge",
+                    "provider": "deepseek",
+                    "model": "deepseek-v4-pro",
+                },
             ],
             "summary": {
                 "route_verification_status": "routes_verified",
@@ -7723,7 +8337,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ).stdout
     )
     if waiver_pipeline_result.get("status") != "pass" or waiver_pipeline_result.get("launch_allowed") is not True:
-        raise SystemExit(f"brief-level degraded telemetry waiver should make guided preflight launchable: {waiver_pipeline_result!r}")
+        raise SystemExit(
+            f"brief-level degraded telemetry waiver should make guided preflight launchable: {waiver_pipeline_result!r}"
+        )
     waiver_manifest = read_json(waiver_bundle / "job.manifest.json")
     waiver = waiver_manifest.get("route_policy_degraded_telemetry_waiver")
     if not isinstance(waiver, dict) or waiver.get("accepted") is not True or not waiver.get("reason"):
@@ -7753,12 +8369,21 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     auto_selection = auto_config_result.get("config_selection", {})
     if auto_selection.get("status") != "pass" or auto_selection.get("candidate_count") != 1:
-        raise SystemExit(f"auto config selection should stop after the first compatible candidate by default: {auto_selection!r}")
+        raise SystemExit(
+            f"auto config selection should stop after the first compatible candidate by default: {auto_selection!r}"
+        )
     if auto_config_result.get("status") != "blocked" or auto_config_result.get("readiness_status") != "blocked":
-        raise SystemExit(f"auto config selection with unverified routes should produce blocked readiness: {auto_config_result!r}")
+        raise SystemExit(
+            f"auto config selection with unverified routes should produce blocked readiness: {auto_config_result!r}"
+        )
     persisted_auto_selection = read_json(auto_config_bundle / "goal-config-selection.json")
-    if persisted_auto_selection.get("candidate_audit_mode") != "first_compatible" or len(persisted_auto_selection.get("candidates", [])) != 1:
-        raise SystemExit(f"persisted config selection should record first_compatible mode: {persisted_auto_selection!r}")
+    if (
+        persisted_auto_selection.get("candidate_audit_mode") != "first_compatible"
+        or len(persisted_auto_selection.get("candidates", [])) != 1
+    ):
+        raise SystemExit(
+            f"persisted config selection should record first_compatible mode: {persisted_auto_selection!r}"
+        )
 
     bad_pipeline_config_path = tmp_path / "goal-config-pipeline-remediation.json"
     bad_pipeline_config = read_json(config_debug_path)
@@ -7789,9 +8414,13 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     config_selection = config_pipeline_result.get("config_selection", {})
     if config_pipeline_result.get("status") != "blocked" or config_selection.get("status") != "pass":
-        raise SystemExit(f"prepare_goal_bundle.py should remediate and select compatible config: {config_pipeline_result!r}")
+        raise SystemExit(
+            f"prepare_goal_bundle.py should remediate and select compatible config: {config_pipeline_result!r}"
+        )
     if config_pipeline_result.get("readiness_status") != "blocked":
-        raise SystemExit(f"prepare_goal_bundle.py should fail closed on unverified route availability: {config_pipeline_result!r}")
+        raise SystemExit(
+            f"prepare_goal_bundle.py should fail closed on unverified route availability: {config_pipeline_result!r}"
+        )
     if "remediated" not in str(config_selection.get("reason", "")):
         raise SystemExit(f"config selection should explain remediated config use: {config_selection!r}")
     persisted_selection = read_json(config_pipeline_bundle / "goal-config-selection.json")
@@ -7803,7 +8432,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(f"config selection candidates should mark exactly one selected entry: {persisted_selection!r}")
     selected = selected_candidates[0]
     if persisted_selection.get("selected_index") != candidates.index(selected):
-        raise SystemExit(f"config selection should point selected_index at the selected candidate: {persisted_selection!r}")
+        raise SystemExit(
+            f"config selection should point selected_index at the selected candidate: {persisted_selection!r}"
+        )
     if selected.get("eligible") is not True or selected.get("remediated_passed") is not True:
         raise SystemExit(f"selected remediated config should be eligible/remediated_passed: {selected!r}")
     if selected.get("remediation", {}).get("status") != "remediated":
@@ -7823,27 +8454,44 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     if not branch_manifest.get("objective") or not branch_manifest.get("scope"):
         raise SystemExit(f"branch manifest should preserve objective and scope: {branch_manifest!r}")
     precedence = config_pipeline_manifest.get("preflight_input_precedence", {})
-    if precedence.get("max_active_branch_agents", {}).get("source") != "goal_config.aggressiveness.max_active_branch_agents":
+    if (
+        precedence.get("max_active_branch_agents", {}).get("source")
+        != "goal_config.aggressiveness.max_active_branch_agents"
+    ):
         raise SystemExit(f"manifest should report config cap precedence: {precedence!r}")
     provenance = config_pipeline_manifest.get("goal_config_provenance", {}).get("config", {})
-    if provenance.get("source_path_type") != "bundle_relative" or "remediated" not in str(provenance.get("source_path")):
+    if provenance.get("source_path_type") != "bundle_relative" or "remediated" not in str(
+        provenance.get("source_path")
+    ):
         raise SystemExit(f"manifest should preserve remediated config source provenance separately: {provenance!r}")
     goal_config_summary = config_pipeline_manifest.get("goal_config_summary", {})
     if goal_config_summary.get("manifest_telemetry_policy", {}).get("raw_text") is not False:
-        raise SystemExit(f"goal_config_summary should expose authoritative manifest telemetry policy: {goal_config_summary!r}")
+        raise SystemExit(
+            f"goal_config_summary should expose authoritative manifest telemetry policy: {goal_config_summary!r}"
+        )
     config_pipeline_readiness = read_json(config_pipeline_bundle / "readiness.json")
     if config_pipeline_readiness.get("config_compatibility") != "config_schema_pass_routes_unverified":
-        raise SystemExit(f"readiness should distinguish config schema pass from route availability: {config_pipeline_readiness!r}")
+        raise SystemExit(
+            f"readiness should distinguish config schema pass from route availability: {config_pipeline_readiness!r}"
+        )
     if config_pipeline_readiness.get("launch_allowed") is not False:
         raise SystemExit(f"unverified route availability should block runtime launch: {config_pipeline_readiness!r}")
     if "config_schema_pass_routes_unverified" not in config_pipeline_readiness.get("launch_blockers", []):
-        raise SystemExit(f"readiness should record unverified route availability as a launch blocker: {config_pipeline_readiness!r}")
-    if not any(item.get("code") == "route_availability_unverified" for item in config_pipeline_readiness.get("warnings", [])):
+        raise SystemExit(
+            f"readiness should record unverified route availability as a launch blocker: {config_pipeline_readiness!r}"
+        )
+    if not any(
+        item.get("code") == "route_availability_unverified" for item in config_pipeline_readiness.get("warnings", [])
+    ):
         raise SystemExit(f"readiness should warn on config route availability ambiguity: {config_pipeline_readiness!r}")
     if config_pipeline_readiness.get("route_policy", {}).get("worker") != []:
-        raise SystemExit(f"config readiness should omit unverified active worker aliases: {config_pipeline_readiness.get('route_policy')!r}")
+        raise SystemExit(
+            f"config readiness should omit unverified active worker aliases: {config_pipeline_readiness.get('route_policy')!r}"
+        )
     if not config_pipeline_readiness.get("route_policy", {}).get("unverified_config_aliases", {}).get("worker"):
-        raise SystemExit(f"config readiness should preserve unverified aliases under unverified_config_aliases: {config_pipeline_readiness.get('route_policy')!r}")
+        raise SystemExit(
+            f"config readiness should preserve unverified aliases under unverified_config_aliases: {config_pipeline_readiness.get('route_policy')!r}"
+        )
     report_text = (config_pipeline_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
     assert_all_contains(
         report_text,
@@ -7878,7 +8526,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ).stdout
     )
     if explicit_cap_result.get("status") != "blocked" or explicit_cap_result.get("readiness_status") != "blocked":
-        raise SystemExit(f"explicit cap pipeline should remediate config but block unverified route launch: {explicit_cap_result!r}")
+        raise SystemExit(
+            f"explicit cap pipeline should remediate config but block unverified route launch: {explicit_cap_result!r}"
+        )
     explicit_cap_manifest = read_json(explicit_cap_bundle / "job.manifest.json")
     if explicit_cap_manifest.get("max_active_branch_agents") != 2:
         raise SystemExit(f"explicit max_active_branch_agents should override config default: {explicit_cap_manifest!r}")
@@ -7962,7 +8612,9 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit("create_goal_bundle.py --json --output should write and print matching command result JSON")
     non_git_manifest = read_json(non_git_bundle / "job.manifest.json")
     if non_git_manifest.get("base_ref") != "nonexistent-base-ref":
-        raise SystemExit(f"non-git repo should not validate base_ref and should preserve provided branch: {non_git_manifest.get('base_ref')!r}")
+        raise SystemExit(
+            f"non-git repo should not validate base_ref and should preserve provided branch: {non_git_manifest.get('base_ref')!r}"
+        )
     non_git_pipeline_bundle = tmp_path / "branch-default-non-git-pipeline-bundle"
     non_git_pipeline_result = json.loads(
         run(
@@ -7983,18 +8635,29 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     )
     runtime_gate = non_git_pipeline_result.get("runtime_gate", {})
     if non_git_pipeline_result.get("status") != "blocked" or runtime_gate.get("status") != "blocked":
-        raise SystemExit(f"non-git pipeline should stop at the early runtime gate by default: {non_git_pipeline_result!r}")
+        raise SystemExit(
+            f"non-git pipeline should stop at the early runtime gate by default: {non_git_pipeline_result!r}"
+        )
     if non_git_pipeline_result.get("launch_allowed") is not False:
         raise SystemExit(f"non-git pipeline should expose aggregate launch_allowed=false: {non_git_pipeline_result!r}")
-    if non_git_pipeline_result.get("result_kind") != "blocked_runtime_gate_preflight" or non_git_pipeline_result.get("usable_bundle") is not False:
-        raise SystemExit(f"non-git pipeline should avoid building a usable runtime bundle by default: {non_git_pipeline_result!r}")
+    if (
+        non_git_pipeline_result.get("result_kind") != "blocked_runtime_gate_preflight"
+        or non_git_pipeline_result.get("usable_bundle") is not False
+    ):
+        raise SystemExit(
+            f"non-git pipeline should avoid building a usable runtime bundle by default: {non_git_pipeline_result!r}"
+        )
     next_commands = non_git_pipeline_result.get("next_commands", [])
     if not any("Correct runtime gate" in command for command in next_commands):
-        raise SystemExit(f"non-git readiness next commands should be corrective, not a launch handoff: {next_commands!r}")
+        raise SystemExit(
+            f"non-git readiness next commands should be corrective, not a launch handoff: {next_commands!r}"
+        )
     if any(command.endswith("/goal") for command in next_commands):
         raise SystemExit(f"non-git readiness next commands must not include /goal: {next_commands!r}")
     if (non_git_pipeline_bundle / "goal-bootloader.md").exists():
-        raise SystemExit("default non-git prepare_goal_bundle.py should not generate launch prompts or bootloader without --build-blocked-bundle")
+        raise SystemExit(
+            "default non-git prepare_goal_bundle.py should not generate launch prompts or bootloader without --build-blocked-bundle"
+        )
 
     non_git_blocked_bundle = tmp_path / "branch-default-non-git-pipeline-inspect-bundle"
     non_git_blocked_result = json.loads(
@@ -8018,12 +8681,24 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     inspect_gate = non_git_blocked_result.get("readiness", {}).get("runtime_gate", {})
     if non_git_blocked_result.get("status") != "blocked" or inspect_gate.get("status") != "blocked":
         raise SystemExit(f"explicit blocked bundle should still block runtime readiness: {non_git_blocked_result!r}")
-    if non_git_blocked_result.get("launch_allowed") is not False or non_git_blocked_result.get("readiness", {}).get("launch_allowed") is not False:
-        raise SystemExit(f"explicit blocked bundle should expose aggregate launch_allowed=false: {non_git_blocked_result!r}")
-    if non_git_blocked_result.get("result_kind") != "blocked_readiness_usable_bundle" or non_git_blocked_result.get("usable_bundle") is not True:
-        raise SystemExit(f"explicit blocked bundle should report a usable but readiness-blocked inspection bundle: {non_git_blocked_result!r}")
+    if (
+        non_git_blocked_result.get("launch_allowed") is not False
+        or non_git_blocked_result.get("readiness", {}).get("launch_allowed") is not False
+    ):
+        raise SystemExit(
+            f"explicit blocked bundle should expose aggregate launch_allowed=false: {non_git_blocked_result!r}"
+        )
+    if (
+        non_git_blocked_result.get("result_kind") != "blocked_readiness_usable_bundle"
+        or non_git_blocked_result.get("usable_bundle") is not True
+    ):
+        raise SystemExit(
+            f"explicit blocked bundle should report a usable but readiness-blocked inspection bundle: {non_git_blocked_result!r}"
+        )
     non_git_bootloader = (non_git_blocked_bundle / "goal-bootloader.md").read_text(encoding="utf-8")
-    assert_all_contains(non_git_bootloader, ["BLOCKED READINESS", "do not launch /goal yet"], "non-git blocked bootloader warning")
+    assert_all_contains(
+        non_git_bootloader, ["BLOCKED READINESS", "do not launch /goal yet"], "non-git blocked bootloader warning"
+    )
     assert_not_contains(non_git_bootloader, "Use $goal-main-orchestrator", "blocked bootloader launch handoff")
     assert_not_contains(non_git_bootloader, "run_prompt_audit_phase.py", "blocked bootloader prompt-audit command")
     non_git_report = (non_git_blocked_bundle / "PREFLIGHT_REPORT.md").read_text(encoding="utf-8")
@@ -8048,7 +8723,9 @@ def run_context_pack_fixtures(tmp_path: Path) -> None:
     if context_pack_result.stdout.strip() != context_pack_out.as_posix() or not context_pack_out.exists():
         raise SystemExit("context_pack.py --output should write the rendered pack and print its path")
     context_pack_text = context_pack_out.read_text(encoding="utf-8")
-    assert_all_contains(context_pack_text, ["Context files to read first:", "- README.md"], "default path-only context pack output")
+    assert_all_contains(
+        context_pack_text, ["Context files to read first:", "- README.md"], "default path-only context pack output"
+    )
     assert_not_contains(context_pack_text, "BEGIN_CONTEXT_EXCERPT", "default path-only context pack output")
     context_pack_excerpt_out = tmp_path / "context-pack-excerpt.md"
     run(
@@ -8070,8 +8747,14 @@ def run_context_pack_fixtures(tmp_path: Path) -> None:
         ]
     )
     context_pack_excerpt_text = context_pack_excerpt_out.read_text(encoding="utf-8")
-    assert_all_contains(context_pack_excerpt_text, ["Deterministic context excerpts:", "BEGIN_CONTEXT_EXCERPT context-1: README.md"], "worktree excerpt context pack output")
-    assert_not_contains(context_pack_excerpt_text, "Context files to read first:\n- README.md", "worktree excerpt context pack output")
+    assert_all_contains(
+        context_pack_excerpt_text,
+        ["Deterministic context excerpts:", "BEGIN_CONTEXT_EXCERPT context-1: README.md"],
+        "worktree excerpt context pack output",
+    )
+    assert_not_contains(
+        context_pack_excerpt_text, "Context files to read first:\n- README.md", "worktree excerpt context pack output"
+    )
 
 
 def run_telemetry_summary_fixture(tmp_path: Path) -> None:
@@ -8091,8 +8774,12 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     status_path = telemetry_packet / "status.json"
     status_path.write_text(json.dumps({"status": "pass"}, sort_keys=True) + "\n", encoding="utf-8")
     (telemetry_packet / "events-primary.jsonl").write_text(
-        json.dumps({"usage": {"input_tokens": 25000, "cached_input_tokens": 24000, "output_tokens": 100}}, sort_keys=True) + "\n"
-        + json.dumps({"type": "done"}, sort_keys=True) + "\n",
+        json.dumps(
+            {"usage": {"input_tokens": 25000, "cached_input_tokens": 24000, "output_tokens": 100}}, sort_keys=True
+        )
+        + "\n"
+        + json.dumps({"type": "done"}, sort_keys=True)
+        + "\n",
         encoding="utf-8",
     )
     telemetry_attempt_json = json.dumps(
@@ -8139,8 +8826,33 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     if not (telemetry_packet / "telemetry.debug.json").exists():
         raise SystemExit("extract_telemetry.py --debug must write telemetry.debug.json")
     (telemetry_packet / "debug.events.jsonl").write_text(
-        json.dumps({"schema_version": 1, "timestamp": "2026-01-01T00:00:00+00:00", "packet_id": "B01-W01", "role": "worker", "phase": "packet", "event": "start"}, sort_keys=True) + "\n"
-        + json.dumps({"schema_version": 1, "timestamp": "2026-01-01T00:00:03+00:00", "packet_id": "B01-W01", "role": "worker", "phase": "packet", "event": "end", "elapsed_ms": 3000, "status": "ok", "exit_status": 0}, sort_keys=True) + "\n",
+        json.dumps(
+            {
+                "schema_version": 1,
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "packet_id": "B01-W01",
+                "role": "worker",
+                "phase": "packet",
+                "event": "start",
+            },
+            sort_keys=True,
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "schema_version": 1,
+                "timestamp": "2026-01-01T00:00:03+00:00",
+                "packet_id": "B01-W01",
+                "role": "worker",
+                "phase": "packet",
+                "event": "end",
+                "elapsed_ms": 3000,
+                "status": "ok",
+                "exit_status": 0,
+            },
+            sort_keys=True,
+        )
+        + "\n",
         encoding="utf-8",
     )
     write_json(
@@ -8152,8 +8864,25 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
             "state_machine": "active -> timeout|fail-clean|fail-dirty|pass|blocked",
             "terminal_state": "pass",
             "events": [
-                {"seq": 1, "state": "active", "attempt_index": 0, "alias": "codex-mini", "provider": "codex", "model": "gpt-5.4-mini"},
-                {"seq": 2, "state": "pass", "attempt_index": 0, "alias": "codex-mini", "provider": "codex", "model": "gpt-5.4-mini", "returncode": 0, "dirty": False, "output_nonempty": True},
+                {
+                    "seq": 1,
+                    "state": "active",
+                    "attempt_index": 0,
+                    "alias": "codex-mini",
+                    "provider": "codex",
+                    "model": "gpt-5.4-mini",
+                },
+                {
+                    "seq": 2,
+                    "state": "pass",
+                    "attempt_index": 0,
+                    "alias": "codex-mini",
+                    "provider": "codex",
+                    "model": "gpt-5.4-mini",
+                    "returncode": 0,
+                    "dirty": False,
+                    "output_nonempty": True,
+                },
             ],
         },
     )
@@ -8180,7 +8909,9 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     debug_attempts = debug_packet.get("model_usage", {}).get("attempts", [])
     debug_timing = debug_attempts[0].get("timing", {}) if debug_attempts else {}
     if debug_timing.get("timed_out") is not False or debug_timing.get("elapsed_seconds") != 3:
-        raise SystemExit(f"debug telemetry should use exit-0 packet timing instead of timeout inference: {debug_timing!r}")
+        raise SystemExit(
+            f"debug telemetry should use exit-0 packet timing instead of timeout inference: {debug_timing!r}"
+        )
     debug_fallback = debug_attempts[1] if len(debug_attempts) > 1 else {}
     if debug_fallback.get("called") is not False or debug_fallback.get("not_executed_reason") != "fallback_not_needed":
         raise SystemExit(f"debug telemetry should explain skipped fallback candidates: {debug_attempts!r}")
@@ -8191,7 +8922,9 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
         or debug_fallback_timing.get("elapsed_seconds") is not None
         or debug_fallback_timing.get("timing_source") != "unknown"
     ):
-        raise SystemExit(f"debug telemetry must not assign packet timing to skipped fallback candidates: {debug_attempts!r}")
+        raise SystemExit(
+            f"debug telemetry must not assign packet timing to skipped fallback candidates: {debug_attempts!r}"
+        )
     (telemetry_packet / "events-primary.jsonl").write_text(
         json.dumps(
             {
@@ -8246,12 +8979,18 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     timeout_debug = read_json(telemetry_packet / "telemetry.debug.json")
     timeout_attempts = timeout_debug.get("model_usage", {}).get("attempts", [])
     if len(timeout_attempts) < 2 or timeout_attempts[0].get("timing", {}).get("timed_out") is not True:
-        raise SystemExit(f"debug telemetry must preserve per-attempt timeout even when packet completed: {timeout_attempts!r}")
+        raise SystemExit(
+            f"debug telemetry must preserve per-attempt timeout even when packet completed: {timeout_attempts!r}"
+        )
     if timeout_attempts[1].get("timing", {}).get("timed_out") is not False:
         raise SystemExit(f"debug telemetry should preserve fallback completion timing: {timeout_attempts!r}")
     (telemetry_packet / "events-primary.jsonl").write_text(
-        json.dumps({"usage": {"input_tokens": 25000, "cached_input_tokens": 24000, "output_tokens": 100}}, sort_keys=True) + "\n"
-        + json.dumps({"type": "done"}, sort_keys=True) + "\n",
+        json.dumps(
+            {"usage": {"input_tokens": 25000, "cached_input_tokens": 24000, "output_tokens": 100}}, sort_keys=True
+        )
+        + "\n"
+        + json.dumps({"type": "done"}, sort_keys=True)
+        + "\n",
         encoding="utf-8",
     )
     (telemetry_packet / "events-fallback.jsonl").unlink(missing_ok=True)
@@ -8323,16 +9062,42 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
         },
     )
     write_json(telemetry_bundle / "main.status.json", {"job_id": "telemetry-pressure", "status": "pass"})
-    run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix()])
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
+            "--bundle-dir",
+            telemetry_bundle.as_posix(),
+        ]
+    )
     telemetry_summary = read_json(telemetry_bundle / "telemetry.summary.json")
     if telemetry_summary.get("telemetry_count") != 1:
         raise SystemExit("summarize_telemetry.py should expose top-level telemetry_count")
     pressure_warnings = telemetry_summary.get("token_pressure", {}).get("warnings")
-    if not isinstance(pressure_warnings, list) or not pressure_warnings or pressure_warnings[0].get("packet_id") != "B01-W01":
-        raise SystemExit("summarize_telemetry.py should report warning-only token pressure for oversized child-session input")
-    if not (telemetry_bundle / "telemetry.debug.summary.json").exists() or not (telemetry_bundle / "run.trace.jsonl").exists():
-        raise SystemExit("summarize_telemetry.py must auto-write debug summary and run trace when manifest telemetry is debug")
-    run(["python3", "skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "--bundle-dir", telemetry_bundle.as_posix(), "--debug"])
+    if (
+        not isinstance(pressure_warnings, list)
+        or not pressure_warnings
+        or pressure_warnings[0].get("packet_id") != "B01-W01"
+    ):
+        raise SystemExit(
+            "summarize_telemetry.py should report warning-only token pressure for oversized child-session input"
+        )
+    if (
+        not (telemetry_bundle / "telemetry.debug.summary.json").exists()
+        or not (telemetry_bundle / "run.trace.jsonl").exists()
+    ):
+        raise SystemExit(
+            "summarize_telemetry.py must auto-write debug summary and run trace when manifest telemetry is debug"
+        )
+    run(
+        [
+            "python3",
+            "skills/goal-main-orchestrator/scripts/summarize_telemetry.py",
+            "--bundle-dir",
+            telemetry_bundle.as_posix(),
+            "--debug",
+        ]
+    )
     debug_summary = read_json(telemetry_bundle / "telemetry.debug.summary.json")
     if not isinstance(debug_summary, dict) or "model_usage" not in debug_summary:
         raise SystemExit("debug telemetry summary must expose model_usage")
@@ -8349,17 +9114,29 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
         if normal_cost.get(normal_key) != debug_model_usage.get(debug_key):
             raise SystemExit(f"normal/debug telemetry summary count mismatch for {normal_key}/{debug_key}")
     if normal_cost.get("token_totals_status") != "complete":
-        raise SystemExit(f"standard telemetry summary should mark complete token totals for fully covered executed attempts: {normal_cost!r}")
-    if normal_cost.get("attempt_totals", {}).get("candidate_attempts") != 2 or normal_cost.get("attempt_totals", {}).get("executed_attempts") != 1:
+        raise SystemExit(
+            f"standard telemetry summary should mark complete token totals for fully covered executed attempts: {normal_cost!r}"
+        )
+    if (
+        normal_cost.get("attempt_totals", {}).get("candidate_attempts") != 2
+        or normal_cost.get("attempt_totals", {}).get("executed_attempts") != 1
+    ):
         raise SystemExit(f"standard telemetry summary should separate candidate and executed attempts: {normal_cost!r}")
     packets = telemetry_summary.get("packets", [])
     packet_attempts = packets[0].get("attempts", []) if packets else []
     if len(packet_attempts) < 2 or packet_attempts[1].get("not_executed_reason") != "fallback_not_needed":
         raise SystemExit(f"standard telemetry summary should preserve skipped fallback reasons: {packets!r}")
-    normal_accepted = sum(normal_cost.get("accepted_aliases", {}).values()) if isinstance(normal_cost.get("accepted_aliases"), dict) else None
+    normal_accepted = (
+        sum(normal_cost.get("accepted_aliases", {}).values())
+        if isinstance(normal_cost.get("accepted_aliases"), dict)
+        else None
+    )
     if normal_accepted != debug_model_usage.get("accepted_attempts"):
         raise SystemExit("normal and debug telemetry summaries should agree on accepted attempts")
-    if not isinstance(debug_summary.get("text_metrics"), dict) or "debug_overhead_chars" not in debug_summary["text_metrics"]:
+    if (
+        not isinstance(debug_summary.get("text_metrics"), dict)
+        or "debug_overhead_chars" not in debug_summary["text_metrics"]
+    ):
         raise SystemExit("debug telemetry summary must expose text metrics and debug_overhead_chars")
     if not isinstance(debug_summary.get("time_metrics"), dict) or "timeout_rate" not in debug_summary["time_metrics"]:
         raise SystemExit("debug telemetry summary must expose timeout_rate")
@@ -8367,22 +9144,45 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     if not isinstance(determinism, dict) or "drift_count" not in determinism:
         raise SystemExit("debug telemetry summary must expose determinism drift count")
     trace = debug_summary.get("trace")
-    if not isinstance(trace, dict) or trace.get("path") != "run.trace.jsonl" or not isinstance(trace.get("event_count"), int):
+    if (
+        not isinstance(trace, dict)
+        or trace.get("path") != "run.trace.jsonl"
+        or not isinstance(trace.get("event_count"), int)
+    ):
         raise SystemExit("debug telemetry summary must expose run trace metadata")
     trace_path = telemetry_bundle / "run.trace.jsonl"
     if not trace_path.exists():
         raise SystemExit("debug telemetry summary must write run.trace.jsonl")
     trace_events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     trace_types = {event.get("event_type") for event in trace_events if isinstance(event, dict)}
-    for expected_type in ["scheduler_event", "packet_debug_event", "launcher_state", "model_attempt", "packet_telemetry", "terminal_artifact", "state_change"]:
+    for expected_type in [
+        "scheduler_event",
+        "packet_debug_event",
+        "launcher_state",
+        "model_attempt",
+        "packet_telemetry",
+        "terminal_artifact",
+        "state_change",
+    ]:
         if expected_type not in trace_types:
             raise SystemExit(f"run.trace.jsonl missing expected event type {expected_type}: {trace_types!r}")
-    state_changes = [event for event in trace_events if isinstance(event, dict) and event.get("event_type") == "state_change"]
+    state_changes = [
+        event for event in trace_events if isinstance(event, dict) and event.get("event_type") == "state_change"
+    ]
     if not state_changes:
         raise SystemExit("run.trace.jsonl should include canonical state_change events")
-    required_state_change_keys = {"action_type", "actor", "artifact_paths", "artifact_hashes", "manifest_epoch", "new_state"}
+    required_state_change_keys = {
+        "action_type",
+        "actor",
+        "artifact_paths",
+        "artifact_hashes",
+        "manifest_epoch",
+        "new_state",
+    }
     if not all(required_state_change_keys.issubset(event) for event in state_changes):
-        raise SystemExit(f"state_change trace events should include action/actor/artifact hash/state fields: {state_changes!r}")
+        raise SystemExit(
+            f"state_change trace events should include action/actor/artifact hash/state fields: {state_changes!r}"
+        )
     if not any(event.get("action_type") == "worker_status_write" for event in state_changes):
         raise SystemExit(f"state_change trace should include worker status writes: {state_changes!r}")
     if any("raw_text" in event for event in trace_events if isinstance(event, dict)):
@@ -8431,7 +9231,11 @@ def run_example_brief_fixtures(tmp_path: Path) -> None:
         ]
     )
     string_bullet_prompt = (string_bullet_bundle / "branches" / "B01.prompt.md").read_text(encoding="utf-8")
-    assert_all_contains(string_bullet_prompt, ["- Stop if public behavior tests fail.", "- Branch-level behavior remains compatible."], "string bullet branch prompt")
+    assert_all_contains(
+        string_bullet_prompt,
+        ["- Stop if public behavior tests fail.", "- Branch-level behavior remains compatible."],
+        "string bullet branch prompt",
+    )
     if "- S\n- t\n- o\n- p" in string_bullet_prompt or "- B\n- r\n- a\n- n\n- c\n- h" in string_bullet_prompt:
         raise SystemExit("branch prompt split a string field into one bullet per character")
 
@@ -8490,7 +9294,9 @@ def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
     )
     deterministic_phase_report = read_json(deterministic_audit_phase / "prompt-audit-phase.json")
     if deterministic_phase_report.get("status") != "pass":
-        raise SystemExit(f"deterministic prompt-audit phase should pass a lint-clean bundle: {deterministic_phase_report!r}")
+        raise SystemExit(
+            f"deterministic prompt-audit phase should pass a lint-clean bundle: {deterministic_phase_report!r}"
+        )
     deterministic_audit = read_json(deterministic_audit_phase / "prompt-audit.json")
     if deterministic_audit.get("status") != "pass" or deterministic_audit.get("can_start") is not True:
         raise SystemExit(f"deterministic prompt-audit did not write a passing audit: {deterministic_audit!r}")
@@ -8513,7 +9319,10 @@ def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
         ]
     )
     rerun_report = json.loads(rerun_phase.stdout)
-    if rerun_report.get("status") != "pass" or rerun_report.get("commands", {}).get("reuse_existing_audit", {}).get("status") != "attempted":
+    if (
+        rerun_report.get("status") != "pass"
+        or rerun_report.get("commands", {}).get("reuse_existing_audit", {}).get("status") != "attempted"
+    ):
         raise SystemExit(f"prompt-audit phase rerun should reuse existing valid audit: {rerun_report!r}")
     run(
         [
@@ -8528,23 +9337,29 @@ def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
             "--require-pass",
         ]
     )
-    ready_after_deterministic_audit = run(
-        [
-            "python3",
-            "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
-            "--manifest",
-            (bundle / "job.manifest.json").as_posix(),
-            "--repo-root",
-            ROOT.as_posix(),
-            "--audit",
-            (deterministic_audit_phase / "prompt-audit.json").as_posix(),
-            "--list-ready",
-            "--limit",
-            "1",
-        ]
-    ).stdout.strip().splitlines()
+    ready_after_deterministic_audit = (
+        run(
+            [
+                "python3",
+                "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py",
+                "--manifest",
+                (bundle / "job.manifest.json").as_posix(),
+                "--repo-root",
+                ROOT.as_posix(),
+                "--audit",
+                (deterministic_audit_phase / "prompt-audit.json").as_posix(),
+                "--list-ready",
+                "--limit",
+                "1",
+            ]
+        )
+        .stdout.strip()
+        .splitlines()
+    )
     if ready_after_deterministic_audit != ["B01"]:
-        raise SystemExit(f"deterministic prompt-audit telemetry did not unlock branch scheduling: {ready_after_deterministic_audit!r}")
+        raise SystemExit(
+            f"deterministic prompt-audit telemetry did not unlock branch scheduling: {ready_after_deterministic_audit!r}"
+        )
 
     audit_phase = tmp_path / "audit-phase"
     run(
@@ -8588,7 +9403,9 @@ def run_prompt_audit_packet_fixtures(tmp_path: Path, bundle: Path) -> None:
         ]
     )
     fake_codex_ready = audit_signal / "fake-codex-ready"
-    fake_codex.write_text(f"#!/usr/bin/env bash\nprintf ready > {shlex.quote(fake_codex_ready.as_posix())}\nsleep 30\n", encoding="utf-8")
+    fake_codex.write_text(
+        f"#!/usr/bin/env bash\nprintf ready > {shlex.quote(fake_codex_ready.as_posix())}\nsleep 30\n", encoding="utf-8"
+    )
     fake_codex.chmod(0o755)
     process = subprocess.Popen(
         [(audit_signal / "launch.sh").as_posix()],
@@ -8700,7 +9517,9 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
         "research/B01-W01/packet.summary.json",
     ]:
         if rel_path not in semantic_hashes:
-            raise SystemExit(f"pre-review gate omitted packet terminal freshness hash for {rel_path}: {semantic_hashes!r}")
+            raise SystemExit(
+                f"pre-review gate omitted packet terminal freshness hash for {rel_path}: {semantic_hashes!r}"
+            )
     diagnostic_hashes = (
         gate.get("volatile_input_hashes", {}).get("diagnostic_artifacts", {})
         if isinstance(gate.get("volatile_input_hashes"), dict)
@@ -8713,7 +9532,9 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
         "research/B01-W01/attempts/attempt-001/telemetry.json",
     ]:
         if rel_path in semantic_hashes:
-            raise SystemExit(f"pre-review gate included diagnostic attempt snapshot in semantic hashes for {rel_path}: {semantic_hashes!r}")
+            raise SystemExit(
+                f"pre-review gate included diagnostic attempt snapshot in semantic hashes for {rel_path}: {semantic_hashes!r}"
+            )
         if rel_path not in diagnostic_hashes:
             raise SystemExit(f"pre-review gate omitted diagnostic attempt hash for {rel_path}: {diagnostic_hashes!r}")
     create_runtime_packet(
@@ -8786,7 +9607,9 @@ def run_reviewer_packet_fixtures(tmp_path: Path, bundle: Path, packet_root: Path
             task_file=task_file,
         )
         assert_reviewer_route(packet_root, packet_id, expected)
-    heavy_diff_gate = write_review_gate_variant(bundle, "B01-R04", diff_stats={"files_changed": 25, "lines_changed": 40})
+    heavy_diff_gate = write_review_gate_variant(
+        bundle, "B01-R04", diff_stats={"files_changed": 25, "lines_changed": 40}
+    )
     create_runtime_packet(
         role="reviewer",
         packet_id="B01-R04",
@@ -9017,7 +9840,11 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     assemble_branch_status(same_hash_stale_bundle)
     write_pre_review_gate(same_hash_stale_bundle)
     same_hash_gate = read_json(same_hash_stale_bundle / "branches" / "B01.pre_review_gate.json")
-    same_hashes = same_hash_gate.get("semantic_input_hashes") if isinstance(same_hash_gate.get("semantic_input_hashes"), dict) else {}
+    same_hashes = (
+        same_hash_gate.get("semantic_input_hashes")
+        if isinstance(same_hash_gate.get("semantic_input_hashes"), dict)
+        else {}
+    )
     create_runtime_packet(
         role="reviewer",
         packet_id="B01-R01",
@@ -9056,9 +9883,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     write_json(same_hash_stale_bundle / "reviewers" / "B01-R01" / "review.json", current_review)
     same_hash_route = read_json(same_hash_stale_bundle / "reviewers" / "B01-R01" / "route.json")
     same_hash_aliases = [
-        item
-        for item in same_hash_route.get("selected_ladder", [])
-        if isinstance(item, str) and item.strip()
+        item for item in same_hash_route.get("selected_ladder", []) if isinstance(item, str) and item.strip()
     ] or ["gpt-5.4"]
     write_json(
         same_hash_stale_bundle / "reviewers" / "B01-R01" / "telemetry.json",
@@ -9107,11 +9932,18 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             ]
         ).stdout
     )
-    if same_hash_result.get("branch_status") != "partial" or same_hash_result.get("review_status") != "mergeable_after_fixes":
-        raise SystemExit(f"same-hash stale canonical review should remain partial with current verdict: {same_hash_result!r}")
+    if (
+        same_hash_result.get("branch_status") != "partial"
+        or same_hash_result.get("review_status") != "mergeable_after_fixes"
+    ):
+        raise SystemExit(
+            f"same-hash stale canonical review should remain partial with current verdict: {same_hash_result!r}"
+        )
     promoted_same_hash_review = read_json(same_hash_stale_bundle / "branches" / "B01.review.json")
     if promoted_same_hash_review.get("summary") != "Current same-hash reviewer fixture.":
-        raise SystemExit(f"canonical review should promote newer same-hash reviewer output: {promoted_same_hash_review!r}")
+        raise SystemExit(
+            f"canonical review should promote newer same-hash reviewer output: {promoted_same_hash_review!r}"
+        )
     reconcile_same_hash = json.loads(
         run(
             [
@@ -9127,9 +9959,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         ).stdout
     )
     mismatch_codes = {
-        item.get("code")
-        for item in reconcile_same_hash.get("stale_or_unreconciled", [])
-        if isinstance(item, dict)
+        item.get("code") for item in reconcile_same_hash.get("stale_or_unreconciled", []) if isinstance(item, dict)
     }
     if "review_path_not_matching_reviewer_output" in mismatch_codes:
         raise SystemExit(f"reconcile should not report review mismatch after promotion: {reconcile_same_hash!r}")
@@ -9153,7 +9983,9 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     )
     branch_validation = json.loads(validate_branch(bundle).stdout)
     if branch_validation.get("artifact_valid") is not True or branch_validation.get("runtime_success") is not False:
-        raise SystemExit(f"branch validator should distinguish valid artifact from non-pass runtime outcome: {branch_validation!r}")
+        raise SystemExit(
+            f"branch validator should distinguish valid artifact from non-pass runtime outcome: {branch_validation!r}"
+        )
     if branch_validation.get("dod_complete") is not False or branch_validation.get("review_complete") is not False:
         raise SystemExit(f"branch validator should expose incomplete DoD/review lanes: {branch_validation!r}")
     stale_ignored_base_ref = read_json(bundle / "job.manifest.json").get("base_ref", "main")
@@ -9192,10 +10024,14 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         ).stdout
     )
     if main_status_result.get("artifact_valid") is not True or main_status_result.get("runtime_success") is not False:
-        raise SystemExit(f"assembled main status should distinguish artifact validity from runtime success: {main_status_result!r}")
+        raise SystemExit(
+            f"assembled main status should distinguish artifact validity from runtime success: {main_status_result!r}"
+        )
     assembled_main_status = read_json(bundle / "main.status.json")
     if not assembled_main_status.get("amendment_decision_blockers"):
-        raise SystemExit(f"blocked main status should preserve amendment decision blocker evidence: {assembled_main_status!r}")
+        raise SystemExit(
+            f"blocked main status should preserve amendment decision blocker evidence: {assembled_main_status!r}"
+        )
     main_validation = json.loads(
         run(
             [
@@ -9210,7 +10046,9 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         ).stdout
     )
     if main_validation.get("artifact_valid") is not True or main_validation.get("runtime_success") is not False:
-        raise SystemExit(f"main validator should distinguish valid artifact from non-pass runtime outcome: {main_validation!r}")
+        raise SystemExit(
+            f"main validator should distinguish valid artifact from non-pass runtime outcome: {main_validation!r}"
+        )
     if main_validation.get("dod_complete") is not False or main_validation.get("review_complete") is not False:
         raise SystemExit(f"main validator should expose incomplete DoD/review lanes: {main_validation!r}")
     invalid_main_bundle = tmp_path / "main-status-invalid-scheduler-mismatch"
@@ -9233,10 +10071,15 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         ).stdout
     )
     invalid_main_status = read_json(invalid_main_bundle / "main.status.json")
-    if invalid_main_status_result.get("artifact_valid") is not False or invalid_main_status.get("artifact_valid") is not False:
+    if (
+        invalid_main_status_result.get("artifact_valid") is not False
+        or invalid_main_status.get("artifact_valid") is not False
+    ):
         raise SystemExit(f"invalid main status assembly should expose artifact_valid=false: {invalid_main_status!r}")
     if not any("must match scheduler finish status" in item for item in invalid_main_status.get("blockers", [])):
-        raise SystemExit(f"invalid main status should preserve scheduler mismatch validator defect: {invalid_main_status!r}")
+        raise SystemExit(
+            f"invalid main status should preserve scheduler mismatch validator defect: {invalid_main_status!r}"
+        )
 
     dependency_failed_bundle = tmp_path / "reconcile-dependency-failed-terminal"
     shutil.copytree(bundle, dependency_failed_bundle)
@@ -9335,7 +10178,10 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             ]
         ).stdout
     )
-    if dependency_main_status.get("artifact_valid") is not True or dependency_main_status.get("runtime_success") is not False:
+    if (
+        dependency_main_status.get("artifact_valid") is not True
+        or dependency_main_status.get("runtime_success") is not False
+    ):
         raise SystemExit(f"dependency-failed main status should be valid partial artifact: {dependency_main_status!r}")
     dependency_main_validation = json.loads(
         run(
@@ -9350,8 +10196,13 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             ]
         ).stdout
     )
-    if dependency_main_validation.get("artifact_valid") is not True or dependency_main_validation.get("runtime_success") is not False:
-        raise SystemExit(f"dependency-failed main validator should accept terminal partial artifact: {dependency_main_validation!r}")
+    if (
+        dependency_main_validation.get("artifact_valid") is not True
+        or dependency_main_validation.get("runtime_success") is not False
+    ):
+        raise SystemExit(
+            f"dependency-failed main validator should accept terminal partial artifact: {dependency_main_validation!r}"
+        )
     dependency_reconcile = json.loads(
         run(
             [
@@ -9367,16 +10218,18 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         ).stdout
     )
     if dependency_reconcile.get("status") != "partial":
-        raise SystemExit(f"dependency-failed reconcile should report terminal partial, not blocked: {dependency_reconcile!r}")
+        raise SystemExit(
+            f"dependency-failed reconcile should report terminal partial, not blocked: {dependency_reconcile!r}"
+        )
     if dependency_reconcile.get("final_state_validation", {}).get("status") != "pass":
         raise SystemExit(f"dependency-failed reconcile final validation should pass: {dependency_reconcile!r}")
     blocked_codes = {
-        item.get("code")
-        for item in dependency_reconcile.get("blocked_work_remaining", [])
-        if isinstance(item, dict)
+        item.get("code") for item in dependency_reconcile.get("blocked_work_remaining", []) if isinstance(item, dict)
     }
     if {"missing_branch_status", "missing_branch_worktree", "unreconciled_worker_scheduler"} & blocked_codes:
-        raise SystemExit(f"dependency-failed unlaunched branch should not be missing blocked work: {dependency_reconcile!r}")
+        raise SystemExit(
+            f"dependency-failed unlaunched branch should not be missing blocked work: {dependency_reconcile!r}"
+        )
     if any(
         isinstance(command, str) and "render_branch_worktree_commands.py" in command and "--branch B02" in command
         for command in dependency_reconcile.get("next_commands", [])
@@ -9391,13 +10244,23 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         None,
     )
     if not dependency_b02_report or dependency_b02_report.get("dependency_failed_terminal") is not True:
-        raise SystemExit(f"dependency-failed branch report should expose terminal dependency evidence: {dependency_reconcile!r}")
+        raise SystemExit(
+            f"dependency-failed branch report should expose terminal dependency evidence: {dependency_reconcile!r}"
+        )
     if dependency_b02_report.get("worker_scheduler", {}).get("validation_status") != "pass":
-        raise SystemExit(f"dependency-failed missing worker scheduler should be accepted as terminal: {dependency_b02_report!r}")
+        raise SystemExit(
+            f"dependency-failed missing worker scheduler should be accepted as terminal: {dependency_b02_report!r}"
+        )
 
-    main_assembler = load_script_module("preparedness_assemble_main_status", "skills/goal-main-orchestrator/scripts/assemble_main_status.py")
-    main_validator = load_script_module("preparedness_validate_main_status", "skills/goal-main-orchestrator/scripts/validate_main_status.py")
-    main_reconciler = load_script_module("preparedness_reconcile_goal_run", "skills/_goal_shared/scripts/reconcile_goal_run.py")
+    main_assembler = load_script_module(
+        "preparedness_assemble_main_status", "skills/goal-main-orchestrator/scripts/assemble_main_status.py"
+    )
+    main_validator = load_script_module(
+        "preparedness_validate_main_status", "skills/goal-main-orchestrator/scripts/validate_main_status.py"
+    )
+    main_reconciler = load_script_module(
+        "preparedness_reconcile_goal_run", "skills/_goal_shared/scripts/reconcile_goal_run.py"
+    )
     recovered = {
         "branch_id": "B01",
         "status": "blocked",
@@ -9418,11 +10281,15 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     manifest_recovery_by_id = {"B01": {"id": "B01"}, "B02": {"id": "B02", "recovers_from": ["B01"]}}
     stale_manifest_recovery_by_id = {"B01": {"id": "B01"}, "B02": {"id": "B02"}}
     if main_assembler.choose_status("pass", [recovered, recovery], 2, []) != "pass":
-        raise SystemExit("main assembler should allow pass when a non-pass branch is explicitly recovered by a mergeable replacement")
+        raise SystemExit(
+            "main assembler should allow pass when a non-pass branch is explicitly recovered by a mergeable replacement"
+        )
     if main_assembler.aggregate_review_status([recovered, recovery], 2) != "mergeable":
         raise SystemExit("main assembler should treat explicitly recovered non-pass branches as review-complete")
     if main_validator.branch_summary_recovered(recovered, recovery_by_id, manifest_recovery_by_id) is not True:
-        raise SystemExit("main validator should recognize recovered branch summaries with a passing mergeable recovered_by branch")
+        raise SystemExit(
+            "main validator should recognize recovered branch summaries with a passing mergeable recovered_by branch"
+        )
     if main_validator.branch_summary_recovered(recovered, recovery_by_id, stale_manifest_recovery_by_id) is not False:
         raise SystemExit("main validator must reject recovered_by links that are not declared by the manifest")
     pending_recovery = {**recovered, "recovered_by": ["B03"]}
@@ -9435,17 +10302,22 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         {"branch_id": "B02", "runtime_status": "pass", "review_status": "mergeable", "validation": {"status": "pass"}},
     ]
     if main_reconciler.recovered_branch_ids(list(manifest_recovery_by_id.values()), recovery_branch_reports) != {"B01"}:
-        raise SystemExit("reconcile_goal_run.py should derive recovered branches from manifest-declared successful replacements")
+        raise SystemExit(
+            "reconcile_goal_run.py should derive recovered branches from manifest-declared successful replacements"
+        )
     if main_reconciler.recovered_branch_ids(list(stale_manifest_recovery_by_id.values()), recovery_branch_reports):
         raise SystemExit("reconcile_goal_run.py must not treat unrelated passing branches as recoveries")
     unrecovered_blocked = [
         item
         for item in recovery_branch_reports
         if item.get("runtime_status") in {"partial", "blocked", "failed"}
-        and item.get("branch_id") not in main_reconciler.recovered_branch_ids(list(manifest_recovery_by_id.values()), recovery_branch_reports)
+        and item.get("branch_id")
+        not in main_reconciler.recovered_branch_ids(list(manifest_recovery_by_id.values()), recovery_branch_reports)
     ]
     if unrecovered_blocked:
-        raise SystemExit(f"recovered non-pass branches must be excluded from remaining blockers: {unrecovered_blocked!r}")
+        raise SystemExit(
+            f"recovered non-pass branches must be excluded from remaining blockers: {unrecovered_blocked!r}"
+        )
     pre_dispatch_bundle = tmp_path / "reconcile-pre-branch-dispatch"
     shutil.copytree(bundle, pre_dispatch_bundle)
     pre_dispatch_manifest = read_json(pre_dispatch_bundle / "job.manifest.json")
@@ -9497,15 +10369,23 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(f"pre-dispatch final validation should be deferred: {pre_dispatch_report!r}")
     if (pre_dispatch_bundle / "main.status.json").exists():
         raise SystemExit("pre-dispatch reconcile --write should not materialize a conservative main.status.json")
-    if not any("render_branch_worktree_commands.py" in command for command in pre_dispatch_report.get("next_commands", [])):
+    if not any(
+        "render_branch_worktree_commands.py" in command for command in pre_dispatch_report.get("next_commands", [])
+    ):
         raise SystemExit(f"pre-dispatch next commands should render branch launch commands: {pre_dispatch_report!r}")
     render_commands = [
         command
         for command in pre_dispatch_report.get("next_commands", [])
         if isinstance(command, str) and "render_branch_worktree_commands.py" in command
     ]
-    if not render_commands or "audit/prompt-audit.json" not in render_commands[0] or "prompt-audit-phase.json" in render_commands[0]:
-        raise SystemExit(f"pre-dispatch branch render command should use canonical prompt-audit.json: {render_commands!r}")
+    if (
+        not render_commands
+        or "audit/prompt-audit.json" not in render_commands[0]
+        or "prompt-audit-phase.json" in render_commands[0]
+    ):
+        raise SystemExit(
+            f"pre-dispatch branch render command should use canonical prompt-audit.json: {render_commands!r}"
+        )
     run(shlex.split(render_commands[0]))
     stale_active_resume_bundle = tmp_path / "reconcile-stale-active-resume"
     shutil.copytree(pre_dispatch_bundle, stale_active_resume_bundle)
@@ -9552,19 +10432,22 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     )
     if stale_active_report.get("execution_phase") != "runtime_or_finalization":
         raise SystemExit(f"stale-active scheduler evidence should force runtime resume phase: {stale_active_report!r}")
-    if not any(item.get("code") == "stale_active_branch_launch" for item in stale_active_report.get("stale_or_unreconciled", [])):
+    if not any(
+        item.get("code") == "stale_active_branch_launch"
+        for item in stale_active_report.get("stale_or_unreconciled", [])
+    ):
         raise SystemExit(f"stale-active resume should report stale active branch launch: {stale_active_report!r}")
     stale_active_commands = [
-        command
-        for command in stale_active_report.get("next_commands", [])
-        if isinstance(command, str)
+        command for command in stale_active_report.get("next_commands", []) if isinstance(command, str)
     ]
     expected_closeout_fragments = [
         f"scheduler_tick.py --manifest {(stale_active_resume_bundle / 'job.manifest.json').as_posix()} --scope main --runtime-ref goal-main-orchestrator --blocked {stale_active_branch_id} --reason-code stale_active",
         f"scheduler_tick.py --manifest {(stale_active_resume_bundle / 'job.manifest.json').as_posix()} --scope main --runtime-ref goal-main-orchestrator --finish {stale_active_branch_id} --status blocked",
         f"scheduler_tick.py --manifest {(stale_active_resume_bundle / 'job.manifest.json').as_posix()} --scope main --runtime-ref goal-main-orchestrator --close {stale_active_branch_id}",
     ]
-    if len(stale_active_commands) < 3 or any(fragment not in stale_active_commands[index] for index, fragment in enumerate(expected_closeout_fragments)):
+    if len(stale_active_commands) < 3 or any(
+        fragment not in stale_active_commands[index] for index, fragment in enumerate(expected_closeout_fragments)
+    ):
         raise SystemExit(f"stale-active resume should put scheduler closeout commands first: {stale_active_commands!r}")
     stale_active_render_commands = [
         command
@@ -9594,14 +10477,16 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         ).stdout
     )
     if stale_active_branch_id not in stale_active_relaunch_state.get("state", {}).get("active", []):
-        raise SystemExit(f"stale-active closeout should make the branch launchable again: {stale_active_relaunch_state!r}")
+        raise SystemExit(
+            f"stale-active closeout should make the branch launchable again: {stale_active_relaunch_state!r}"
+        )
     blocked_codes = {
-        item.get("code")
-        for item in pre_dispatch_report.get("blocked_work_remaining", [])
-        if isinstance(item, dict)
+        item.get("code") for item in pre_dispatch_report.get("blocked_work_remaining", []) if isinstance(item, dict)
     }
     if {"missing_main_status", "missing_branch_status", "missing_branch_worktree"} & blocked_codes:
-        raise SystemExit(f"pre-dispatch missing launch artifacts should be pending work, not blocked work: {pre_dispatch_report!r}")
+        raise SystemExit(
+            f"pre-dispatch missing launch artifacts should be pending work, not blocked work: {pre_dispatch_report!r}"
+        )
     resume_report = json.loads(
         run(
             [
@@ -9620,11 +10505,18 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     if not resume_report.get("blocked_branches") or not resume_report.get("blocked_work_remaining"):
         raise SystemExit(f"resume report should make blocked branch work prominent: {resume_report!r}")
     if resume_report.get("next_required_action") != resume_report.get("resume_action"):
-        raise SystemExit(f"resume report next_required_action should mirror deterministic resume_action: {resume_report!r}")
+        raise SystemExit(
+            f"resume report next_required_action should mirror deterministic resume_action: {resume_report!r}"
+        )
     stale_archive_bundle = tmp_path / "stale-artifact-index"
     shutil.copytree(bundle, stale_archive_bundle)
-    write_json(stale_archive_bundle / "branches" / "stale" / "B01.status.old.json", {"branch_id": "B01", "status": "blocked"})
-    write_json(stale_archive_bundle / "reviewers.stale" / "B01-R01" / "review.old.json", {"packet_id": "B01-R01", "verdict": "needs_changes"})
+    write_json(
+        stale_archive_bundle / "branches" / "stale" / "B01.status.old.json", {"branch_id": "B01", "status": "blocked"}
+    )
+    write_json(
+        stale_archive_bundle / "reviewers.stale" / "B01-R01" / "review.old.json",
+        {"packet_id": "B01-R01", "verdict": "needs_changes"},
+    )
     stale_before = json.loads(
         run(
             [
@@ -9636,7 +10528,9 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             ]
         ).stdout
     )
-    if not any(item.get("code") == "missing_stale_artifact_index" for item in stale_before.get("stale_or_unreconciled", [])):
+    if not any(
+        item.get("code") == "missing_stale_artifact_index" for item in stale_before.get("stale_or_unreconciled", [])
+    ):
         raise SystemExit(f"stale archive without an index should be reported: {stale_before!r}")
     stale_after = json.loads(
         run(
@@ -9656,14 +10550,20 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(f"stale artifact index should capture both archived files: {stale_index!r}")
     if not all(item.get("excluded_from_current_evidence") is True for item in stale_entries if isinstance(item, dict)):
         raise SystemExit(f"stale artifact index entries should be excluded from current evidence: {stale_index!r}")
-    if any(item.get("original_hash") is None or not item.get("stale_reason") for item in stale_entries if isinstance(item, dict)):
+    if any(
+        item.get("original_hash") is None or not item.get("stale_reason")
+        for item in stale_entries
+        if isinstance(item, dict)
+    ):
         raise SystemExit(f"stale artifact index entries should carry hash and reason: {stale_index!r}")
     if any(
         not item.get("superseding_artifact") and not item.get("terminal_reason")
         for item in stale_entries
         if isinstance(item, dict)
     ):
-        raise SystemExit(f"stale artifact index entries should carry superseding lineage or terminal reason: {stale_index!r}")
+        raise SystemExit(
+            f"stale artifact index entries should carry superseding lineage or terminal reason: {stale_index!r}"
+        )
     if any(item.get("code") == "missing_stale_artifact_index" for item in stale_after.get("stale_or_unreconciled", [])):
         raise SystemExit(f"reconcile --write should materialize stale artifact index before reporting: {stale_after!r}")
 
@@ -9693,7 +10593,13 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
     }
     write_json(old_policy_bundle / "job.manifest.json", manifest)
     lint_result = run(
-        ["python3", "skills/goal-preflight/scripts/lint_goal_bundle.py", "--bundle-dir", old_policy_bundle.as_posix(), "--no-write"],
+        [
+            "python3",
+            "skills/goal-preflight/scripts/lint_goal_bundle.py",
+            "--bundle-dir",
+            old_policy_bundle.as_posix(),
+            "--no-write",
+        ],
         expect=1,
     )
     assert_contains(lint_result.stdout, "obsolete narrow-access phrase", "old-policy fixture")

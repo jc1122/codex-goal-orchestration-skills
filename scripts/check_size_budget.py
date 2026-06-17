@@ -272,12 +272,18 @@ def make_report(current: dict[str, Any], budget: dict[str, Any]) -> dict[str, An
     thresholds = {
         "growth_warn_ratio": float(thresholds_raw.get("growth_warn_ratio", DEFAULT_THRESHOLDS["growth_warn_ratio"])),
         "growth_high_ratio": float(thresholds_raw.get("growth_high_ratio", DEFAULT_THRESHOLDS["growth_high_ratio"])),
-        "growth_review_ratio": float(thresholds_raw.get("growth_review_ratio", DEFAULT_THRESHOLDS["growth_review_ratio"])),
+        "growth_review_ratio": float(
+            thresholds_raw.get("growth_review_ratio", DEFAULT_THRESHOLDS["growth_review_ratio"])
+        ),
     }
     warnings = []
-    warnings.extend(compare_group(group="scopes", current=current["scopes"], baseline=budget["scopes"], thresholds=thresholds))
     warnings.extend(
-        compare_group(group="per_skill", current=current["per_skill"], baseline=budget["per_skill"], thresholds=thresholds)
+        compare_group(group="scopes", current=current["scopes"], baseline=budget["scopes"], thresholds=thresholds)
+    )
+    warnings.extend(
+        compare_group(
+            group="per_skill", current=current["per_skill"], baseline=budget["per_skill"], thresholds=thresholds
+        )
     )
     warnings.extend(
         compare_largest_files(
@@ -357,14 +363,20 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--budget", type=Path, default=DEFAULT_BUDGET, help="Path to the committed size budget.")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON.")
-    parser.add_argument("--update", action="store_true", help="Rewrite the budget to the current tracked-file baseline.")
+    parser.add_argument(
+        "--update", action="store_true", help="Rewrite the budget to the current tracked-file baseline."
+    )
     parser.add_argument(
         "--include-untracked",
         action="store_true",
         help="Include untracked non-ignored files; intended for creating a baseline before the first guardrail commit.",
     )
-    parser.add_argument("--fail-on-warnings", action="store_true", help="Return nonzero when growth warnings are present.")
-    parser.add_argument("--verbose", action="store_true", help="Print every human-readable warning; --json always includes all.")
+    parser.add_argument(
+        "--fail-on-warnings", action="store_true", help="Return nonzero when growth warnings are present."
+    )
+    parser.add_argument(
+        "--verbose", action="store_true", help="Print every human-readable warning; --json always includes all."
+    )
     args = parser.parse_args()
 
     current = collect_current(include_untracked=args.include_untracked)

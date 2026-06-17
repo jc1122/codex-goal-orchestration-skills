@@ -178,7 +178,9 @@ def large_file_functions(path: Path, text: str) -> list[str]:
             continue
         line_count = node.end_lineno - node.lineno + 1
         functions.append((line_count, node.lineno, node.name))
-    selected = sorted(functions, key=lambda item: (item[0], -item[1], item[2]), reverse=True)[:LARGE_FILE_FUNCTION_LIMIT]
+    selected = sorted(functions, key=lambda item: (item[0], -item[1], item[2]), reverse=True)[
+        :LARGE_FILE_FUNCTION_LIMIT
+    ]
     return [f"{line}:{name}:{line_count}l" for line_count, line, name in selected]
 
 
@@ -295,7 +297,12 @@ def build_entrypoints(package: dict[str, Any]) -> dict[str, Any]:
         "agent_start": ["AGENTS.md", "maintenance/agent-context-index.json"],
         "install": ["bin/install-goal-skills.js", "package.json"],
         "ci": [".github/workflows/ci.yml", "package.json"],
-        "dependencies": [".github/dependabot.yml", "maintenance/dependency-policy.json", "package.json", "requirements-dev.txt"],
+        "dependencies": [
+            ".github/dependabot.yml",
+            "maintenance/dependency-policy.json",
+            "package.json",
+            "requirements-dev.txt",
+        ],
         "maintenance": [
             "maintenance/agent-context-index.json",
             "maintenance/size-budget.json",
@@ -328,7 +335,10 @@ def build_tasks() -> dict[str, Any]:
                 "python3 skills/goal-preflight/scripts/lint_goal_bundle.py --help",
             ],
             "open_scripts_only_for": "bundle schema implementation or script debugging",
-            "write_candidates": ["skills/goal-preflight/scripts", "skills/_goal_shared/scripts/orchestration_contract.py"],
+            "write_candidates": [
+                "skills/goal-preflight/scripts",
+                "skills/_goal_shared/scripts/orchestration_contract.py",
+            ],
             "checks": ["npm run check:fixtures", "npm run check:golden"],
         },
         "goal_configuration": {
@@ -429,9 +439,7 @@ def build_index() -> dict[str, Any]:
         references = skill_files(skill, "references", (".md",))
         assets = skill_files(skill, "assets", (".md",))
         scripts = [
-            rel(path)
-            for path in sorted((SKILLS_ROOT / skill / "scripts").glob("*.py"))
-            if not is_shared_wrapper(path)
+            rel(path) for path in sorted((SKILLS_ROOT / skill / "scripts").glob("*.py")) if not is_shared_wrapper(path)
         ]
         skills[skill] = {
             "role": first_sentence(frontmatter.get("description", "")),
@@ -489,7 +497,9 @@ def stable_json(data: dict[str, Any]) -> str:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="Rewrite maintenance/agent-context-index.json.")
-    parser.add_argument("--check", action="store_true", help="Fail when the generated index differs from the committed file.")
+    parser.add_argument(
+        "--check", action="store_true", help="Fail when the generated index differs from the committed file."
+    )
     parser.add_argument("--json", action="store_true", help="Print the generated index JSON.")
     args = parser.parse_args()
 

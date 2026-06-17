@@ -29,7 +29,9 @@ _SAFE_SKILL_DIRS = {
 # GOAL_LITE_OFFLINE_BRIDGE_METADATA contract: an absolute control-script path plus a
 # captured control version, so packet creation never touches the live deepseek delegate.
 OFFLINE_BRIDGE_CONTROL_VERSION = "schema_version:1"
-CODEX_MINI_WORKER_COMMAND = "codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"
+CODEX_MINI_WORKER_COMMAND = (
+    "codex exec --ephemeral --ignore-user-config --ignore-rules -m gpt-5.4-mini -s workspace-write"
+)
 
 
 def offline_bridge_control_script() -> str:
@@ -145,7 +147,11 @@ def _run_python_cli_in_process(
     argv = [script.as_posix(), *command[2:]]
     code = 0
     old_path = sys.path[:]
-    with _temporary_process_state(argv=argv, cwd=cwd, env=env), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stdout):
+    with (
+        _temporary_process_state(argv=argv, cwd=cwd, env=env),
+        contextlib.redirect_stdout(stdout),
+        contextlib.redirect_stderr(stdout),
+    ):
         try:
             sys.path.insert(0, script.parent.as_posix())
             result = main()
@@ -288,7 +294,10 @@ def assert_lean_codex_attempts(attempts: object, label: str, *, expected_count: 
         raise SystemExit(f"{label} count mismatch: expected {expected_count}, got {len(attempts)}: {attempts!r}")
     if not attempts:
         raise SystemExit(f"{label} should include at least one attempt")
-    if any(attempt_item.get("ignore_user_config") is not True or attempt_item.get("ignore_rules") is not True for attempt_item in attempts):
+    if any(
+        attempt_item.get("ignore_user_config") is not True or attempt_item.get("ignore_rules") is not True
+        for attempt_item in attempts
+    ):
         raise SystemExit(f"{label} should use lean Codex startup flags: {attempts!r}")
     return attempts
 
@@ -318,7 +327,9 @@ def assert_codex_mini_worker_route(config: dict, selection_reason: str, label: s
     if event_logs != ["events-mini.jsonl"]:
         raise SystemExit(f"{label} launch-config event logs mismatch: {event_logs!r}")
     if probe_logs:
-        raise SystemExit(f"{label} launch-config should not include probe logs for codex-mini-only route: {probe_logs!r}")
+        raise SystemExit(
+            f"{label} launch-config should not include probe logs for codex-mini-only route: {probe_logs!r}"
+        )
     if config.get("selected_commands") != [CODEX_MINI_WORKER_COMMAND]:
         raise SystemExit(f"{label} launch-config selected commands mismatch: {config.get('selected_commands')!r}")
     assert_lean_codex_attempts(config.get("attempts", []), f"{label} Codex attempt", expected_count=1)
@@ -751,10 +762,7 @@ def assert_compact_audit_launcher(packet_dir: Path) -> dict:
     if aliases != ["gpt-5.5", "gpt-5.4"]:
         raise SystemExit(f"audit launch-config aliases mismatch: {aliases!r}")
     event_logs = [
-        log
-        for attempt_item in attempts
-        if isinstance(attempt_item, dict)
-        for log in attempt_item.get("event_logs", [])
+        log for attempt_item in attempts if isinstance(attempt_item, dict) for log in attempt_item.get("event_logs", [])
     ]
     if event_logs != ["events-primary.jsonl", "events-fallback.jsonl"]:
         raise SystemExit(f"audit launch-config event logs mismatch: {event_logs!r}")

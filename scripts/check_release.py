@@ -158,11 +158,19 @@ def require(condition: bool, message: str) -> None:
 def check_metadata(package: dict) -> str:
     require(package.get("name") == "codex-goal-orchestration-skills", "package.json name is wrong")
     version = package.get("version")
-    require(isinstance(version, str) and SEMVER_RE.fullmatch(version) is not None, "package.json version must be valid semver")
-    require(isinstance(package.get("description"), str) and package["description"].strip(), "package.json description is required")
+    require(
+        isinstance(version, str) and SEMVER_RE.fullmatch(version) is not None,
+        "package.json version must be valid semver",
+    )
+    require(
+        isinstance(package.get("description"), str) and package["description"].strip(),
+        "package.json description is required",
+    )
     require(isinstance(package.get("license"), str) and package["license"].strip(), "package.json license is required")
     repository = package.get("repository")
-    require(isinstance(repository, dict) and repository.get("type") == "git", "package.json repository.type must be git")
+    require(
+        isinstance(repository, dict) and repository.get("type") == "git", "package.json repository.type must be git"
+    )
     require(
         isinstance(repository, dict)
         and isinstance(repository.get("url"), str)
@@ -264,7 +272,10 @@ def check_pack(version: str) -> None:
     except json.JSONDecodeError as exc:
         print(result.stdout, file=sys.stderr)
         raise SystemExit(f"npm pack --dry-run --json did not return JSON: {exc}") from exc
-    require(isinstance(packed, list) and len(packed) == 1 and isinstance(packed[0], dict), "npm pack JSON must contain one package object")
+    require(
+        isinstance(packed, list) and len(packed) == 1 and isinstance(packed[0], dict),
+        "npm pack JSON must contain one package object",
+    )
     package = packed[0]
     require(package.get("name") == "codex-goal-orchestration-skills", "packed package name mismatch")
     require(package.get("version") == version, "packed package version mismatch")
@@ -293,7 +304,9 @@ def check_git_clean() -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--require-clean", action="store_true", help="Fail unless git status is clean; use before tagging.")
+    parser.add_argument(
+        "--require-clean", action="store_true", help="Fail unless git status is clean; use before tagging."
+    )
     args = parser.parse_args()
 
     require(shutil.which("node") is not None, "node must be available")
