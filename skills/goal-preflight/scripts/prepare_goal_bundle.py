@@ -192,7 +192,7 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
             continue
         try:
             report = read_json(candidate)
-        except Exception:  # noqa: BLE001
+        except (SystemExit, Exception):  # noqa: BLE001 - tolerant read: treat unreadable/non-object as absent
             continue
         if routes_verified(report) and report_matches_config(report, config, config_sha256=config_sha256):
             return candidate
@@ -273,7 +273,7 @@ def top_defects_from_report(path: Path, *, limit: int = 5) -> list[str]:
         return []
     try:
         payload = read_json(path)
-    except Exception:  # noqa: BLE001
+    except (SystemExit, Exception):  # noqa: BLE001 - tolerant read: treat unreadable/non-object as absent
         return []
     raw_items = payload.get("defects") or payload.get("errors") or payload.get("failures") or []
     if not isinstance(raw_items, list):
@@ -445,7 +445,7 @@ def route_availability_verified(candidate: dict | None) -> bool:
         return False
     try:
         check = read_json(path)
-    except Exception:  # noqa: BLE001
+    except (SystemExit, Exception):  # noqa: BLE001 - tolerant read: treat unreadable/non-object as absent
         return False
     summary = check.get("summary") if isinstance(check.get("summary"), dict) else {}
     if summary.get("route_verification_status") == "routes_verified":
@@ -681,7 +681,7 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
     )
     try:
         config_data = read_json(config)
-    except Exception:  # noqa: BLE001
+    except (SystemExit, Exception):  # noqa: BLE001 - tolerant read: treat unreadable/non-object as absent
         config_data = {}
     candidate = {
         "config_path": config.as_posix(),
