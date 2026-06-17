@@ -11,6 +11,7 @@ import os
 import tempfile
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import NamedTuple
 
 
 def _load_module(name: str, path: Path):
@@ -298,15 +299,35 @@ def load_or_create_ledger(path: Path, spec: dict, manifest_path: Path, *, create
     return ledger
 
 
-def replay(
-    ledger: dict,
-    item_ids: list[str],
-    dependencies: dict[str, list[str]],
-    capacity: int,
-    *,
-    allow_relaunch: bool = False,
-    relaunch_reason_codes: set[str] | None = None,
-) -> dict:
+class _ReplayLedgerState(NamedTuple):
+    """Collections produced by reducing a scheduler ledger's event stream.
+
+    Mirrors the exact local variables the inlined replay loop maintained; the
+    orchestrator consumes them in the identical downstream order.
+    """
+
+    active: set[str]
+    ready: set[str]
+    launched: set[str]
+    finished: set[str]
+    closed: set[str]
+    blocked: set[str]
+    deferred: set[str]
+    under_capacity: set[str]
+    blocked_excuses: set[str]
+    deferred_excuses: set[str]
+    under_capacity_excuses: set[str]
+    finished_status: dict[str, str]
+    blocked_reason_codes: dict[str, str]
+    max_observed_active: int
+
+
+def _reduce_ledger_events(ledger: dict, capacity: int, known: set[str]) -> _ReplayLedgerState:
+    """Reduce the ledger event stream into scheduler state sets.
+
+    Identical to the inlined replay loop: same validation order, same raises,
+    same set/dict mutations event-by-event.
+    """
     active: set[str] = set()
     ready: set[str] = set()
     launched: set[str] = set()
@@ -321,7 +342,6 @@ def replay(
     finished_status: dict[str, str] = {}
     blocked_reason_codes: dict[str, str] = {}
     max_observed_active = 0
-    known = set(item_ids)
     for index, event in enumerate(ledger.get("events", [])):
         if not isinstance(event, dict):
             raise SystemExit(f"scheduler events[{index}] must be an object")
@@ -388,49 +408,138 @@ def replay(
             pass
         else:
             raise SystemExit(f"scheduler events[{index}].event is unsupported: {name!r}")
+    return _ReplayLedgerState(
+        active=active,
+        ready=ready,
+        launched=launched,
+        finished=finished,
+        closed=closed,
+        blocked=blocked,
+        deferred=deferred,
+        under_capacity=under_capacity,
+        blocked_excuses=blocked_excuses,
+        deferred_excuses=deferred_excuses,
+        under_capacity_excuses=under_capacity_excuses,
+        finished_status=finished_status,
+        blocked_reason_codes=blocked_reason_codes,
+        max_observed_active=max_observed_active,
+    )
 
-    def is_repair_relaunch(item_id: str) -> bool:
-        if not (
-            allow_relaunch and item_id in launched and item_id in closed and finished_status.get(item_id) != "pass"
+
+def _is_repair_relaunch(
+    item_id: str,
+    state: _ReplayLedgerState,
+    *,
+    allow_relaunch: bool,
+    relaunch_reason_codes: set[str] | None,
+) -> bool:
+    """Repair-relaunch predicate, identical to the inlined ``is_repair_relaunch`` closure."""
+    if not (
+        allow_relaunch
+        and item_id in state.launched
+        and item_id in state.closed
+        and state.finished_status.get(item_id) != "pass"
+    ):
+        return False
+    if relaunch_reason_codes is None:
+        return True
+    return state.blocked_reason_codes.get(item_id) in relaunch_reason_codes
+
+
+def _replay_eligible_ids(
+    item_ids: list[str],
+    dependencies: dict[str, list[str]],
+    state: _ReplayLedgerState,
+    *,
+    allow_relaunch: bool,
+    relaunch_reason_codes: set[str] | None,
+) -> list[str]:
+    """Eligible-id computation, identical to the inlined ``eligible_ids`` closure."""
+    eligible = []
+    for item_id in item_ids:
+        if item_id in state.active:
+            continue
+        if item_id in state.launched and (
+            item_id not in state.closed
+            or state.finished_status.get(item_id) == "pass"
+            or not _is_repair_relaunch(
+                item_id,
+                state,
+                allow_relaunch=allow_relaunch,
+                relaunch_reason_codes=relaunch_reason_codes,
+            )
         ):
-            return False
-        if relaunch_reason_codes is None:
-            return True
-        return blocked_reason_codes.get(item_id) in relaunch_reason_codes
+            continue
+        deps = dependencies.get(item_id, [])
+        if all(dep in state.closed and state.finished_status.get(dep) == "pass" for dep in deps):
+            eligible.append(item_id)
+    return eligible
 
-    def eligible_ids() -> list[str]:
-        eligible = []
-        for item_id in item_ids:
-            if item_id in active:
-                continue
-            if item_id in launched and (
-                item_id not in closed or finished_status.get(item_id) == "pass" or not is_repair_relaunch(item_id)
-            ):
-                continue
-            deps = dependencies.get(item_id, [])
-            if all(dep in closed and finished_status.get(dep) == "pass" for dep in deps):
-                eligible.append(item_id)
-        return eligible
 
-    eligible = eligible_ids()
-    excused = blocked_excuses | deferred_excuses | under_capacity_excuses
-    unexcused = [item_id for item_id in eligible if item_id not in excused or is_repair_relaunch(item_id)]
-    launchable = [item_id for item_id in unexcused if item_id not in launched or is_repair_relaunch(item_id)]
+def _assemble_replay_state(
+    item_ids: list[str],
+    capacity: int,
+    state: _ReplayLedgerState,
+    eligible: list[str],
+    unexcused: list[str],
+    launchable: list[str],
+) -> dict:
+    """Build the public replay result dict, identical to the inlined return."""
     return {
-        "active": [item_id for item_id in item_ids if item_id in active],
-        "ready": [item_id for item_id in item_ids if item_id in ready],
-        "launched": [item_id for item_id in item_ids if item_id in launched],
-        "finished": [item_id for item_id in item_ids if item_id in finished],
-        "closed": [item_id for item_id in item_ids if item_id in closed],
-        "blocked": [item_id for item_id in item_ids if item_id in blocked],
-        "deferred": [item_id for item_id in item_ids if item_id in deferred or item_id in under_capacity],
-        "finished_status": finished_status,
+        "active": [item_id for item_id in item_ids if item_id in state.active],
+        "ready": [item_id for item_id in item_ids if item_id in state.ready],
+        "launched": [item_id for item_id in item_ids if item_id in state.launched],
+        "finished": [item_id for item_id in item_ids if item_id in state.finished],
+        "closed": [item_id for item_id in item_ids if item_id in state.closed],
+        "blocked": [item_id for item_id in item_ids if item_id in state.blocked],
+        "deferred": [
+            item_id for item_id in item_ids if item_id in state.deferred or item_id in state.under_capacity
+        ],
+        "finished_status": state.finished_status,
         "eligible": eligible,
         "unexcused": unexcused,
         "launchable": launchable,
-        "remaining_capacity": max(0, capacity - len(active)),
-        "max_observed_active": max_observed_active,
+        "remaining_capacity": max(0, capacity - len(state.active)),
+        "max_observed_active": state.max_observed_active,
     }
+
+
+def replay(
+    ledger: dict,
+    item_ids: list[str],
+    dependencies: dict[str, list[str]],
+    capacity: int,
+    *,
+    allow_relaunch: bool = False,
+    relaunch_reason_codes: set[str] | None = None,
+) -> dict:
+    known = set(item_ids)
+    state = _reduce_ledger_events(ledger, capacity, known)
+    eligible = _replay_eligible_ids(
+        item_ids,
+        dependencies,
+        state,
+        allow_relaunch=allow_relaunch,
+        relaunch_reason_codes=relaunch_reason_codes,
+    )
+    excused = state.blocked_excuses | state.deferred_excuses | state.under_capacity_excuses
+    unexcused = [
+        item_id
+        for item_id in eligible
+        if item_id not in excused
+        or _is_repair_relaunch(
+            item_id, state, allow_relaunch=allow_relaunch, relaunch_reason_codes=relaunch_reason_codes
+        )
+    ]
+    launchable = [
+        item_id
+        for item_id in unexcused
+        if item_id not in state.launched
+        or _is_repair_relaunch(
+            item_id, state, allow_relaunch=allow_relaunch, relaunch_reason_codes=relaunch_reason_codes
+        )
+    ]
+    return _assemble_replay_state(item_ids, capacity, state, eligible, unexcused, launchable)
 
 
 def append_event(

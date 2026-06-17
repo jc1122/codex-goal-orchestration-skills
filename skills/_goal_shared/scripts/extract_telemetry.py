@@ -8,7 +8,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 from datetime import datetime
 
 
@@ -534,132 +534,180 @@ def build_telemetry(
     }
 
 
-def build_debug_telemetry(
+class _DebugAttemptInputs(NamedTuple):
+    """Per-attempt path/stat inputs derived from a debug-telemetry attempt spec.
+
+    Groups the values the inlined loop computed up front; carries identical data
+    in the identical evaluation order.
+    """
+
+    event_log_paths: list[Path]
+    probe_log_paths: list[Path]
+    event_logs: list[dict[str, Any]]
+    probe_logs: list[dict[str, Any]]
+    called: bool
+    retry_ordinal: str
+    timeout_seconds: int | None
+    timed_out: bool | None
+    execution: dict[str, Any] | None
+
+
+def _debug_attempt_inputs(packet_dir: Path, spec: dict[str, Any]) -> _DebugAttemptInputs:
+    """Compute path/stat inputs for one debug attempt, identical to the inlined block."""
+    event_log_paths = [packet_dir / str(path) for path in spec.get("event_logs", []) if isinstance(path, str)]
+    probe_log_paths = [packet_dir / str(path) for path in spec.get("probe_logs", []) if isinstance(path, str)]
+    event_logs = [file_stats(path) for path in event_log_paths]
+    probe_logs = [file_stats(path) for path in probe_log_paths]
+    called = any(item["exists"] for item in event_logs + probe_logs)
+    retry_ordinal = _infer_retry_ordinal(packet_dir, spec.get("retry_ordinal"))
+    timeout_seconds = spec.get("timeout_seconds")
+    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+        timeout_seconds = None
+    timed_out = _attempt_timeout_detected(event_log_paths + probe_log_paths)
+    timed_out = bool(timed_out) if isinstance(timed_out, bool) else None
+    execution = _normalize_execution(spec.get("execution"))
+    return _DebugAttemptInputs(
+        event_log_paths=event_log_paths,
+        probe_log_paths=probe_log_paths,
+        event_logs=event_logs,
+        probe_logs=probe_logs,
+        called=called,
+        retry_ordinal=retry_ordinal,
+        timeout_seconds=timeout_seconds,
+        timed_out=timed_out,
+        execution=execution,
+    )
+
+
+def _resolve_attempt_timing_initial(
+    inputs: _DebugAttemptInputs,
+    packet_timing: dict[str, Any] | None,
+) -> tuple[dict[str, Any], str | None]:
+    """First timing-resolution phase (jsonl scan + packet fallback + default).
+
+    Identical to the inlined lines preceding the determinism-artifact appends.
+    Returns the resolved ``attempt_timing`` dict and ``timing_unsupported_reason``.
+    """
+    attempt_timing = None
+    timing_unsupported_reason = None
+    for path in inputs.event_log_paths + inputs.probe_log_paths:
+        attempt_timing = _timing_from_jsonl(path)
+        if attempt_timing is not None:
+            break
+    if inputs.called and packet_timing is not None and attempt_timing is None:
+        attempt_timing = packet_timing
+    elif packet_timing is not None and isinstance(attempt_timing, dict):
+        packet_timed_out = packet_timing.get("timed_out")
+        event_timed_out = attempt_timing.get("timed_out")
+        if packet_timed_out is not None and event_timed_out is None:
+            attempt_timing["timed_out"] = packet_timed_out
+    if attempt_timing is None:
+        attempt_timing = {
+            "started_at": None,
+            "completed_at": None,
+            "elapsed_seconds": None,
+            "timed_out": inputs.timed_out,
+            "timing_source": "timeout_text_scan" if inputs.timed_out is not None else "unknown",
+        }
+        timing_unsupported_reason = "attempt_timings_unavailable"
+    return attempt_timing, timing_unsupported_reason
+
+
+def _finalize_attempt_timing(
+    attempt_timing: dict[str, Any],
+    timing_unsupported_reason: str | None,
+    inputs: _DebugAttemptInputs,
+    packet_timing: dict[str, Any] | None,
+) -> str | None:
+    """Second timing-resolution phase (run after determinism appends + usage).
+
+    Mutates ``attempt_timing`` in place exactly as the inlined block did and
+    returns the updated ``timing_unsupported_reason``.
+    """
+    if attempt_timing.get("started_at") is not None and attempt_timing.get("completed_at") is not None:
+        timing_unsupported_reason = None
+    if attempt_timing.get("timed_out") is None and inputs.timed_out is not None:
+        attempt_timing["timed_out"] = inputs.timed_out
+    if (
+        attempt_timing.get("timed_out") is None
+        and packet_timing is not None
+        and packet_timing.get("timed_out") is not None
+    ):
+        attempt_timing["timed_out"] = packet_timing.get("timed_out")
+    if timing_unsupported_reason is None and inputs.called and attempt_timing.get("timed_out") is None:
+        timing_unsupported_reason = "timing_unsupported_or_missing"
+    return timing_unsupported_reason
+
+
+def _build_debug_attempt(
     *,
-    packet_dir: Path,
+    index: int,
+    spec: dict[str, Any],
     packet_id: str,
     role: str,
+    inputs: _DebugAttemptInputs,
+    accepted: bool,
+    usage: dict[str, int] | None,
+    not_executed_reason: str | None,
+    timing_unsupported_reason: str | None,
+    attempt_timing: dict[str, Any],
+) -> dict[str, Any]:
+    """Assemble one debug-attempt record, identical to the inlined dict literal."""
+    attempt_id = _stable_attempt_id(
+        packet_id=packet_id,
+        role=role,
+        alias=str(spec.get("alias", "")),
+        provider=str(spec.get("provider", "")),
+        model=str(spec.get("model", "")),
+        command=str(spec.get("command", "")),
+        index=index,
+        retry_ordinal=inputs.retry_ordinal,
+    )
+    return {
+        "alias": spec.get("alias", ""),
+        "provider": spec.get("provider", ""),
+        "model": spec.get("model", ""),
+        "effort": spec.get("effort") or None,
+        "command": spec.get("command", ""),
+        "timeout_seconds": inputs.timeout_seconds,
+        "attempt_id": attempt_id,
+        "retry_ordinal": _coerce_str_none(inputs.retry_ordinal),
+        "candidate_attempts_index": index + 1,
+        "not_executed_reason": not_executed_reason,
+        "called": inputs.called,
+        "accepted": accepted,
+        "execution": inputs.execution,
+        "status_parse": spec.get("status_parse"),
+        "route_health": spec.get("route_health") if isinstance(spec.get("route_health"), dict) else None,
+        "stop_reason": spec.get("stop_reason"),
+        "provenance_level": _coerce_str_none(spec.get("provenance_level")),
+        "usage": usage,
+        "timing_unsupported_reason": timing_unsupported_reason,
+        "timing": {
+            "configured_timeout_seconds": inputs.timeout_seconds,
+            "started_at": attempt_timing.get("started_at"),
+            "completed_at": attempt_timing.get("completed_at"),
+            "elapsed_seconds": attempt_timing.get("elapsed_seconds"),
+            "timed_out": attempt_timing.get("timed_out"),
+            "timing_source": attempt_timing.get("timing_source"),
+        },
+    }
+
+
+def _assemble_debug_telemetry(
+    *,
+    packet_id: str,
+    role: str,
+    route_class: str | None,
     output_name: str,
     prompt_name: str,
-    attempt_specs: list[dict[str, Any]],
-    output_json: dict[str, Any] | None,
-    output_stats: dict[str, Any],
     prompt_stats: dict[str, Any],
+    output_stats: dict[str, Any],
     telemetry: dict[str, Any],
+    attempts: list[dict[str, Any]],
+    determinism_artifacts: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    route_class = (
-        output_json.get("route_class")
-        if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str)
-        else None
-    )
-    attempts: list[dict[str, Any]] = []
-    packet_timing = _packet_debug_timing(packet_dir)
-    determinism_artifacts: list[dict[str, Any]] = [
-        _artifact_hash_record(packet_dir / prompt_name, "prompt"),
-        _artifact_hash_record(packet_dir / output_name, "output"),
-    ]
-    for index, spec in enumerate(attempt_specs):
-        event_log_paths = [packet_dir / str(path) for path in spec.get("event_logs", []) if isinstance(path, str)]
-        probe_log_paths = [packet_dir / str(path) for path in spec.get("probe_logs", []) if isinstance(path, str)]
-        event_logs = [file_stats(path) for path in event_log_paths]
-        probe_logs = [file_stats(path) for path in probe_log_paths]
-        called = any(item["exists"] for item in event_logs + probe_logs)
-        retry_ordinal = _infer_retry_ordinal(packet_dir, spec.get("retry_ordinal"))
-        timeout_seconds = spec.get("timeout_seconds")
-        if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
-            timeout_seconds = None
-        timed_out = _attempt_timeout_detected(event_log_paths + probe_log_paths)
-        timed_out = bool(timed_out) if isinstance(timed_out, bool) else None
-        execution = _normalize_execution(spec.get("execution"))
-        attempt_timing = None
-        timing_unsupported_reason = None
-        for path in event_log_paths + probe_log_paths:
-            attempt_timing = _timing_from_jsonl(path)
-            if attempt_timing is not None:
-                break
-        accepted = bool(telemetry["accepted_alias"] == spec.get("alias", ""))
-        if called and packet_timing is not None and attempt_timing is None:
-            attempt_timing = packet_timing
-        elif packet_timing is not None and isinstance(attempt_timing, dict):
-            packet_timed_out = packet_timing.get("timed_out")
-            event_timed_out = attempt_timing.get("timed_out")
-            if packet_timed_out is not None and event_timed_out is None:
-                attempt_timing["timed_out"] = packet_timed_out
-        if attempt_timing is None:
-            attempt_timing = {
-                "started_at": None,
-                "completed_at": None,
-                "elapsed_seconds": None,
-                "timed_out": timed_out,
-                "timing_source": "timeout_text_scan" if timed_out is not None else "unknown",
-            }
-            timing_unsupported_reason = "attempt_timings_unavailable"
-        for path in event_log_paths:
-            determinism_artifacts.append(_artifact_hash_record(path, "event_logs"))
-        for path in probe_log_paths:
-            determinism_artifacts.append(_artifact_hash_record(path, "probe_logs"))
-        usage = sum_usage(event_logs + probe_logs)
-        if attempt_timing.get("started_at") is not None and attempt_timing.get("completed_at") is not None:
-            timing_unsupported_reason = None
-        if attempt_timing.get("timed_out") is None and timed_out is not None:
-            attempt_timing["timed_out"] = timed_out
-        if (
-            attempt_timing.get("timed_out") is None
-            and packet_timing is not None
-            and packet_timing.get("timed_out") is not None
-        ):
-            attempt_timing["timed_out"] = packet_timing.get("timed_out")
-        if timing_unsupported_reason is None and called and attempt_timing.get("timed_out") is None:
-            timing_unsupported_reason = "timing_unsupported_or_missing"
-        not_executed_reason = _normalize_not_executed_reason(
-            index=index,
-            called_before=any(item.get("called") for item in attempts),
-            called=called,
-            output_json=output_json,
-            spec=spec,
-        )
-        attempt_id = _stable_attempt_id(
-            packet_id=packet_id,
-            role=role,
-            alias=str(spec.get("alias", "")),
-            provider=str(spec.get("provider", "")),
-            model=str(spec.get("model", "")),
-            command=str(spec.get("command", "")),
-            index=index,
-            retry_ordinal=retry_ordinal,
-        )
-        attempts.append(
-            {
-                "alias": spec.get("alias", ""),
-                "provider": spec.get("provider", ""),
-                "model": spec.get("model", ""),
-                "effort": spec.get("effort") or None,
-                "command": spec.get("command", ""),
-                "timeout_seconds": timeout_seconds,
-                "attempt_id": attempt_id,
-                "retry_ordinal": _coerce_str_none(retry_ordinal),
-                "candidate_attempts_index": index + 1,
-                "not_executed_reason": not_executed_reason,
-                "called": called,
-                "accepted": accepted,
-                "execution": execution,
-                "status_parse": spec.get("status_parse"),
-                "route_health": spec.get("route_health") if isinstance(spec.get("route_health"), dict) else None,
-                "stop_reason": spec.get("stop_reason"),
-                "provenance_level": _coerce_str_none(spec.get("provenance_level")),
-                "usage": usage,
-                "timing_unsupported_reason": timing_unsupported_reason,
-                "timing": {
-                    "configured_timeout_seconds": timeout_seconds,
-                    "started_at": attempt_timing.get("started_at"),
-                    "completed_at": attempt_timing.get("completed_at"),
-                    "elapsed_seconds": attempt_timing.get("elapsed_seconds"),
-                    "timed_out": attempt_timing.get("timed_out"),
-                    "timing_source": attempt_timing.get("timing_source"),
-                },
-            }
-        )
-
+    """Build the final debug-telemetry dict, identical to the inlined return."""
     return {
         "schema_version": 1,
         "packet_id": packet_id,
@@ -705,6 +753,78 @@ def build_debug_telemetry(
             "route_class": route_class,
         },
     }
+
+
+def build_debug_telemetry(
+    *,
+    packet_dir: Path,
+    packet_id: str,
+    role: str,
+    output_name: str,
+    prompt_name: str,
+    attempt_specs: list[dict[str, Any]],
+    output_json: dict[str, Any] | None,
+    output_stats: dict[str, Any],
+    prompt_stats: dict[str, Any],
+    telemetry: dict[str, Any],
+) -> dict[str, Any]:
+    route_class = (
+        output_json.get("route_class")
+        if isinstance(output_json, dict) and isinstance(output_json.get("route_class"), str)
+        else None
+    )
+    attempts: list[dict[str, Any]] = []
+    packet_timing = _packet_debug_timing(packet_dir)
+    determinism_artifacts: list[dict[str, Any]] = [
+        _artifact_hash_record(packet_dir / prompt_name, "prompt"),
+        _artifact_hash_record(packet_dir / output_name, "output"),
+    ]
+    for index, spec in enumerate(attempt_specs):
+        inputs = _debug_attempt_inputs(packet_dir, spec)
+        attempt_timing, timing_unsupported_reason = _resolve_attempt_timing_initial(inputs, packet_timing)
+        accepted = bool(telemetry["accepted_alias"] == spec.get("alias", ""))
+        for path in inputs.event_log_paths:
+            determinism_artifacts.append(_artifact_hash_record(path, "event_logs"))
+        for path in inputs.probe_log_paths:
+            determinism_artifacts.append(_artifact_hash_record(path, "probe_logs"))
+        usage = sum_usage(inputs.event_logs + inputs.probe_logs)
+        timing_unsupported_reason = _finalize_attempt_timing(
+            attempt_timing, timing_unsupported_reason, inputs, packet_timing
+        )
+        not_executed_reason = _normalize_not_executed_reason(
+            index=index,
+            called_before=any(item.get("called") for item in attempts),
+            called=inputs.called,
+            output_json=output_json,
+            spec=spec,
+        )
+        attempts.append(
+            _build_debug_attempt(
+                index=index,
+                spec=spec,
+                packet_id=packet_id,
+                role=role,
+                inputs=inputs,
+                accepted=accepted,
+                usage=usage,
+                not_executed_reason=not_executed_reason,
+                timing_unsupported_reason=timing_unsupported_reason,
+                attempt_timing=attempt_timing,
+            )
+        )
+
+    return _assemble_debug_telemetry(
+        packet_id=packet_id,
+        role=role,
+        route_class=route_class,
+        output_name=output_name,
+        prompt_name=prompt_name,
+        prompt_stats=prompt_stats,
+        output_stats=output_stats,
+        telemetry=telemetry,
+        attempts=attempts,
+        determinism_artifacts=determinism_artifacts,
+    )
 
 
 def main() -> int:
