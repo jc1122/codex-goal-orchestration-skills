@@ -10,6 +10,7 @@ sys.path.insert(0, str(REPO / "skills" / "goal-preflight" / "scripts"))
 
 lpb = load_module("skills/goal-preflight/scripts/lint_preflight_brief.py", "lpb_dr")
 rgb = load_module("skills/goal-preflight/scripts/render_goal_bootloader.py", "rgb_dr")
+pgb = load_module("skills/goal-preflight/scripts/prepare_goal_bundle.py", "pgb_dr")
 
 
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
@@ -54,3 +55,24 @@ def test_cleanup_plan_blunt_remove_when_no_config(tmp_path):
     assert plan["preserve_config_artifacts"] == []
     blanket = f"rm -rf {shlex.quote(bundle.as_posix())}"
     assert blanket in plan["cleanup_commands"]
+
+
+# --- report_matches_config: recorded check-time sha is the freshness anchor ---
+def test_report_matches_config_rejects_stale_by_recorded_sha(tmp_path):
+    config = tmp_path / "goal.config.json"
+    config.write_text('{"a": 1}\n', encoding="utf-8")
+    live = pgb.sha256_file(config)
+    # The check recorded a different sha => the config changed since the check => stale.
+    stale = {"config_path": str(config), "config_sha256": "deadbeef"}
+    assert pgb.report_matches_config(stale, config) is False
+    # The check recorded the matching sha => fresh.
+    fresh = {"config_path": str(config), "config_sha256": live}
+    assert pgb.report_matches_config(fresh, config) is True
+
+
+def test_report_matches_config_legacy_report_falls_back_to_path(tmp_path):
+    config = tmp_path / "goal.config.json"
+    config.write_text('{"a": 1}\n', encoding="utf-8")
+    # A report written before config_sha256 existed still matches by path/content.
+    legacy = {"config_path": str(config)}
+    assert pgb.report_matches_config(legacy, config) is True

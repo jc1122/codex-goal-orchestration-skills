@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import importlib.util
 import json
 import os
@@ -1221,6 +1222,18 @@ def build_check_context(args: argparse.Namespace) -> CheckContext:
     )
 
 
+def _config_sha256(path: Path) -> str | None:
+    """sha256 of the config file bytes the check validated (freshness anchor)."""
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
 def base_check_result(
     args: argparse.Namespace,
     ctx: CheckContext,
@@ -1240,6 +1253,7 @@ def base_check_result(
         "config_validation_mode": ctx.config_validation,
         "command": ctx.command,
         "config_path": args.config.resolve().as_posix(),
+        "config_sha256": _config_sha256(args.config),
         "profile": ctx.config.get("profile"),
         "checked_roles": checked_roles,
         "accepted_routes": accepted_routes,

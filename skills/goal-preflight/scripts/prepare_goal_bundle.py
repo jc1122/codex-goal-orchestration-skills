@@ -71,11 +71,20 @@ def config_path_from_report(report: dict) -> Path | None:
 
 
 def report_matches_config(report: dict, config: Path, config_sha256: str | None = None) -> bool:
-    report_config = config_path_from_report(report)
     config_sha = config_sha256
     if config_sha is None:
         config_sha = sha256_file(config)
-    if report_config is None or config_sha is None:
+    if config_sha is None:
+        return False
+    recorded_sha = report.get("config_sha256")
+    if isinstance(recorded_sha, str) and recorded_sha:
+        # Authoritative freshness check: the candidate config must be byte-identical
+        # to what the check actually validated. Path equality alone is not enough —
+        # the file may have been edited after the check ran.
+        return recorded_sha == config_sha
+    # Backward compatibility for check reports written before config_sha256 existed.
+    report_config = config_path_from_report(report)
+    if report_config is None:
         return False
     try:
         if report_config.resolve() == config.resolve():
