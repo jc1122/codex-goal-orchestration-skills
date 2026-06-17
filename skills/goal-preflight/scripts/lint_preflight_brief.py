@@ -319,6 +319,13 @@ def lint_verification_and_dod(defects: list[dict], branch: dict, branch_path: st
     if not isinstance(work_items, list) or not work_items:
         defect(defects, f"{branch_path}.work_items", "critical", "must contain at least one work item")
         return
+    if len(work_items) > CREATE_GOAL_BUNDLE.MAX_WORKER_PACKETS_PER_BRANCH:
+        defect(
+            defects,
+            f"{branch_path}.work_items",
+            "major",
+            f"must contain at most {CREATE_GOAL_BUNDLE.MAX_WORKER_PACKETS_PER_BRANCH} work items",
+        )
     for item_index, item in enumerate(work_items):
         item_path = f"{branch_path}.work_items[{item_index}]"
         if not isinstance(item, dict):

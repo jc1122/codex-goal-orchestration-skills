@@ -309,6 +309,7 @@ MANIFEST_REQUIRED_KEYS = (
     "lite_model_policy",
     "lite_advisor_policy",
     "review_model_policy",
+    "research_worker_policy",
     "route_contract",
     "route_contract_sha256",
     "execution_strategy",
@@ -391,6 +392,7 @@ BRANCH_REQUIRED_KEYS = (
 BRANCH_PROMPT_PHRASES_BEFORE_SCHEDULER = (
     "Objective",
     "Scope",
+    "Base ref",
     "Depends on branches",
     "Work Items",
     "Runtime rules appendix",
@@ -429,6 +431,7 @@ BRANCH_PROMPT_PHRASES_AFTER_SCHEDULER = (
     "validate_branch_status.py --manifest",
     "Stop Conditions",
     "git diff --check",
+    "...HEAD",
     "semantic_input_hashes",
 )
 RUNTIME_RULES_REQUIRED_PHRASES = (
@@ -1739,6 +1742,15 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
         defect("job.manifest.json", "critical", "branch ids must not appear in more than one wave")
     if set(wave_branch_ids) != set(ids):
         defect("job.manifest.json", "critical", "waves must cover exactly the manifest branch ids")
+    declared_wave_ids = {wid for wid in wave_ids if isinstance(wid, str)}
+    for branch in branches:
+        branch_wave = branch.get("wave")
+        if branch_wave is not None and branch_wave not in declared_wave_ids:
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch.get('id')!r} references unknown wave {branch_wave!r}",
+            )
     if isinstance(branches, list) and not has_serial_reason:
         chain = longest_branch_chain(branches)
         if len(branches) > 2 and chain >= len(branches) - 1:
@@ -1818,6 +1830,7 @@ def _lint_runtime_rules(defect, bundle_dir: Path, manifest: dict) -> None:
 
 def _lint_bootloader_and_report(defect, bundle_dir: Path, manifest: dict) -> None:
     """Validate the bootloader and PREFLIGHT_REPORT readiness messaging."""
+    repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
     bootloader_path = bundle_dir / "goal-bootloader.md"
     if not bootloader_path.exists():
         defect("goal-bootloader.md", "critical", "bootloader is missing")
@@ -1826,7 +1839,6 @@ def _lint_bootloader_and_report(defect, bundle_dir: Path, manifest: dict) -> Non
         lint_generated_prompt_text(defect, "goal-bootloader.md", bootloader)
         if len(bootloader) > 4000:
             defect("goal-bootloader.md", "critical", "bootloader exceeds 4000 characters")
-        repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
         runtime_blocked = repo_status.get("repo_is_git") is False or repo_status.get("base_ref_status") == "missing"
         if runtime_blocked:
             if "BLOCKED READINESS" not in bootloader:
@@ -1851,21 +1863,29 @@ def _lint_bootloader_and_report(defect, bundle_dir: Path, manifest: dict) -> Non
                 message_prefix="bootloader missing phrase",
                 case_sensitive=True,
             )
-        report_path = bundle_dir / "PREFLIGHT_REPORT.md"
-        if report_path.exists():
-            report_text = report_path.read_text(encoding="utf-8")
-            if repo_status.get("repo_is_git") is False and "Runtime readiness gate: blocked" not in report_text:
-                defect(
-                    "PREFLIGHT_REPORT.md",
-                    "major",
-                    "preflight report must surface the non-git runtime readiness blocker",
-                )
-            if "harness check status is pass" in report_text:
-                defect(
-                    "PREFLIGHT_REPORT.md",
-                    "major",
-                    "preflight report must not label config compatibility as harness/route availability pass",
-                )
+    report_path = bundle_dir / "PREFLIGHT_REPORT.md"
+    if not report_path.exists():
+        defect("PREFLIGHT_REPORT.md", "critical", "preflight report is missing")
+    else:
+        report_text = report_path.read_text(encoding="utf-8")
+        if repo_status.get("repo_is_git") is False and "Runtime readiness gate: blocked" not in report_text:
+            defect(
+                "PREFLIGHT_REPORT.md",
+                "major",
+                "preflight report must surface the non-git runtime readiness blocker",
+            )
+        if "harness check status is pass" in report_text:
+            defect(
+                "PREFLIGHT_REPORT.md",
+                "major",
+                "preflight report must not label config compatibility as harness/route availability pass",
+            )
+        if "Waves are dependency-aware scheduling/order groups" not in report_text:
+            defect(
+                "PREFLIGHT_REPORT.md",
+                "major",
+                "preflight report must state waves are dependency-aware scheduling/order groups",
+            )
 
 
 def _lint_goal_config_selection(defect, bundle_dir: Path) -> None:
