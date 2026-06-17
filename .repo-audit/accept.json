@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "accept": [
+    {
+      "match": {"kind": "rule", "leaf": "hotspot"},
+      "reason": "Repo-wide git-history churn / temporal-coupling. Advisory only and not code-fixable in source; the wave's hotspot lane mines whole-repo history and ignores --source-prefix, so it cannot be driven to zero by editing skill code."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "complexity"},
+      "reason": "Residual complexity after decomposing EVERY CC>40 god-function (lint() 407->17, validate_scheduler_ledger 127->17, validate_branch_status validators, render_branch_worktree main 150, summarize_telemetry, create_runtime_packet/runtime_packet_runner, reconcile_goal_run, check_goal_config, amendment_lib, validate_main_status, promote, extract_telemetry, scheduler_tick). Max CC is now <=40. The remaining CC 11-40 + function_nloc + parameter_count + MI findings are the irreducible idiom floor: pervasive defensive `x.get() if isinstance(x.get(),dict) else {}` guards (each counted as a branch) and the explicit keyword-threaded helpers produced by the decompositions. Advisory (Tier-2)."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "quality", "metric": "E501"},
+      "reason": "Irreducible long single-line string literals after `ruff format` (line-length 120): prompt/manifest templates, raise/defect error-message f-strings, and route-policy text. Wrapping would split string contents (changing generated output) for zero behavior value."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "quality", "metric": "SIM108"},
+      "reason": "Three if/else blocks left explicit because the ternary rewrite produces hard-to-read nested/mixed-precedence expressions; readability over the lint nit."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "duplication", "metric": "duplicate_tokens"},
+      "reason": "Standalone-script idiom by design. The skill scripts are intentionally self-contained: generated 36-line importlib wrapper shims, the per-script _load_module/sys.path bootstrap, and the read_json/write_json/sha256_file helpers are duplicated so each script runs standalone; the three runtime runners are deliberately decoupled. Genuine logic clones were extracted (source_record/add_if_exists -> amendment_lib); the rest must stay duplicated to preserve the standalone design."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "docs-consistency", "metric": "doc_path_missing"},
+      "reason": "Linter base-path false positives: references resolve bundle-relative / skill-relative (e.g. amendments/, lite/, scripts/..., ../../_goal_shared/...) and do not resolve from the repo root, but all targets exist. The standalone docs-consistency wave lane reports 0."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "dependency", "metric": "import_undeclared"},
+      "reason": "Standalone-script sibling imports (e.g. amendment_lib, render_bootloader) resolved at runtime via the per-script sys.path bootstrap; not missing PyPI dependencies."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "dependency", "metric": "declared_unused"},
+      "reason": "ruff/pyright are dev CLI tools declared in requirements-dev.txt / devDependencies and invoked as commands, not imported as modules; AST import scanning cannot see them."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B105"},
+      "reason": "False positive: bandit matches the string literals \"pass\"/\"partial\" (run/branch status outcome keys and sentinel values) as hardcoded passwords. No credentials are present anywhere in the package."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B603"},
+      "reason": "By design: deterministic subprocess launches of git / codex / the opencode-worker-bridge control script, always list-form argv with shell=False; base_ref and other interpolated values are validated (validate_base_ref). This is a CLI orchestration tool whose purpose is launching those processes."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B607"},
+      "reason": "By design: partial executable paths (git, codex, opencode_worker.py) are resolved via shutil.which / known skill roots; list-form, no shell. Expected for a CLI orchestration tool."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B404"},
+      "reason": "By design: `import subprocess` is required - this package's function is to launch and supervise model/CLI worker processes."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B112"},
+      "reason": "By design: try/except/continue in tolerant artifact/ledger parsers, intentionally skipping malformed entries rather than crashing the orchestrator."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B103"},
+      "reason": "By design: os.chmod(launch.sh, 0o755) makes the generated launcher script executable; world-writable bit is not set."
+    },
+    {
+      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B108"},
+      "reason": "By design: /dev/shm is used as a faster scratch root ONLY when writable (mkdir + exist_ok, writability-gated) with a packet-local fallback; it is a directory root, not a predictable-filename temp file (CWE-377 does not apply)."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_route_class_ladder", "metric": "dead_code_confidence"},
+      "reason": "False positive: public orchestration_contract API consumed by the skill runtimes (route-class ladder accessor); vulture cannot see cross-script importlib consumers."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "normalize_route_ladder", "metric": "dead_code_confidence"},
+      "reason": "False positive: public orchestration_contract API consumed by the skill runtimes (ladder normalization/validation); vulture cannot see cross-script importlib consumers."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "symbol": "is_worktree_dirty", "metric": "dead_code_confidence"},
+      "reason": "False positive: exercised by the preparedness fixtures (dirty-stop salvage path); vulture min-confidence 60 over-flags it."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "symbol": "clear_git_stdout_cache", "metric": "dead_code_confidence"},
+      "reason": "False positive: git-stdout cache invalidator retained as part of the cache API and referenced by preparedness fixtures; vulture over-flags."
+    }
+  ]
+}

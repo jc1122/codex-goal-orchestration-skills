@@ -388,7 +388,7 @@ def _stable_attempt_id(
             command or "-",
         ]
     )
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha1(key.encode("utf-8"), usedforsecurity=False).hexdigest()[:10]
     retry_segment = f":{retry_ordinal}" if retry_ordinal else ""
     return f"{packet_id}{retry_segment}:{role}:{index + 1:03d}:{digest}"
 

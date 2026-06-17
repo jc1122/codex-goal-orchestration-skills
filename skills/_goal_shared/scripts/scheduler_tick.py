@@ -492,9 +492,7 @@ def _assemble_replay_state(
         "finished": [item_id for item_id in item_ids if item_id in state.finished],
         "closed": [item_id for item_id in item_ids if item_id in state.closed],
         "blocked": [item_id for item_id in item_ids if item_id in state.blocked],
-        "deferred": [
-            item_id for item_id in item_ids if item_id in state.deferred or item_id in state.under_capacity
-        ],
+        "deferred": [item_id for item_id in item_ids if item_id in state.deferred or item_id in state.under_capacity],
         "finished_status": state.finished_status,
         "eligible": eligible,
         "unexcused": unexcused,

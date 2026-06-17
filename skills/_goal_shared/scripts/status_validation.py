@@ -269,9 +269,7 @@ def validate_telemetry_artifact(
             defect(defects, f"{path}.accepted_alias", "must match the accepted attempt alias")
     elif accepted_aliases:
         defect(defects, f"{path}.accepted_alias", "must be set when an attempt is marked accepted")
-    _validate_telemetry_totals(
-        defects, data, path, attempts_len=len(attempts), called_count=len(called_aliases)
-    )
+    _validate_telemetry_totals(defects, data, path, attempts_len=len(attempts), called_count=len(called_aliases))
     return data
 
 
@@ -1032,9 +1030,7 @@ def validate_scheduler_ledger(
             _handle_finish_event(defects, state, event, event_id, event_path)
             continue
         if event_name == "close":
-            refill_required = _handle_close_event(
-                defects, state, event_id, event_path, refill_required=refill_required
-            )
+            refill_required = _handle_close_event(defects, state, event_id, event_path, refill_required=refill_required)
             continue
         if event_name == "defer":
             _handle_defer_event(defects, state, event, event_id, event_path)

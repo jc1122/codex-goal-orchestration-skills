@@ -1060,9 +1060,7 @@ def deterministic_route_class_ladders(worker_policy: dict) -> dict[str, list[str
     }
 
 
-def _valid_route_class_ladder(
-    ladder: object, *, default_aliases: list[str], allowed_set: set[str]
-) -> list[str] | None:
+def _valid_route_class_ladder(ladder: object, *, default_aliases: list[str], allowed_set: set[str]) -> list[str] | None:
     if not isinstance(ladder, list) or not ladder:
         return None
     aliases = [alias for alias in ladder if isinstance(alias, str) and alias]
@@ -1767,9 +1765,7 @@ def _build_branch_record(original: dict, idx: int, *, job_id: str, repo_root: Pa
     bid = original.get("id") or branch_id(idx)
     bid = require_safe_id(str(bid).upper(), "branch id")
     branch_name = require_branch_name(original.get("branch_name") or f"{job_id}-{bid.lower()}")
-    worktree_path = require_relative_path(
-        original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path"
-    )
+    worktree_path = require_relative_path(original.get("worktree_path") or f".worktrees/{branch_name}", "worktree_path")
     max_workers = require_worker_limit(original.get("max_active_worker_packets", MAX_WORKER_PACKETS_PER_BRANCH))
     original_worker_parallelism = (
         original.get("worker_parallelism") if isinstance(original.get("worker_parallelism"), dict) else {}
@@ -1779,9 +1775,9 @@ def _build_branch_record(original: dict, idx: int, *, job_id: str, repo_root: Pa
         original.get("worker_serial_reasons", original_worker_parallelism.get("serial_reasons")),
         worker_serial_reason,
     )
-    worker_parallelization_rationale = nonempty_text(
-        original.get("worker_parallelization_rationale")
-    ) or nonempty_text(original_worker_parallelism.get("parallelization_rationale"))
+    worker_parallelization_rationale = nonempty_text(original.get("worker_parallelization_rationale")) or nonempty_text(
+        original_worker_parallelism.get("parallelization_rationale")
+    )
     branch_context = {
         "id": bid,
         "objective": nonempty_text(original.get("objective")),
@@ -2008,7 +2004,9 @@ def _compatibility_cap_defects(branch_cap: object, worker_cap: object) -> list[s
     return defects
 
 
-def _compatibility_check_defects(config_validation_mode: object, check_mode: object, check_status: object, check: dict | None) -> list[str]:
+def _compatibility_check_defects(
+    config_validation_mode: object, check_mode: object, check_status: object, check: dict | None
+) -> list[str]:
     defects: list[str] = []
     if check is None:
         defects.append("goal_config_check is required when goal_config is supplied")
@@ -2401,9 +2399,7 @@ def _ownership_command_record(
         uncovered_paths, ownership, work_item_id, dependency_recommendations
     )
     missing_owned_paths = [
-        path
-        for path in uncovered_paths
-        if not any(path == item["path"] for item in owning_branch_candidates)
+        path for path in uncovered_paths if not any(path == item["path"] for item in owning_branch_candidates)
     ]
     status = "pass" if not uncovered_paths else "needs_review"
     return {
@@ -3059,8 +3055,7 @@ def _manifest_branch_entry(
         "worker_parallelism": branch["worker_parallelism"],
         **(
             {"dependency_context_reason": branch["dependency_context_reason"]}
-            if isinstance(branch.get("dependency_context_reason"), str)
-            and branch["dependency_context_reason"].strip()
+            if isinstance(branch.get("dependency_context_reason"), str) and branch["dependency_context_reason"].strip()
             else {}
         ),
         **({"recovers_from": branch["recovers_from"]} if isinstance(branch.get("recovers_from"), list) else {}),
@@ -3077,8 +3072,7 @@ def _manifest_branch_entry(
         ),
         **(
             {"worker_contention_reason": branch["worker_contention_reason"]}
-            if isinstance(branch.get("worker_contention_reason"), str)
-            and branch["worker_contention_reason"].strip()
+            if isinstance(branch.get("worker_contention_reason"), str) and branch["worker_contention_reason"].strip()
             else {}
         ),
     }

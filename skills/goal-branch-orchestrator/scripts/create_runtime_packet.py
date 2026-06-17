@@ -2882,9 +2882,7 @@ def resolve_worker_routing(
         allow_route_pruning=args.allow_route_pruning,
     )
     catalog_path = (
-        resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True)
-        if args.model_catalog
-        else None
+        resolve_absolute_path(args.model_catalog, "--model-catalog", must_exist=True) if args.model_catalog else None
     )
     selected_ladder, model_catalog = apply_model_catalog_to_worker_ladder(
         selected_ladder,
@@ -2896,9 +2894,8 @@ def resolve_worker_routing(
         raise SystemExit("--selection-reason is required when --worker-route is supplied")
     if not selection_reason:
         if manifest_configured_worker_policy:
-            selection_reason = (
-                f"{route_class} route class selected from manifest worker_model_policy: "
-                + ", ".join(selected_ladder)
+            selection_reason = f"{route_class} route class selected from manifest worker_model_policy: " + ", ".join(
+                selected_ladder
             )
         else:
             selection_reason = default_selection_reason(route_class)

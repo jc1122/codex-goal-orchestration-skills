@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:7ce4d127ab1cfa5ae30a97bc3a5a7ae4fea1ca835134c110884814c49623ac41"
+    "source_fingerprint": "sha256:eb12d996afbbac75b7184fcd52c3401db3450d4234afc6b331fa8758a2b31750"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,34 +29,34 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3534,
-      "approx_tokens": 39483,
+      "lines": 3528,
+      "approx_tokens": 39470,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1842:normalize_brief:109l",
-        "3126:render_branch_prompt_text:105l",
-        "2510:build_runtime_index:96l",
-        "2934:manifest_from_normalized_brief:94l"
+        "1838:normalize_brief:109l",
+        "3120:render_branch_prompt_text:105l",
+        "2506:build_runtime_index:96l",
+        "2930:manifest_from_normalized_brief:94l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3392,
-      "approx_tokens": 33836,
+      "lines": 3389,
+      "approx_tokens": 33828,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "3155:main:234l",
+        "3152:main:234l",
         "2453:compact_launch_config:139l",
         "1247:compact_worker_context:116l",
-        "2827:resolve_worker_routing:114l"
+        "2827:resolve_worker_routing:111l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3515,
-      "approx_tokens": 33019,
+      "lines": 3513,
+      "approx_tokens": 33016,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "1918:run_opencode_bridge_model:280l",
@@ -68,13 +68,13 @@
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2791,
-      "approx_tokens": 31323,
+      "lines": 2808,
+      "approx_tokens": 31329,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2133:_lint_branch_worker_parallelism:133l",
+        "2139:_lint_branch_worker_parallelism:135l",
         "1097:validate_goal_config_manifest:121l",
-        "2595:lint:110l",
+        "2614:lint:108l",
         "1526:_lint_model_policies:107l"
       ]
     }

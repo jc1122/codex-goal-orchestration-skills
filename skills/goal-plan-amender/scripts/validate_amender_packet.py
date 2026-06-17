@@ -156,9 +156,7 @@ def validate_input_files(
             defect(defects, f"{item_path}.sha256", "does not match current source file")
 
 
-def _validate_telemetry_header(
-    defects: list[str], telemetry: dict, *, amendment_id: str, proposal_name: str
-) -> None:
+def _validate_telemetry_header(defects: list[str], telemetry: dict, *, amendment_id: str, proposal_name: str) -> None:
     if telemetry.get("schema_version") != 1:
         defect(defects, "$.telemetry.schema_version", "must be 1")
     if telemetry.get("packet_id") != amendment_id:

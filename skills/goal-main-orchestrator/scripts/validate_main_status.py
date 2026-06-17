@@ -342,9 +342,7 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
     telemetry_files = validate_telemetry_summary_files(
         defects, summary, summary_path, manifest_path=manifest_path, require_artifacts=require_artifacts
     )
-    totals = validate_telemetry_summary_totals(
-        defects, summary, telemetry_files, require_artifacts=require_artifacts
-    )
+    totals = validate_telemetry_summary_totals(defects, summary, telemetry_files, require_artifacts=require_artifacts)
     validate_telemetry_summary_premium(defects, summary)
     cost = validate_telemetry_summary_cost(defects, summary, totals)
     validate_telemetry_summary_mini_spark(defects, cost)
@@ -564,14 +562,9 @@ def validate_amendment_decision_record(
             defects, packet_validation_value, f"{item_path}.packet_validation_path"
         )
         if not packet_validation_path_text or not is_repo_relative_path(packet_validation_path_text):
-            defect(
-                defects, f"{item_path}.packet_validation_path", "must be a bundle-relative path without traversal"
-            )
+            defect(defects, f"{item_path}.packet_validation_path", "must be a bundle-relative path without traversal")
             return
-        if (
-            amendment_id
-            and packet_validation_path_text != f"amendments/{amendment_id}.packet/packet.validation.json"
-        ):
+        if amendment_id and packet_validation_path_text != f"amendments/{amendment_id}.packet/packet.validation.json":
             defect(
                 defects,
                 f"{item_path}.packet_validation_path",

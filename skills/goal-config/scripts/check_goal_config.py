@@ -1344,9 +1344,7 @@ def build_check_context(args: argparse.Namespace) -> CheckContext:
     )
 
 
-def run_for_preflight_mode(
-    args: argparse.Namespace, ctx: CheckContext
-) -> tuple[int | None, dict[str, Any] | None]:
+def run_for_preflight_mode(args: argparse.Namespace, ctx: CheckContext) -> tuple[int | None, dict[str, Any] | None]:
     config = ctx.config
     contract = ctx.contract
     failures = ctx.failures

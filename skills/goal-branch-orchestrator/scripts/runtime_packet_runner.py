@@ -3308,9 +3308,7 @@ def _review_handle_dirty_stop(
     output_nonempty: bool,
     packet_changed_files: list[str],
 ) -> int:
-    message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(
-        packet_changed_files
-    )
+    message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(packet_changed_files)
     attempt["failure_class"] = "dirty_worktree"
     attempt["failure_subclass"] = "read_only_attempt_left_dirty_worktree"
     (packet_dir / "dirty-worktree.blocked.txt").write_text(message + "\n", encoding="utf-8")

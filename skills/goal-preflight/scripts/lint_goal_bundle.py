@@ -1930,14 +1930,14 @@ class _BranchRouteTally(NamedTuple):
     default_normal_route_count: int
 
 
-def _lint_work_item_fields(defect, branch: dict, item: dict, item_path: str, source_attachment_labels: set[str], git_status: dict) -> None:
+def _lint_work_item_fields(
+    defect, branch: dict, item: dict, item_path: str, source_attachment_labels: set[str], git_status: dict
+) -> None:
     """Validate a single work item's id/packet_id/objective/worker_type/route fields and list fields."""
     item_id = item.get("id")
     packet_id = item.get("packet_id")
     expected_packet_id = (
-        f"{branch.get('id')}-{item_id}"
-        if isinstance(branch.get("id"), str) and isinstance(item_id, str)
-        else ""
+        f"{branch.get('id')}-{item_id}" if isinstance(branch.get("id"), str) and isinstance(item_id, str) else ""
     )
     if not isinstance(packet_id, str) or not SAFE_LABEL_RE.fullmatch(packet_id):
         defect("job.manifest.json", "critical", f"{item_path}.packet_id must match {SAFE_LABEL_RE.pattern}")
@@ -1991,7 +1991,15 @@ def _lint_work_item_fields(defect, branch: dict, item: dict, item_path: str, sou
                 )
 
 
-def _lint_work_items(defect, branch: dict, work_items: list, branch_owned_paths_value: list, source_attachment_labels: set[str], git_status: dict, tally: _BranchRouteTally) -> _BranchRouteTally:
+def _lint_work_items(
+    defect,
+    branch: dict,
+    work_items: list,
+    branch_owned_paths_value: list,
+    source_attachment_labels: set[str],
+    git_status: dict,
+    tally: _BranchRouteTally,
+) -> _BranchRouteTally:
     """Validate the work_items list of one branch; return the updated route tally."""
     has_research_work_item = tally.has_research_work_item
     worker_route_class_count = tally.worker_route_class_count
@@ -2089,9 +2097,7 @@ def _lint_work_item_cross_checks(defect, branch: dict, work_items: list, branch_
                 (left_path, right_path)
                 for left_path in left_paths
                 for right_path in right_paths
-                if isinstance(left_path, str)
-                and isinstance(right_path, str)
-                and paths_overlap(left_path, right_path)
+                if isinstance(left_path, str) and isinstance(right_path, str) and paths_overlap(left_path, right_path)
             ]
             if not overlaps:
                 continue
@@ -2130,7 +2136,9 @@ def _lint_work_item_cross_checks(defect, branch: dict, work_items: list, branch_
         )
 
 
-def _lint_branch_worker_parallelism(defect, manifest: dict, branch: dict, work_items: list, max_workers: object) -> None:
+def _lint_branch_worker_parallelism(
+    defect, manifest: dict, branch: dict, work_items: list, max_workers: object
+) -> None:
     """Validate one branch's worker_parallelism block and contract refs."""
     worker_parallelism = branch.get("worker_parallelism", {})
     if not isinstance(worker_parallelism, dict):
@@ -2265,7 +2273,9 @@ def _lint_branch_worker_parallelism(defect, manifest: dict, branch: dict, work_i
         )
 
 
-def _lint_branch_paths_and_prompt(defect, bundle_dir: Path, manifest: dict, branch: dict, runtime_index: dict | None) -> None:
+def _lint_branch_paths_and_prompt(
+    defect, bundle_dir: Path, manifest: dict, branch: dict, runtime_index: dict | None
+) -> None:
     """Validate one branch's path fields and its rendered branch prompt artifact."""
     for key in ["prompt", "status_path", "review_path"]:
         message = relative_path_defect(branch.get(key), key)
@@ -2328,7 +2338,16 @@ def _lint_branch_paths_and_prompt(defect, bundle_dir: Path, manifest: dict, bran
         defect(str(prompt_path), "major", f"branch {branch.get('id')} prompt must embed execution strategy id")
 
 
-def _lint_branches(defect, bundle_dir: Path, manifest: dict, branches: list, ids: list, source_attachment_labels: set[str], git_status: dict, runtime_index: dict | None) -> _BranchRouteTally:
+def _lint_branches(
+    defect,
+    bundle_dir: Path,
+    manifest: dict,
+    branches: list,
+    ids: list,
+    source_attachment_labels: set[str],
+    git_status: dict,
+    runtime_index: dict | None,
+) -> _BranchRouteTally:
     """Validate every branch (keys, depends_on, work_items, parallelism, prompt) in manifest order.
 
     Returns the aggregated route tally consumed by downstream lint() checks.
@@ -2646,9 +2665,7 @@ def lint(bundle_dir: Path) -> dict:
     goal_config, config_check_status = validate_goal_config_manifest(defect, bundle_dir, manifest)
     runtime_index = validate_runtime_metadata(defect, bundle_dir, manifest)
 
-    compatibility_status, source_attachment_labels = _lint_manifest_core_fields(
-        defect, manifest, config_check_status
-    )
+    compatibility_status, source_attachment_labels = _lint_manifest_core_fields(defect, manifest, config_check_status)
 
     max_active = manifest.get("max_active_branch_agents")
     if not is_strict_int(max_active) or max_active < 1 or max_active > MAX_ACTIVE_BRANCH_AGENTS:

@@ -1041,9 +1041,7 @@ def resolve_branch_sets(
         raise SystemExit("--completed-branch and --active-branch must not overlap")
     if args.limit is not None and args.limit < 1:
         raise SystemExit("--limit must be a positive integer")
-    return SchedulerSets(
-        ordered_branch_ids, known_ids, completed, active, scheduler_non_pass, scheduler_relaunchable
-    )
+    return SchedulerSets(ordered_branch_ids, known_ids, completed, active, scheduler_non_pass, scheduler_relaunchable)
 
 
 def compute_ready_branches(

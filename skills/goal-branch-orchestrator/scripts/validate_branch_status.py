@@ -932,7 +932,9 @@ def validate_repair_promotion_source_status(
 
 
 def validate_repair_evidence_command_copy(defects: list[str], evidence_obj: dict, worker: dict, path: str) -> None:
-    evidence_commands = require_string_list(defects, evidence_obj.get("commands_run"), f"{path}.commands_run", min_items=1)
+    evidence_commands = require_string_list(
+        defects, evidence_obj.get("commands_run"), f"{path}.commands_run", min_items=1
+    )
     evidence_tests = require_string_list(defects, evidence_obj.get("tests"), f"{path}.tests", min_items=1)
     worker_commands = worker.get("commands_run") if isinstance(worker.get("commands_run"), list) else []
     worker_tests = worker.get("tests") if isinstance(worker.get("tests"), list) else []
@@ -1054,7 +1056,9 @@ def resolve_worker_status_artifact(
     return status_artifact
 
 
-def validate_worker_changed_files(defects: list[str], artifact: dict, item_path: str, *, owned_paths: list[str]) -> None:
+def validate_worker_changed_files(
+    defects: list[str], artifact: dict, item_path: str, *, owned_paths: list[str]
+) -> None:
     changed_files = artifact.get("changed_files") if isinstance(artifact.get("changed_files"), list) else []
     for changed_index, changed in enumerate(changed_files):
         if not isinstance(changed, str):
@@ -1145,7 +1149,13 @@ def validate_research_worker_telemetry(
 
 
 def validate_worker_route_and_telemetry(
-    defects: list[str], artifact: dict, status_artifact: Path, item_path: str, *, packet_id: object, repair_promoted: bool
+    defects: list[str],
+    artifact: dict,
+    status_artifact: Path,
+    item_path: str,
+    *,
+    packet_id: object,
+    repair_promoted: bool,
 ) -> None:
     route_path = status_artifact.parent / "route.json"
     if not route_path.exists():
@@ -1193,7 +1203,11 @@ def validate_worker_route_and_telemetry(
             f"{item_path}.telemetry_path.attempts",
             "called worker attempts must be a prefix of selected_ladder",
         )
-    if artifact.get("status") == "pass" and not repair_promoted and telemetry.get("accepted_alias") not in selected_ladder:
+    if (
+        artifact.get("status") == "pass"
+        and not repair_promoted
+        and telemetry.get("accepted_alias") not in selected_ladder
+    ):
         defect(
             defects,
             f"{item_path}.telemetry_path.accepted_alias",
@@ -2372,7 +2386,11 @@ def validate_reviewer_reuse_telemetry(
         require_called=False,
     )
     called = (
-        [attempt for attempt in telemetry.get("attempts", []) if isinstance(attempt, dict) and attempt.get("called") is True]
+        [
+            attempt
+            for attempt in telemetry.get("attempts", [])
+            if isinstance(attempt, dict) and attempt.get("called") is True
+        ]
         if isinstance(telemetry.get("attempts"), list)
         else []
     )

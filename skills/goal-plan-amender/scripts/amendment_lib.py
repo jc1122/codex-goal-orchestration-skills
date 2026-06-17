@@ -953,7 +953,9 @@ def _apply_add_work_item(ctx: OperationContext, operation: dict, path: str, *, b
     ctx.changed_branch_ids.add(branch_id)
 
 
-def _apply_mark_obsolete(ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target_index: int) -> None:
+def _apply_mark_obsolete(
+    ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target_index: int
+) -> None:
     referencing: list[str] = []
     for branch in ctx.branches:
         if not isinstance(branch, dict):
@@ -992,9 +994,7 @@ def _resolve_target_branch_id(ctx: OperationContext, operation: dict, path: str)
     return branch_id
 
 
-def _apply_one_operation(
-    ctx: OperationContext, operation: dict, path: str, *, protected_branch_ids: set[str]
-) -> None:
+def _apply_one_operation(ctx: OperationContext, operation: dict, path: str, *, protected_branch_ids: set[str]) -> None:
     op = operation.get("op")
     if op not in CONTRACT.ADAPTATION_ALLOWED_OPERATIONS:
         ctx.defects.append(f"{path}.op must be one of {list(CONTRACT.ADAPTATION_ALLOWED_OPERATIONS)}")
