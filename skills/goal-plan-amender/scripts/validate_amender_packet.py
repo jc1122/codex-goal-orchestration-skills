@@ -156,15 +156,8 @@ def validate_input_files(
             defect(defects, f"{item_path}.sha256", "does not match current source file")
 
 
-def validate_telemetry(
-    defects: list[str],
-    telemetry: dict,
-    *,
-    amendment_id: str,
-    route: dict,
-    proposal_name: str,
-    manifest: dict,
-    manifest_path: Path,
+def _validate_telemetry_header(
+    defects: list[str], telemetry: dict, *, amendment_id: str, proposal_name: str
 ) -> None:
     if telemetry.get("schema_version") != 1:
         defect(defects, "$.telemetry.schema_version", "must be 1")
@@ -174,11 +167,9 @@ def validate_telemetry(
         defect(defects, "$.telemetry.role", f"must be {CONTRACT.AMENDER_ROLE!r}")
     if telemetry.get("output_artifact") != f"../{proposal_name}":
         defect(defects, "$.telemetry.output_artifact", f"must be '../{proposal_name}'")
-    attempts = telemetry.get("attempts")
-    selected = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else []
-    if not isinstance(attempts, list):
-        defect(defects, "$.telemetry.attempts", "must be an array")
-        return
+
+
+def _validate_telemetry_alias_allowlist(defects: list[str], attempts: list) -> None:
     allowed_telemetry_aliases = set(CONTRACT.ALLOWED_AMENDER_TELEMETRY_ALIASES)
     for index, item in enumerate(attempts):
         if not isinstance(item, dict):
@@ -190,30 +181,42 @@ def validate_telemetry(
                 f"$.telemetry.attempts[{index}].alias",
                 f"must be one of {sorted(allowed_telemetry_aliases)}",
             )
-    if deterministic_mode(route):
-        if len(attempts) != 1:
-            defect(defects, "$.telemetry.attempts", "must contain exactly one deterministic blocker-repair attempt")
-            return
-        attempt = require_object(defects, attempts[0], "$.telemetry.attempts[0]")
-        alias = getattr(CONTRACT, "DETERMINISTIC_AMENDER_ALIAS", "deterministic-blocker-repair")
-        if attempt.get("alias") != alias:
-            defect(defects, "$.telemetry.attempts[0].alias", f"must be {alias!r}")
-        if attempt.get("provider") != "local-script":
-            defect(defects, "$.telemetry.attempts[0].provider", "must be 'local-script'")
-        if attempt.get("model") != "goal-plan-amender.deterministic-blocker-repair":
-            defect(defects, "$.telemetry.attempts[0].model", "must be 'goal-plan-amender.deterministic-blocker-repair'")
-        if attempt.get("timeout_seconds") != 1:
-            defect(defects, "$.telemetry.attempts[0].timeout_seconds", "must be 1")
-        if attempt.get("called") is not True or attempt.get("accepted") is not True:
-            defect(defects, "$.telemetry.attempts[0]", "deterministic attempt must be called and accepted")
-        if telemetry.get("accepted_alias") != alias:
-            defect(defects, "$.telemetry.accepted_alias", f"must be {alias!r}")
-        totals = require_object(defects, telemetry.get("totals"), "$.telemetry.totals")
-        if totals.get("attempts_declared") != 1:
-            defect(defects, "$.telemetry.totals.attempts_declared", "must be 1")
-        if totals.get("attempts_called") != 1:
-            defect(defects, "$.telemetry.totals.attempts_called", "must be 1")
+
+
+def _validate_deterministic_telemetry(defects: list[str], telemetry: dict, attempts: list) -> None:
+    if len(attempts) != 1:
+        defect(defects, "$.telemetry.attempts", "must contain exactly one deterministic blocker-repair attempt")
         return
+    attempt = require_object(defects, attempts[0], "$.telemetry.attempts[0]")
+    alias = getattr(CONTRACT, "DETERMINISTIC_AMENDER_ALIAS", "deterministic-blocker-repair")
+    if attempt.get("alias") != alias:
+        defect(defects, "$.telemetry.attempts[0].alias", f"must be {alias!r}")
+    if attempt.get("provider") != "local-script":
+        defect(defects, "$.telemetry.attempts[0].provider", "must be 'local-script'")
+    if attempt.get("model") != "goal-plan-amender.deterministic-blocker-repair":
+        defect(defects, "$.telemetry.attempts[0].model", "must be 'goal-plan-amender.deterministic-blocker-repair'")
+    if attempt.get("timeout_seconds") != 1:
+        defect(defects, "$.telemetry.attempts[0].timeout_seconds", "must be 1")
+    if attempt.get("called") is not True or attempt.get("accepted") is not True:
+        defect(defects, "$.telemetry.attempts[0]", "deterministic attempt must be called and accepted")
+    if telemetry.get("accepted_alias") != alias:
+        defect(defects, "$.telemetry.accepted_alias", f"must be {alias!r}")
+    totals = require_object(defects, telemetry.get("totals"), "$.telemetry.totals")
+    if totals.get("attempts_declared") != 1:
+        defect(defects, "$.telemetry.totals.attempts_declared", "must be 1")
+    if totals.get("attempts_called") != 1:
+        defect(defects, "$.telemetry.totals.attempts_called", "must be 1")
+
+
+def _validate_ladder_telemetry(
+    defects: list[str],
+    telemetry: dict,
+    attempts: list,
+    *,
+    selected: list[str],
+    manifest: dict,
+    manifest_path: Path,
+) -> None:
     aliases = [item.get("alias") for item in attempts if isinstance(item, dict)]
     if aliases != selected:
         defect(defects, "$.telemetry.attempts", "declared aliases must match route.json selected_ladder exactly")
@@ -251,6 +254,31 @@ def validate_telemetry(
             defect(defects, f"$.telemetry.attempts[{index}].model", f"must be {expected.get('model')!r}")
         if attempt.get("provider") != expected.get("provider"):
             defect(defects, f"$.telemetry.attempts[{index}].provider", f"must be {expected.get('provider')!r}")
+
+
+def validate_telemetry(
+    defects: list[str],
+    telemetry: dict,
+    *,
+    amendment_id: str,
+    route: dict,
+    proposal_name: str,
+    manifest: dict,
+    manifest_path: Path,
+) -> None:
+    _validate_telemetry_header(defects, telemetry, amendment_id=amendment_id, proposal_name=proposal_name)
+    attempts = telemetry.get("attempts")
+    selected = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else []
+    if not isinstance(attempts, list):
+        defect(defects, "$.telemetry.attempts", "must be an array")
+        return
+    _validate_telemetry_alias_allowlist(defects, attempts)
+    if deterministic_mode(route):
+        _validate_deterministic_telemetry(defects, telemetry, attempts)
+        return
+    _validate_ladder_telemetry(
+        defects, telemetry, attempts, selected=selected, manifest=manifest, manifest_path=manifest_path
+    )
 
 
 def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path) -> dict:

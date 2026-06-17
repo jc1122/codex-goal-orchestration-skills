@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+from typing import NamedTuple
 
 from amendment_lib import (
     CONTRACT,
@@ -153,21 +154,6 @@ def _attempt_label(attempt: dict) -> str:
     return str(attempt.get("alias", "amender")).replace("/", "-")
 
 
-def _configured_attempt_command(attempt: dict, *, amendment_id: str, repo_root: Path) -> str | None:
-    kind = attempt.get("harness_kind") or attempt.get("provider")
-    model = str(attempt.get("model") or "")
-    alias = str(attempt.get("alias") or "amender")
-    if kind == "opencode":
-        return (
-            "opencode run --pure --format json "
-            f"--model {CONTRACT.shell_quote(model)} "
-            f"--dir {CONTRACT.shell_quote(repo_root.as_posix())} "
-            f"--title {CONTRACT.shell_quote(amendment_id + '-' + alias)} "
-            '"$(cat "$packet_dir/prompt.md")"'
-        )
-    return None
-
-
 def launch_script(
     amendment_id: str,
     job_id: str,
@@ -201,9 +187,7 @@ def launch_script(
             event_name = (
                 logs[0] if isinstance(logs, list) and logs and isinstance(logs[0], str) else f"events-{label}.log"
             )
-            command = _configured_attempt_command(attempt, amendment_id=amendment_id, repo_root=repo_root)
-            if command is None:
-                command = f"unsupported_attempt {CONTRACT.shell_quote(event_name)} {CONTRACT.shell_quote(alias)} {CONTRACT.shell_quote(str(kind or 'unknown'))}"
+            command = f"unsupported_attempt {CONTRACT.shell_quote(event_name)} {CONTRACT.shell_quote(alias)} {CONTRACT.shell_quote(str(kind or 'unknown'))}"
             runner = f"run_configured_model {CONTRACT.shell_quote(event_name)} {command}"
         attempt_lines.extend(
             [
@@ -550,7 +534,7 @@ exit 1
 """
 
 
-def main() -> int:
+def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--main-prompt", required=True)
@@ -567,8 +551,21 @@ def main() -> int:
     )
     parser.add_argument("--selection-reason", help="Required when --amender-route is supplied; recorded in route.json.")
     parser.add_argument("--replace", action="store_true")
-    args = parser.parse_args()
+    return parser.parse_args()
 
+
+class ResolvedInputs(NamedTuple):
+    manifest_path: Path
+    main_prompt: Path
+    repo_root: Path
+    amendment_id: str
+    manifest: dict
+    policy: dict
+    selected_ladder: list[str]
+    selection_reason: str
+
+
+def _resolve_inputs(args: argparse.Namespace) -> ResolvedInputs:
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     main_prompt = resolve_absolute_path(args.main_prompt, "--main-prompt", must_exist=True)
     repo_root = resolve_absolute_path(args.repo_root, "--repo-root", must_exist=True)
@@ -585,9 +582,19 @@ def main() -> int:
         str(args.selection_reason or "").strip()
         or "Default deterministic plan-amender model ladder from amender_model_policy."
     )
-    bundle_dir = manifest_path.parent
-    amendments_dir = bundle_dir / "amendments"
-    decision_path = amendments_dir / f"{amendment_id}.decision.json"
+    return ResolvedInputs(
+        manifest_path=manifest_path,
+        main_prompt=main_prompt,
+        repo_root=repo_root,
+        amendment_id=amendment_id,
+        manifest=manifest,
+        policy=policy,
+        selected_ladder=selected_ladder,
+        selection_reason=selection_reason,
+    )
+
+
+def _load_launch_decision(decision_path: Path, *, amendment_id: str, manifest_path: Path) -> dict:
     if not decision_path.exists():
         raise SystemExit(f"missing launch decision artifact: {decision_path}")
     decision = load_json_object(decision_path)
@@ -603,8 +610,12 @@ def main() -> int:
         raise SystemExit("amendment decision manifest path or sha256 does not match the live manifest")
     if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
         raise SystemExit("amendment decision reason_code is not valid for a launch decision")
+    return decision
+
+
+def _prepare_packet_dir(amendments_dir: Path, amendment_id: str, *, replace: bool) -> Path:
     packet_dir = amendments_dir / f"{amendment_id}.packet"
-    if packet_dir.exists() and not args.replace:
+    if packet_dir.exists() and not replace:
         raise SystemExit(f"adaptation packet already exists; pass --replace to recreate: {packet_dir}")
     if packet_dir.exists():
         for child in sorted(packet_dir.iterdir(), reverse=True):
@@ -612,10 +623,15 @@ def main() -> int:
                 raise SystemExit(f"refusing to replace non-empty nested packet directory: {child}")
             child.unlink()
     packet_dir.mkdir(parents=True, exist_ok=True)
+    return packet_dir
 
+
+def _reconcile_protected_ids(
+    args: argparse.Namespace, inputs: ResolvedInputs, decision: dict
+) -> tuple[list[str], list[str], dict]:
     active, terminal, terminal_status = protected_ids(
-        manifest_path,
-        manifest,
+        inputs.manifest_path,
+        inputs.manifest,
         active_ids=args.active_branch,
         terminal_ids=args.terminal_branch,
         infer_scheduler=True,
@@ -631,10 +647,23 @@ def main() -> int:
         branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)
     } != {branch_id: decision_terminal_status.get(branch_id) for branch_id in decision_terminal}:
         raise SystemExit("amendment decision terminal_branch_statuses do not match packet protected terminal statuses")
+    return active, terminal, terminal_status
+
+
+def _collect_source_records(
+    args: argparse.Namespace,
+    inputs: ResolvedInputs,
+    *,
+    bundle_dir: Path,
+    amendments_dir: Path,
+    decision_path: Path,
+    terminal: list[str],
+) -> list[dict]:
+    manifest = inputs.manifest
     records: list[dict] = []
-    records.append(source_record(manifest_path, "live manifest"))
+    records.append(source_record(inputs.manifest_path, "live manifest"))
     records.append(source_record(decision_path, "amendment launch decision"))
-    records.append(source_record(main_prompt, "main prompt"))
+    records.append(source_record(inputs.main_prompt, "main prompt"))
     audit_path = (
         resolve_absolute_path(args.prompt_audit, "--prompt-audit", must_exist=True)
         if args.prompt_audit
@@ -660,14 +689,32 @@ def main() -> int:
                 add_if_exists(records, bundle_dir / value, f"{label} {branch_id}")
     for accepted in sorted(amendments_dir.glob("*.accepted.json")):
         add_if_exists(records, accepted, "previous accepted amendment")
+    return records
 
+
+def _emit_packet_artifacts(
+    inputs: ResolvedInputs,
+    *,
+    packet_dir: Path,
+    amendments_dir: Path,
+    decision_path: Path,
+    active: list[str],
+    terminal: list[str],
+    terminal_status: dict,
+    records: list[dict],
+) -> None:
+    manifest = inputs.manifest
+    manifest_path = inputs.manifest_path
+    amendment_id = inputs.amendment_id
+    selected_ladder = inputs.selected_ladder
+    selection_reason = inputs.selection_reason
     packet = {
         "schema_version": 1,
         "amendment_id": amendment_id,
         "job_id": manifest.get("job_id"),
         "manifest": manifest_path.as_posix(),
-        "main_prompt": main_prompt.as_posix(),
-        "repo_root": repo_root.as_posix(),
+        "main_prompt": inputs.main_prompt.as_posix(),
+        "repo_root": inputs.repo_root.as_posix(),
         "decision_path": decision_path.as_posix(),
         "proposal_path": (amendments_dir / f"{amendment_id}.proposal.json").as_posix(),
         "validation_path": (amendments_dir / f"{amendment_id}.validation.json").as_posix(),
@@ -677,7 +724,7 @@ def main() -> int:
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
         "selected_ladder": selected_ladder,
         "selection_reason": selection_reason,
-        "route_policy": policy,
+        "route_policy": inputs.policy,
         "source_files": records,
     }
     route = {
@@ -704,7 +751,7 @@ def main() -> int:
     launch = launch_script(
         amendment_id,
         str(manifest.get("job_id", "")),
-        repo_root,
+        inputs.repo_root,
         manifest,
         manifest_path,
         selected_ladder,
@@ -713,6 +760,37 @@ def main() -> int:
     launch_path = packet_dir / "launch.sh"
     launch_path.write_text(launch, encoding="utf-8")
     os.chmod(launch_path, 0o755)
+
+
+def main() -> int:
+    args = _parse_args()
+    inputs = _resolve_inputs(args)
+    bundle_dir = inputs.manifest_path.parent
+    amendments_dir = bundle_dir / "amendments"
+    decision_path = amendments_dir / f"{inputs.amendment_id}.decision.json"
+    decision = _load_launch_decision(
+        decision_path, amendment_id=inputs.amendment_id, manifest_path=inputs.manifest_path
+    )
+    packet_dir = _prepare_packet_dir(amendments_dir, inputs.amendment_id, replace=args.replace)
+    active, terminal, terminal_status = _reconcile_protected_ids(args, inputs, decision)
+    records = _collect_source_records(
+        args,
+        inputs,
+        bundle_dir=bundle_dir,
+        amendments_dir=amendments_dir,
+        decision_path=decision_path,
+        terminal=terminal,
+    )
+    _emit_packet_artifacts(
+        inputs,
+        packet_dir=packet_dir,
+        amendments_dir=amendments_dir,
+        decision_path=decision_path,
+        active=active,
+        terminal=terminal,
+        terminal_status=terminal_status,
+        records=records,
+    )
     print(packet_dir)
     return 0
 
