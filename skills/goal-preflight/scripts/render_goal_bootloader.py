@@ -176,13 +176,15 @@ def _lint_status(bundle_dir: Path, label: str) -> dict[str, object]:
     if not isinstance(payload, dict):
         return {"label": label, "status": "invalid", "path": str(path)}
     schema_status = payload.get("schema_lint_status") or payload.get("status", "unknown")
+    raw_defects = payload.get("defects", payload.get("errors", []))
+    defect_list = raw_defects if isinstance(raw_defects, list) else []
     return {
         "label": label,
         "status": schema_status,
         "reported_status": payload.get("status", "unknown"),
         "status_kind": payload.get("status_kind"),
-        "defect_count": payload.get("defect_count", len(payload.get("defects", payload.get("errors", [])) or [])),
-        "defects": payload.get("defects", payload.get("errors", [])),
+        "defect_count": payload.get("defect_count", len(defect_list)),
+        "defects": defect_list,
         "path": str(path),
     }
 
@@ -193,19 +195,20 @@ def _repair_gate_status(bundle_dir: Path) -> dict[str, object]:
         return {"status": "missing", "path": str(path)}
     payload = _read_json(path, "repair gate report")
     status = payload.get("status")
-    actions = payload.get("actions", [])
+    raw_actions = payload.get("actions", [])
+    actions = raw_actions if isinstance(raw_actions, list) else []
     if status not in {"pass", "blocked", "failed"}:
         status = "pass" if payload.get("decision") == "pass_no_actions" else "blocked"
     return {
         "status": status,
         "decision": payload.get("decision"),
-        "actions": actions if isinstance(actions, list) else [],
+        "actions": actions,
         "path": str(path),
         "model_launch_allowed": payload.get("model_launch_allowed"),
         "script_repair_model_launch_allowed": payload.get("script_repair_model_launch_allowed"),
         "runtime_launch_allowed": payload.get("runtime_launch_allowed"),
         "launch_allowed": payload.get("launch_allowed"),
-        "action_count": payload.get("action_count", len(payload.get("actions", []) or [])),
+        "action_count": payload.get("action_count", len(actions)),
     }
 
 
@@ -697,6 +700,10 @@ def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[
         "goal-config-selection.json",
         "runtime.index.json",
         "create-bundle-result.json",
+        "main.status.json",
+        "model-catalog.json",
+        "run.trace.jsonl",
+        "telemetry.debug.summary.json",
     ]
     config_artifacts = ["goal.config.json", "goal-config.check.json"]
     preserve_config = [name for name in config_artifacts if (bundle_dir / name).exists()]

@@ -764,7 +764,8 @@ def branch_dependency_levels(branches: list[dict]) -> dict[str, int]:
     while remaining:
         progressed = False
         for branch_id, branch in list(remaining.items()):
-            deps = [dep for dep in branch.get("depends_on", []) if isinstance(dep, str)]
+            raw_deps = branch.get("depends_on")
+            deps = [dep for dep in (raw_deps if isinstance(raw_deps, list) else []) if isinstance(dep, str)]
             if any(dep in remaining for dep in deps):
                 continue
             dep_levels = [levels.get(dep, 0) for dep in deps]
@@ -2109,7 +2110,8 @@ def _lint_work_item_cross_checks(defect, branch: dict, work_items: list, branch_
     for index, item in enumerate(work_items):
         if not isinstance(item, dict):
             continue
-        for dep in item.get("depends_on", []):
+        raw_deps = item.get("depends_on")
+        for dep in raw_deps if isinstance(raw_deps, list) else []:
             if dep not in known_work_item_ids:
                 defect(
                     "job.manifest.json",
@@ -2163,7 +2165,10 @@ def _lint_work_item_cross_checks(defect, branch: dict, work_items: list, branch_
                 )
     derived_branch_owned = []
     for item in work_items:
-        for value in item.get("owned_paths", []):
+        if not isinstance(item, dict):
+            continue
+        raw_owned = item.get("owned_paths")
+        for value in raw_owned if isinstance(raw_owned, list) else []:
             if isinstance(value, str) and value not in derived_branch_owned:
                 derived_branch_owned.append(value)
     if branch_owned_paths_value != derived_branch_owned:

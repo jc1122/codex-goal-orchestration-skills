@@ -1962,6 +1962,8 @@ def validate_goal_config(config: dict) -> None:
         if not isinstance(ladder, list) or not ladder:
             raise SystemExit(f"goal_config.model_ladders.{ladder_name} must be a non-empty array")
         for role in ladder:
+            if not isinstance(role, str):
+                raise SystemExit(f"goal_config.model_ladders.{ladder_name} entries must be strings: {role!r}")
             if role not in models:
                 raise SystemExit(f"goal_config.model_ladders.{ladder_name} references unknown role: {role}")
     policies = config.get("model_policies")

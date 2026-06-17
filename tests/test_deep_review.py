@@ -11,6 +11,7 @@ sys.path.insert(0, str(REPO / "skills" / "goal-preflight" / "scripts"))
 lpb = load_module("skills/goal-preflight/scripts/lint_preflight_brief.py", "lpb_dr")
 rgb = load_module("skills/goal-preflight/scripts/render_goal_bootloader.py", "rgb_dr")
 pgb = load_module("skills/goal-preflight/scripts/prepare_goal_bundle.py", "pgb_dr")
+lgb = load_module("skills/goal-preflight/scripts/lint_goal_bundle.py", "lgb_dr")
 
 
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
@@ -95,3 +96,51 @@ def test_report_matches_config_legacy_report_falls_back_to_path(tmp_path):
     # A report written before config_sha256 existed still matches by path/content.
     legacy = {"config_path": str(config)}
     assert pgb.report_matches_config(legacy, config) is True
+
+
+# --- 2026-06-18 re-review residuals: linter fail-closed on non-list depends_on/owned_paths ---
+def test_branch_dependency_levels_tolerates_non_list_depends_on():
+    # A non-iterable depends_on used to raise TypeError, aborting the whole linter.
+    levels = lgb.branch_dependency_levels([{"id": "B01", "depends_on": 7}])
+    assert "B01" in levels  # resolves (no crash) rather than raising TypeError
+
+
+def test_work_item_cross_checks_tolerates_non_list_fields():
+    collected: list = []
+
+    def defect(file, severity, message):
+        collected.append((file, severity, message))
+
+    branch = {"id": "B01", "owned_paths": []}
+    work_items = [{"id": "W01", "packet_id": "B01-W01", "depends_on": 5, "owned_paths": 9}]
+    # Non-list depends_on / owned_paths previously raised TypeError here.
+    lgb._lint_work_item_cross_checks(defect, branch, work_items, [])
+
+
+# --- cleanup plan must remove the runtime status / catalog / trace artifacts too ---
+def test_cleanup_plan_removes_runtime_status_and_catalog_artifacts(tmp_path):
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "goal.config.json").write_text("{}", encoding="utf-8")  # preserve branch
+    extra = ("main.status.json", "model-catalog.json", "run.trace.jsonl", "telemetry.debug.summary.json")
+    for name in extra:
+        (bundle / name).write_text("{}", encoding="utf-8")
+    cmds = "\n".join(rgb._cleanup_plan(bundle, None, [])["cleanup_commands"])
+    for name in extra:
+        assert (bundle / name).as_posix() in cmds, f"{name} not removed by cleanup"
+    assert (bundle / "goal.config.json").as_posix() not in cmds
+
+
+# --- readiness readers tolerate a malformed (non-list) defects/actions value ---
+def test_lint_status_tolerates_non_list_defects(tmp_path):
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "preflight.lint.json").write_text('{"status": "failed", "defects": 5}', encoding="utf-8")
+    assert rgb._lint_status(bundle, "schema")["defect_count"] == 0  # must not raise
+
+
+def test_repair_gate_status_tolerates_non_list_actions(tmp_path):
+    bundle = tmp_path / "b"
+    bundle.mkdir()
+    (bundle / "repair-gate.json").write_text('{"status": "blocked", "actions": 5}', encoding="utf-8")
+    assert rgb._repair_gate_status(bundle)["action_count"] == 0  # must not raise
