@@ -48,6 +48,23 @@ def test_cleanup_plan_preserves_existing_config(tmp_path):
     assert blanket not in plan["cleanup_commands"], "blanket rm -rf would delete the preserved config"
 
 
+def test_cleanup_plan_removes_all_disposable_root_artifacts(tmp_path):
+    # Preserve branch must still remove every disposable bundle-root artifact,
+    # including runtime.index.json / create-bundle-result.json (the gap caught
+    # by the second-pass review), while never targeting the preserved config.
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "goal.config.json").write_text("{}", encoding="utf-8")  # triggers preserve branch
+    disposable = ("runtime.index.json", "create-bundle-result.json", "job.manifest.json")
+    for name in disposable:
+        (bundle / name).write_text("{}", encoding="utf-8")
+    plan = rgb._cleanup_plan(bundle, None, [])
+    cmds = "\n".join(plan["cleanup_commands"])
+    for name in disposable:
+        assert (bundle / name).as_posix() in cmds, f"{name} not removed by cleanup"
+    assert (bundle / "goal.config.json").as_posix() not in cmds
+
+
 def test_cleanup_plan_blunt_remove_when_no_config(tmp_path):
     bundle = tmp_path / "bundle"
     bundle.mkdir()

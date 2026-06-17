@@ -685,6 +685,8 @@ def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[
         "orchestration.state.json",
         "resume.report.json",
         "goal-config-selection.json",
+        "runtime.index.json",
+        "create-bundle-result.json",
     ]
     config_artifacts = ["goal.config.json", "goal-config.check.json"]
     preserve_config = [name for name in config_artifacts if (bundle_dir / name).exists()]

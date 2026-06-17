@@ -1716,6 +1716,7 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
     waves = manifest.get("waves", [])
     wave_branch_ids = []
     wave_ids = []
+    branch_to_wave: dict[str, str] = {}
     if not isinstance(waves, list):
         defect("job.manifest.json", "critical", "waves must be a JSON array")
         waves = []
@@ -1735,6 +1736,9 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
             branch_ids = []
         if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
             defect("job.manifest.json", "critical", f"wave {wave.get('id')} has more than 4 branches")
+        for bid in branch_ids:
+            if isinstance(bid, str) and isinstance(wid, str):
+                branch_to_wave.setdefault(bid, wid)
         wave_branch_ids.extend(branch_ids)
     if len(wave_ids) != len(set(wave_ids)):
         defect("job.manifest.json", "critical", "wave ids must be unique")
@@ -1745,11 +1749,20 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
     declared_wave_ids = {wid for wid in wave_ids if isinstance(wid, str)}
     for branch in branches:
         branch_wave = branch.get("wave")
-        if branch_wave is not None and branch_wave not in declared_wave_ids:
+        if branch_wave is None:
+            continue
+        branch_id = branch.get("id")
+        if branch_wave not in declared_wave_ids:
             defect(
                 "job.manifest.json",
                 "critical",
-                f"branch {branch.get('id')!r} references unknown wave {branch_wave!r}",
+                f"branch {branch_id!r} references unknown wave {branch_wave!r}",
+            )
+        elif isinstance(branch_id, str) and branch_to_wave.get(branch_id) not in (None, branch_wave):
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"branch {branch_id!r} declares wave {branch_wave!r} but is listed under wave {branch_to_wave[branch_id]!r}",
             )
     if isinstance(branches, list) and not has_serial_reason:
         chain = longest_branch_chain(branches)
