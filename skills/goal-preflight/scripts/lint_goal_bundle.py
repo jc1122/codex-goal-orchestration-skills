@@ -1045,7 +1045,7 @@ def validate_telemetry_policy(defect, manifest: dict) -> None:
         defect("job.manifest.json", "critical", "telemetry_policy must be an object")
         return
 
-    schema_version = policy.get("schema_version", TELEMETRY_POLICY_SCHEMA_VERSION)
+    schema_version = policy.get("schema_version")
     if not isinstance(schema_version, int) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
         defect(
             "job.manifest.json",
