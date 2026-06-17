@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 from pathlib import Path
+from typing import NamedTuple
 import contextlib
 
 
@@ -834,6 +835,206 @@ def append_dependency(branch: dict, dependency: str) -> None:
     branch["depends_on"] = deps
 
 
+class OperationContext(NamedTuple):
+    """Mutable accumulators shared by per-operation handlers.
+
+    ``branches``, ``obsolete_entries`` and ``changed_branch_ids`` are mutated in
+    place exactly as the original inlined loop body did; ``defects`` collects the
+    same defect strings in the same append order.
+    """
+
+    branches: list
+    obsolete_entries: list
+    changed_branch_ids: set[str]
+    defects: list[str]
+
+
+def _apply_add_branch(ctx: OperationContext, operation: dict, path: str) -> None:
+    branch = operation.get("branch")
+    if not isinstance(branch, dict):
+        ctx.defects.append(f"{path}.branch must be an object")
+        return
+    branch_id = branch.get("id")
+    if not isinstance(branch_id, str):
+        ctx.defects.append(f"{path}.branch.id must be a string")
+        return
+    if branch_index(ctx.branches, branch_id) is not None:
+        ctx.defects.append(f"{path}.branch.id duplicates existing branch {branch_id}")
+        return
+    ctx.branches.append(branch)
+    ctx.changed_branch_ids.add(branch_id)
+
+
+def _apply_replace_unstarted_branch(
+    ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target_index: int
+) -> None:
+    branch = operation.get("branch")
+    if not isinstance(branch, dict):
+        ctx.defects.append(f"{path}.branch must be an object")
+        return
+    replacement_id = branch.get("id")
+    if not isinstance(replacement_id, str):
+        ctx.defects.append(f"{path}.branch.id must be a string")
+        return
+    existing_index = branch_index(ctx.branches, replacement_id)
+    if existing_index is not None and existing_index != target_index:
+        ctx.defects.append(f"{path}.branch.id duplicates existing branch {replacement_id}")
+        return
+    ctx.branches[target_index] = branch
+    replace_dependency(ctx.branches[target_index + 1 :], branch_id, [replacement_id])
+    ctx.changed_branch_ids.add(replacement_id)
+
+
+def _validate_split_branches(ctx: OperationContext, operation: dict, path: str) -> list | None:
+    """Validate the split ``branches`` array, appending defects in original order.
+
+    Returns the new-branch list when structurally valid, otherwise ``None`` after
+    appending exactly the same defect the inlined logic produced.
+    """
+    new_branches = require_list(operation.get("branches"), f"{path}.branches", ctx.defects, min_items=2)
+    if len(new_branches) > CONTRACT.MAX_ACTIVE_BRANCH_AGENTS:
+        ctx.defects.append(f"{path}.branches must contain at most {CONTRACT.MAX_ACTIVE_BRANCH_AGENTS} branches")
+        return None
+    if any(not isinstance(branch, dict) for branch in new_branches):
+        ctx.defects.append(f"{path}.branches entries must be objects")
+        return None
+    replacement_ids = [branch.get("id") for branch in new_branches]
+    if any(not isinstance(value, str) for value in replacement_ids):
+        ctx.defects.append(f"{path}.branches[].id values must be strings")
+        return None
+    duplicate_ids = {value for value in replacement_ids if replacement_ids.count(value) > 1}
+    if duplicate_ids:
+        ctx.defects.append(f"{path}.branches contain duplicate ids: {', '.join(sorted(duplicate_ids))}")
+        return None
+    return new_branches
+
+
+def _apply_split_unstarted_branch(
+    ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target_index: int
+) -> None:
+    new_branches = _validate_split_branches(ctx, operation, path)
+    if new_branches is None:
+        return
+    replacement_ids = [branch.get("id") for branch in new_branches]
+    for replacement_id in replacement_ids:
+        existing_index = branch_index(ctx.branches, str(replacement_id))
+        if existing_index is not None and existing_index != target_index:
+            ctx.defects.append(f"{path}.branches id duplicates existing branch {replacement_id}")
+    if ctx.defects and ctx.defects[-1].startswith(path):
+        return
+    ctx.branches[target_index : target_index + 1] = new_branches
+    replace_dependency(
+        ctx.branches[target_index + len(new_branches) :], branch_id, [str(value) for value in replacement_ids]
+    )
+    ctx.changed_branch_ids.update(str(value) for value in replacement_ids)
+
+
+def _apply_add_dependency(ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target: dict) -> None:
+    dependencies = require_list(operation.get("depends_on"), f"{path}.depends_on", ctx.defects, min_items=1)
+    for dependency in dependencies:
+        if not isinstance(dependency, str):
+            ctx.defects.append(f"{path}.depends_on entries must be strings")
+            continue
+        append_dependency(target, dependency)
+    ctx.changed_branch_ids.add(branch_id)
+
+
+def _apply_add_work_item(ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target: dict) -> None:
+    work_item = operation.get("work_item")
+    if not isinstance(work_item, dict):
+        ctx.defects.append(f"{path}.work_item must be an object")
+        return
+    work_items = target.get("work_items")
+    if not isinstance(work_items, list):
+        ctx.defects.append(f"{path}.branch work_items must be an array")
+        return
+    work_items.append(work_item)
+    target["work_items"] = work_items
+    ctx.changed_branch_ids.add(branch_id)
+
+
+def _apply_mark_obsolete(ctx: OperationContext, operation: dict, path: str, *, branch_id: str, target_index: int) -> None:
+    referencing: list[str] = []
+    for branch in ctx.branches:
+        if not isinstance(branch, dict):
+            continue
+        if branch.get("id") == branch_id:
+            continue
+        for field in ("depends_on", "recovers_from", "supersedes"):
+            refs = branch.get(field)
+            if isinstance(refs, list) and branch_id in refs:
+                referencing.append(f"{branch.get('id')} ({field})")
+                break
+    if referencing:
+        ctx.defects.append(
+            f"{path} cannot mark {branch_id} obsolete while other branches reference it via "
+            f"depends_on/recovers_from/supersedes: {', '.join(str(item) for item in referencing)}"
+        )
+        return
+    removed = ctx.branches.pop(target_index)
+    ctx.obsolete_entries.append(
+        {
+            "branch_id": branch_id,
+            "reason": operation.get("reason", "Marked obsolete by accepted amendment."),
+            "archived_branch": removed,
+        }
+    )
+
+
+def _resolve_target_branch_id(ctx: OperationContext, operation: dict, path: str) -> str | None:
+    branch_id = operation.get("branch_id")
+    if not isinstance(branch_id, str):
+        ctx.defects.append(f"{path}.branch_id must be a string")
+        return None
+    if branch_index(ctx.branches, branch_id) is None:
+        ctx.defects.append(f"{path}.branch_id does not exist in the manifest: {branch_id}")
+        return None
+    return branch_id
+
+
+def _apply_one_operation(
+    ctx: OperationContext, operation: dict, path: str, *, protected_branch_ids: set[str]
+) -> None:
+    op = operation.get("op")
+    if op not in CONTRACT.ADAPTATION_ALLOWED_OPERATIONS:
+        ctx.defects.append(f"{path}.op must be one of {list(CONTRACT.ADAPTATION_ALLOWED_OPERATIONS)}")
+        return
+    touched_protected = sorted(operation_branch_ids(operation) & protected_branch_ids)
+    if touched_protected:
+        ctx.defects.append(f"{path} attempts to modify protected branch ids: {', '.join(touched_protected)}")
+        return
+
+    if op == "add_branch":
+        _apply_add_branch(ctx, operation, path)
+        return
+
+    branch_id = _resolve_target_branch_id(ctx, operation, path)
+    if branch_id is None:
+        return
+    target_index = branch_index(ctx.branches, branch_id)
+
+    if op == "replace_unstarted_branch":
+        _apply_replace_unstarted_branch(ctx, operation, path, branch_id=branch_id, target_index=target_index)
+        return
+
+    if op == "split_unstarted_branch":
+        _apply_split_unstarted_branch(ctx, operation, path, branch_id=branch_id, target_index=target_index)
+        return
+
+    target = ctx.branches[target_index]
+    if op == "add_dependency_to_unstarted_branch":
+        _apply_add_dependency(ctx, operation, path, branch_id=branch_id, target=target)
+        return
+
+    if op == "add_work_item_to_unstarted_branch":
+        _apply_add_work_item(ctx, operation, path, branch_id=branch_id, target=target)
+        return
+
+    if op == "mark_unstarted_branch_obsolete":
+        _apply_mark_obsolete(ctx, operation, path, branch_id=branch_id, target_index=target_index)
+        return
+
+
 def apply_operations_to_manifest(
     manifest: dict,
     proposal: dict,
@@ -853,6 +1054,12 @@ def apply_operations_to_manifest(
         obsolete_entries = []
         candidate["obsolete_branches"] = obsolete_entries
 
+    ctx = OperationContext(
+        branches=branches,
+        obsolete_entries=obsolete_entries,
+        changed_branch_ids=changed_branch_ids,
+        defects=defects,
+    )
     operations = require_list(proposal.get("operations"), "operations", defects, min_items=1)
     for index, raw_operation in enumerate(operations):
         path = f"operations[{index}]"
@@ -860,139 +1067,7 @@ def apply_operations_to_manifest(
             defects.append(f"{path} must be an object")
             continue
         operation = copy.deepcopy(raw_operation)
-        op = operation.get("op")
-        if op not in CONTRACT.ADAPTATION_ALLOWED_OPERATIONS:
-            defects.append(f"{path}.op must be one of {list(CONTRACT.ADAPTATION_ALLOWED_OPERATIONS)}")
-            continue
-        touched_protected = sorted(operation_branch_ids(operation) & protected_branch_ids)
-        if touched_protected:
-            defects.append(f"{path} attempts to modify protected branch ids: {', '.join(touched_protected)}")
-            continue
-
-        if op == "add_branch":
-            branch = operation.get("branch")
-            if not isinstance(branch, dict):
-                defects.append(f"{path}.branch must be an object")
-                continue
-            branch_id = branch.get("id")
-            if not isinstance(branch_id, str):
-                defects.append(f"{path}.branch.id must be a string")
-                continue
-            if branch_index(branches, branch_id) is not None:
-                defects.append(f"{path}.branch.id duplicates existing branch {branch_id}")
-                continue
-            branches.append(branch)
-            changed_branch_ids.add(branch_id)
-            continue
-
-        branch_id = operation.get("branch_id")
-        if not isinstance(branch_id, str):
-            defects.append(f"{path}.branch_id must be a string")
-            continue
-        target_index = branch_index(branches, branch_id)
-        if target_index is None:
-            defects.append(f"{path}.branch_id does not exist in the manifest: {branch_id}")
-            continue
-
-        if op == "replace_unstarted_branch":
-            branch = operation.get("branch")
-            if not isinstance(branch, dict):
-                defects.append(f"{path}.branch must be an object")
-                continue
-            replacement_id = branch.get("id")
-            if not isinstance(replacement_id, str):
-                defects.append(f"{path}.branch.id must be a string")
-                continue
-            existing_index = branch_index(branches, replacement_id)
-            if existing_index is not None and existing_index != target_index:
-                defects.append(f"{path}.branch.id duplicates existing branch {replacement_id}")
-                continue
-            branches[target_index] = branch
-            replace_dependency(branches[target_index + 1 :], branch_id, [replacement_id])
-            changed_branch_ids.add(replacement_id)
-            continue
-
-        if op == "split_unstarted_branch":
-            new_branches = require_list(operation.get("branches"), f"{path}.branches", defects, min_items=2)
-            if len(new_branches) > CONTRACT.MAX_ACTIVE_BRANCH_AGENTS:
-                defects.append(f"{path}.branches must contain at most {CONTRACT.MAX_ACTIVE_BRANCH_AGENTS} branches")
-                continue
-            if any(not isinstance(branch, dict) for branch in new_branches):
-                defects.append(f"{path}.branches entries must be objects")
-                continue
-            replacement_ids = [branch.get("id") for branch in new_branches]
-            if any(not isinstance(value, str) for value in replacement_ids):
-                defects.append(f"{path}.branches[].id values must be strings")
-                continue
-            duplicate_ids = {value for value in replacement_ids if replacement_ids.count(value) > 1}
-            if duplicate_ids:
-                defects.append(f"{path}.branches contain duplicate ids: {', '.join(sorted(duplicate_ids))}")
-                continue
-            for replacement_id in replacement_ids:
-                existing_index = branch_index(branches, str(replacement_id))
-                if existing_index is not None and existing_index != target_index:
-                    defects.append(f"{path}.branches id duplicates existing branch {replacement_id}")
-            if defects and defects[-1].startswith(path):
-                continue
-            branches[target_index : target_index + 1] = new_branches
-            replace_dependency(
-                branches[target_index + len(new_branches) :], branch_id, [str(value) for value in replacement_ids]
-            )
-            changed_branch_ids.update(str(value) for value in replacement_ids)
-            continue
-
-        target = branches[target_index]
-        if op == "add_dependency_to_unstarted_branch":
-            dependencies = require_list(operation.get("depends_on"), f"{path}.depends_on", defects, min_items=1)
-            for dependency in dependencies:
-                if not isinstance(dependency, str):
-                    defects.append(f"{path}.depends_on entries must be strings")
-                    continue
-                append_dependency(target, dependency)
-            changed_branch_ids.add(branch_id)
-            continue
-
-        if op == "add_work_item_to_unstarted_branch":
-            work_item = operation.get("work_item")
-            if not isinstance(work_item, dict):
-                defects.append(f"{path}.work_item must be an object")
-                continue
-            work_items = target.get("work_items")
-            if not isinstance(work_items, list):
-                defects.append(f"{path}.branch work_items must be an array")
-                continue
-            work_items.append(work_item)
-            target["work_items"] = work_items
-            changed_branch_ids.add(branch_id)
-            continue
-
-        if op == "mark_unstarted_branch_obsolete":
-            referencing: list[str] = []
-            for branch in branches:
-                if not isinstance(branch, dict):
-                    continue
-                if branch.get("id") == branch_id:
-                    continue
-                for field in ("depends_on", "recovers_from", "supersedes"):
-                    refs = branch.get(field)
-                    if isinstance(refs, list) and branch_id in refs:
-                        referencing.append(f"{branch.get('id')} ({field})")
-                        break
-            if referencing:
-                defects.append(
-                    f"{path} cannot mark {branch_id} obsolete while other branches reference it via "
-                    f"depends_on/recovers_from/supersedes: {', '.join(str(item) for item in referencing)}"
-                )
-                continue
-            removed = branches.pop(target_index)
-            obsolete_entries.append(
-                {
-                    "branch_id": branch_id,
-                    "reason": operation.get("reason", "Marked obsolete by accepted amendment."),
-                    "archived_branch": removed,
-                }
-            )
-            continue
+        _apply_one_operation(ctx, operation, path, protected_branch_ids=protected_branch_ids)
 
     defects.extend(
         changed_branch_nonpass_dependency_defects(
