@@ -778,7 +778,6 @@ def report_is_accepted(report: dict[str, Any], *, smoke_requested: bool) -> bool
 def profile_discovery_candidates(
     profile_name: str,
     *,
-    providers: list[str],
     model_filter: str | None,
     max_candidates: int | None,
 ) -> list[dict[str, Any]]:
@@ -786,12 +785,9 @@ def profile_discovery_candidates(
     if profile is None:
         raise SystemExit(f"unknown discovery profile: {profile_name}")
     matcher = re.compile(model_filter) if model_filter else None
-    allowed_providers = set(providers)
     candidates: list[dict[str, Any]] = []
     for item in profile["candidates"]:
         candidate = dict(item)
-        if allowed_providers and candidate.get("provider") not in allowed_providers:
-            continue
         text = " ".join(str(candidate.get(key, "")) for key in ("harness", "provider", "model", "alias"))
         if matcher and not matcher.search(text):
             continue
@@ -820,7 +816,6 @@ def discover_profile_routes(
     config: dict[str, Any],
     *,
     profile_name: str,
-    providers: list[str],
     model_filter: str | None,
     max_candidates: int | None,
     smoke: bool,
@@ -830,7 +825,6 @@ def discover_profile_routes(
     profile = DISCOVERY_PROFILES[profile_name]
     candidates = profile_discovery_candidates(
         profile_name,
-        providers=providers,
         model_filter=model_filter,
         max_candidates=max_candidates,
     )
@@ -899,7 +893,7 @@ def discover_profile_routes(
 
 
 def rejection_counts(rejected_routes: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    counts: dict[tuple[str, str, str, str], dict[str, Any]] = {}
+    counts: dict[tuple[str, str, str], dict[str, Any]] = {}
     for route in rejected_routes:
         if not isinstance(route, dict):
             continue
@@ -1025,9 +1019,8 @@ def print_report_summary(result: dict[str, Any], *, output: Path | None) -> None
             print(f"- {route_summary(route)}")
     print("rejection_counts:")
     for item in summary["rejection_counts"]:
-        status = f" status={item['status']}" if item.get("status") else ""
         print(
-            f"- {item.get('harness') or '-'} {item.get('provider') or '-'}{status} "
+            f"- {item.get('harness') or '-'} {item.get('provider') or '-'} "
             f"count={item.get('count')} message={item.get('message')}"
         )
 
@@ -1302,27 +1295,26 @@ def run_for_preflight_mode(args: argparse.Namespace, ctx: CheckContext) -> tuple
         write_state(result, output=args.output, state_output=args.state_output, for_preflight=True)
         write_report(result, output=args.output, stdout_mode=args.stdout_mode)
         return 1 if failures else 0, preflight_remediation
-    if failures or not args.smoke or not args.reuse_smoke_report:
-        result = base_check_result(
-            args,
-            ctx,
-            failures=failures,
-            checked_roles=[],
-            accepted_routes=[],
-            rejected_routes=[],
-            harnesses=[],
-        )
-        result.update(
-            {
-                "skipped_routes": [],
-                "unvisited_routes": [],
-                "remediation": preflight_remediation,
-            }
-        )
-        write_state(result, output=args.output, state_output=args.state_output, for_preflight=True)
-        write_report(result, output=args.output, stdout_mode=args.stdout_mode)
-        return 1 if failures else 0, preflight_remediation
-    return None, preflight_remediation
+
+    result = base_check_result(
+        args,
+        ctx,
+        failures=failures,
+        checked_roles=[],
+        accepted_routes=[],
+        rejected_routes=[],
+        harnesses=[],
+    )
+    result.update(
+        {
+            "skipped_routes": [],
+            "unvisited_routes": [],
+            "remediation": preflight_remediation,
+        }
+    )
+    write_state(result, output=args.output, state_output=args.state_output, for_preflight=True)
+    write_report(result, output=args.output, stdout_mode=args.stdout_mode)
+    return 1 if failures else 0, preflight_remediation
 
 
 def run_discover_mode(
@@ -1340,7 +1332,6 @@ def run_discover_mode(
         profile_candidates_, profile_reports, profile_failures, profile_unvisited = discover_profile_routes(
             config,
             profile_name=args.discover_profile,
-            providers=[],
             model_filter=args.discover_model_filter,
             max_candidates=args.discover_max,
             smoke=args.smoke,
