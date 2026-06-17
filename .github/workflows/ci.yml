@@ -34,6 +34,9 @@ jobs:
         run: |
           python3 -m py_compile $(find skills bin scripts -type f -name '*.py' | sort)
 
+      - name: Install dev tools
+        run: python3 -m pip install -r requirements-dev.txt
+
       - name: Run deterministic checks
         run: npm run check
 

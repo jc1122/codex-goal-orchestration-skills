@@ -24,9 +24,11 @@ def _call(monkeypatch, tmp_path, work_item, owned_files):
 def test_worker_no_owned_paths_rejected(monkeypatch, tmp_path):
     with pytest.raises(SystemExit) as exc:
         _call(monkeypatch, tmp_path, work_item={}, owned_files=[])
-    assert "owned" in str(exc.value).lower()
+    assert "declares no owned_paths" in str(exc.value)
 
 
 def test_worker_with_owned_paths_ok(monkeypatch, tmp_path):
     result = _call(monkeypatch, tmp_path, work_item={"owned_paths": ["src/x.py"]}, owned_files=[])
+    # compact_worker_context returns (task_text, context_files, artifact); pin owned_paths propagation.
     assert result is not None
+    assert result[2]["work_item"]["owned_paths"] == ["src/x.py"]

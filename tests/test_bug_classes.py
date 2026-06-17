@@ -3,6 +3,9 @@
 Each test would FAIL on the pre-fix code; verify red-green per the plan.
 """
 
+import subprocess
+from pathlib import Path
+
 import pytest
 
 from conftest import load_module
@@ -10,6 +13,10 @@ from conftest import load_module
 et = load_module("skills/_goal_shared/scripts/extract_telemetry.py")
 cg = load_module("skills/goal-config/scripts/create_goal_config.py")
 rpr = load_module("skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py")
+vb = load_module("skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "vb_ladder")
+ab = load_module("skills/goal-branch-orchestrator/scripts/assemble_branch_status.py", "ab_git")
+ccg = load_module("skills/goal-config/scripts/check_goal_config.py", "ccg_guard")
+_CONTRACT = ccg.load_contract()
 
 
 # --- extract_telemetry: a blocked lite_advisor must never be marked accepted ---
@@ -68,3 +75,36 @@ def test_worker_with_owned_flags_only_unowned():
     assert rpr.worker_ownership_violations({"role": "worker", "owned_files": ["a/"]}, ["a/b.py", "c/d.py"]) == [
         "c/d.py"
     ]
+
+
+# --- validate_worker_ladder: empty allowed + alias not in ladder must not raise (was ValueError) ---
+def test_validate_worker_ladder_no_valueerror_on_empty_allowed():
+    defects: list[str] = []
+    # pre-fix this raised ValueError (allowed.index on an empty list); the guard now returns instead.
+    result = vb.validate_worker_ladder(defects, ["x-route"], "$.ladder", allowed_routes=[], default_ladder=["a", "b"])
+    assert result == ["x-route"]
+
+
+# --- assemble_branch_status.changed_files_from_git: git failure records a blocker (fail-closed) ---
+def test_changed_files_from_git_failure_records_blocker(monkeypatch):
+    monkeypatch.setattr(
+        ab,
+        "run_git",
+        lambda *a, **k: subprocess.CompletedProcess(args=[], returncode=1, stdout="fatal: bad rev", stderr=""),
+    )
+    blockers: list[str] = []
+    result = ab.changed_files_from_git(Path("/nonexistent"), "main", blockers)
+    assert result == []
+    assert blockers and "failed" in blockers[0].lower()
+
+
+# --- check_goal_config.validate_for_preflight: a non-dict telemetry must not crash (was AttributeError) ---
+def test_validate_for_preflight_nondict_telemetry_no_crash():
+    config = {
+        "aggressiveness": {"max_active_branch_agents": 1, "max_active_worker_packets": 1, "max_waves": 1},
+        "validation": {"mode": "debug"},
+        "telemetry": "not-a-dict",
+    }
+    # pre-fix: config.get("telemetry", {}).get("mode") raised AttributeError on a non-dict telemetry.
+    failures = ccg.validate_for_preflight(config, "smoke", _CONTRACT)
+    assert any("telemetry" in failure for failure in failures)
