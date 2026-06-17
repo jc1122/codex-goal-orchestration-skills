@@ -1263,6 +1263,11 @@ def compact_worker_context(
     branch_scope = markdown_section(task_text, "Scope", max_chars=500)
     stop_conditions = markdown_section(task_text, "Stop Conditions", max_chars=500)
     work_owned_paths = compact_list(work_item.get("owned_paths")) or owned_files
+    if not work_owned_paths:
+        raise SystemExit(
+            f"worker packet {packet_id} (branch {branch_id}) declares no owned_paths; "
+            "a worker must own at least one path"
+        )
     work_context_files = compact_list(work_item.get("context_files"))
     verification = compact_list(work_item.get("verification"))
     dod = compact_list(work_item.get("dod"))
