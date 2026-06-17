@@ -37,8 +37,11 @@ require_safe_label = PATH_RULES.require_safe_packet_label
 
 
 def read_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object at {path}")
     return data

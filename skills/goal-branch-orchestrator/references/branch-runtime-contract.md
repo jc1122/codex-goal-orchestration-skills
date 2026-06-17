@@ -66,10 +66,11 @@ A timeout is a failed attempt. Do not poll active logs or status files while wai
 
 ## Reviewer Model Policy
 
-Use this reviewer/auditor preference:
+Reviewer routing is the deterministic, bridge-led tier router in `review_model_policy.routes` (the `REVIEW_MODEL_ROUTES` source of truth):
 
-1. `gpt-5.5`
-2. `gpt-5.4`
+1. `light` → `ds-flash-max`
+2. `standard` → `ds-pro-max`
+3. `heavy` → `ds-pro-max` then native `gpt-5.5`
 
 Reviewers are read-only. Their Codex attempts run with `--ignore-user-config --ignore-rules`; they produce findings, verification gaps, residual risks, mergeability verdicts, and same-packet `telemetry.json`.
 

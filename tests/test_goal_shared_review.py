@@ -68,9 +68,15 @@ def test_lite_prompt_tolerates_malformed_source_files():
 
 
 def test_lite_prompt_well_formed_is_byte_identical_to_get_form():
-    # The .get() hardening must not alter output for well-formed packets (hash stability).
-    item = {"path": "a.py", "sha256": "sha256:" + "0" * 64, "size_bytes": 12}
-    assert "- a.py (sha256:" in _build([item])
+    # The .get() hardening must not alter output for well-formed packets (the prompt hash
+    # is computed over this exact text). Lock the FULL rendered source line, not a prefix.
+    sha = "sha256:" + "0" * 64
+    item = {"path": "a.py", "sha256": sha, "size_bytes": 12}
+    expected_line = f"- a.py ({sha}, 12 bytes)"
+    rendered = _build([item])
+    assert expected_line in rendered
+    # exactly one source line, exactly as the pre-hardening f-string would have produced it
+    assert rendered.count("- a.py (") == 1
 
 
 # --- extract_telemetry tolerates non-list blockers (no TypeError, telemetry still produced) ---

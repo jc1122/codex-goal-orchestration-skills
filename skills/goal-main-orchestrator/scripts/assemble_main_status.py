@@ -282,7 +282,11 @@ def current_amendment_records(
         return [], set(), []
     terminal_statuses = _terminal_statuses(branch_statuses)
     active_ids = {item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()}
-    manifest_sha = sha256_file(manifest_path)
+    # Accept the pre-amendment (archived) manifest sha like the scheduler rollup below does;
+    # a launch decision records the sha at decision time, but apply_manifest_amendment then
+    # rewrites the live manifest (new sha) without refreshing the decision, so a strict
+    # current-sha match would drop a legitimate decision and block main `pass` post-amendment.
+    allowed_manifest_shas = STATUS_VALIDATION.archived_manifest_sha256s(manifest_path)
     records = []
     covered_branch_ids: set[str] = set()
     ignored: list[str] = []
@@ -300,7 +304,7 @@ def current_amendment_records(
         reasons: list[str] = []
         if data.get("manifest") != manifest_path.as_posix():
             reasons.append("manifest path mismatch")
-        if data.get("manifest_sha256") != manifest_sha:
+        if data.get("manifest_sha256") not in allowed_manifest_shas:
             reasons.append("manifest sha256 mismatch")
         overlap = sorted(active_ids & set(terminal_ids))
         if overlap:

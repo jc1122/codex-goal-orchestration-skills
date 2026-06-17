@@ -12,7 +12,10 @@ from pathlib import Path
 
 
 def _read_json(path: Path, label: str) -> dict:
-    data = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{label} is not valid JSON: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"{label} must be an object: {path}")
     return data
