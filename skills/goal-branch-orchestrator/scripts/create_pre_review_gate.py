@@ -726,7 +726,9 @@ def reuse_policy(
         telemetry_path,
         "reuse_source_telemetry",
         role="reviewer",
-        allowed_aliases=("gpt-5.4-mini", "gpt-5.4", "gpt-5.5"),
+        # Use the validator's reviewer allowlist (bridge-led REVIEW_MODEL_ROUTES + gpt) so the
+        # gate does not refuse a legitimately reused ds-pro-max / ds-flash-max reviewer telemetry.
+        allowed_aliases=BRANCH_VALIDATOR.REVIEWER_ALLOWED_ALIASES,
         require_called=True,
     )
     defects.extend(telemetry_defects)

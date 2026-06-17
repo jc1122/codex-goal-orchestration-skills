@@ -2600,7 +2600,13 @@ def extract_status_json(
     parse_report["failure_subclass"] = parse_report.get("failure_subclass")
     parse_report.setdefault("provider_error_code", None)
     parse_report["messages"] = parse_report.get("messages", [])
-    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    try:
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        # A missing/corrupt schema artifact must fail closed (treated as a parse failure →
+        # conservative blocked terminal), not abort the runner with a traceback.
+        parse_report["failure_subclass"] = "parser_failure"
+        return False
     marker_block = (
         string_value(config.get("status_markers", {}), "begin")
         if isinstance(config.get("status_markers"), dict)

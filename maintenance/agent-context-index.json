@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:8a806c8e84b62ff45f98f3e5433d6c34a6e8353bd40555d83f74c2e60285e180"
+    "source_fingerprint": "sha256:d34c05e25f72d10519936ea6f78454cab7ffe06d57661ad08d77cc142a7523c2"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -42,27 +42,27 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3394,
-      "approx_tokens": 33878,
+      "lines": 3384,
+      "approx_tokens": 33799,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "3157:main:234l",
-        "2458:compact_launch_config:139l",
-        "1247:compact_worker_context:121l",
-        "2832:resolve_worker_routing:111l"
+        "3147:main:234l",
+        "2448:compact_launch_config:139l",
+        "1237:compact_worker_context:121l",
+        "2822:resolve_worker_routing:111l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3515,
-      "approx_tokens": 33077,
+      "lines": 3521,
+      "approx_tokens": 33154,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "1920:run_opencode_bridge_model:280l",
         "1419:summarize_dirty_stop_salvage:131l",
-        "2592:extract_status_json:110l",
-        "3100:_run_worker_packet:100l"
+        "2592:extract_status_json:116l",
+        "3106:_run_worker_packet:100l"
       ]
     },
     {

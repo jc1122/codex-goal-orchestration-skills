@@ -117,7 +117,8 @@ def path_is_owned(path: str, owned_paths: list[str]) -> bool:
 def evidence_commands(evidence: dict) -> tuple[list[str], list[str]]:
     commands: list[str] = []
     tests: list[str] = []
-    for item in evidence.get("local_validation", []):
+    local_validation = evidence.get("local_validation")
+    for item in local_validation if isinstance(local_validation, list) else []:
         if not isinstance(item, dict):
             continue
         command = item.get("command")
@@ -129,10 +130,12 @@ def evidence_commands(evidence: dict) -> tuple[list[str], list[str]]:
                 tests.append(command.strip())
         if isinstance(result, str) and any(token in result.lower() for token in ("failed", "error", "mismatch=false")):
             raise SystemExit(f"repair evidence records non-passing validation result for {command!r}: {result}")
-    for value in evidence.get("commands_run", []):
+    commands_run = evidence.get("commands_run")
+    for value in commands_run if isinstance(commands_run, list) else []:
         if isinstance(value, str) and value.strip() and value.strip() not in commands:
             commands.append(value.strip())
-    for value in evidence.get("tests", []):
+    evidence_tests = evidence.get("tests")
+    for value in evidence_tests if isinstance(evidence_tests, list) else []:
         if isinstance(value, str) and value.strip() and value.strip() not in tests:
             tests.append(value.strip())
     if not any("git diff --check" in command for command in commands):
@@ -250,7 +253,7 @@ def resolve_promoted_changes(manifest: dict, branch: dict, item: dict, worktree:
         owned
         for work in branch.get("work_items", [])
         if isinstance(work, dict)
-        for owned in work.get("owned_paths", [])
+        for owned in (work.get("owned_paths") if isinstance(work.get("owned_paths"), list) else [])
         if isinstance(owned, str) and owned.strip()
     ]
     unowned = [path for path in changed_files if branch_owned and not path_is_owned(path, branch_owned)]
@@ -259,7 +262,12 @@ def resolve_promoted_changes(manifest: dict, branch: dict, item: dict, worktree:
             "repair evidence cannot promote branch changes outside declared owned paths: " + ", ".join(unowned)
         )
 
-    item_owned = [owned for owned in item.get("owned_paths", []) if isinstance(owned, str) and owned.strip()]
+    raw_item_owned = item.get("owned_paths")
+    item_owned = [
+        owned
+        for owned in (raw_item_owned if isinstance(raw_item_owned, list) else [])
+        if isinstance(owned, str) and owned.strip()
+    ]
     if not item_owned:
         raise SystemExit("repair promotion target work item declares no owned paths; cannot scope promoted changes")
     promoted_changed = [path for path in changed_files if path_is_owned(path, item_owned)]

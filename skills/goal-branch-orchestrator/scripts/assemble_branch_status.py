@@ -44,11 +44,24 @@ TEST_COMMAND_TOKENS = (" pytest ", "python3 -m pytest", "python -m pytest", "mak
 
 
 def read_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object at {path}")
     return data
+
+
+def read_object_or_blocker(path: Path, blockers: list[str], label: str) -> dict | None:
+    """Read a semi-trusted runtime artifact; on a malformed/non-object file record a
+    conservative blocker and return None rather than aborting the whole assembler."""
+    try:
+        return read_json(path)
+    except SystemExit as exc:
+        blockers.append(f"{label} is not a readable JSON object: {exc}")
+        return None
 
 
 def write_json(path: Path, data: object) -> None:
@@ -164,7 +177,10 @@ def synthesize_issue059_repair_evidence(
     partial_path = bundle_dir / "branches" / f"{branch_id}.partial.evidence.json"
     if not partial_path.exists():
         return None, [f"no repair-evidence candidate for {packet_id}"]
-    partial = read_json(partial_path)
+    try:
+        partial = read_json(partial_path)
+    except SystemExit as exc:
+        return None, [f"partial repair evidence for {packet_id} is not a readable JSON object: {exc}"]
     if partial.get("branch_id") != branch_id:
         return None, [f"partial repair evidence branch_id mismatch for {packet_id}: {partial.get('branch_id')!r}"]
     if partial.get("status") != "partial":
@@ -321,7 +337,9 @@ def collect_worker_statuses(
         if not artifact_path.exists():
             blockers.append(f"missing {role} artifact for {packet_id}: {artifact_path}")
             continue
-        status = read_json(artifact_path)
+        status = read_object_or_blocker(artifact_path, blockers, f"{role} artifact for {packet_id}")
+        if status is None:
+            continue
         if role == "worker":
             repair_blockers = promote_worker_with_repair_evidence(
                 manifest_path=manifest_path,
@@ -334,7 +352,10 @@ def collect_worker_statuses(
             )
             if repair_blockers:
                 blockers.extend(repair_blockers)
-            status = read_json(artifact_path)
+            reread = read_object_or_blocker(artifact_path, blockers, f"{role} artifact for {packet_id} after repair")
+            if reread is None:
+                continue
+            status = reread
         if role == "worker":
             status.setdefault("role", "worker")
         status["status_path"] = artifact_path.resolve().as_posix()
@@ -399,7 +420,7 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
                         scheduler_serial_reasons.append(
                             f"scheduler {event.get('event')} for {','.join(ids)}: {detail.strip()}"
                         )
-        except Exception as exc:  # noqa: BLE001
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - read_json raises SystemExit on non-dict
             defects.append(f"could not read scheduler refill events: {exc}")
     manifest_serial_reasons = (
         branch.get("worker_parallelism", {}).get("serial_reasons", [])
@@ -444,8 +465,11 @@ def collect_lite_advice(bundle_dir: Path, branch_id: str) -> list[dict]:
         inputs_path = packet_dir / "input-files.json"
         if not advice_path.exists() or not inputs_path.exists():
             continue
-        inputs = read_json(inputs_path)
-        advice = read_json(advice_path)
+        try:
+            inputs = read_json(inputs_path)
+            advice = read_json(advice_path)
+        except SystemExit:
+            continue  # advisory Lite packet with a malformed artifact is ignored, not fatal
         command = STATUS_VALIDATION.lite_validation_command(SCRIPT_DIR, advice_path.resolve(), inputs_path.resolve())
         result = subprocess.run(
             shlex.split(command),
@@ -581,7 +605,10 @@ def current_pre_review_gate(
     gate_path = bundle_dir / CONTRACT.pre_review_gate_path(branch_id)
     if not gate_path.exists():
         return None, {}, None, [f"current pre-review gate is missing: {gate_path}"]
-    gate = read_json(gate_path)
+    try:
+        gate = read_json(gate_path)
+    except SystemExit as exc:
+        return None, {}, None, [f"current pre-review gate is not a readable JSON object: {exc}"]
     if gate.get("status") != "pass":
         return gate, {}, None, [f"current pre-review gate is not pass: {gate_path}"]
     gate_hashes = gate.get("semantic_input_hashes")
@@ -627,7 +654,7 @@ def current_reviewer_candidates(
     for candidate in sorted(reviewers_dir.glob(f"{branch_id}-R*/review.json")):
         try:
             data = read_json(candidate)
-        except Exception as exc:  # noqa: BLE001
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 - read_json raises SystemExit on non-dict
             defects.append(f"candidate reviewer artifact is invalid JSON: {candidate}: {exc}")
             continue
         packet_id = data.get("packet_id")
@@ -688,12 +715,18 @@ def review_status(bundle_dir: Path, branch: dict, branch_id: str) -> tuple[str, 
     promotion_defects = promote_current_reviewer_if_newer(bundle_dir, review_path, branch_id)
     if promotion_defects and not review_path.exists():
         return "missing", promotion_defects
-    review = read_json(review_path)
+    try:
+        review = read_json(review_path)
+    except SystemExit as exc:
+        return "missing", [f"review artifact is not a readable JSON object: {exc}"]
     if not review_matches_gate(review, branch_id, expected_hashes, expected_packet_id):
         promotion_defects = promote_reviewer_output(bundle_dir, review_path, branch_id)
         if promotion_defects:
             return "missing", promotion_defects
-        review = read_json(review_path)
+        try:
+            review = read_json(review_path)
+        except SystemExit as exc:
+            return "missing", [f"review artifact is not a readable JSON object: {exc}"]
     verdict = review.get("verdict")
     verification_gaps = review.get("verification_gaps")
     if verdict not in CONTRACT.REVIEW_STATUSES:

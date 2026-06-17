@@ -870,19 +870,6 @@ def research_telemetry_attempts() -> list[dict]:
     )
 
 
-def telemetry_function(role: str, packet_id: str, output_name: str, attempts: list[dict]) -> str:
-    script = (Path(__file__).resolve().parent / "extract_telemetry.py").as_posix()
-    return CONTRACT.telemetry_shell_function(
-        script_path=script,
-        packet_dir_expr="$packet_dir",
-        packet_id=packet_id,
-        role=role,
-        output_name=output_name,
-        prompt_name="prompt.md",
-        attempts=attempts,
-    )
-
-
 def runtime_runner_path() -> Path:
     return Path(__file__).resolve().parent / "runtime_packet_runner.py"
 
@@ -1164,8 +1151,11 @@ def load_task(path: Path | None) -> str:
 
 
 def load_json(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object at {path}")
     return data

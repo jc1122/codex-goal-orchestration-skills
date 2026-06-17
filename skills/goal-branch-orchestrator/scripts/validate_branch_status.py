@@ -1100,7 +1100,9 @@ def validate_worker_manifest_identity(
         defect(defects, f"{item_path}.route_class", "must match manifest work item route_class")
     manifest_item = manifest_work_items.get(str(packet_id))
     expected_work_item_id = manifest_item.get("id") if isinstance(manifest_item, dict) else None
-    expected_route_id = f"{packet_id}:{artifact.get('route_class')}:{','.join(item for item in artifact.get('selected_ladder', []) if isinstance(item, str))}"
+    ladder = artifact.get("selected_ladder")
+    ladder_text = ",".join(item for item in ladder if isinstance(item, str)) if isinstance(ladder, list) else ""
+    expected_route_id = f"{packet_id}:{artifact.get('route_class')}:{ladder_text}"
     if artifact.get("branch_id") != branch_id:
         defect(defects, f"{item_path}.branch_id", "must match manifest branch id")
     if isinstance(expected_work_item_id, str) and artifact.get("work_item_id") != expected_work_item_id:
@@ -1983,6 +1985,9 @@ def validate_manifest_branch_identity(
     expected_gate_path = CONTRACT.pre_review_gate_path(branch_id)
     if pre_review_gate_path != expected_gate_path:
         defect(defects, "manifest.branch.pre_review_gate_path", f"must be {expected_gate_path!r}")
+    # A missing review_path would otherwise let validate_review_artifact_for_branch return early,
+    # bypassing every reviewer / pre-review-gate / worktree-freshness / base-range evidence check.
+    require_string(defects, branch_entry.get("review_path"), "manifest.branch.review_path")
 
 
 def validate_worker_status_packet_set(
@@ -2818,13 +2823,17 @@ def main() -> int:
     status_path = resolve_absolute_path(args.status, "--status", must_exist=True)
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     worktree = resolve_absolute_path(args.worktree, "--worktree", must_exist=True).as_posix() if args.worktree else None
-    status_data = load_json(status_path)
-    defects = validate_branch_status(
+    # The gate must fail closed: a malformed status/manifest yields a structured `failed`
+    # result with defects, not an unhandled JSONDecodeError traceback.
+    boot_defects: list[str] = []
+    status_data = load_json_artifact(boot_defects, status_path, "$")
+    manifest_data = load_json_artifact(boot_defects, manifest_path, "$.manifest")
+    defects = boot_defects + validate_branch_status(
         status_data,
         branch_id=args.branch_id,
         branch=args.branch,
         worktree=worktree,
-        manifest=load_json(manifest_path),
+        manifest=manifest_data,
         manifest_path=manifest_path,
         status_path=status_path,
         allow_archived_manifest_hashes=args.allow_archived_manifest_hashes,

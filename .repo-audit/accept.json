@@ -124,6 +124,14 @@
     {
       "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_runtime_lite_advice_entries", "metric": "dead_code_confidence"},
       "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_runtime_lite_advice_entries in validate_main_status / validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "symbol": "is_worktree_dirty", "metric": "dead_code_confidence"},
+      "reason": "Tested utility consumed only by the preparedness fixture harness (scripts/check_preparedness_fixtures.py asserts archived-vs-live worktree dirtiness incl. ignore_runtime_cache), which is gated by npm run check:fixtures; vulture cannot see the importlib consumer. Production dirty-detection uses packet_delta_changed_files. Verified 2026-06-18."
+    },
+    {
+      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "symbol": "clear_git_stdout_cache", "metric": "dead_code_confidence"},
+      "reason": "Legitimate test-support utility: scripts/check_preparedness_fixtures.py clears the per-process git stdout cache between archived-mode and live-mode freshness assertions (after git branch -f moves the ref) so the live snapshot recomputes; gated by npm run check:fixtures. vulture cannot see the importlib consumer. Verified 2026-06-18."
     }
   ]
 }
