@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:6480dd86bde303df6d9fe263866c24b8191abc21b5fe9052a0c2310354c90d64"
+    "source_fingerprint": "sha256:9eae038e020f96bbdf30bc47b78d7ac021fe55ebc5f0c484ce569e1aa14ba9ec"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -55,14 +55,14 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3217,
-      "approx_tokens": 31646,
+      "lines": 3515,
+      "approx_tokens": 33019,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2750:run_packet:426l",
         "1918:run_opencode_bridge_model:280l",
         "1417:summarize_dirty_stop_salvage:131l",
-        "2590:extract_status_json:110l"
+        "2590:extract_status_json:110l",
+        "3098:_run_worker_packet:100l"
       ]
     },
     {

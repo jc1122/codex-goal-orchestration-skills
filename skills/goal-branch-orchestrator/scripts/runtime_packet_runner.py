@@ -16,7 +16,7 @@ import sys
 import time
 from datetime import datetime, UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 import contextlib
 
 
@@ -2747,7 +2747,19 @@ def run_worker_attempt(
     raise SystemExit(f"{CONFIG_NAME} unsupported worker provider: {provider}")
 
 
-def run_packet(packet_dir: Path) -> int:
+class _PacketContext(NamedTuple):
+    """Resolved per-packet locals shared by the worker and review route loops."""
+
+    config: dict[str, Any]
+    role: str
+    output_name: str
+    output_path: Path
+    worktree: str
+    attempts: list[dict[str, Any]]
+    schema_name: str
+
+
+def _run_packet_setup(packet_dir: Path) -> _PacketContext:
     config = read_json(packet_dir / CONFIG_NAME)
     if config.get("schema_version") != 1:
         raise SystemExit(f"{CONFIG_NAME} schema_version must be 1")
@@ -2765,389 +2777,603 @@ def run_packet(packet_dir: Path) -> int:
         remove_if_exists(packet_dir / debug_name)
     guard_scheduler_closed_pass(packet_dir, config)
     clean_outputs(packet_dir, output_name, attempts, config)
+    return _PacketContext(
+        config=config,
+        role=role,
+        output_name=output_name,
+        output_path=output_path,
+        worktree=worktree,
+        attempts=attempts,
+        schema_name=schema_name,
+    )
 
-    if role == "worker":
-        baseline_changed_files = changed_file_fingerprints(worktree)
-        for index, attempt in enumerate(attempts):
-            command_lines = command_lines_from_attempts(attempts)
-            degraded = degraded_route_health(packet_dir, attempt)
-            if degraded is not None:
-                message = (
-                    f"{event_label(attempt, f'attempt-{index + 1}')} skipped because bundle route health "
-                    f"degraded after {degraded.get('degraded_reason')}"
-                )
-                attempt["called"] = False
-                attempt["accepted"] = False
-                attempt["failure_class"] = "route_degraded"
-                attempt["failure_subclass"] = "route_degraded"
-                attempt["provider_error_code"] = "ROUTE_HEALTH_DEGRADED"
-                attempt["route_health"] = {
-                    "transport_disconnect_count": 0,
-                    "capacity_exhausted": False,
-                    "degraded": True,
-                    "degraded_reason": degraded.get("degraded_reason"),
-                    "degraded_after_count": degraded.get("degraded_after_count"),
-                }
-                attempt["status_parse"] = {
-                    "status": "failed",
-                    "failure_subclass": "route_degraded",
-                    "provider_error_code": "ROUTE_HEALTH_DEGRADED",
-                    "messages": [message],
-                    "message_count": 1,
-                    "final_message": message,
-                }
-                write_launcher_state(
-                    packet_dir,
-                    config,
-                    state="fail-clean",
-                    attempt=attempt,
-                    attempt_index=index,
-                    returncode=1,
-                    dirty=False,
-                    output_nonempty=False,
-                    message=message,
-                    stop_reason="route_degraded",
-                )
-                continue
-            write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
-            rc, event_path = run_worker_attempt(
-                packet_dir=packet_dir,
-                config=config,
-                attempt=attempt,
-                attempt_index=index,
-                schema_name=schema_name,
-                output_name=output_name,
-                worktree=worktree,
-            )
-            output_nonempty = output_path.exists() and output_path.stat().st_size > 0
-            cleanup = cleanup_generated_artifacts(worktree, attempt_index=index, attempt=attempt)
-            record_generated_artifact_cleanup(packet_dir, attempt, cleanup)
-            packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
-            dirty = bool(packet_changed_files)
-            state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
-            parse_report = attempt.get("_parse_report")
-            if not isinstance(parse_report, dict):
-                parse_report = {}
-                attempt["_parse_report"] = parse_report
-            parse_messages = _event_parse_messages(parse_report)
-            failure_message = "; ".join(parse_messages[:2]) if parse_messages else ""
-            stop_reason = _attempt_stop_reason(attempt, state)
-            _finalize_attempt_observation(
-                attempt,
-                parse_report=parse_report,
-                output_path=output_path,
-                event_path=event_path,
-                attempt_state=state,
-                returncode=rc,
-                dirty=dirty,
-                output_nonempty=output_nonempty,
-                message=failure_message,
-            )
-            record_bundle_route_failure(packet_dir, attempt)
-            command_lines = command_lines_from_attempts(attempts)
-            write_launcher_state(
-                packet_dir,
-                config,
-                state=state,
-                attempt=attempt,
-                attempt_index=index,
-                returncode=rc,
-                dirty=dirty,
-                output_nonempty=output_nonempty,
-                elapsed_ms=attempt_elapsed_ms(attempt),
-                stop_reason=stop_reason,
-            )
-            if rc == 0:
-                ownership_violations = worker_ownership_violations(config, packet_changed_files)
-                if ownership_violations:
-                    message = "worker changed files outside owned paths: " + ", ".join(ownership_violations)
-                    attempt["failure_class"] = "ownership"
-                    attempt["failure_subclass"] = "owned_path_violation"
-                    attempt["owned_path_violation"] = ownership_violations
-                    parse_report["failure_subclass"] = "owned_path_violation"
-                    (packet_dir / "ownership.blocked.txt").write_text(message + "\n", encoding="utf-8")
-                    write_terminal(
-                        packet_dir, config, message, changed_files=packet_changed_files, commands_run=command_lines
-                    )
-                    write_launcher_state(
-                        packet_dir,
-                        config,
-                        state="blocked",
-                        attempt=attempt,
-                        attempt_index=index,
-                        returncode=rc,
-                        dirty=True,
-                        output_nonempty=output_nonempty,
-                        message=message,
-                        elapsed_ms=attempt_elapsed_ms(attempt),
-                        stop_reason=stop_reason,
-                    )
-                    cleanup_runtime_cache_evidence(packet_dir, config)
-                    write_telemetry(packet_dir, config)
-                    return 2
-                cleanup_runtime_cache_evidence(packet_dir, config)
-                write_telemetry(packet_dir, config)
-                return 0
-            if dirty:
-                label = event_label(attempt, f"attempt-{index + 1}")
-                suffix = "refusing fallback in same worktree." if index < len(attempts) - 1 else "no fallback remains."
-                message = f"{label} failed after leaving dirty worktree; {suffix}"
-                if failure_message:
-                    message = f"{message} details: {failure_message}"
-                (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
-                salvage_context = summarize_dirty_stop_salvage(
-                    packet_dir=packet_dir,
-                    config=config,
-                    worktree=worktree,
-                    packet_changed_files=packet_changed_files,
-                    attempt=attempt,
-                    attempt_index=index,
-                    message=message,
-                )
-                write_terminal(
-                    packet_dir,
-                    config,
-                    message,
-                    changed_files=packet_changed_files,
-                    commands_run=command_lines,
-                    salvage_context=salvage_context,
-                )
-                write_launcher_state(
-                    packet_dir,
-                    config,
-                    state="blocked",
-                    attempt=attempt,
-                    attempt_index=index,
-                    returncode=rc,
-                    dirty=True,
-                    output_nonempty=output_nonempty,
-                    message=message,
-                    elapsed_ms=attempt_elapsed_ms(attempt),
-                    stop_reason=stop_reason,
-                    salvage_context=salvage_context,
-                )
-                cleanup_runtime_cache_evidence(packet_dir, config)
-                write_telemetry(packet_dir, config)
-                return 2
-            if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
-                clear_invalid_output_for_fallback(output_path)
-                continue
-            if output_nonempty:
-                message = string_value(config, "terminal_message")
-                if failure_message:
-                    message = f"{message}: {failure_message}"
-                command_lines = command_lines_from_attempts(attempts)
-                write_terminal(packet_dir, config, message, commands_run=command_lines)
-                write_launcher_state(
-                    packet_dir,
-                    config,
-                    state="blocked",
-                    attempt=attempt,
-                    attempt_index=index,
-                    returncode=rc,
-                    dirty=False,
-                    output_nonempty=output_nonempty,
-                    message=message,
-                    elapsed_ms=attempt_elapsed_ms(attempt),
-                    stop_reason=stop_reason,
-                )
-                cleanup_runtime_cache_evidence(packet_dir, config)
-                write_telemetry(packet_dir, config)
-                return 1
-        packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
-        if packet_changed_files:
-            message = "worker failed after leaving dirty worktree; no fallback remains."
-            (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
-            command_lines = command_lines_from_attempts(attempts)
-            salvage_context = summarize_dirty_stop_salvage(
-                packet_dir=packet_dir,
-                config=config,
-                worktree=worktree,
-                packet_changed_files=packet_changed_files,
-                attempt=attempts[-1] if attempts else {},
-                attempt_index=len(attempts) - 1 if attempts else None,
-                message=message,
-            )
-            write_terminal(
-                packet_dir,
-                config,
-                message,
-                changed_files=packet_changed_files,
-                commands_run=command_lines,
-                salvage_context=salvage_context,
-            )
-            write_launcher_state(
-                packet_dir,
-                config,
-                state="blocked",
-                attempt=attempts[-1] if attempts else None,
-                attempt_index=len(attempts) - 1 if attempts else None,
-                returncode=rc,
-                dirty=True,
-                message=message,
-                stop_reason="dirty_stop",
-                salvage_context=salvage_context,
-            )
-            cleanup_runtime_cache_evidence(packet_dir, config)
-            write_telemetry(packet_dir, config)
-            return 2
-        message = string_value(config, "terminal_message")
-        parse_report = attempts[-1].get("_parse_report") if attempts else {}
-        if isinstance(parse_report, dict):
-            parse_messages = _event_parse_messages(parse_report)
-            if parse_messages:
-                message = f"{message}: {'; '.join(parse_messages[:2])}"
-        final_attempt = attempts[-1] if attempts else {}
+
+def _worker_skip_degraded_route(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    degraded: dict[str, Any],
+) -> None:
+    message = (
+        f"{event_label(attempt, f'attempt-{index + 1}')} skipped because bundle route health "
+        f"degraded after {degraded.get('degraded_reason')}"
+    )
+    attempt["called"] = False
+    attempt["accepted"] = False
+    attempt["failure_class"] = "route_degraded"
+    attempt["failure_subclass"] = "route_degraded"
+    attempt["provider_error_code"] = "ROUTE_HEALTH_DEGRADED"
+    attempt["route_health"] = {
+        "transport_disconnect_count": 0,
+        "capacity_exhausted": False,
+        "degraded": True,
+        "degraded_reason": degraded.get("degraded_reason"),
+        "degraded_after_count": degraded.get("degraded_after_count"),
+    }
+    attempt["status_parse"] = {
+        "status": "failed",
+        "failure_subclass": "route_degraded",
+        "provider_error_code": "ROUTE_HEALTH_DEGRADED",
+        "messages": [message],
+        "message_count": 1,
+        "final_message": message,
+    }
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="fail-clean",
+        attempt=attempt,
+        attempt_index=index,
+        returncode=1,
+        dirty=False,
+        output_nonempty=False,
+        message=message,
+        stop_reason="route_degraded",
+    )
+
+
+def _worker_observe_attempt(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    event_path: Path | None,
+    output_path: Path,
+    worktree: str,
+    baseline_changed_files: dict[str, str],
+) -> tuple[list[str], bool, str, dict[str, Any], str, str | None]:
+    """Replay the worker per-attempt cleanup/observation/launcher-state block exactly.
+
+    Returns (packet_changed_files, output_nonempty, state, parse_report,
+    failure_message, stop_reason).
+    """
+    output_nonempty = output_path.exists() and output_path.stat().st_size > 0
+    cleanup = cleanup_generated_artifacts(worktree, attempt_index=index, attempt=attempt)
+    record_generated_artifact_cleanup(packet_dir, attempt, cleanup)
+    packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
+    dirty = bool(packet_changed_files)
+    state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
+    parse_report = attempt.get("_parse_report")
+    if not isinstance(parse_report, dict):
+        parse_report = {}
+        attempt["_parse_report"] = parse_report
+    parse_messages = _event_parse_messages(parse_report)
+    failure_message = "; ".join(parse_messages[:2]) if parse_messages else ""
+    stop_reason = _attempt_stop_reason(attempt, state)
+    _finalize_attempt_observation(
+        attempt,
+        parse_report=parse_report,
+        output_path=output_path,
+        event_path=event_path,
+        attempt_state=state,
+        returncode=rc,
+        dirty=dirty,
+        output_nonempty=output_nonempty,
+        message=failure_message,
+    )
+    record_bundle_route_failure(packet_dir, attempt)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state=state,
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=dirty,
+        output_nonempty=output_nonempty,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason=stop_reason,
+    )
+    return packet_changed_files, output_nonempty, state, parse_report, failure_message, stop_reason
+
+
+def _worker_handle_ownership_violation(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    output_nonempty: bool,
+    stop_reason: str | None,
+    parse_report: dict[str, Any],
+    packet_changed_files: list[str],
+    command_lines: list[str],
+    ownership_violations: list[str],
+) -> int:
+    message = "worker changed files outside owned paths: " + ", ".join(ownership_violations)
+    attempt["failure_class"] = "ownership"
+    attempt["failure_subclass"] = "owned_path_violation"
+    attempt["owned_path_violation"] = ownership_violations
+    parse_report["failure_subclass"] = "owned_path_violation"
+    (packet_dir / "ownership.blocked.txt").write_text(message + "\n", encoding="utf-8")
+    write_terminal(packet_dir, config, message, changed_files=packet_changed_files, commands_run=command_lines)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=True,
+        output_nonempty=output_nonempty,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason=stop_reason,
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
+    write_telemetry(packet_dir, config)
+    return 2
+
+
+def _worker_handle_dirty_stop(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    output_nonempty: bool,
+    stop_reason: str | None,
+    worktree: str,
+    packet_changed_files: list[str],
+    command_lines: list[str],
+    attempts: list[dict[str, Any]],
+    failure_message: str,
+) -> int:
+    label = event_label(attempt, f"attempt-{index + 1}")
+    suffix = "refusing fallback in same worktree." if index < len(attempts) - 1 else "no fallback remains."
+    message = f"{label} failed after leaving dirty worktree; {suffix}"
+    if failure_message:
+        message = f"{message} details: {failure_message}"
+    (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
+    salvage_context = summarize_dirty_stop_salvage(
+        packet_dir=packet_dir,
+        config=config,
+        worktree=worktree,
+        packet_changed_files=packet_changed_files,
+        attempt=attempt,
+        attempt_index=index,
+        message=message,
+    )
+    write_terminal(
+        packet_dir,
+        config,
+        message,
+        changed_files=packet_changed_files,
+        commands_run=command_lines,
+        salvage_context=salvage_context,
+    )
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=True,
+        output_nonempty=output_nonempty,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason=stop_reason,
+        salvage_context=salvage_context,
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
+    write_telemetry(packet_dir, config)
+    return 2
+
+
+def _worker_handle_invalid_output(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    output_nonempty: bool,
+    stop_reason: str | None,
+    attempts: list[dict[str, Any]],
+    failure_message: str,
+) -> int:
+    message = string_value(config, "terminal_message")
+    if failure_message:
+        message = f"{message}: {failure_message}"
+    command_lines = command_lines_from_attempts(attempts)
+    write_terminal(packet_dir, config, message, commands_run=command_lines)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=False,
+        output_nonempty=output_nonempty,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason=stop_reason,
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
+    write_telemetry(packet_dir, config)
+    return 1
+
+
+def _worker_finalize_no_success(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    worktree: str,
+    attempts: list[dict[str, Any]],
+    baseline_changed_files: dict[str, str],
+    rc: int,
+) -> int:
+    packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
+    if packet_changed_files:
+        message = "worker failed after leaving dirty worktree; no fallback remains."
+        (packet_dir / "fallback.blocked.txt").write_text(message + "\n", encoding="utf-8")
         command_lines = command_lines_from_attempts(attempts)
-        final_state = "fail-clean" if attempts else None
-        final_stop_reason = _attempt_stop_reason(final_attempt, final_state) if final_state else None
-        write_terminal(packet_dir, config, message, commands_run=command_lines)
+        salvage_context = summarize_dirty_stop_salvage(
+            packet_dir=packet_dir,
+            config=config,
+            worktree=worktree,
+            packet_changed_files=packet_changed_files,
+            attempt=attempts[-1] if attempts else {},
+            attempt_index=len(attempts) - 1 if attempts else None,
+            message=message,
+        )
+        write_terminal(
+            packet_dir,
+            config,
+            message,
+            changed_files=packet_changed_files,
+            commands_run=command_lines,
+            salvage_context=salvage_context,
+        )
         write_launcher_state(
             packet_dir,
             config,
             state="blocked",
             attempt=attempts[-1] if attempts else None,
             attempt_index=len(attempts) - 1 if attempts else None,
-            dirty=False,
+            returncode=rc,
+            dirty=True,
             message=message,
-            elapsed_ms=attempt_elapsed_ms(final_attempt) if attempts else None,
-            stop_reason=final_stop_reason,
+            stop_reason="dirty_stop",
+            salvage_context=salvage_context,
         )
         cleanup_runtime_cache_evidence(packet_dir, config)
         write_telemetry(packet_dir, config)
-        return 1
-
-    baseline_changed_files = changed_file_fingerprints(worktree)
-    for index, attempt in enumerate(attempts):
-        _label = event_label(attempt, f"attempt-{index + 1}")
-        provider = attempt.get("harness_kind") or attempt.get("provider")
-        write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
-        event_path: Path | None = None
-        if provider == "codex":
-            rc, _, event_path = run_codex_model(
-                attempt,
-                packet_dir=packet_dir,
-                config=config,
-                schema_name=schema_name,
-                output_name=output_name,
-                worktree=worktree,
-                label=_label,
-            )
-        elif provider == BRIDGE_HARNESS_KIND:
-            rc, _, event_path = run_opencode_bridge_model(
-                attempt,
-                packet_dir=packet_dir,
-                config=config,
-                schema_name=schema_name,
-                output_name=output_name,
-                worktree=worktree,
-                label=_label,
-            )
-        elif provider == "generic-cli":
-            rc, _, event_path = run_generic_cli_model(
-                attempt,
-                packet_dir=packet_dir,
-                config=config,
-                schema_name=schema_name,
-                output_name=output_name,
-                worktree=worktree,
-                label=_label,
-            )
-        else:
-            raise SystemExit(f"{CONFIG_NAME} unsupported {role} provider: {provider}")
-        output_nonempty = output_path.exists() and output_path.stat().st_size > 0
-        cleanup = cleanup_generated_artifacts(worktree, attempt_index=index, attempt=attempt)
-        record_generated_artifact_cleanup(packet_dir, attempt, cleanup)
-        packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
-        dirty = bool(packet_changed_files)
-        state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
-        parse_report = attempt.get("_parse_report")
-        if not isinstance(parse_report, dict):
-            parse_report = {}
-            attempt["_parse_report"] = parse_report
+        return 2
+    message = string_value(config, "terminal_message")
+    parse_report = attempts[-1].get("_parse_report") if attempts else {}
+    if isinstance(parse_report, dict):
         parse_messages = _event_parse_messages(parse_report)
-        failure_message = "; ".join(parse_messages[:2]) if parse_messages else ""
-        _finalize_attempt_observation(
-            attempt,
-            parse_report=parse_report,
-            output_path=output_path,
-            event_path=event_path,
-            attempt_state=state,
-            returncode=rc,
-            dirty=dirty,
-            output_nonempty=output_nonempty,
-            message=failure_message,
-        )
-        stop_reason = _attempt_stop_reason(attempt, state)
-        write_launcher_state(
-            packet_dir,
-            config,
-            state=state,
+        if parse_messages:
+            message = f"{message}: {'; '.join(parse_messages[:2])}"
+    final_attempt = attempts[-1] if attempts else {}
+    command_lines = command_lines_from_attempts(attempts)
+    final_state = "fail-clean" if attempts else None
+    final_stop_reason = _attempt_stop_reason(final_attempt, final_state) if final_state else None
+    write_terminal(packet_dir, config, message, commands_run=command_lines)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempts[-1] if attempts else None,
+        attempt_index=len(attempts) - 1 if attempts else None,
+        dirty=False,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(final_attempt) if attempts else None,
+        stop_reason=final_stop_reason,
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
+    write_telemetry(packet_dir, config)
+    return 1
+
+
+def _run_worker_packet(packet_dir: Path, ctx: _PacketContext) -> int:
+    config = ctx.config
+    output_path = ctx.output_path
+    worktree = ctx.worktree
+    attempts = ctx.attempts
+    schema_name = ctx.schema_name
+    output_name = ctx.output_name
+    baseline_changed_files = changed_file_fingerprints(worktree)
+    rc = 0
+    for index, attempt in enumerate(attempts):
+        degraded = degraded_route_health(packet_dir, attempt)
+        if degraded is not None:
+            _worker_skip_degraded_route(packet_dir, config, attempt=attempt, index=index, degraded=degraded)
+            continue
+        write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
+        rc, event_path = run_worker_attempt(
+            packet_dir=packet_dir,
+            config=config,
             attempt=attempt,
             attempt_index=index,
-            returncode=rc,
-            dirty=dirty,
-            output_nonempty=output_nonempty,
-            elapsed_ms=attempt_elapsed_ms(attempt),
-            stop_reason=stop_reason,
+            schema_name=schema_name,
+            output_name=output_name,
+            worktree=worktree,
         )
-        if rc == 0 and dirty:
-            message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(
-                packet_changed_files
-            )
-            attempt["failure_class"] = "dirty_worktree"
-            attempt["failure_subclass"] = "read_only_attempt_left_dirty_worktree"
-            (packet_dir / "dirty-worktree.blocked.txt").write_text(message + "\n", encoding="utf-8")
-            write_launcher_state(
-                packet_dir,
-                config,
-                state="blocked",
-                attempt=attempt,
-                attempt_index=index,
-                returncode=rc,
-                dirty=True,
-                output_nonempty=output_nonempty,
-                message=message,
-                elapsed_ms=attempt_elapsed_ms(attempt),
-                stop_reason="dirty_stop",
-            )
-            cleanup_runtime_cache_evidence(packet_dir, config)
-            write_telemetry(packet_dir, config)
-            write_packet_summary(packet_dir, config)
-            return 2
+        (
+            packet_changed_files,
+            output_nonempty,
+            state,
+            parse_report,
+            failure_message,
+            stop_reason,
+        ) = _worker_observe_attempt(
+            packet_dir,
+            config,
+            attempt=attempt,
+            index=index,
+            rc=rc,
+            event_path=event_path,
+            output_path=output_path,
+            worktree=worktree,
+            baseline_changed_files=baseline_changed_files,
+        )
+        command_lines = command_lines_from_attempts(attempts)
         if rc == 0:
+            ownership_violations = worker_ownership_violations(config, packet_changed_files)
+            if ownership_violations:
+                return _worker_handle_ownership_violation(
+                    packet_dir,
+                    config,
+                    attempt=attempt,
+                    index=index,
+                    rc=rc,
+                    output_nonempty=output_nonempty,
+                    stop_reason=stop_reason,
+                    parse_report=parse_report,
+                    packet_changed_files=packet_changed_files,
+                    command_lines=command_lines,
+                    ownership_violations=ownership_violations,
+                )
             cleanup_runtime_cache_evidence(packet_dir, config)
             write_telemetry(packet_dir, config)
             return 0
-        if output_nonempty:
-            if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
-                clear_invalid_output_for_fallback(output_path)
-                continue
-            message = string_value(config, "terminal_message")
-            if failure_message:
-                message = f"{message}: {failure_message}"
-            command_lines = command_lines_from_attempts(attempts)
-            write_terminal(packet_dir, config, message, commands_run=command_lines)
-            write_launcher_state(
+        if bool(packet_changed_files):
+            return _worker_handle_dirty_stop(
                 packet_dir,
                 config,
-                state="blocked",
                 attempt=attempt,
-                attempt_index=index,
-                returncode=rc,
-                dirty=False,
+                index=index,
+                rc=rc,
                 output_nonempty=output_nonempty,
-                message=message,
-                elapsed_ms=attempt_elapsed_ms(attempt),
                 stop_reason=stop_reason,
+                worktree=worktree,
+                packet_changed_files=packet_changed_files,
+                command_lines=command_lines,
+                attempts=attempts,
+                failure_message=failure_message,
             )
-            cleanup_runtime_cache_evidence(packet_dir, config)
-            write_telemetry(packet_dir, config)
-            return 1
         if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
             clear_invalid_output_for_fallback(output_path)
             continue
+        if output_nonempty:
+            return _worker_handle_invalid_output(
+                packet_dir,
+                config,
+                attempt=attempt,
+                index=index,
+                rc=rc,
+                output_nonempty=output_nonempty,
+                stop_reason=stop_reason,
+                attempts=attempts,
+                failure_message=failure_message,
+            )
+    return _worker_finalize_no_success(
+        packet_dir,
+        config,
+        worktree=worktree,
+        attempts=attempts,
+        baseline_changed_files=baseline_changed_files,
+        rc=rc,
+    )
 
+
+def _review_dispatch_attempt(
+    packet_dir: Path,
+    ctx: _PacketContext,
+    *,
+    attempt: dict[str, Any],
+    label: str,
+) -> tuple[int, Path | None]:
+    provider = attempt.get("harness_kind") or attempt.get("provider")
+    if provider == "codex":
+        rc, _, event_path = run_codex_model(
+            attempt,
+            packet_dir=packet_dir,
+            config=ctx.config,
+            schema_name=ctx.schema_name,
+            output_name=ctx.output_name,
+            worktree=ctx.worktree,
+            label=label,
+        )
+        return rc, event_path
+    if provider == BRIDGE_HARNESS_KIND:
+        rc, _, event_path = run_opencode_bridge_model(
+            attempt,
+            packet_dir=packet_dir,
+            config=ctx.config,
+            schema_name=ctx.schema_name,
+            output_name=ctx.output_name,
+            worktree=ctx.worktree,
+            label=label,
+        )
+        return rc, event_path
+    if provider == "generic-cli":
+        rc, _, event_path = run_generic_cli_model(
+            attempt,
+            packet_dir=packet_dir,
+            config=ctx.config,
+            schema_name=ctx.schema_name,
+            output_name=ctx.output_name,
+            worktree=ctx.worktree,
+            label=label,
+        )
+        return rc, event_path
+    raise SystemExit(f"{CONFIG_NAME} unsupported {ctx.role} provider: {provider}")
+
+
+def _review_observe_attempt(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    event_path: Path | None,
+    output_path: Path,
+    worktree: str,
+    baseline_changed_files: dict[str, str],
+) -> tuple[list[str], bool, str, dict[str, Any], str, str | None]:
+    """Replay the reviewer/research per-attempt cleanup/observation block exactly.
+
+    Returns (packet_changed_files, output_nonempty, state, parse_report,
+    failure_message, stop_reason).
+    """
+    output_nonempty = output_path.exists() and output_path.stat().st_size > 0
+    cleanup = cleanup_generated_artifacts(worktree, attempt_index=index, attempt=attempt)
+    record_generated_artifact_cleanup(packet_dir, attempt, cleanup)
+    packet_changed_files = packet_delta_changed_files(worktree, baseline_changed_files)
+    dirty = bool(packet_changed_files)
+    state = classify_attempt_state(rc, output_nonempty=output_nonempty, dirty=dirty)
+    parse_report = attempt.get("_parse_report")
+    if not isinstance(parse_report, dict):
+        parse_report = {}
+        attempt["_parse_report"] = parse_report
+    parse_messages = _event_parse_messages(parse_report)
+    failure_message = "; ".join(parse_messages[:2]) if parse_messages else ""
+    _finalize_attempt_observation(
+        attempt,
+        parse_report=parse_report,
+        output_path=output_path,
+        event_path=event_path,
+        attempt_state=state,
+        returncode=rc,
+        dirty=dirty,
+        output_nonempty=output_nonempty,
+        message=failure_message,
+    )
+    stop_reason = _attempt_stop_reason(attempt, state)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state=state,
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=dirty,
+        output_nonempty=output_nonempty,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason=stop_reason,
+    )
+    return packet_changed_files, output_nonempty, state, parse_report, failure_message, stop_reason
+
+
+def _review_handle_dirty_stop(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    role: str,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    output_nonempty: bool,
+    packet_changed_files: list[str],
+) -> int:
+    message = f"{role} changed worktree files despite read-only/review semantics: " + ", ".join(
+        packet_changed_files
+    )
+    attempt["failure_class"] = "dirty_worktree"
+    attempt["failure_subclass"] = "read_only_attempt_left_dirty_worktree"
+    (packet_dir / "dirty-worktree.blocked.txt").write_text(message + "\n", encoding="utf-8")
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=True,
+        output_nonempty=output_nonempty,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason="dirty_stop",
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
+    write_telemetry(packet_dir, config)
+    write_packet_summary(packet_dir, config)
+    return 2
+
+
+def _review_handle_invalid_output(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempt: dict[str, Any],
+    index: int,
+    rc: int,
+    output_nonempty: bool,
+    stop_reason: str | None,
+    attempts: list[dict[str, Any]],
+    failure_message: str,
+) -> int:
+    message = string_value(config, "terminal_message")
+    if failure_message:
+        message = f"{message}: {failure_message}"
+    command_lines = command_lines_from_attempts(attempts)
+    write_terminal(packet_dir, config, message, commands_run=command_lines)
+    write_launcher_state(
+        packet_dir,
+        config,
+        state="blocked",
+        attempt=attempt,
+        attempt_index=index,
+        returncode=rc,
+        dirty=False,
+        output_nonempty=output_nonempty,
+        message=message,
+        elapsed_ms=attempt_elapsed_ms(attempt),
+        stop_reason=stop_reason,
+    )
+    cleanup_runtime_cache_evidence(packet_dir, config)
+    write_telemetry(packet_dir, config)
+    return 1
+
+
+def _review_finalize_no_success(
+    packet_dir: Path,
+    config: dict[str, Any],
+    *,
+    attempts: list[dict[str, Any]],
+) -> int:
     message = string_value(config, "terminal_message")
     parse_report = attempts[-1].get("_parse_report") if attempts else {}
     if isinstance(parse_report, dict):
@@ -3173,6 +3399,78 @@ def run_packet(packet_dir: Path) -> int:
     cleanup_runtime_cache_evidence(packet_dir, config)
     write_telemetry(packet_dir, config)
     return 1
+
+
+def _run_review_packet(packet_dir: Path, ctx: _PacketContext) -> int:
+    config = ctx.config
+    role = ctx.role
+    output_path = ctx.output_path
+    worktree = ctx.worktree
+    attempts = ctx.attempts
+    baseline_changed_files = changed_file_fingerprints(worktree)
+    for index, attempt in enumerate(attempts):
+        _label = event_label(attempt, f"attempt-{index + 1}")
+        write_launcher_state(packet_dir, config, state="active", attempt=attempt, attempt_index=index)
+        rc, event_path = _review_dispatch_attempt(packet_dir, ctx, attempt=attempt, label=_label)
+        (
+            packet_changed_files,
+            output_nonempty,
+            state,
+            parse_report,
+            failure_message,
+            stop_reason,
+        ) = _review_observe_attempt(
+            packet_dir,
+            config,
+            attempt=attempt,
+            index=index,
+            rc=rc,
+            event_path=event_path,
+            output_path=output_path,
+            worktree=worktree,
+            baseline_changed_files=baseline_changed_files,
+        )
+        if rc == 0 and bool(packet_changed_files):
+            return _review_handle_dirty_stop(
+                packet_dir,
+                config,
+                role=role,
+                attempt=attempt,
+                index=index,
+                rc=rc,
+                output_nonempty=output_nonempty,
+                packet_changed_files=packet_changed_files,
+            )
+        if rc == 0:
+            cleanup_runtime_cache_evidence(packet_dir, config)
+            write_telemetry(packet_dir, config)
+            return 0
+        if output_nonempty:
+            if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
+                clear_invalid_output_for_fallback(output_path)
+                continue
+            return _review_handle_invalid_output(
+                packet_dir,
+                config,
+                attempt=attempt,
+                index=index,
+                rc=rc,
+                output_nonempty=output_nonempty,
+                stop_reason=stop_reason,
+                attempts=attempts,
+                failure_message=failure_message,
+            )
+        if _parse_failure_detected(parse_report) and index < len(attempts) - 1:
+            clear_invalid_output_for_fallback(output_path)
+            continue
+    return _review_finalize_no_success(packet_dir, config, attempts=attempts)
+
+
+def run_packet(packet_dir: Path) -> int:
+    ctx = _run_packet_setup(packet_dir)
+    if ctx.role == "worker":
+        return _run_worker_packet(packet_dir, ctx)
+    return _run_review_packet(packet_dir, ctx)
 
 
 def main() -> int:
