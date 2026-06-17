@@ -283,9 +283,9 @@ def focused_response_excerpt(output: str, expected: str, *, limit: int = 240) ->
 
 
 def model_roles(config: dict[str, Any], selected: list[str]) -> list[str]:
-    models = config.get("models")
-    if not isinstance(models, dict) or not models:
-        raise SystemExit("config.models must be a non-empty object")
+    # config.models is validated non-empty by validate_config_shape (run in
+    # build_check_context); the sole caller invokes this only when `not failures`.
+    models = config["models"]
     if not selected:
         return sorted(models)
     roles: list[str] = []
