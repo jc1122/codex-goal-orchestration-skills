@@ -7,7 +7,7 @@ import argparse
 import importlib.util
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 
 def _load_contract():
@@ -187,19 +187,9 @@ def validate_audit_artifacts(defects: list[str], root: dict, *, manifest_path: P
     )
 
 
-def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, require_artifacts: bool) -> None:
-    summary_path = manifest_path.parent / "telemetry.summary.json"
-    if not summary_path.exists():
-        if require_artifacts:
-            defect(defects, "$.telemetry_summary", f"telemetry summary does not exist: {summary_path}")
-        return
-    summary = require_object(
-        defects, load_json_artifact(defects, summary_path, "$.telemetry_summary"), "$.telemetry_summary"
-    )
-    if summary.get("schema_version") != 1:
-        defect(defects, "$.telemetry_summary.schema_version", "must be 1")
-    if summary.get("bundle_dir") != manifest_path.parent.as_posix():
-        defect(defects, "$.telemetry_summary.bundle_dir", "must match manifest bundle directory")
+def validate_telemetry_summary_files(
+    defects: list[str], summary: dict, summary_path: Path, *, manifest_path: Path, require_artifacts: bool
+) -> object:
     telemetry_files = summary.get("telemetry_files")
     discovered = sorted(
         path.relative_to(manifest_path.parent).as_posix()
@@ -240,6 +230,12 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
                     f"$.telemetry_summary.telemetry_files[{index}]",
                     "telemetry.summary.json is stale relative to this telemetry artifact",
                 )
+    return telemetry_files
+
+
+def validate_telemetry_summary_totals(
+    defects: list[str], summary: dict, telemetry_files: object, *, require_artifacts: bool
+) -> dict:
     totals = require_object(defects, summary.get("totals"), "$.telemetry_summary.totals")
     for key in [
         "packet_count",
@@ -254,6 +250,10 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
             defect(defects, f"$.telemetry_summary.totals.{key}", "must be a non-negative integer")
     if require_artifacts and isinstance(telemetry_files, list) and totals.get("packet_count") != len(telemetry_files):
         defect(defects, "$.telemetry_summary.totals.packet_count", "must match telemetry_files length")
+    return totals
+
+
+def validate_telemetry_summary_premium(defects: list[str], summary: dict) -> None:
     premium_usage = require_object(defects, summary.get("premium_usage"), "$.telemetry_summary.premium_usage")
     for key in ["audit_gpt_5_5", "amender_gpt_5_5", "reviewer_gpt_5_5"]:
         bucket = require_object(defects, premium_usage.get(key), f"$.telemetry_summary.premium_usage.{key}")
@@ -264,6 +264,9 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
         STATUS_VALIDATION.validate_usage(
             defects, bucket.get("known_usage"), f"$.telemetry_summary.premium_usage.{key}.known_usage"
         )
+
+
+def validate_telemetry_summary_cost(defects: list[str], summary: dict, totals: dict) -> dict:
     cost = require_object(defects, summary.get("cost_summary"), "$.telemetry_summary.cost_summary")
     for key in [
         "declared_attempts",
@@ -299,6 +302,10 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
                 defect(defects, f"$.telemetry_summary.cost_summary.{key}", "alias keys must be non-empty strings")
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 defect(defects, f"$.telemetry_summary.cost_summary.{key}.{alias}", "must be a non-negative integer")
+    return cost
+
+
+def validate_telemetry_summary_mini_spark(defects: list[str], cost: dict) -> None:
     mini_spark = require_object(
         defects, cost.get("mini_spark_usage"), "$.telemetry_summary.cost_summary.mini_spark_usage"
     )
@@ -317,6 +324,30 @@ def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, requi
         STATUS_VALIDATION.validate_usage(
             defects, bucket.get("known_usage"), f"$.telemetry_summary.cost_summary.mini_spark_usage.{alias}.known_usage"
         )
+
+
+def validate_telemetry_summary(defects: list[str], *, manifest_path: Path, require_artifacts: bool) -> None:
+    summary_path = manifest_path.parent / "telemetry.summary.json"
+    if not summary_path.exists():
+        if require_artifacts:
+            defect(defects, "$.telemetry_summary", f"telemetry summary does not exist: {summary_path}")
+        return
+    summary = require_object(
+        defects, load_json_artifact(defects, summary_path, "$.telemetry_summary"), "$.telemetry_summary"
+    )
+    if summary.get("schema_version") != 1:
+        defect(defects, "$.telemetry_summary.schema_version", "must be 1")
+    if summary.get("bundle_dir") != manifest_path.parent.as_posix():
+        defect(defects, "$.telemetry_summary.bundle_dir", "must match manifest bundle directory")
+    telemetry_files = validate_telemetry_summary_files(
+        defects, summary, summary_path, manifest_path=manifest_path, require_artifacts=require_artifacts
+    )
+    totals = validate_telemetry_summary_totals(
+        defects, summary, telemetry_files, require_artifacts=require_artifacts
+    )
+    validate_telemetry_summary_premium(defects, summary)
+    cost = validate_telemetry_summary_cost(defects, summary, totals)
+    validate_telemetry_summary_mini_spark(defects, cost)
 
 
 def validate_decision_artifact(
@@ -473,96 +504,101 @@ def validate_packet_validation_artifact(
     return validation
 
 
-def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_path: Path, status: object) -> None:
-    records = root.get("amendment_decisions")
-    if not isinstance(records, list):
-        defect(defects, "$.amendment_decisions", "must be an array")
+class AmendmentDecisionAccumulators(NamedTuple):
+    """Mutable sets threaded through the per-record amendment decision loop."""
+
+    recorded_decisions: set[str]
+    recorded_launch_ids: set[str]
+    decision_branch_ids: set[str]
+    seen_ids: set[str]
+
+
+def validate_amendment_decision_record(
+    defects: list[str],
+    item: object,
+    item_path: str,
+    *,
+    bundle_dir: Path,
+    manifest_path: Path,
+    acc: AmendmentDecisionAccumulators,
+) -> None:
+    record = require_object(defects, item, item_path)
+    amendment_id = require_string(defects, record.get("amendment_id"), f"{item_path}.amendment_id")
+    if amendment_id in acc.seen_ids:
+        defect(defects, f"{item_path}.amendment_id", f"duplicates amendment decision {amendment_id!r}")
+    if amendment_id:
+        acc.seen_ids.add(amendment_id)
+    decision_value = record.get("decision")
+    if decision_value not in CONTRACT.AMENDMENT_DECISIONS:
+        defect(defects, f"{item_path}.decision", f"must be one of {list(CONTRACT.AMENDMENT_DECISIONS)}")
+    decision_path_value = require_string(defects, record.get("decision_path"), f"{item_path}.decision_path")
+    if not decision_path_value or not is_repo_relative_path(decision_path_value):
+        defect(defects, f"{item_path}.decision_path", "must be a bundle-relative path without traversal")
         return
-    blocker_branch_ids = validate_amendment_decision_blockers(defects, root, status=status)
-    bundle_dir = manifest_path.parent
-    amendments_dir = bundle_dir / "amendments"
-    decision_files = sorted(amendments_dir.glob("*.decision.json")) if amendments_dir.is_dir() else []
-    packet_dirs = (
-        sorted(path for path in amendments_dir.glob("*.packet") if path.is_dir()) if amendments_dir.is_dir() else []
+    if amendment_id and decision_path_value != f"amendments/{amendment_id}.decision.json":
+        defect(defects, f"{item_path}.decision_path", "must use the deterministic amendment decision path")
+    acc.recorded_decisions.add(decision_path_value)
+    decision_path = bundle_dir / decision_path_value
+    decision_data = validate_decision_artifact(
+        defects,
+        load_json_artifact(defects, decision_path, f"{item_path}.decision_path"),
+        f"{item_path}.decision_path",
+        amendment_id=amendment_id,
+        manifest_path=manifest_path,
     )
-    discovered_decisions = {path.relative_to(bundle_dir).as_posix() for path in decision_files}
-    discovered_packets = {path.name.removesuffix(".packet") for path in packet_dirs}
-    recorded_decisions: set[str] = set()
-    recorded_launch_ids: set[str] = set()
-    decision_branch_ids: set[str] = set()
-    seen_ids: set[str] = set()
+    if decision_data.get("decision") != decision_value:
+        defect(defects, f"{item_path}.decision", "must match decision artifact")
+    for branch_id in (
+        decision_data.get("terminal_branch_ids", [])
+        if isinstance(decision_data.get("terminal_branch_ids"), list)
+        else []
+    ):
+        if isinstance(branch_id, str):
+            acc.decision_branch_ids.add(branch_id)
 
-    if root.get("branch_statuses") and not records and not blocker_branch_ids:
-        defect(defects, "$.amendment_decisions", "must record launch or skip decisions for terminal branch checkpoints")
-
-    for index, item in enumerate(records):
-        item_path = f"$.amendment_decisions[{index}]"
-        record = require_object(defects, item, item_path)
-        amendment_id = require_string(defects, record.get("amendment_id"), f"{item_path}.amendment_id")
-        if amendment_id in seen_ids:
-            defect(defects, f"{item_path}.amendment_id", f"duplicates amendment decision {amendment_id!r}")
+    packet_validation_value = record.get("packet_validation_path")
+    if decision_value == "launch":
         if amendment_id:
-            seen_ids.add(amendment_id)
-        decision_value = record.get("decision")
-        if decision_value not in CONTRACT.AMENDMENT_DECISIONS:
-            defect(defects, f"{item_path}.decision", f"must be one of {list(CONTRACT.AMENDMENT_DECISIONS)}")
-        decision_path_value = require_string(defects, record.get("decision_path"), f"{item_path}.decision_path")
-        if not decision_path_value or not is_repo_relative_path(decision_path_value):
-            defect(defects, f"{item_path}.decision_path", "must be a bundle-relative path without traversal")
-            continue
-        if amendment_id and decision_path_value != f"amendments/{amendment_id}.decision.json":
-            defect(defects, f"{item_path}.decision_path", "must use the deterministic amendment decision path")
-        recorded_decisions.add(decision_path_value)
-        decision_path = bundle_dir / decision_path_value
-        decision_data = validate_decision_artifact(
+            acc.recorded_launch_ids.add(amendment_id)
+        packet_validation_path_text = require_string(
+            defects, packet_validation_value, f"{item_path}.packet_validation_path"
+        )
+        if not packet_validation_path_text or not is_repo_relative_path(packet_validation_path_text):
+            defect(
+                defects, f"{item_path}.packet_validation_path", "must be a bundle-relative path without traversal"
+            )
+            return
+        if (
+            amendment_id
+            and packet_validation_path_text != f"amendments/{amendment_id}.packet/packet.validation.json"
+        ):
+            defect(
+                defects,
+                f"{item_path}.packet_validation_path",
+                "must use the deterministic amender packet validation path",
+            )
+        packet_validation_path = bundle_dir / packet_validation_path_text
+        validate_packet_validation_artifact(
             defects,
-            load_json_artifact(defects, decision_path, f"{item_path}.decision_path"),
-            f"{item_path}.decision_path",
+            load_json_artifact(defects, packet_validation_path, f"{item_path}.packet_validation_path"),
+            f"{item_path}.packet_validation_path",
             amendment_id=amendment_id,
             manifest_path=manifest_path,
         )
-        if decision_data.get("decision") != decision_value:
-            defect(defects, f"{item_path}.decision", "must match decision artifact")
-        for branch_id in (
-            decision_data.get("terminal_branch_ids", [])
-            if isinstance(decision_data.get("terminal_branch_ids"), list)
-            else []
-        ):
-            if isinstance(branch_id, str):
-                decision_branch_ids.add(branch_id)
+    elif packet_validation_value is not None:
+        defect(defects, f"{item_path}.packet_validation_path", "must be null or omitted for skip decisions")
 
-        packet_validation_value = record.get("packet_validation_path")
-        if decision_value == "launch":
-            if amendment_id:
-                recorded_launch_ids.add(amendment_id)
-            packet_validation_path_text = require_string(
-                defects, packet_validation_value, f"{item_path}.packet_validation_path"
-            )
-            if not packet_validation_path_text or not is_repo_relative_path(packet_validation_path_text):
-                defect(
-                    defects, f"{item_path}.packet_validation_path", "must be a bundle-relative path without traversal"
-                )
-                continue
-            if (
-                amendment_id
-                and packet_validation_path_text != f"amendments/{amendment_id}.packet/packet.validation.json"
-            ):
-                defect(
-                    defects,
-                    f"{item_path}.packet_validation_path",
-                    "must use the deterministic amender packet validation path",
-                )
-            packet_validation_path = bundle_dir / packet_validation_path_text
-            validate_packet_validation_artifact(
-                defects,
-                load_json_artifact(defects, packet_validation_path, f"{item_path}.packet_validation_path"),
-                f"{item_path}.packet_validation_path",
-                amendment_id=amendment_id,
-                manifest_path=manifest_path,
-            )
-        elif packet_validation_value is not None:
-            defect(defects, f"{item_path}.packet_validation_path", "must be null or omitted for skip decisions")
 
+def validate_amendment_omitted_decisions(
+    defects: list[str],
+    discovered_decisions: set[str],
+    recorded_decisions: set[str],
+    *,
+    bundle_dir: Path,
+    manifest_path: Path,
+    blocker_branch_ids: set[str],
+    status: object,
+) -> None:
     omitted_decisions = sorted(discovered_decisions - recorded_decisions)
     current_omitted: list[str] = []
     for decision_rel in omitted_decisions:
@@ -592,6 +628,19 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
             "$.amendment_decisions",
             "omits discovered amendment decision artifacts: " + ", ".join(current_omitted),
         )
+
+
+def validate_amendment_packet_coverage(
+    defects: list[str],
+    root: dict,
+    *,
+    amendments_dir: Path,
+    discovered_packets: set[str],
+    discovered_decisions: set[str],
+    recorded_launch_ids: set[str],
+    decision_branch_ids: set[str],
+    blocker_branch_ids: set[str],
+) -> None:
     for amendment_id in sorted(discovered_packets):
         if f"amendments/{amendment_id}.decision.json" not in discovered_decisions:
             defect(defects, "$.amendment_decisions", f"missing amender decision artifact for packet: {amendment_id}")
@@ -618,6 +667,61 @@ def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_pat
                 "$.amendment_decisions",
                 "missing amendment launch/skip decisions for terminal branches: " + ", ".join(missing),
             )
+
+
+def validate_amendment_decisions(defects: list[str], root: dict, *, manifest_path: Path, status: object) -> None:
+    records = root.get("amendment_decisions")
+    if not isinstance(records, list):
+        defect(defects, "$.amendment_decisions", "must be an array")
+        return
+    blocker_branch_ids = validate_amendment_decision_blockers(defects, root, status=status)
+    bundle_dir = manifest_path.parent
+    amendments_dir = bundle_dir / "amendments"
+    decision_files = sorted(amendments_dir.glob("*.decision.json")) if amendments_dir.is_dir() else []
+    packet_dirs = (
+        sorted(path for path in amendments_dir.glob("*.packet") if path.is_dir()) if amendments_dir.is_dir() else []
+    )
+    discovered_decisions = {path.relative_to(bundle_dir).as_posix() for path in decision_files}
+    discovered_packets = {path.name.removesuffix(".packet") for path in packet_dirs}
+    acc = AmendmentDecisionAccumulators(
+        recorded_decisions=set(),
+        recorded_launch_ids=set(),
+        decision_branch_ids=set(),
+        seen_ids=set(),
+    )
+
+    if root.get("branch_statuses") and not records and not blocker_branch_ids:
+        defect(defects, "$.amendment_decisions", "must record launch or skip decisions for terminal branch checkpoints")
+
+    for index, item in enumerate(records):
+        validate_amendment_decision_record(
+            defects,
+            item,
+            f"$.amendment_decisions[{index}]",
+            bundle_dir=bundle_dir,
+            manifest_path=manifest_path,
+            acc=acc,
+        )
+
+    validate_amendment_omitted_decisions(
+        defects,
+        discovered_decisions,
+        acc.recorded_decisions,
+        bundle_dir=bundle_dir,
+        manifest_path=manifest_path,
+        blocker_branch_ids=blocker_branch_ids,
+        status=status,
+    )
+    validate_amendment_packet_coverage(
+        defects,
+        root,
+        amendments_dir=amendments_dir,
+        discovered_packets=discovered_packets,
+        discovered_decisions=discovered_decisions,
+        recorded_launch_ids=acc.recorded_launch_ids,
+        decision_branch_ids=acc.decision_branch_ids,
+        blocker_branch_ids=blocker_branch_ids,
+    )
 
 
 def load_branch_status_validator(defects: list[str]):
