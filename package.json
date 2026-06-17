@@ -8,7 +8,8 @@
     "install-codex-goal-skills": "./bin/install-goal-skills.js"
   },
   "scripts": {
-    "check": "npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance && npm run check:tests",
+    "check": "npm run check:lint && npm run check:shared && npm run check:config && npm run check:fixtures && npm run check:golden && npm run check:release && npm run check:maintenance && npm run check:tests",
+    "check:lint": "ruff check . && ruff format --check .",
     "check:tests": "python3 -B -m pytest tests -q",
     "check:shared": "python3 scripts/sync_goal_shared.py",
     "check:config": "python3 scripts/check_goal_config_fixtures.py",

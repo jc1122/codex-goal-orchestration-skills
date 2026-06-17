@@ -615,15 +615,27 @@ git diff --check
 Focused checks:
 
 ```bash
+npm run check:lint
 npm run check:shared
 npm run check:config
 npm run check:fixtures
 npm run check:golden
 npm run check:release
 npm run check:maintenance
+npm run check:tests
 npm run check:models
 npm run check:context
 ```
+
+### Local hooks
+
+`npm run check` includes `check:lint` (ruff lint + format) and `check:tests` (pytest). Enable the git pre-commit hooks once so style and a fresh `agent-context-index.json` are enforced before every commit:
+
+```bash
+pip install pre-commit && pre-commit install
+```
+
+The hooks run ruff + ruff-format and assert `maintenance/agent-context-index.json` is regenerated (`npm run generate:context`) when fingerprinted sources change.
 
 Machine-readable maintenance reports:
 
@@ -678,4 +690,4 @@ git tag -a v<package.json version> -m "Release v<package.json version>"
 git push origin main v<package.json version>
 ```
 
-CI has two jobs: a deterministic gate that compiles scripts, runs `npm run check`, verifies generated files/package contents/temp install parity, and checks whitespace; and a maintenance report job that uploads size, dependency, model-catalog, Ruff, and Pyright reports.
+CI has three jobs: a deterministic gate that compiles scripts, runs `npm run check` (now including ruff lint/format and the pytest suite), verifies generated files/package contents/temp install parity, and checks whitespace; a unit-tests job that runs `pytest` and asserts no bytecode leaks under `skills/bin/scripts`; and a maintenance report job that uploads size, dependency, model-catalog, Ruff, and Pyright reports.

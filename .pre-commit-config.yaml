@@ -1,0 +1,15 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+      - id: ruff-format
+        args: [--check]
+  - repo: local
+    hooks:
+      - id: context-index-fresh
+        name: agent-context-index is fresh
+        entry: python3 scripts/generate_agent_context_index.py --check
+        language: system
+        pass_filenames: false
+        always_run: true
