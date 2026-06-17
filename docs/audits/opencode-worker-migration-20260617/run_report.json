@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "repo_root": "/home/jakub/projects/codex-goal-orchestration-skills",
+  "started_utc": "2026-06-16T18:00:00Z",
+  "finished_utc": "2026-06-17T05:00:00Z",
+  "orchestrator_skill_version": "repo-audit-refactor-optimize@v0.12.1",
+  "lanes": {
+    "code-health": {"status": "converged", "actionable": 0, "note": "all CC>40 god-functions decomposed; residual idiom-floor complexity + string-literal E501 + standalone-script duplication accepted with reasons"},
+    "security": {"status": "converged", "actionable": 0, "note": "B324 fixed (usedforsecurity=False); by-design subprocess (B603/B607/B404/B112/B103) + B105 'pass'-key FP + /dev/shm B108 accepted"},
+    "hygiene": {"status": "clean", "actionable": 0, "note": "LICENSE added"},
+    "docs": {"status": "clean", "actionable": 0, "note": "all model-routing docs rewritten to bridge+native; docs-consistency lane 0; base-path FPs accepted"},
+    "dependency": {"status": "converged", "actionable": 0, "note": "sibling-import + dev-tool FPs accepted"},
+    "hotspot": {"status": "converged", "actionable": 0, "note": "repo-wide git-history churn; advisory, accepted"}
+  },
+  "findings_totals": {
+    "baseline_pre_migration": 2652,
+    "actionable_remaining": 0,
+    "accepted_documented_residuals": 1910,
+    "code_fixed": "format_drift 47->0, E501 1125->388(string-literal, accepted), dead-code 13->4(FP), F-codes->0, all CC>40 god-functions->0 (max CC 407->40), 1 duplication clone extracted, B324 fixed, LICENSE added, P0 shell=True injection + P1 fail-closed/exit-code/lite-dedup/obsolete-guard/next_command fixes"
+  },
+  "backlog": {
+    "accepted": 1910,
+    "deferred": 0,
+    "coverage_gated": 0
+  },
+  "batches": [
+    "B1 shared contract (orchestration_contract: ds-pro-max/ds-flash-max + native; gemini/copilot removed)",
+    "B2 goal-config (opencode-bridge harness, deepseek preset default, fail-closed fix)",
+    "B3 model-catalog (exclude bridge aliases)",
+    "B4 deep bridge runtime seam (create_runtime_packet + runtime_packet_runner.run_opencode_bridge_model, pool cap-4) + P0 shell=True injection fix",
+    "B5 telemetry alias classification + prompt-audit exit-code P1 (prompt-audit/branch-control stay native)",
+    "B6 lite advisor via bridge + prompt_for dedup P1",
+    "B7 plan-amender via bridge + obsolete-guard P1",
+    "B8a fixtures (fake bridge driver) + create_runtime_packet bridge-block bug",
+    "B8b docs rewrite to bridge+native",
+    "B9 context-index regen",
+    "P3 cleanup: ruff format (E501 1125->388), dead-code removal (~561 lines orphaned opencode), duplication extract",
+    "P3 complexity: 15 files, all CC>40 decomposed behavior-identical (lint 407->17, scheduler-ledger 127->17, render_branch_worktree main 150, etc.)",
+    "P3 converge: LICENSE, B324, accept.json documenting all irreducible residuals"
+  ],
+  "verification": {
+    "npm_run_check": "pass (shared/config/fixtures/golden/release/maintenance all green)",
+    "forced_full_wave_actionable": 0,
+    "behavior_preservation": "every god-function decomposition proven byte-identical via per-function differential harnesses (clean-HEAD vs new) over fixture matrices, plus full preparedness + golden gate fixtures green throughout; migration verified via offline packet/bundle/telemetry byte-diffs and the offline fake-opencode-bridge driver",
+    "accept_policy": "pass (validate_accept.py); 1910 residuals each recorded with a reason in wave_findings.accepted.json",
+    "evidence_dir": "/tmp/opencode-migration/ (spec.md, design.md, baseline + p3-certify wave artifacts)"
+  },
+  "warnings": []
+}
