@@ -130,6 +130,14 @@ def test_branch_reuse_map_excludes_stale_non_b_branch():
 
 
 # --- path_rules rejects option-injection-shaped and control-char branch names ---
+def test_is_repo_relative_path_rejects_porcelain_prefix():
+    # 2026-06-18 convergence pass 8: the reject_porcelain branch enforces the contract MUST that
+    # changed_files entries carry no git porcelain status prefix.
+    assert path_rules.is_repo_relative_path("src/foo.py", reject_porcelain=True) is True
+    assert path_rules.is_repo_relative_path(" M src/foo.py", reject_porcelain=True) is False
+    assert path_rules.is_repo_relative_path(" M src/foo.py", reject_porcelain=False) is True
+
+
 def test_safe_branch_name_rejects_leading_dash_and_control_chars():
     assert path_rules.safe_branch_name("phaseX-B01") is True
     assert path_rules.safe_branch_name("-rf") is False

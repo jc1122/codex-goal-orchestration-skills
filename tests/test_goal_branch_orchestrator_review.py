@@ -62,6 +62,17 @@ def test_create_pre_review_gate_read_json_fails_closed_on_non_utf8(tmp_path):
         cprg.read_json(nonutf8)
 
 
+# --- 2026-06-18 convergence pass 8: the porcelain-prefix rejection in changed_files paths is
+#     exercised (the contract MUST was enforced only by the gate-dark reject_porcelain branch) ---
+def test_validate_path_list_rejects_porcelain_prefix():
+    defects: list[str] = []
+    vbs.validate_path_list(defects, [" M src/foo.py"], "$.changed_files")
+    assert any("porcelain" in d.lower() for d in defects), defects
+    clean: list[str] = []
+    vbs.validate_path_list(clean, ["src/foo.py"], "$.changed_files")
+    assert clean == []
+
+
 # --- 2026-06-18 convergence pass 7: configured_telemetry_attempts guards a non-dict
 #     goal_config.models/harnesses (.get on a non-dict used to AttributeError) ---
 def test_worker_telemetry_attempts_tolerates_non_dict_goal_config():
