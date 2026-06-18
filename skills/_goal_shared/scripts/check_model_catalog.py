@@ -93,7 +93,9 @@ def model_rows(models: list[Any]) -> list[dict[str, Any]]:
 def read_json(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except FileNotFoundError as exc:
+        raise SystemExit(f"{path} does not exist") from exc
+    except (OSError, json.JSONDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object: {path}")

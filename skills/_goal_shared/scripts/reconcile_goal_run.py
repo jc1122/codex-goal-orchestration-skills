@@ -68,6 +68,20 @@ def read_json_or_none(path: Path) -> tuple[dict[str, Any] | None, str | None]:
         return None, str(exc)
 
 
+def read_manifest(path: Path) -> dict[str, Any]:
+    """Fail-closed top-level manifest read for the standalone entrypoints.
+
+    ``read_json`` is left bare on purpose (``read_json_or_none`` wraps it with
+    ``except Exception``; hardening it to ``SystemExit`` would break that wrapper).
+    The direct manifest reads in ``build_report``/``main`` must instead surface a
+    clean SystemExit, never a raw JSONDecodeError/ValueError traceback.
+    """
+    try:
+        return read_json(path)
+    except ValueError as exc:  # JSONDecodeError is a ValueError subclass
+        raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
+
+
 def write_json(path: Path, data: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -1669,7 +1683,7 @@ def _assemble_report(
 
 def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, Any]:
     bundle_dir = manifest_path.parent
-    manifest = read_json(manifest_path)
+    manifest = read_manifest(manifest_path)
     branches = branch_entries(manifest)
     missing_artifacts: list[dict[str, Any]] = []
     stale_or_unreconciled: list[dict[str, Any]] = []
@@ -1801,7 +1815,7 @@ def main() -> int:
         else None
     )
     if args.write:
-        manifest = read_json(manifest_path)
+        manifest = read_manifest(manifest_path)
         write_json(
             manifest_path.parent / "stale-artifacts.index.json",
             build_stale_artifact_index(manifest_path.parent, manifest),

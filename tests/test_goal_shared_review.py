@@ -111,3 +111,31 @@ def test_safe_branch_name_rejects_leading_dash_and_control_chars():
 def test_dead_worker_route_class_ladder_removed():
     assert not hasattr(contract, "worker_route_class_ladder")
     assert hasattr(contract, "worker_route_class_reason")
+
+
+# --- 2026-06-18 convergence pass: reconcile's direct manifest reads fail closed via a
+#     dedicated read_manifest helper (the bare read_json primitive stays bare for read_json_or_none) ---
+def test_reconcile_read_manifest_fails_closed(tmp_path):
+    bad = tmp_path / "job.manifest.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        reconcile.read_manifest(bad)
+    arr = tmp_path / "arr.json"
+    arr.write_text("[]", encoding="utf-8")  # valid JSON, not an object
+    with pytest.raises(SystemExit):
+        reconcile.read_manifest(arr)
+    # The tolerant wrapper must still degrade (landmine): read_json stays bare so this keeps working.
+    data, err = reconcile.read_json_or_none(bad)
+    assert data is None and err
+
+
+# --- 2026-06-18 convergence pass: check_model_catalog.read_json fails closed on a missing
+#     manifest path (was an uncaught FileNotFoundError traceback from main's optional --manifest) ---
+def test_check_model_catalog_read_json_handles_missing_file(tmp_path):
+    missing = tmp_path / "nope.json"
+    with pytest.raises(SystemExit):
+        check_model_catalog.read_json(missing)
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        check_model_catalog.read_json(bad)
