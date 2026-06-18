@@ -109,6 +109,11 @@ def test_load_json_object_fails_closed(tmp_path):
     good = tmp_path / "good.json"
     good.write_text('{"k": 1}', encoding="utf-8")
     assert amendment_lib.load_json_object(good) == {"k": 1}
+    # Pass-3: a non-UTF-8 file (UnicodeDecodeError, a ValueError) also fails closed
+    nonutf8 = tmp_path / "bad-bytes.json"
+    nonutf8.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(SystemExit):
+        amendment_lib.load_json_object(nonutf8)
 
 
 # --- safe_path keeps .github/ paths (leading dot no longer stripped) ---
