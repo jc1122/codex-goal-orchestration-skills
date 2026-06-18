@@ -478,8 +478,10 @@ def validate_packet_validation_artifact(
         proposal_value = validation.get("proposal")
         if isinstance(proposal_value, str) and proposal_value.strip():
             proposal_path = Path(proposal_value)
-            if not proposal_path.exists():
-                defect(defects, f"{path}.proposal", f"artifact does not exist: {proposal_path}")
+            if not proposal_path.is_file():
+                defect(
+                    defects, f"{path}.proposal", f"artifact does not exist or is not a regular file: {proposal_path}"
+                )
             elif validation.get("proposal_sha256") != STATUS_VALIDATION.sha256_file(proposal_path):
                 defect(defects, f"{path}.proposal_sha256", "must match current proposal sha256")
     telemetry_value = validation.get("telemetry")
