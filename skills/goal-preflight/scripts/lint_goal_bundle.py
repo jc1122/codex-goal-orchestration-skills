@@ -263,7 +263,7 @@ def load_bundle_json(defect, bundle_dir: Path, relative_path: str, label: str) -
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         defect(relative_path, "critical", f"{label} must be valid JSON: {exc}")
         return None
     if not isinstance(data, dict):

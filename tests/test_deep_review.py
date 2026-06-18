@@ -41,6 +41,19 @@ def test_resolve_waves_rejects_malformed_wave_elements():
         cgb._resolve_waves({"waves": [{"id": "W1", "branches": [{"nested": 1}]}]}, [{"id": "B01"}], 4)
 
 
+# --- 2026-06-18 convergence pass 3: create_goal_bundle.load_json fails closed on a non-object
+#     brief and on a non-UTF-8 file (standalone create entrypoint had neither guard) ---
+def test_create_goal_bundle_load_json_fails_closed(tmp_path):
+    arr = tmp_path / "brief.json"
+    arr.write_text("[]", encoding="utf-8")  # valid JSON, non-object -> used to TypeError in create_bundle
+    with pytest.raises(SystemExit):
+        cgb.load_json(arr)
+    nonutf8 = tmp_path / "brief2.json"
+    nonutf8.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(SystemExit):
+        cgb.load_json(nonutf8)
+
+
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
 def test_placeholder_regex_ignores_operators_and_emails():
     clean = [

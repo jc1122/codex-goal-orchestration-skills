@@ -917,9 +917,12 @@ def wave_id(index: int) -> str:
 def load_json(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
-    except json.JSONDecodeError as exc:
+            data = json.load(handle)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"brief must be a JSON object: {path}")
+    return data
 
 
 def usable_python_command() -> str:
@@ -2083,7 +2086,7 @@ def load_goal_config(path: Path | None) -> dict | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"goal config is not valid JSON: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"goal config must be a JSON object: {path}")
@@ -2096,7 +2099,7 @@ def load_goal_config_check(path: Path | None) -> dict | None:
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"goal config check is not valid JSON: {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"goal config check must be a JSON object: {path}")
