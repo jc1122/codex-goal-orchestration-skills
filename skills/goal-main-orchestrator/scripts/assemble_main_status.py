@@ -440,9 +440,7 @@ def amendment_decision_blockers(
                 "decision artifact is available for these checkpoints. Preserve this as blocked evidence "
                 "instead of reusing stale amendment decisions."
             ),
-            "active_branch_ids": [
-                item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()
-            ],
+            "active_branch_ids": _nonempty_str_list(branch_parallelism.get("active_ids")),
             "terminal_branch_ids": missing,
             "terminal_branch_statuses": {branch_id: terminal_statuses[branch_id] for branch_id in missing},
             "evidence_paths": evidence_paths,
