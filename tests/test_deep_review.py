@@ -223,3 +223,20 @@ def test_repair_gate_status_tolerates_non_list_actions(tmp_path):
     bundle.mkdir()
     (bundle / "repair-gate.json").write_text('{"status": "blocked", "actions": 5}', encoding="utf-8")
     assert rgb._repair_gate_status(bundle)["action_count"] == 0  # must not raise
+
+
+# --- 2026-06-18 convergence pass 17: _lint_source_attachments fails closed on a non-int `bytes`
+#     (was `attachment.get("bytes", 0) < 8192` -> TypeError comparing str/list with int). ---
+def test_lint_source_attachments_tolerates_non_int_bytes():
+    captured: list[tuple] = []
+
+    def defect(*args):
+        captured.append(args)
+
+    manifest = {
+        "source_attachments": [
+            {"label": "x", "path": "src/a.py", "promoted_from_context_files": True, "bytes": "huge"},
+        ]
+    }
+    lgb._lint_source_attachments(defect, manifest)  # must not raise on non-int bytes
+    assert any("large-source threshold" in a[2] for a in captured), captured

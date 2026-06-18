@@ -1424,7 +1424,10 @@ def _lint_source_attachments(defect, manifest: dict) -> tuple[set[str], set[str]
                     defect("job.manifest.json", "critical", f"source_attachments[{index}].path must be repo-relative")
                 else:
                     source_attachment_paths.add(path)
-                if attachment.get("promoted_from_context_files") is True and attachment.get("bytes", 0) < 8192:
+                attachment_bytes = attachment.get("bytes", 0)
+                if not isinstance(attachment_bytes, int) or isinstance(attachment_bytes, bool):
+                    attachment_bytes = 0
+                if attachment.get("promoted_from_context_files") is True and attachment_bytes < 8192:
                     defect(
                         "job.manifest.json",
                         "major",
