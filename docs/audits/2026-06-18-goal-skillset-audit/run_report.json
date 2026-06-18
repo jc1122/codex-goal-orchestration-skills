@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "run_id": "2026-06-18-goal-skillset-audit",
+  "date": "2026-06-18",
+  "repo": "codex-goal-orchestration-skills",
+  "scope": "Full review pass (maintainability, code quality, performance, gaps, bugs, inconsistencies) + repo-audit-refactor-optimize pass with all lanes opted in, executed with subagents, iterated audit->fix->audit to convergence.",
+  "stages": ["bootstrap", "discovery", "diagnosis", "synthesis", "execution", "verification", "run_report"],
+  "outcome": "converged",
+  "diagnosis": {
+    "lanes": ["code-health", "security", "hygiene", "docs", "dependency", "hotspot"],
+    "raw_findings": {"code-health": 1689, "security": 388, "hotspot": 362, "dependency": 7, "hygiene": 0, "docs": 0},
+    "active_findings_after_accept": 0,
+    "note": "All raw findings fall in the curated by-design residual categories accepted in .repo-audit/accept.json; 0 dead-code, 0 structure, no over-acceptance of genuine bugs."
+  },
+  "dominant_defect_class": "Unguarded set/frozenset/dict membership over a .get()-tainted possibly-non-string value (TypeError instead of fail-closed). First detector/sweep had false negatives; this run closed them.",
+  "findings_fixed": [
+    {"id": "C1", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/validate_main_status.py", "what": "review_status set-membership unguarded", "severity": "high"},
+    {"id": "C2", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/validate_main_status.py", "what": "verdict set-membership unguarded", "severity": "high"},
+    {"id": "C3", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/validate_main_status.py", "what": "amendment-path status membership unguarded (2 sites)", "severity": "high"},
+    {"id": "C4", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py", "what": "status set-membership unguarded", "severity": "high"},
+    {"id": "C5", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/assemble_main_status.py", "what": "status/review_status set-membership unguarded", "severity": "high"},
+    {"id": "C6", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/assemble_main_status.py", "what": "manifest_sha256 set-membership unguarded", "severity": "high"},
+    {"id": "C7", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/runtime_prompt_audit_runner.py", "what": "failure_summary event-log-name fallback divergence", "severity": "low"},
+    {"id": "A1", "skill": "_goal_shared", "file": "skills/_goal_shared/scripts/extract_telemetry.py", "what": "accepted_alias marked a blocked reviewer/research-worker as accepted (fail-open)", "severity": "medium"},
+    {"id": "A2", "skill": "_goal_shared", "file": "skills/_goal_shared/scripts/check_model_catalog.py", "what": "reported hardcoded config paths instead of manifest-resolved", "severity": "low"},
+    {"id": "A3", "skill": "_goal_shared", "file": "skills/_goal_shared/scripts/check_goal_skill_availability.py", "what": "declared_skill_name crashed on non-UTF-8 SKILL.md", "severity": "nit"},
+    {"id": "B1", "skill": "goal-branch-orchestrator", "file": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "what": "parse_messages used before assignment in _review_finalize_no_success", "severity": "medium"},
+    {"id": "B2", "skill": "goal-branch-orchestrator", "file": "skills/goal-branch-orchestrator/scripts/render_worker_schedule.py", "what": "rejected legacy worker_type:'research' alias + hardened membership", "severity": "low"},
+    {"id": "D1", "skill": "goal-preflight", "file": "skills/goal-preflight/scripts/create_goal_bundle.py", "what": "auto-injected untracked __init__.py skeletons its own linter rejects (un-launchable bundle)", "severity": "high"},
+    {"id": "D2", "skill": "goal-preflight", "file": "skills/goal-preflight/scripts/create_goal_bundle.py", "what": "supplied waves not checked for dependency ordering + missing dependency_level", "severity": "medium"},
+    {"id": "D3", "skill": "goal-preflight", "file": "skills/goal-preflight/scripts/lint_goal_bundle.py", "what": "_lint_branches skipped per-item path-safety validation on out-of-range work_items count", "severity": "low"},
+    {"id": "D4", "skill": "goal-preflight", "file": "skills/goal-preflight/scripts/lint_preflight_brief.py", "what": "spurious policy-default defects when brief normalization failed", "severity": "low"},
+    {"id": "E1", "skill": "goal-plan-amender", "file": "skills/goal-plan-amender/scripts/validate_manifest_amendment.py", "what": "crashed (no artifact) on malformed amendment_id; dead Path.stem fallback; later broadened to catch ValueError+SystemExit", "severity": "medium"},
+    {"id": "E3", "skill": "goal-plan-amender", "file": "skills/goal-plan-amender/scripts/amendment_lib.py", "what": "amender_model_policy returned shared mutable CONTRACT default", "severity": "low"},
+    {"id": "E4", "skill": "goal-plan-amender", "file": "skills/goal-plan-amender/scripts/amendment_lib.py", "what": "split duplicate-id guard inspected defects[-1] (fragile)", "severity": "low"},
+    {"id": "F2", "skill": "goal-config", "file": "skills/goal-config/scripts/create_goal_config.py", "what": "find_route consumed JSON boolean selector as int route index", "severity": "low"},
+    {"id": "G2", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/assemble_main_status.py", "what": "aggregate_review_status left valid mergeable_after_fixes falling through to missing", "severity": "low"},
+    {"id": "G3", "skill": "_goal_shared", "file": "skills/_goal_shared/scripts/status_validation.py", "what": "three inline scheduler enums re-encoded CONTRACT tuples; now derived", "severity": "info"},
+    {"id": "R2-vbs", "skill": "goal-branch-orchestrator", "file": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "what": "verdict/source_verdict/review_status/worker_type set-membership unguarded + non-string status normalization", "severity": "high"},
+    {"id": "R2-rbwc", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/render_branch_worktree_commands.py", "what": "worker_type set-membership unguarded + missing research normalization", "severity": "medium"},
+    {"id": "R2-lint", "skill": "goal-preflight", "file": "skills/goal-preflight/scripts/lint_goal_bundle.py", "what": "_lite_record_artifacts validation_status set-membership unguarded", "severity": "medium"},
+    {"id": "R3-vpa", "skill": "goal-main-orchestrator", "file": "skills/goal-main-orchestrator/scripts/validate_prompt_audit.py", "what": "pass-branch defect severity set-membership unguarded", "severity": "high"}
+  ],
+  "triaged_not_fixed": [
+    {"id": "F1", "disposition": "reverted_by_design", "rationale": "Implied-provider harnesses (codex/opencode-bridge) carry provider separately and emit the bare model id; exercised by the opencode-deepseek-v4 preset fixture. check:config failure caught the incorrect change."},
+    {"id": "E2", "disposition": "deferred_with_rationale", "rationale": "Depends-only-on-prior-branch-ids invariant makes backward dependencies invalid and fail-closed downstream via preflight normalization; full-list rewrite risks altering replacement-branch self-references for marginal benefit."}
+  ],
+  "verification": {
+    "npm_run_check": "pass",
+    "pytest": "190 passed",
+    "regression_tests_added": 33,
+    "diagnosis_wave_active_findings_final": 0,
+    "ast_membership_scan": "all genuine sites guarded; remainder verified safe (str-normalized / require_string-detainted / isinstance-guarded / tuple-or-list RHS / int-typed)",
+    "ruff_format_check": "clean",
+    "context_index_regenerated": true,
+    "convergence_pass": "clean (Round 4)"
+  },
+  "files_changed": {"source": 14, "tests": 6, "other": 1, "insertions": 747, "deletions": 97}
+}
