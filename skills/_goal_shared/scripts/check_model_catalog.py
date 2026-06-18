@@ -95,7 +95,7 @@ def read_json(path: Path) -> dict[str, Any]:
         data = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as exc:
         raise SystemExit(f"{path} does not exist") from exc
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object: {path}")

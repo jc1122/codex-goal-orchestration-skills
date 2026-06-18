@@ -11,8 +11,11 @@ Pins the verified defects so they cannot silently regress:
 - the genuinely-dead worker_route_class_ladder accessor was removed.
 """
 
+import subprocess
+import sys
+
 import pytest
-from conftest import load_module
+from conftest import REPO, load_module
 
 scheduler_tick = load_module("skills/_goal_shared/scripts/scheduler_tick.py", "gs_scheduler_tick")
 append_event = load_module("skills/_goal_shared/scripts/append_scheduler_event.py", "gs_append_event")
@@ -23,6 +26,7 @@ extract_telemetry = load_module("skills/_goal_shared/scripts/extract_telemetry.p
 reconcile = load_module("skills/_goal_shared/scripts/reconcile_goal_run.py", "gs_reconcile")
 path_rules = load_module("skills/_goal_shared/scripts/path_rules.py", "gs_path_rules")
 contract = load_module("skills/_goal_shared/scripts/orchestration_contract.py", "gs_contract")
+vla = load_module("skills/_goal_shared/scripts/validate_lite_advice.py", "gs_validate_lite_advice")
 
 
 # --- malformed JSON fails closed (SystemExit), never a raw traceback ---
@@ -139,3 +143,46 @@ def test_check_model_catalog_read_json_handles_missing_file(tmp_path):
     bad.write_text("{ not json", encoding="utf-8")
     with pytest.raises(SystemExit):
         check_model_catalog.read_json(bad)
+    # Pass-2: UnicodeDecodeError (a ValueError, not OSError) must also fail closed.
+    nonutf8 = tmp_path / "bad-bytes.json"
+    nonutf8.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(SystemExit):
+        check_model_catalog.read_json(nonutf8)
+
+
+# --- 2026-06-18 convergence pass 2: validate_lite_advice tolerates a non-UTF-8 task.md (no
+#     UnicodeDecodeError) — it is also run in-process by status_validation, so a crash here would
+#     take down the whole status validator ---
+def test_validate_prompt_hash_tolerates_non_utf8_task(tmp_path):
+    (tmp_path / "prompt.md").write_text("prompt body", encoding="utf-8")
+    (tmp_path / "task.md").write_bytes(b"\xff\xfe not utf8")
+    inputs = {"prompt_sha256": "sha256:" + "0" * 64}
+    defects: list[str] = []
+    vla.validate_prompt_hash(defects, inputs, tmp_path / "input-files.json")  # must not raise
+    assert defects  # a stale/mismatch defect is recorded instead of crashing
+
+
+# --- 2026-06-18 convergence pass 2: the validate_lite_advice CLI fails closed on malformed
+#     --inputs (the bare load_json call site is guarded; the primitive stays bare for its wrapper) ---
+def test_validate_lite_advice_cli_fails_closed_on_malformed_inputs(tmp_path):
+    advice = tmp_path / "advice.json"
+    advice.write_text("{}", encoding="utf-8")
+    bad_inputs = tmp_path / "input-files.json"
+    bad_inputs.write_text("{ not json", encoding="utf-8")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            # invoke via a skill dispatch shim: the _goal_shared canonical refuses direct execution
+            str(REPO / "skills" / "goal-branch-orchestrator" / "scripts" / "validate_lite_advice.py"),
+            "--advice",
+            str(advice),
+            "--inputs",
+            str(bad_inputs),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode != 0, combined
+    assert "Traceback" not in proc.stderr, f"crashed instead of failing closed:\n{proc.stderr}"
+    assert "--inputs is not valid JSON" in combined, combined

@@ -367,7 +367,9 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
     if not task_path.exists():
         defect(defects, "task.md", f"must exist next to input-files.json: {task_path}")
         return
-    task_text = task_path.read_text(encoding="utf-8")
+    # errors="replace": a non-UTF-8 task.md must produce a stale-hash defect, not a
+    # UnicodeDecodeError — this validator is also run in-process by status_validation.
+    task_text = task_path.read_text(encoding="utf-8", errors="replace")
     task_sha256 = inputs.get("task_sha256")
     if isinstance(task_sha256, str) and SHA256_RE.fullmatch(task_sha256):
         actual_task = sha256_text(task_text)
@@ -402,7 +404,7 @@ def validate_prompt_hash(defects: list[str], inputs: dict | None, inputs_path: P
             "input-files.json.prompt_sha256",
             f"must match regenerated prompt from input-files.json/task.md: got {regenerated_hash}",
         )
-    actual_text = prompt_path.read_text(encoding="utf-8")
+    actual_text = prompt_path.read_text(encoding="utf-8", errors="replace")
     actual = sha256_text(actual_text)
     if actual != expected:
         defect(defects, "prompt.md", f"stale prompt metadata: expected {expected}, got {actual}")
@@ -593,7 +595,10 @@ def main() -> int:
     expected_sources = None
     inputs = None
     if inputs_path:
-        loaded_inputs = load_json(inputs_path)
+        try:
+            loaded_inputs = load_json(inputs_path)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise SystemExit(f"--inputs is not valid JSON: {exc}") from exc
         inputs = loaded_inputs if isinstance(loaded_inputs, dict) else None
         if inputs is None:
             raise SystemExit("--inputs must point to a JSON object")
@@ -603,8 +608,12 @@ def main() -> int:
         if not args.purpose:
             args.purpose = inputs.get("purpose")
 
+    try:
+        advice_data = load_json(advice_path)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise SystemExit(f"--advice is not valid JSON: {exc}") from exc
     defects = validate(
-        load_json(advice_path),
+        advice_data,
         packet_id=args.packet_id,
         purpose=args.purpose,
         expected_sources=expected_sources,
