@@ -149,7 +149,9 @@ archived_manifest_hashes_by_rel_path = STATUS_VALIDATION.archived_manifest_hashe
 archived_manifest_sha256s = STATUS_VALIDATION.archived_manifest_sha256s
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):

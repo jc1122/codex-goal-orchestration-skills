@@ -52,7 +52,9 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
