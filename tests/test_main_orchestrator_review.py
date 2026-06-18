@@ -66,6 +66,17 @@ def test_validate_manifest_waves_fails_closed_on_malformed_shape():
         rgb.validate_manifest_waves({"branches": ["not-a-dict"]}, [])
 
 
+# --- 2026-06-18 convergence pass 3: create_audit_packet.render_prompt fails closed on a malformed
+#     manifest (the first audit step; was a KeyError/AttributeError traceback) ---
+def test_create_audit_packet_render_prompt_fails_closed(tmp_path):
+    # missing main_prompt -> was KeyError
+    with pytest.raises(SystemExit):
+        cap.render_prompt(tmp_path / "job.manifest.json", tmp_path, {"branches": [{"id": "B01"}]})
+    # non-dict branch entry -> was AttributeError on branch.get(...)
+    with pytest.raises(SystemExit):
+        cap.render_prompt(tmp_path / "job.manifest.json", tmp_path, {"main_prompt": 5, "branches": ["x"]})
+
+
 # --- C1: the generated branch launch prompt interpolates the real branch id ---
 def test_cli_launch_prompt_interpolates_branch_id(tmp_path):
     branch = {

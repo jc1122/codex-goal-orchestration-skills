@@ -77,7 +77,7 @@ def load_manifest(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"manifest must be a JSON object: {path}")
@@ -158,8 +158,16 @@ def audit_schema(manifest_path: Path, repo_root: Path) -> dict:
 
 def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
     base = manifest_path.parent
-    main_prompt = resolve_bundle_path(base, manifest["main_prompt"], "main_prompt")
+    # Fail closed on a malformed manifest: this is the first audit step and there is no
+    # upstream manifest re-validation, so a missing main_prompt / non-dict branch must be a
+    # clean SystemExit, not a KeyError/AttributeError traceback.
+    main_prompt_value = manifest.get("main_prompt")
+    if not isinstance(main_prompt_value, str):
+        raise SystemExit("manifest main_prompt must be a string")
+    main_prompt = resolve_bundle_path(base, main_prompt_value, "main_prompt")
     branches = manifest.get("branches", [])
+    if not isinstance(branches, list) or not all(isinstance(branch, dict) for branch in branches):
+        raise SystemExit("manifest branches must be a list of objects")
     max_active = manifest.get("max_active_branch_agents", "missing")
     waves = manifest.get("waves", [])
     branch_lines = []
