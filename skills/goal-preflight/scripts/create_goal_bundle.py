@@ -1850,6 +1850,8 @@ def normalize_brief(
         raise SystemExit("brief must include job_id")
     if not brief.get("branches"):
         raise SystemExit("brief must include synthesized branches before bundle generation")
+    if not isinstance(brief["branches"], list) or not all(isinstance(item, dict) for item in brief["branches"]):
+        raise SystemExit("brief branches must be a list of objects")
 
     job_id = slug(brief["job_id"])
     base_ref = require_branch_name(str(brief.get("base_ref") or default_base_ref), "base_ref")

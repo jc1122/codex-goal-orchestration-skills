@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:bb02ac9e118ad56fdb3c6db10d9abe441cad70001951819ebcd488edc19e5211"
+    "source_fingerprint": "sha256:d7875e4d8c8cdf19b063e689ffe0d75c4ae28b18e0a771a86e2340602dd50d52"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,14 +29,14 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3544,
-      "approx_tokens": 39697,
+      "lines": 3546,
+      "approx_tokens": 39743,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1846:normalize_brief:109l",
-        "3136:render_branch_prompt_text:105l",
-        "2522:build_runtime_index:96l",
-        "2946:manifest_from_normalized_brief:94l"
+        "1846:normalize_brief:111l",
+        "3138:render_branch_prompt_text:105l",
+        "2524:build_runtime_index:96l",
+        "2948:manifest_from_normalized_brief:94l"
       ]
     },
     {

@@ -54,6 +54,15 @@ def test_create_goal_bundle_load_json_fails_closed(tmp_path):
         cgb.load_json(nonutf8)
 
 
+# --- 2026-06-18 convergence pass 4: normalize_brief fails closed on a non-list / list-of-non-dict
+#     `branches` (was an AttributeError in _build_branch_record on the standalone create path) ---
+def test_normalize_brief_rejects_malformed_branches():
+    with pytest.raises(SystemExit):
+        cgb.normalize_brief({"job_id": "j1", "branches": "B01"}, validate_base_ref=False)
+    with pytest.raises(SystemExit):
+        cgb.normalize_brief({"job_id": "j1", "branches": ["not-a-dict"]}, validate_base_ref=False)
+
+
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
 def test_placeholder_regex_ignores_operators_and_emails():
     clean = [
