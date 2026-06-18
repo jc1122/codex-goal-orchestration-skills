@@ -179,9 +179,15 @@ def source_review_path(branch: dict, bundle_dir: Path) -> Path | None:
     return None
 
 
+def _as_list(value: object) -> list:
+    """A non-list `branches`/`obsolete_branches` (e.g. JSON null/scalar) must iterate as empty,
+    not TypeError — `.get(k, [])` only defaults on an ABSENT key, not a present non-list value."""
+    return value if isinstance(value, list) else []
+
+
 def all_owned_paths(manifest: dict) -> dict[str, str]:
     owners: dict[str, str] = {}
-    for branch in manifest.get("branches", []):
+    for branch in _as_list(manifest.get("branches")):
         if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
             continue
         branch_id = branch["id"]
@@ -193,10 +199,10 @@ def all_owned_paths(manifest: dict) -> dict[str, str]:
 
 def next_branch_id(manifest: dict, offset: int) -> str:
     used = set()
-    for branch in manifest.get("branches", []):
+    for branch in _as_list(manifest.get("branches")):
         if isinstance(branch, dict) and isinstance(branch.get("id"), str):
             used.add(branch["id"])
-    for branch in manifest.get("obsolete_branches", []):
+    for branch in _as_list(manifest.get("obsolete_branches")):
         if isinstance(branch, dict) and isinstance(branch.get("branch_id"), str):
             used.add(branch["branch_id"])
     highest = 0
@@ -343,6 +349,11 @@ def repair_branch(
 
 
 def generate_proposal(input_data: dict) -> dict:
+    # Fail closed on a malformed --emit-proposal input-files.json: these four fields are consumed
+    # by direct subscript below, so a missing/non-string value must be a clean SystemExit.
+    for key in ("manifest", "repo_root", "amendment_id", "job_id"):
+        if not isinstance(input_data.get(key), str) or not input_data[key].strip():
+            raise SystemExit(f"input-files.json missing required string field: {key}")
     manifest_path = Path(input_data["manifest"])
     repo_root = Path(input_data["repo_root"])
     manifest = load_json_object(manifest_path)
@@ -589,7 +600,7 @@ def create_packet(args: argparse.Namespace) -> Path:
     )
     if isinstance(scheduler_path, str) and not relative_path_defect(scheduler_path, "scheduler_path"):
         add_if_exists(records, bundle_dir / scheduler_path, "main scheduler")
-    for branch in manifest.get("branches", []):
+    for branch in _as_list(manifest.get("branches")):
         if not isinstance(branch, dict) or not isinstance(branch.get("id"), str) or branch["id"] not in terminal:
             continue
         value = branch.get("status_path")

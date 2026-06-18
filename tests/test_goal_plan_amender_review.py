@@ -94,6 +94,20 @@ def test_reconcile_protected_ids_wraps_valueerror(monkeypatch):
         cap._reconcile_protected_ids(args, inputs, {})
 
 
+# --- 2026-06-18 convergence pass 4: create_blocker_repair branch iterations tolerate a non-list
+#     `branches`/`obsolete_branches` (.get(k, []) only defaults on an ABSENT key, not a present null) ---
+def test_blocker_repair_branch_iterations_tolerate_non_list():
+    assert cbr.all_owned_paths({"branches": None}) == {}  # used to raise TypeError
+    assert isinstance(cbr.next_branch_id({"branches": 5, "obsolete_branches": None}, 0), str)
+
+
+# --- 2026-06-18 convergence pass 4: generate_proposal fails closed on a malformed --emit-proposal
+#     input-files.json (direct dict subscripts used to KeyError) ---
+def test_generate_proposal_requires_fields():
+    with pytest.raises(SystemExit):
+        cbr.generate_proposal({"repo_root": "/r", "amendment_id": "A1", "job_id": "j1"})  # missing manifest
+
+
 # --- shared loader fails closed (SystemExit) on malformed JSON, not a raw traceback ---
 def test_load_json_object_fails_closed(tmp_path):
     bad = tmp_path / "job.manifest.json"
