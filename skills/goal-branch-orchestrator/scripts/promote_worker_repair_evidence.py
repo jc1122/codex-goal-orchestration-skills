@@ -40,7 +40,7 @@ def read_json(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object at {path}")

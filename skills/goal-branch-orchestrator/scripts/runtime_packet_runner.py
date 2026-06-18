@@ -455,7 +455,7 @@ def attempt_elapsed_ms(attempt: dict[str, Any]) -> int | None:
 def safe_json(data: str) -> dict[str, Any]:
     try:
         value = json.loads(data)
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, UnicodeDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
 
@@ -2588,7 +2588,7 @@ def extract_status_json(
     parse_report["messages"] = parse_report.get("messages", [])
     try:
         schema = json.loads(schema_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         # A missing/corrupt schema artifact must fail closed (treated as a parse failure →
         # conservative blocked terminal), not abort the runner with a traceback.
         parse_report["failure_subclass"] = "parser_failure"

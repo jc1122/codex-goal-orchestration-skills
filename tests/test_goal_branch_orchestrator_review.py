@@ -20,6 +20,24 @@ asm = load_module("skills/goal-branch-orchestrator/scripts/assemble_branch_statu
 crp = load_module("skills/goal-branch-orchestrator/scripts/create_runtime_packet.py", "crp_review")
 prw = load_module("skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py", "prw_review")
 rpr = load_module("skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "rpr_review")
+cprg = load_module("skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py", "cprg_review")
+
+
+# --- 2026-06-18 convergence pass 3: create_pre_review_gate.read_json fails closed on a non-UTF-8
+#     worker artifact (launcher-state/packet.summary are worker-produced) ---
+def test_create_pre_review_gate_read_json_fails_closed_on_non_utf8(tmp_path):
+    nonutf8 = tmp_path / "launcher-state.json"
+    nonutf8.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(SystemExit):
+        cprg.read_json(nonutf8)
+
+
+# --- 2026-06-18 convergence pass 3: the research-worker secret-marker security branches are
+#     exercised (were gate-dark — a silent regression would let a worker reading .ssh/id_rsa pass) ---
+def test_validate_research_security_flags_secret_markers():
+    defects: list[str] = []
+    vbs.validate_research_security(defects, ["cat .env"], [".ssh/id_rsa"], "$.research")
+    assert sum("secret or credential material" in d for d in defects) >= 2, defects
 
 
 # --- validate_branch_status: the gate fails closed on malformed JSON (no traceback) ---
