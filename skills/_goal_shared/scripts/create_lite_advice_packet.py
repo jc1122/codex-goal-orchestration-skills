@@ -452,7 +452,10 @@ def main() -> int:
             raise SystemExit(f"Lite packet already exists; pass --replace to recreate deterministically: {packet_dir}")
         shutil.rmtree(packet_dir)
     packet_dir.mkdir(parents=True, exist_ok=True)
-    extra = task_file.read_text(encoding="utf-8") if task_file else ""
+    # errors="replace": match the validator side (validate_lite_advice reads the persisted
+    # task.md with errors="replace") so a non-UTF-8 --task-file does not crash create and the
+    # create/validate hashes stay consistent.
+    extra = task_file.read_text(encoding="utf-8", errors="replace") if task_file else ""
     task_sha256 = sha256_text(extra)
     control_script, control_version = resolve_bridge_control()
     prompt_text = prompt_for(
