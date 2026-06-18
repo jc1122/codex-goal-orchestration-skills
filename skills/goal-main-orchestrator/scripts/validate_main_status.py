@@ -88,7 +88,7 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
         if key not in data:
             defect(defects, path, f"missing key: {key}")
     require_string(defects, data.get("branch_id"), f"{path}.branch_id")
-    if data.get("status") not in STATUSES:
+    if not isinstance(data.get("status"), str) or data.get("status") not in STATUSES:
         defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
     status_path = require_string(defects, data.get("status_path"), f"{path}.status_path")
     review_path = require_string(defects, data.get("review_path"), f"{path}.review_path")
@@ -163,7 +163,7 @@ def validate_audit_artifacts(defects: list[str], root: dict, *, manifest_path: P
     )
     if audit.get("manifest") != manifest_path.as_posix():
         defect(defects, "$.audit_status.artifact.manifest", "must match manifest path")
-    if audit.get("status") not in AUDIT_STATUSES - {"missing"}:
+    if not isinstance(audit.get("status"), str) or audit.get("status") not in AUDIT_STATUSES - {"missing"}:
         defect(defects, "$.audit_status.artifact.status", f"must be one of {sorted(AUDIT_STATUSES - {'missing'})}")
     if audit_status != "missing" and audit.get("status") != audit_status:
         defect(defects, "$.audit_status", "must match prompt audit artifact status")

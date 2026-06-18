@@ -46,6 +46,14 @@ def test_validate_decision_artifact_tolerates_unhashable_terminal_ids(tmp_path):
     assert isinstance(defects, list)  # must not raise TypeError on set(terminal_branch_ids)
 
 
+# --- 2026-06-18 convergence pass 14: membership tests guard a non-string (unhashable) scalar field
+#     (a tampered list-valued `status` no longer raises TypeError on `not in {set}`) ---
+def test_validate_branch_summary_tolerates_unhashable_status():
+    defects: list[str] = []
+    vms.validate_branch_summary(defects, {"status": ["pass"], "branch_id": "B01"}, "$.b")  # must not raise
+    assert any("status" in d for d in defects), defects
+
+
 # --- 2026-06-18 re-review residual: create_audit_packet.load_manifest fails closed ---
 def test_create_audit_packet_load_manifest_fails_closed(tmp_path):
     bad = tmp_path / "job.manifest.json"

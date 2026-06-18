@@ -138,7 +138,7 @@ def valid_defects(value: object) -> bool:
             return False
         if not isinstance(item.get("file"), str) or not item["file"].strip():
             return False
-        if item.get("severity") not in {"critical", "major", "minor"}:
+        if not isinstance(item.get("severity"), str) or item.get("severity") not in {"critical", "major", "minor"}:
             return False
         if not isinstance(item.get("message"), str) or not item["message"].strip():
             return False
@@ -150,7 +150,7 @@ def valid_audit_data(data: object, *, manifest: str, repo_root: str) -> bool:
         return False
     if data.get("manifest") != manifest or data.get("repo_root") != repo_root:
         return False
-    if data.get("status") not in {"pass", "failed", "blocked"}:
+    if not isinstance(data.get("status"), str) or data.get("status") not in {"pass", "failed", "blocked"}:
         return False
     if not isinstance(data.get("can_start"), bool):
         return False
