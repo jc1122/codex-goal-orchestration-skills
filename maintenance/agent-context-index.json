@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:11cdbe9aba31807f4d515bc5a34e9c0928c5c492cf178d00b9db9028cb38d1c1"
+    "source_fingerprint": "sha256:bb02ac9e118ad56fdb3c6db10d9abe441cad70001951819ebcd488edc19e5211"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,21 +29,21 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3541,
-      "approx_tokens": 39652,
+      "lines": 3544,
+      "approx_tokens": 39697,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1843:normalize_brief:109l",
-        "3133:render_branch_prompt_text:105l",
-        "2519:build_runtime_index:96l",
-        "2943:manifest_from_normalized_brief:94l"
+        "1846:normalize_brief:109l",
+        "3136:render_branch_prompt_text:105l",
+        "2522:build_runtime_index:96l",
+        "2946:manifest_from_normalized_brief:94l"
       ]
     },
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
       "lines": 3361,
-      "approx_tokens": 33573,
+      "approx_tokens": 33578,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "3124:main:234l",
@@ -56,7 +56,7 @@
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
       "lines": 3507,
-      "approx_tokens": 33078,
+      "approx_tokens": 33088,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "1906:run_opencode_bridge_model:280l",
@@ -69,7 +69,7 @@
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
       "lines": 2874,
-      "approx_tokens": 32084,
+      "approx_tokens": 32090,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "2182:_lint_branch_worker_parallelism:135l",

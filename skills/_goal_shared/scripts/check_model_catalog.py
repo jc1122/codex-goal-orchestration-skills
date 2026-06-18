@@ -46,7 +46,7 @@ def run_catalog(*, bundled: bool) -> tuple[dict[str, Any] | None, str]:
         return None, f"command failed with {result.returncode}: {' '.join(command)}; {detail}"
     try:
         data = json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         return None, f"catalog JSON parse failed: {exc}"
     if not isinstance(data, dict) or not isinstance(data.get("models"), list):
         return None, "catalog JSON must contain a models array"

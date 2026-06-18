@@ -47,7 +47,7 @@ def load_json(path: Path) -> object:
     try:
         with path.open("r", encoding="utf-8") as handle:
             return json.load(handle)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
 
 
