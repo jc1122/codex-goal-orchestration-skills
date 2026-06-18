@@ -25,6 +25,26 @@ rec = load_module("skills/goal-plan-amender/scripts/recommend_amendment_decision
 vap = load_module("skills/goal-plan-amender/scripts/validate_amender_packet.py", "vap_review")
 
 
+# --- 2026-06-18 convergence pass 10: validate_input_files records a defect (not IsADirectoryError)
+#     when a source_files entry's path is a directory ---
+def test_validate_input_files_rejects_directory_source(tmp_path):
+    defects: list[str] = []
+    data = {
+        "schema_version": 1,
+        "amendment_id": "A1",
+        "source_files": [{"path": str(tmp_path), "sha256": "sha256:" + "0" * 64}],
+    }
+    vap.validate_input_files(
+        defects,
+        data,
+        amendment_id="A1",
+        manifest_path=tmp_path / "job.manifest.json",
+        decision_path=tmp_path / "A1.decision.json",
+        route={},
+    )  # must not raise IsADirectoryError
+    assert any("regular file" in d or "does not exist" in d for d in defects), defects
+
+
 # --- 2026-06-18 convergence pass 2: the protected-branch inference helpers convert a malformed
 #     ledger/status artifact into a ValueError (so validate_proposal's `except ValueError` records a
 #     defect) — `except Exception` could not catch the SystemExit load_json_object raises ---

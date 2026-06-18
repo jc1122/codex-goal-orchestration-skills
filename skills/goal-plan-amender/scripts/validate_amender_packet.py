@@ -150,8 +150,8 @@ def validate_input_files(
         if not path_text:
             continue
         source_path = Path(path_text)
-        if not source_path.exists():
-            defect(defects, f"{item_path}.path", f"source file does not exist: {source_path}")
+        if not source_path.is_file():
+            defect(defects, f"{item_path}.path", f"source file does not exist or is not a regular file: {source_path}")
         elif expected_sha and expected_sha != sha256_file(source_path):
             defect(defects, f"{item_path}.sha256", "does not match current source file")
 
