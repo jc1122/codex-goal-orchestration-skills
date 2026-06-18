@@ -14,6 +14,7 @@ fix cannot silently regress. Fixes covered:
 import json
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -292,3 +293,13 @@ def test_iter_debug_trace_skips_unreadable_event_file(tmp_path):
     broken.symlink_to(tmp_path / "does-not-exist.jsonl")  # broken symlink: exists()->glob, read->error
     events = stl.iter_debug_event_trace_events(tmp_path)  # must not raise
     assert any(e.get("event_type") == "trace_defect" for e in events)
+
+
+# --- 2026-06-18 convergence pass 16: resolve_selected_ids fails closed on a malformed wave whose
+#     `branches` is not an array of strings (was `set([...])` -> TypeError: unhashable type). ---
+def test_resolve_selected_ids_rejects_non_string_wave_branches():
+    args = types.SimpleNamespace(branch=None, wave="w1")
+    waves = [{"id": "w1", "branches": [{"id": "b"}]}]  # branches must be strings, not objects
+    sets = rgb.SchedulerSets([], set(), set(), set(), set(), set())
+    with pytest.raises(SystemExit):
+        rgb.resolve_selected_ids(args, waves, {}, sets, 1)

@@ -1120,7 +1120,10 @@ def resolve_selected_ids(
         matches = [wave for wave in waves if wave.get("id") == args.wave]
         if not matches:
             raise SystemExit(f"unknown wave: {args.wave}")
-        selected_ids = set(matches[0].get("branches", []))
+        wave_branches = matches[0].get("branches", [])
+        if not isinstance(wave_branches, list) or any(not isinstance(bid, str) for bid in wave_branches):
+            raise SystemExit(f"wave {args.wave} branches must be an array of strings")
+        selected_ids = set(wave_branches)
         for bid in sorted(selected_ids):
             _validate_selectable(bid, branch_dependencies, sets)
     if selected_ids is not None and len(sets.active) + len(selected_ids) > max_active:
