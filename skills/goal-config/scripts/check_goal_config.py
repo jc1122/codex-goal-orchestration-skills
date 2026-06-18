@@ -351,7 +351,7 @@ def validate_harness_shape(config: dict[str, Any]) -> list[str]:
             failures.append(f"harness {name} must be an object")
             continue
         kind = harness.get("kind")
-        if kind not in HARNESS_KIND_VALUES:
+        if not isinstance(kind, str) or kind not in HARNESS_KIND_VALUES:
             failures.append(f"harness {name} has unsupported kind: {kind}")
         command = harness.get("command")
         if not isinstance(command, str) or not command:
@@ -538,7 +538,11 @@ def remediate_for_preflight(
                     "reason": "preflight expects semantic telemetry groups; detailed counters belong in usage_units",
                 }
             )
-        if telemetry.get("schema_version") not in (None, contract.TELEMETRY_POLICY_SCHEMA_VERSION):
+        telemetry_schema_version = telemetry.get("schema_version")
+        if (
+            telemetry_schema_version is not None
+            and telemetry_schema_version != contract.TELEMETRY_POLICY_SCHEMA_VERSION
+        ):
             actions.append(
                 {
                     "field": "telemetry.schema_version",
@@ -837,7 +841,7 @@ def check_model_for_harness(
     harness: dict[str, Any],
 ) -> tuple[dict[str, Any], list[str]]:
     kind = harness.get("kind")
-    if kind not in HARNESS_KIND_VALUES:
+    if not isinstance(kind, str) or kind not in HARNESS_KIND_VALUES:
         return {"status": "failed", "reason": f"unsupported harness kind: {kind}"}, [
             f"unsupported harness kind: {kind}"
         ]
@@ -1122,7 +1126,7 @@ def write_state(
         required_mode = str(check_mode or mode or "check")
         if required_mode == "debug":
             required_mode = "smoke"
-        if config_validation_mode in {"smoke", "debug"}:
+        if isinstance(config_validation_mode, str) and config_validation_mode in {"smoke", "debug"}:
             required_mode = "smoke"
         next_mode_flag = " --smoke" if required_mode in {"smoke", "discover"} else ""
         if output_path:
