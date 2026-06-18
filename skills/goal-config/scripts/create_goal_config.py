@@ -277,14 +277,14 @@ def load_harness_spec(value: str) -> dict[str, Any]:
     if source.startswith("{"):
         try:
             data = json.loads(source)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SystemExit(f"inline --harness-spec is not valid JSON: {exc}") from exc
         source_name = "inline --harness-spec"
     else:
         path = Path(value)
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SystemExit(f"could not read --harness-spec {path}: {exc}") from exc
         source_name = path.as_posix()
     if not isinstance(data, dict):
@@ -475,7 +475,7 @@ def route_id(value: str) -> str:
 def load_discovery_report(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"could not read discovery report {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"discovery report must be a JSON object: {path}")
@@ -606,7 +606,7 @@ def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None,
         mapping_path = Path(mapping)
         try:
             data = json.loads(mapping_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SystemExit(f"could not read discovery mapping {mapping_path}: {exc}") from exc
         if not isinstance(data, dict) or not data:
             raise SystemExit(f"discovery mapping must be a non-empty JSON object: {mapping_path}")

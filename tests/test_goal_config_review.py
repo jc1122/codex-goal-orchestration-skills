@@ -39,6 +39,15 @@ def test_check_load_json_fails_closed(tmp_path):
         cgc.load_json(tmp_path / "does-not-exist.json")
 
 
+# --- 2026-06-18 convergence pass 3: check_goal_config.load_json also fails closed on a non-UTF-8
+#     --config (UnicodeDecodeError is a ValueError, not OSError/JSONDecodeError) ---
+def test_check_load_json_fails_closed_on_non_utf8(tmp_path):
+    nonutf8 = tmp_path / "goal.config.json"
+    nonutf8.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(SystemExit):
+        cgc.load_json(nonutf8)
+
+
 # --- config-supplied non-numeric timeout no longer crashes the smoke path ---
 def test_run_harness_smoke_tolerates_non_numeric_timeout():
     # Missing prompt/expect short-circuits to a failed result; the int() on a non-numeric

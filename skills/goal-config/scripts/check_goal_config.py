@@ -58,7 +58,7 @@ DISCOVERY_PROFILES: dict[str, dict[str, Any]] = {
 def load_json(path: Path) -> dict[str, Any]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"could not read config JSON {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"config must be a JSON object: {path}")
