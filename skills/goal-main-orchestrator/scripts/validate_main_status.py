@@ -606,7 +606,7 @@ def validate_amendment_omitted_decisions(
         )
         decision_terminal_ids = (
             {branch_id for branch_id in decision_data.get("terminal_branch_ids", []) if isinstance(branch_id, str)}
-            if isinstance(decision_data, dict)
+            if isinstance(decision_data, dict) and isinstance(decision_data.get("terminal_branch_ids"), list)
             else set()
         )
         if (

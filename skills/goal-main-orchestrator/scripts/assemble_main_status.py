@@ -57,6 +57,12 @@ load_json = STATUS_VALIDATION.load_json
 sha256_file = STATUS_VALIDATION.sha256_file
 
 
+def _nonempty_str_list(value: object) -> list[str]:
+    """A semi-trusted artifact's id list (e.g. branch_parallelism.active_ids) may be a present
+    non-list; iterate as empty rather than TypeError."""
+    return [item for item in value if isinstance(item, str) and item.strip()] if isinstance(value, list) else []
+
+
 def write_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -282,7 +288,7 @@ def current_amendment_records(
     if not amendments_dir.is_dir():
         return [], set(), []
     terminal_statuses = _terminal_statuses(branch_statuses)
-    active_ids = {item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()}
+    active_ids = set(_nonempty_str_list(branch_parallelism.get("active_ids")))
     # Accept the pre-amendment (archived) manifest sha like the scheduler rollup below does;
     # a launch decision records the sha at decision time, but apply_manifest_amendment then
     # rewrites the live manifest (new sha) without refreshing the decision, so a strict
@@ -391,7 +397,7 @@ def ensure_skip_decision(
         "scheduler_path": CONTRACT.MAIN_SCHEDULER_PATH,
         "scheduler_event_seq": scheduler_event_seq,
         "active_branch_ids": [
-            item for item in branch_parallelism.get("active_ids", []) if isinstance(item, str) and item.strip()
+            *_nonempty_str_list(branch_parallelism.get("active_ids")),
         ],
         "terminal_branch_ids": sorted(terminal_statuses),
         "terminal_branch_statuses": {

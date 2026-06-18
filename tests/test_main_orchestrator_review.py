@@ -169,6 +169,14 @@ def test_audit_status_blocks_on_malformed_artifact(tmp_path):
     assert blockers
 
 
+def test_assemble_nonempty_str_list_guards_non_list():
+    # 2026-06-18 convergence pass 6 (proactive sweep): the id-list helper tolerates a non-list
+    # branch_parallelism.active_ids (semi-trusted branch artifact) instead of TypeError.
+    assert ams._nonempty_str_list(5) == []
+    assert ams._nonempty_str_list(None) == []
+    assert ams._nonempty_str_list(["a", "", 3, "b"]) == ["a", "b"]
+
+
 def test_branch_summaries_tolerates_non_list_blockers(tmp_path):
     # 2026-06-18 convergence pass 6: a branch status artifact with a non-list `blockers`
     # used to raise TypeError in branch_summaries; now it is skipped.
