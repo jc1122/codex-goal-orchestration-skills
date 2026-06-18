@@ -66,6 +66,15 @@ def test_json_readers_fail_closed_on_malformed(tmp_path):
         append_event.load_ledger(bad)
 
 
+# --- 2026-06-18 convergence pass 13: sha256_file returns None on a non-file (directory) instead of
+#     raising IsADirectoryError; callers comparing it then fail closed (mismatch defect) ---
+def test_sha256_file_returns_none_on_directory(tmp_path):
+    assert scheduler_tick.sha256_file(tmp_path) is None  # a directory -> None, not IsADirectoryError
+    f = tmp_path / "x.txt"
+    f.write_text("hi", encoding="utf-8")
+    assert isinstance(scheduler_tick.sha256_file(f), str)  # a real file still hashes
+
+
 # --- 2026-06-18 convergence pass 12: fail-closed JSON readers also fail closed on a DIRECTORY
 #     path (IsADirectoryError is an OSError, previously uncaught) ---
 def test_json_readers_fail_closed_on_directory(tmp_path):

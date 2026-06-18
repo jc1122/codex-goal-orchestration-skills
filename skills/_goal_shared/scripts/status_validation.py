@@ -315,7 +315,9 @@ is_repo_relative_path = PATH_RULES.is_repo_relative_path
 is_absolute_path = PATH_RULES.is_absolute_path
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
