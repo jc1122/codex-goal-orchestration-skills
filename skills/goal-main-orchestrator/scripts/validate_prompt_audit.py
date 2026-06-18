@@ -47,7 +47,7 @@ def validate_defects(defects: list[str], value: object) -> None:
         item_path = f"$.defects[{index}]"
         data = require_object(defects, item, item_path)
         severity = data.get("severity")
-        if severity not in {"critical", "major", "minor"}:
+        if not isinstance(severity, str) or severity not in {"critical", "major", "minor"}:
             defect(defects, f"{item_path}.severity", "must be one of critical, major, minor")
         require_string(defects, data.get("file"), f"{item_path}.file")
         require_string(defects, data.get("message"), f"{item_path}.message")

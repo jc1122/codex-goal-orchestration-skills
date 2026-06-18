@@ -105,7 +105,9 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
     if recovered_by is not None:
         require_string_list(defects, recovered_by, f"{path}.recovered_by", min_items=1)
     recovery_status = data.get("recovery_status")
-    if recovery_status is not None and recovery_status not in {"pending", "recovered"}:
+    if recovery_status is not None and (
+        not isinstance(recovery_status, str) or recovery_status not in {"pending", "recovered"}
+    ):
         defect(defects, f"{path}.recovery_status", "must be pending or recovered")
     if recovery_status == "recovered" and not isinstance(recovered_by, list):
         defect(defects, f"{path}.recovered_by", "is required when recovery_status is recovered")
@@ -1061,37 +1063,37 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
     expected_branches = expected_branches_from_manifest(defects, manifest)
     require_string(defects, root.get("job_id"), "$.job_id")
     status = root.get("status")
-    if status not in STATUSES:
+    if not isinstance(status, str) or status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
     schema_status = root.get("schema_status")
-    if schema_status not in {"assembled", "failed"}:
+    if not isinstance(schema_status, str) or schema_status not in {"assembled", "failed"}:
         defect(defects, "$.schema_status", "must be 'assembled' or 'failed'")
     runtime_status = root.get("runtime_status")
-    if runtime_status not in STATUSES:
+    if not isinstance(runtime_status, str) or runtime_status not in STATUSES:
         defect(defects, "$.runtime_status", f"must be one of {sorted(STATUSES)}")
     elif runtime_status != status:
         defect(defects, "$.runtime_status", "must match status")
     dod_status = root.get("dod_status")
-    if dod_status not in {"pass", "incomplete"}:
+    if not isinstance(dod_status, str) or dod_status not in {"pass", "incomplete"}:
         defect(defects, "$.dod_status", "must be 'pass' or 'incomplete'")
     elif status == "pass" and dod_status != "pass":
         defect(defects, "$.dod_status", "must be pass when main status is pass")
-    elif status in {"partial", "blocked", "failed"} and dod_status == "pass":
+    elif isinstance(status, str) and status in {"partial", "blocked", "failed"} and dod_status == "pass":
         defect(defects, "$.dod_status", "must not be pass when main status is non-pass")
     review_status = root.get("review_status")
-    if review_status not in REVIEW_STATUSES:
+    if not isinstance(review_status, str) or review_status not in REVIEW_STATUSES:
         defect(defects, "$.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")
     resume_action = root.get("resume_action")
-    if resume_action not in {"reuse_terminal_status", "resume_or_repair"}:
+    if not isinstance(resume_action, str) or resume_action not in {"reuse_terminal_status", "resume_or_repair"}:
         defect(defects, "$.resume_action", "must be reuse_terminal_status or resume_or_repair")
     audit_status = root.get("audit_status")
-    if audit_status not in AUDIT_STATUSES:
+    if not isinstance(audit_status, str) or audit_status not in AUDIT_STATUSES:
         defect(defects, "$.audit_status", f"must be one of {sorted(AUDIT_STATUSES)}")
     if status == "pass" and audit_status != "pass":
         defect(defects, "$.audit_status", "must be pass when main status is pass")
     validate_audit_artifacts(defects, root, manifest_path=manifest_path, require_artifacts=status == "pass")
     branch_statuses = root.get("branch_statuses")
-    min_branches = 1 if status in {"pass", "partial"} else 0
+    min_branches = 1 if isinstance(status, str) and status in {"pass", "partial"} else 0
     if (
         not isinstance(branch_statuses, list)
         or len(branch_statuses) < min_branches
@@ -1142,7 +1144,7 @@ def validate_main_status(data: object, *, job_id: str | None, manifest: object, 
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")
     if status == "pass" and blockers:
         defect(defects, "$.blockers", "must be empty when status is pass")
-    if status in {"partial", "blocked", "failed"} and not blockers:
+    if isinstance(status, str) and status in {"partial", "blocked", "failed"} and not blockers:
         defect(defects, "$.blockers", "must explain non-pass status")
     require_string(defects, root.get("summary"), "$.summary")
     return defects

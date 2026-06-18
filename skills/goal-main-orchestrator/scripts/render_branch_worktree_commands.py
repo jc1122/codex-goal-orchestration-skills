@@ -394,7 +394,7 @@ def artifact_status(path: Path) -> str | None:
         return None
     data = load_json(path)
     status = data.get("status")
-    if status not in TERMINAL_STATUSES:
+    if not isinstance(status, str) or status not in TERMINAL_STATUSES:
         raise SystemExit(f"status artifact {path} must contain a terminal status")
     return str(status)
 
@@ -453,7 +453,7 @@ def scheduler_state_from_ledger(
             raise SystemExit(f"main scheduler events[{index}] must be an object: {scheduler_path}")
         name = event.get("event")
         event_id = event.get("id")
-        if name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
+        if isinstance(name, str) and name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
             if not isinstance(event_id, str):
                 raise SystemExit(f"main scheduler events[{index}].id must be a string: {scheduler_path}")
             if event_id not in known:
@@ -470,7 +470,7 @@ def scheduler_state_from_ledger(
             finished_status.pop(str(event_id), None)
         elif name == "finish":
             status = event.get("status")
-            if status not in TERMINAL_STATUSES:
+            if not isinstance(status, str) or status not in TERMINAL_STATUSES:
                 raise SystemExit(f"main scheduler events[{index}].status must be terminal")
             if event_id not in active:
                 raise SystemExit(f"main scheduler events[{index}] finishes inactive branch {event_id}")
@@ -486,7 +486,7 @@ def scheduler_state_from_ledger(
             reason_code = event.get("reason_code")
             if isinstance(reason_code, str):
                 blocked_reason_codes[str(event_id)] = reason_code
-        elif name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
+        elif isinstance(name, str) and name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
             continue
         else:
             raise SystemExit(f"main scheduler events[{index}].event is unsupported: {name!r}")
@@ -863,7 +863,7 @@ def validate_audit_pass(audit: dict, audit_path: Path, manifest: dict) -> None:
             blocking_audit_defects.append("non-object audit defect")
             continue
         severity = item.get("severity")
-        if severity not in {"critical", "major", "minor"}:
+        if not isinstance(severity, str) or severity not in {"critical", "major", "minor"}:
             blocking_audit_defects.append(str(item.get("message", "invalid audit defect severity")))
             continue
         if not isinstance(item.get("file"), str) or not item["file"].strip():

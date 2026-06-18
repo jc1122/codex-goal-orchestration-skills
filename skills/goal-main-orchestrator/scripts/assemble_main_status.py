@@ -127,7 +127,7 @@ def audit_status(bundle_dir: Path, blockers: list[str]) -> str:
         return "missing"
     data = safe_load_object(path, blockers, "prompt audit artifact")
     status = data.get("status")
-    if status not in {"pass", "failed", "blocked"}:
+    if not isinstance(status, str) or status not in {"pass", "failed", "blocked"}:
         blockers.append(f"prompt audit artifact has invalid status: {status!r}")
         return "blocked"
     if status != "pass":
