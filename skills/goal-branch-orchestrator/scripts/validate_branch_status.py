@@ -101,18 +101,31 @@ RESEARCH_SECRET_MARKERS = [
 WORKER_FORBIDDEN_COMMAND_PATTERNS = [
     (r"\bgit\s+(add|commit|push|reset|checkout|clean|merge|rebase|stash)\b", "git state mutation"),
 ]
-# Global git options that may appear between `git` and the subcommand; collapse them so a
-# mutating subcommand cannot evade the forbidden-command gate via `git -C dir commit` / `git -c k=v push`.
-_GIT_GLOBAL_OPT_RE = re.compile(
-    r"\bgit\s+(?:(?:-c\s+\S+|--git-dir(?:=|\s+)\S+|--work-tree(?:=|\s+)\S+"
-    r"|--exec-path(?:=\S+)?|--namespace(?:=|\s+)\S+|--no-pager|--paginate|-p)\s+)+"
-)
+# Git global options that take a separate-token argument (so the value is consumed when collapsing).
+# Everything else option-shaped (-p, --no-pager, --bare, --no-optional-locks, --literal-pathspecs,
+# unknown future flags, ...) is treated as no-argument so it cannot break the git->subcommand adjacency.
+_GIT_ARG_OPTS = {"-c", "-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"}
 
 
 def normalize_git_command(text: str) -> str:
     """Collapse `git <global options> <subcommand>` to `git <subcommand>` for forbidden-command
-    matching. (-C is lowercased to -c by the caller, so the -c rule covers both -c and -C.)"""
-    return _GIT_GLOBAL_OPT_RE.sub("git ", text)
+    matching, so a mutating subcommand cannot evade the gates via any global option inserted before
+    it (git -C dir commit / git -c k=v push / git --no-optional-locks commit / git --bare push)."""
+    tokens = text.split()
+    out: list[str] = []
+    i = 0
+    n = len(tokens)
+    while i < n:
+        tok = tokens[i]
+        out.append(tok)
+        i += 1
+        if tok == "git":
+            while i < n and tokens[i].startswith("-"):
+                opt = tokens[i]
+                i += 1
+                if "=" not in opt and opt in _GIT_ARG_OPTS and i < n:
+                    i += 1  # consume the option's separate-token value
+    return " ".join(out)
 
 
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE

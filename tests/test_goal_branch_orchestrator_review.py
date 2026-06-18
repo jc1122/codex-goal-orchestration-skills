@@ -95,6 +95,29 @@ def test_research_command_gate_not_evaded_and_secret_path_still_caught():
     assert any("secret or credential" in d for d in secret), secret
 
 
+# --- 2026-06-18 convergence pass 11: the git-mutation gate also resists no-argument global flags
+#     (--bare/--no-optional-locks/--literal-pathspecs), not just the enumerated arg-taking ones ---
+def test_worker_command_gate_not_evaded_by_no_arg_git_global_flags():
+    for cmd in ("git --no-optional-locks commit -m x", "git --bare push", "git --literal-pathspecs reset --hard"):
+        defects: list[str] = []
+        vbs.validate_worker_command_evidence(defects, [cmd], "$.cr")
+        assert any("mutating command" in d for d in defects), cmd
+
+
+# --- 2026-06-18 convergence pass 11: configured_route_commands / configured_telemetry_attempts
+#     guard an unhashable (list/dict) goal_config model `harness` value (was TypeError on dict.get) ---
+def test_configured_route_commands_tolerates_unhashable_harness():
+    cmds = crp.configured_route_commands(
+        ["ds-pro-max"], {"models": {"ds-pro-max": {"harness": ["x"], "model": "m"}}, "harnesses": {}}
+    )
+    assert isinstance(cmds, list)  # was TypeError: unhashable type
+
+
+def test_configured_telemetry_attempts_rejects_unhashable_harness():
+    with pytest.raises(SystemExit):  # references unknown harness, NOT TypeError on dict.get
+        crp.worker_telemetry_attempts(["codex-spark"], {"models": {"codex-spark": {"harness": ["x"]}}, "harnesses": {}})
+
+
 # --- 2026-06-18 convergence pass 10: configured_route_commands guards a non-dict per-alias model
 #     value (sibling configured_telemetry_attempts already did) ---
 def test_configured_route_commands_tolerates_non_dict_model():

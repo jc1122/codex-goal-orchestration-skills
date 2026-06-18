@@ -511,8 +511,10 @@ def configured_route_commands(selected_ladder: list[str], goal_config: dict) -> 
     for alias in selected_ladder:
         model = models.get(alias)
         model = model if isinstance(model, dict) else {}
-        harness = harnesses.get(model.get("harness"), {})
-        command = harness.get("command", model.get("harness", ""))
+        harness_name = model.get("harness")
+        harness_name = harness_name if isinstance(harness_name, str) else ""
+        harness = harnesses.get(harness_name, {})
+        command = harness.get("command", harness_name)
         args = harness.get("run_args") or harness.get("smoke_args") or []
         rendered = render_attempt_args(
             args,
@@ -701,7 +703,7 @@ def configured_telemetry_attempts(
         if not isinstance(model, dict):
             raise SystemExit(f"goal_config missing model role used by route ladder: {alias}")
         harness_name = model.get("harness")
-        harness = harnesses.get(harness_name)
+        harness = harnesses.get(harness_name) if isinstance(harness_name, str) else None
         if not isinstance(harness, dict):
             raise SystemExit(f"goal_config model {alias} references unknown harness: {harness_name}")
         kind = harness.get("kind")
