@@ -8,6 +8,8 @@ Pins the verified defects:
 """
 
 import sys
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from conftest import REPO, load_module
@@ -17,6 +19,20 @@ sys.path.insert(0, str(REPO / "skills" / "goal-plan-amender" / "scripts"))
 
 amendment_lib = load_module("skills/goal-plan-amender/scripts/amendment_lib.py", "amlib_review")
 cbr = load_module("skills/goal-plan-amender/scripts/create_blocker_repair_packet.py", "cbr_review")
+cap = load_module("skills/goal-plan-amender/scripts/create_adaptation_packet.py", "cap_review")
+
+
+# --- 2026-06-18 convergence pass: _reconcile_protected_ids wraps protected_ids' ValueError as a
+#     clean SystemExit, matching its three sibling scripts (was the lone unguarded outlier) ---
+def test_reconcile_protected_ids_wraps_valueerror(monkeypatch):
+    def boom(*_a, **_k):
+        raise ValueError("scheduler ledger events must be an array for protected branch inference")
+
+    monkeypatch.setattr(cap, "protected_ids", boom)
+    args = SimpleNamespace(active_branch=[], terminal_branch=[])
+    inputs = SimpleNamespace(manifest_path=Path("/abs/job.manifest.json"), manifest={})
+    with pytest.raises(SystemExit):
+        cap._reconcile_protected_ids(args, inputs, {})
 
 
 # --- shared loader fails closed (SystemExit) on malformed JSON, not a raw traceback ---

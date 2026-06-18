@@ -629,13 +629,16 @@ def _prepare_packet_dir(amendments_dir: Path, amendment_id: str, *, replace: boo
 def _reconcile_protected_ids(
     args: argparse.Namespace, inputs: ResolvedInputs, decision: dict
 ) -> tuple[list[str], list[str], dict]:
-    active, terminal, terminal_status = protected_ids(
-        inputs.manifest_path,
-        inputs.manifest,
-        active_ids=args.active_branch,
-        terminal_ids=args.terminal_branch,
-        infer_scheduler=True,
-    )
+    try:
+        active, terminal, terminal_status = protected_ids(
+            inputs.manifest_path,
+            inputs.manifest,
+            active_ids=args.active_branch,
+            terminal_ids=args.terminal_branch,
+            infer_scheduler=True,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     decision_active = sorted(item for item in decision.get("active_branch_ids", []) if isinstance(item, str))
     decision_terminal = sorted(item for item in decision.get("terminal_branch_ids", []) if isinstance(item, str))
     if sorted(active) != decision_active:
