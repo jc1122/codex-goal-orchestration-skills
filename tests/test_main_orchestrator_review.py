@@ -169,6 +169,19 @@ def test_audit_status_blocks_on_malformed_artifact(tmp_path):
     assert blockers
 
 
+def test_branch_summaries_tolerates_non_list_blockers(tmp_path):
+    # 2026-06-18 convergence pass 6: a branch status artifact with a non-list `blockers`
+    # used to raise TypeError in branch_summaries; now it is skipped.
+    (tmp_path / "branches").mkdir()
+    (tmp_path / "branches" / "B01.status.json").write_text(
+        json.dumps({"status": "failed", "blockers": 5}), encoding="utf-8"
+    )
+    branches = [{"id": "B01", "status_path": "branches/B01.status.json", "review_path": "branches/B01.review.json"}]
+    blockers: list[str] = []
+    summaries = ams.branch_summaries(tmp_path, branches, blockers)  # must not raise
+    assert summaries[0]["status"] == "failed"
+
+
 def test_branch_summaries_blocks_on_malformed_status(tmp_path):
     (tmp_path / "branches").mkdir()
     (tmp_path / "branches" / "B01.status.json").write_text("][", encoding="utf-8")

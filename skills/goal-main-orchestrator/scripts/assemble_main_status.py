@@ -218,7 +218,8 @@ def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]
             if status_rel and (bundle_dir / status_rel).exists()
             else {}
         )
-        for item in status_data.get("blockers", []):
+        raw_blockers = status_data.get("blockers")
+        for item in raw_blockers if isinstance(raw_blockers, list) else []:
             if isinstance(item, str) and item.strip():
                 blockers.append(f"{branch_id}: {item.strip()}")
         if not status_data.get("blockers"):
