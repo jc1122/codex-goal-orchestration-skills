@@ -322,7 +322,10 @@ def render_tokens(command: Any, *, context: dict[str, str]) -> list[str]:
     for item in command:
         if not isinstance(item, str):
             continue
-        rendered.append(item.format(**context))
+        try:
+            rendered.append(item.format(**context))
+        except (KeyError, IndexError, ValueError) as exc:
+            raise SystemExit(f"harness args template has an unknown/invalid token in {item!r}: {exc}") from exc
     return rendered
 
 
@@ -793,7 +796,10 @@ def profile_discovery_candidates(
     profile = DISCOVERY_PROFILES.get(profile_name)
     if profile is None:
         raise SystemExit(f"unknown discovery profile: {profile_name}")
-    matcher = re.compile(model_filter) if model_filter else None
+    try:
+        matcher = re.compile(model_filter) if model_filter else None
+    except re.error as exc:
+        raise SystemExit(f"--discover-model-filter is not a valid regex: {exc}") from exc
     candidates: list[dict[str, Any]] = []
     for item in profile["candidates"]:
         candidate = dict(item)

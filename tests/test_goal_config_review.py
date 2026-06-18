@@ -20,7 +20,11 @@ crc = load_module("skills/goal-config/scripts/create_goal_config.py", "crc_revie
 def test_docs_do_not_reference_nonexistent_check_flag():
     parser_flags = {opt for action in cgc.build_parser()._actions for opt in action.option_strings}
     assert "--include-raw-errors" not in parser_flags  # confirms reality: the flag does not exist
-    for rel in ("skills/goal-config/SKILL.md", "skills/goal-config/references/configuration-contract.md"):
+    for rel in (
+        "skills/goal-config/SKILL.md",
+        "skills/goal-config/references/configuration-contract.md",
+        "README.md",
+    ):
         text = (REPO / rel).read_text(encoding="utf-8")
         assert "--include-raw-errors" not in text, f"{rel} still references the nonexistent flag"
 
@@ -68,6 +72,22 @@ def test_check_model_for_harness_rejects_bad_bridge_route():
     )
     assert result["status"] == "failed"
     assert any("not a known bridge route" in f for f in failures)
+
+
+# --- 2026-06-18 convergence pass 2: render_tokens fails closed on an unknown/invalid template
+#     token (a doc-sanctioned smoke_args token absent from the smoke context used to KeyError-crash) ---
+def test_render_tokens_fails_closed_on_unknown_token():
+    with pytest.raises(SystemExit):
+        cgc.render_tokens(["{prompt_file}"], context={"prompt": "x"})
+    # well-formed tokens still render
+    assert cgc.render_tokens(["--p", "{prompt}"], context={"prompt": "hello"}) == ["--p", "hello"]
+
+
+# --- 2026-06-18 convergence pass 2: an invalid --discover-model-filter regex fails closed
+#     (was an uncaught re.error traceback) ---
+def test_profile_discovery_rejects_invalid_regex():
+    with pytest.raises(SystemExit):
+        cgc.profile_discovery_candidates("mixed-fast", model_filter="[", max_candidates=None)
 
 
 # --- create_goal_config: file-input loaders fail closed ---
