@@ -576,8 +576,10 @@ def append_unique(target: list[str], value: object) -> None:
 def collect_worker_tests(worker_statuses: list[dict]) -> list[str]:
     tests: list[str] = []
     for status in worker_statuses:
-        for value in status.get("tests", []):
-            append_unique(tests, value)
+        values = status.get("tests")
+        if isinstance(values, list):
+            for value in values:
+                append_unique(tests, value)
     return tests
 
 
@@ -594,8 +596,10 @@ def collect_manifest_dod(branch: dict) -> list[str]:
         for work_item in work_items:
             if not isinstance(work_item, dict):
                 continue
-            for value in work_item.get("dod", []):
-                append_unique(items, value)
+            dod_values = work_item.get("dod")
+            if isinstance(dod_values, list):
+                for value in dod_values:
+                    append_unique(items, value)
     return items
 
 

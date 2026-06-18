@@ -32,6 +32,28 @@ def test_create_pre_review_gate_read_json_fails_closed_on_non_utf8(tmp_path):
         cprg.read_json(nonutf8)
 
 
+# --- 2026-06-18 convergence pass 4: nested-field iteration guards — a non-list `tests` /
+#     work-item `dod` in a worker/manifest artifact is skipped, not a TypeError ---
+def test_collect_worker_tests_tolerates_non_list():
+    assert asm.collect_worker_tests([{"tests": 5}]) == []  # used to raise TypeError
+
+
+def test_collect_manifest_dod_tolerates_non_list_work_item_dod():
+    result = asm.collect_manifest_dod({"dod": ["d1"], "work_items": [{"dod": 7}]})  # must not raise
+    assert result == ["d1"]
+
+
+# --- 2026-06-18 convergence pass 4: the worker mutating-command security gate is exercised
+#     (was gate-dark, like its research sibling) ---
+def test_validate_worker_command_evidence_flags_git_mutation():
+    defects: list[str] = []
+    vbs.validate_worker_command_evidence(defects, ["git push origin HEAD"], "$.w.commands_run")
+    assert any("must not list mutating command evidence" in d for d in defects), defects
+    clean: list[str] = []
+    vbs.validate_worker_command_evidence(clean, ["pytest -q"], "$.w.commands_run")
+    assert clean == []
+
+
 # --- 2026-06-18 convergence pass 3: the research-worker secret-marker security branches are
 #     exercised (were gate-dark — a silent regression would let a worker reading .ssh/id_rsa pass) ---
 def test_validate_research_security_flags_secret_markers():
