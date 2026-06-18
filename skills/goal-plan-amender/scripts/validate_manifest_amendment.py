@@ -46,9 +46,25 @@ def main() -> int:
     proposed_amendment_id = (
         validation.get("amendment_id")
         if isinstance(validation.get("amendment_id"), str) and validation.get("amendment_id").strip()
-        else proposal_path.stem
+        # Use the leading id segment of the proposal filename (A1.proposal.json -> A1), not Path.stem,
+        # which yields the double-extension "A1.proposal" that ensure_amendment_id always rejects.
+        else proposal_path.name.split(".")[0]
     )
-    amendment_id = ensure_amendment_id(proposed_amendment_id)
+    try:
+        amendment_id = ensure_amendment_id(proposed_amendment_id)
+    except (ValueError, SystemExit):
+        # The proposal's amendment_id is malformed; validate_proposal already recorded the structured
+        # defect (status != "pass"). Emit that failed validation result instead of crashing and writing
+        # no artifact at all (the fail-closed convention requires a clean failed result, and a valid
+        # amendment_id is needed to build the lineage path below). ensure_amendment_id raises ValueError
+        # for an empty/non-string id and SystemExit (via require_safe_id) for a malformed non-empty id.
+        if args.output:
+            write_json(resolve_absolute_path(args.output, "--output", must_exist=False), validation)
+        if args.json or not args.output:
+            print(json.dumps(validation, indent=2, sort_keys=True))
+        else:
+            print(args.output)
+        return 0 if validation["status"] == "pass" else 1
     lineage_path = amendment_lineage_path(manifest_path.parent, amendment_id)
     lineage = load_lineage(lineage_path, amendment_id=amendment_id)
     parent_sha = latest_lineage_sha(lineage)

@@ -226,3 +226,106 @@ def test_safe_path_preserves_github_and_strips_wrapping():
     # traversal / absolute paths are still rejected
     assert cbr.safe_path("../escape.py") is None
     assert cbr.safe_path("/etc/passwd") is None
+
+
+# --- 2026-06-18 fresh-audit pass ---
+
+
+# E1: validate_manifest_amendment.main() must emit the failed validation artifact (not crash with a
+#     path-rule SystemExit and write nothing) when the proposal's amendment_id is malformed.
+def test_validate_manifest_amendment_emits_failed_validation_on_bad_id(tmp_path, monkeypatch):
+    vma = load_module("skills/goal-plan-amender/scripts/validate_manifest_amendment.py", "vma_review")
+    manifest = tmp_path / "job.manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    proposal = tmp_path / "123.proposal.json"
+    proposal.write_text("{}", encoding="utf-8")
+    out = tmp_path / "out.json"
+    failed = {
+        "status": "failed",
+        "amendment_id": "123",  # malformed (must match ^[A-Z][A-Z0-9_-]{1,31}$)
+        "defects": ["amendment_id must match ^[A-Z][A-Z0-9_-]{1,31}$: '123'"],
+        "proposal_sha256": "sha256:x",
+    }
+    monkeypatch.setattr(vma, "validate_proposal", lambda **kw: (failed, None, None))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_manifest_amendment.py",
+            "--manifest",
+            str(manifest),
+            "--proposal",
+            str(proposal),
+            "--output",
+            str(out),
+        ],
+    )
+    assert vma.main() == 1  # must not raise SystemExit out of ensure_amendment_id
+    assert out.exists(), "failed validation artifact must still be written"
+    assert json.loads(out.read_text(encoding="utf-8"))["status"] == "failed"
+
+
+# E3: amender_model_policy returns a deepcopy of the shared default, so a caller mutating the result
+#     cannot corrupt CONTRACT.AMENDER_MODEL_POLICY process-wide.
+def test_amender_model_policy_returns_deepcopy():
+    first = amendment_lib.amender_model_policy(None)
+    first["__mutated__"] = True
+    second = amendment_lib.amender_model_policy(None)
+    assert "__mutated__" not in second
+    assert "__mutated__" not in amendment_lib.CONTRACT.AMENDER_MODEL_POLICY
+
+
+# E4: the split duplicate-id guard tracks whether THIS loop appended a defect (count delta), instead
+#     of the fragile ctx.defects[-1].startswith(path) check.
+def test_split_rejects_replacement_id_duplicating_existing_branch():
+    branches = [{"id": "B01"}, {"id": "B02"}, {"id": "B03"}]
+    ctx = amendment_lib.OperationContext(branches=branches, obsolete_entries=[], changed_branch_ids=set(), defects=[])
+    operation = {"branches": [{"id": "B01"}, {"id": "B05"}]}  # B01 duplicates the existing branch at index 0
+    amendment_lib._apply_split_unstarted_branch(ctx, operation, "$.operations[0]", branch_id="B02", target_index=1)
+    assert any("duplicates existing branch" in d for d in ctx.defects)
+    assert [b["id"] for b in ctx.branches] == ["B01", "B02", "B03"]  # split not applied
+
+
+def test_split_valid_applies_and_rewrites_dependents():
+    branches = [{"id": "B01"}, {"id": "B02", "depends_on": []}, {"id": "B03", "depends_on": ["B02"]}]
+    ctx = amendment_lib.OperationContext(branches=branches, obsolete_entries=[], changed_branch_ids=set(), defects=[])
+    operation = {"branches": [{"id": "B04"}, {"id": "B05"}]}
+    amendment_lib._apply_split_unstarted_branch(ctx, operation, "$.operations[0]", branch_id="B02", target_index=1)
+    assert not ctx.defects
+    assert [b["id"] for b in ctx.branches] == ["B01", "B04", "B05", "B03"]
+    assert ctx.branches[-1]["depends_on"] == ["B04", "B05"]  # dependent rewired to the replacements
+
+
+# --- 2026-06-18 RE-AUDIT pass: validate_manifest_amendment.main() must also catch the ValueError that
+#     ensure_amendment_id raises for an EMPTY id (the first fix only caught SystemExit, which covers a
+#     malformed non-empty id). A proposal named ".proposal.json" yields proposed id "" -> ValueError. ---
+def test_validate_manifest_amendment_handles_empty_amendment_id(tmp_path, monkeypatch):
+    vma = load_module("skills/goal-plan-amender/scripts/validate_manifest_amendment.py", "vma_empty_review")
+    manifest = tmp_path / "job.manifest.json"
+    manifest.write_text("{}", encoding="utf-8")
+    proposal = tmp_path / ".proposal.json"  # leading dot -> name.split(".")[0] == ""
+    proposal.write_text("{}", encoding="utf-8")
+    out = tmp_path / "out.json"
+    failed = {
+        "status": "failed",
+        "amendment_id": None,
+        "defects": ["amendment_id required"],
+        "proposal_sha256": "sha256:x",
+    }
+    monkeypatch.setattr(vma, "validate_proposal", lambda **kw: (failed, None, None))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "validate_manifest_amendment.py",
+            "--manifest",
+            str(manifest),
+            "--proposal",
+            str(proposal),
+            "--output",
+            str(out),
+        ],
+    )
+    assert vma.main() == 1  # ValueError from ensure_amendment_id("") must be caught, not crash
+    assert out.exists()
+    assert json.loads(out.read_text(encoding="utf-8"))["status"] == "failed"

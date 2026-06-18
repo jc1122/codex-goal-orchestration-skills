@@ -170,7 +170,9 @@ def _string_list(value: object) -> list[str]:
 def amender_model_policy(manifest: dict | None, manifest_path: Path | None = None) -> dict:
     policy = manifest.get("amender_model_policy") if isinstance(manifest, dict) else None
     if not isinstance(policy, dict):
-        return CONTRACT.AMENDER_MODEL_POLICY
+        # deepcopy the shared module-level default so a caller mutating the result cannot corrupt
+        # CONTRACT.AMENDER_MODEL_POLICY process-wide (matches the deepcopy convention used elsewhere).
+        return copy.deepcopy(CONTRACT.AMENDER_MODEL_POLICY)
     validate_amender_model_policy(manifest, manifest_path)
     return policy
 
@@ -178,7 +180,7 @@ def amender_model_policy(manifest: dict | None, manifest_path: Path | None = Non
 def validate_amender_model_policy(manifest: dict | None, manifest_path: Path | None = None) -> dict:
     policy = manifest.get("amender_model_policy") if isinstance(manifest, dict) else None
     if policy == CONTRACT.AMENDER_MODEL_POLICY:
-        return CONTRACT.AMENDER_MODEL_POLICY
+        return copy.deepcopy(CONTRACT.AMENDER_MODEL_POLICY)
     defects: list[str] = []
     if not isinstance(policy, dict):
         raise ValueError("manifest amender_model_policy must be an object")
@@ -925,11 +927,15 @@ def _apply_split_unstarted_branch(
     if new_branches is None:
         return
     replacement_ids = [branch.get("id") for branch in new_branches]
+    defects_before = len(ctx.defects)
     for replacement_id in replacement_ids:
         existing_index = branch_index(ctx.branches, str(replacement_id))
         if existing_index is not None and existing_index != target_index:
             ctx.defects.append(f"{path}.branches id duplicates existing branch {replacement_id}")
-    if ctx.defects and ctx.defects[-1].startswith(path):
+    # Abort if THIS duplicate-id loop appended any defect. Tracking the count is robust; the prior
+    # `ctx.defects[-1].startswith(path)` check could drop a valid split if a later edit appended an
+    # unrelated defect, or pass it through on a pre-existing defect that happened to share the prefix.
+    if len(ctx.defects) != defects_before:
         return
     ctx.branches[target_index : target_index + 1] = new_branches
     replace_dependency(
