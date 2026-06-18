@@ -392,7 +392,12 @@ def lint_brief(brief: dict, *, repo_root: Path | None) -> list[dict]:
     except Exception as exc:  # noqa: BLE001
         defect(defects, "$", "critical", f"brief normalization failed: {exc}")
     lint_placeholders(defects, brief)
-    lint_policy(defects, normalized if normalized is not None else brief)
+    # lint_policy validates the post-normalization artifact_policy/cleanup_policy defaults, so it is
+    # meaningful only on a successfully normalized brief. Running it against the raw brief after a
+    # normalization failure emits spurious "must supply artifact_policy/cleanup_policy" defaults defects
+    # (the tool would have defaulted them) on top of the real critical defect — misleading noise.
+    if normalized is not None:
+        lint_policy(defects, normalized)
     lint_goal_surface(defects, brief)
     lint_source_fidelity(defects, brief, repo_root=repo_root)
     lint_runtime_cap(defects, brief)

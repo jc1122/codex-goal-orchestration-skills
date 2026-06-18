@@ -972,7 +972,25 @@ def package_skeletons_for_path(path: str) -> list[str]:
     return skeletons
 
 
+def _path_is_git_tracked(repo_root: Path, rel_path: str) -> bool:
+    result = subprocess.run(
+        ["git", "-C", repo_root.as_posix(), "ls-files", "--error-unmatch", "--", rel_path],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    return result.returncode == 0
+
+
 def assign_package_skeleton_context_files(work_items: list[dict], repo_root: Path | None = None) -> None:
+    # In a git repo the bundle linter (_lint_work_item_fields) requires every context_files entry to
+    # be git-tracked, so auto-injecting an untracked __init__.py here would make the tool emit a
+    # bundle that its own linter then rejects with a `major` defect (failing lint on a bundle the
+    # user never authored — untracked __init__.py is a very common repo state). Only inject a
+    # skeleton the linter will accept; outside a git repo the linter does not require tracking, so
+    # the existence check alone is preserved there.
+    repo_is_git = repo_root is not None and _is_git_repo(repo_root)
     for item in work_items:
         owned_paths = item.get("owned_paths")
         context_files = item.get("context_files")
@@ -988,8 +1006,11 @@ def assign_package_skeleton_context_files(work_items: list[dict], repo_root: Pat
                 if repo_root is None:
                     if not Path(skeleton).exists():
                         continue
-                elif not (repo_root / skeleton).exists():
-                    continue
+                else:
+                    if not (repo_root / skeleton).exists():
+                        continue
+                    if repo_is_git and not _path_is_git_tracked(repo_root, skeleton):
+                        continue
                 if skeleton not in context_files and skeleton not in additions:
                     additions.append(skeleton)
         if additions:
@@ -1705,6 +1726,7 @@ def _resolve_waves(brief: dict, branches: list[dict], max_active: int) -> tuple[
     raw_waves = brief.get("waves")
     if raw_waves is not None and not isinstance(raw_waves, list):
         raise SystemExit("waves must be a JSON array")
+    supplied_waves = raw_waves is not None
     waves = raw_waves or dependency_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
         raise SystemExit(f"waves must not exceed {MAX_WAVES}")
@@ -1736,6 +1758,36 @@ def _resolve_waves(brief: dict, branches: list[dict], max_active: int) -> tuple[
             seen_wave_branches.append(bid)
     if set(seen_wave_branches) != branch_ids:
         raise SystemExit("waves must cover every branch exactly once")
+    # Compute each branch's topological dependency level (1 + max dependency level). Branches are
+    # already topologically ordered: depends_on may only reference prior branch ids (enforced above).
+    branch_level: dict[str, int] = {}
+    for branch in branches:
+        deps = branch.get("depends_on") if isinstance(branch.get("depends_on"), list) else []
+        dep_levels = [branch_level.get(dep, 1) for dep in deps if isinstance(dep, str)]
+        branch_level[branch["id"]] = 1 + (max(dep_levels) if dep_levels else 0)
+    # A branch must run in a strictly later wave than each of its dependencies (waves are parallel
+    # scheduling groups). The auto dependency_waves path guarantees this by construction; supplied
+    # waves were previously not checked, so an inverted ordering (a dependent listed before its
+    # dependency) silently produced a scheduling DAG that contradicted depends_on.
+    wave_position = {wave["id"]: index for index, wave in enumerate(waves)}
+    for branch in branches:
+        branch_pos = wave_position.get(wave_by_branch.get(branch["id"]))
+        deps = branch.get("depends_on") if isinstance(branch.get("depends_on"), list) else []
+        for dep in deps:
+            if not isinstance(dep, str):
+                continue
+            dep_pos = wave_position.get(wave_by_branch.get(dep))
+            if dep_pos is None or branch_pos is None:
+                continue
+            if dep_pos >= branch_pos:
+                raise SystemExit(f"wave for branch {branch['id']} must come after the wave of its dependency {dep}")
+    # Stamp dependency_level on supplied waves so the readiness DAG matches the auto path, which
+    # already sets it (dependency_waves). Use the max topological level among each wave's branches.
+    if supplied_waves:
+        for wave in waves:
+            members = [bid for bid in wave.get("branches", []) if isinstance(bid, str)]
+            if members:
+                wave["dependency_level"] = max(branch_level.get(bid, 1) for bid in members)
     return waves, wave_by_branch
 
 

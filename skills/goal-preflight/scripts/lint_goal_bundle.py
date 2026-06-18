@@ -978,7 +978,11 @@ def _lite_record_artifacts(
         inputs_path=inputs_path,
     )
     actual_validation_status = "pass" if not lite_defects else "failed"
-    if validation_status in LITE_VALIDATION_STATUSES and validation_status != actual_validation_status:
+    if (
+        isinstance(validation_status, str)
+        and validation_status in LITE_VALIDATION_STATUSES
+        and validation_status != actual_validation_status
+    ):
         defect(
             "job.manifest.json",
             "critical",
@@ -2463,18 +2467,28 @@ def _lint_branches(
             )
             branch_owned_paths_value = []
         work_items = branch.get("work_items", [])
-        if not isinstance(work_items, list) or len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
+        if not isinstance(work_items, list):
             defect(
                 "job.manifest.json",
                 "critical",
                 f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets",
             )
-        elif any(not isinstance(item, dict) for item in work_items):
-            defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items entries must be objects")
         else:
-            tally = _lint_work_items(
-                defect, branch, work_items, branch_owned_paths_value, source_attachment_labels, git_status, tally
-            )
+            if len(work_items) < 1 or len(work_items) > MAX_WORKER_PACKETS_PER_BRANCH:
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch {branch.get('id')} work_items must contain 1 to 4 worker packets",
+                )
+            if any(not isinstance(item, dict) for item in work_items):
+                defect("job.manifest.json", "critical", f"branch {branch.get('id')} work_items entries must be objects")
+            else:
+                # Validate per-item fields (path-safety, packet_id, route_class) even when the count is
+                # out of range, so a malformed bundle gets the complete defect set instead of only the
+                # count defect above. The count defect still fails the bundle; this is diagnostic completeness.
+                tally = _lint_work_items(
+                    defect, branch, work_items, branch_owned_paths_value, source_attachment_labels, git_status, tally
+                )
         _lint_branch_worker_parallelism(defect, manifest, branch, work_items, max_workers)
         _lint_branch_paths_and_prompt(defect, bundle_dir, manifest, branch, runtime_index)
     return tally
