@@ -77,6 +77,30 @@ def test_create_audit_packet_render_prompt_fails_closed(tmp_path):
         cap.render_prompt(tmp_path / "job.manifest.json", tmp_path, {"main_prompt": 5, "branches": ["x"]})
 
 
+# --- 2026-06-18 convergence pass 4: render_prompt coerces non-string depends_on elements in the
+#     join (the sibling worker_packet_ids/types joins already used str(); depends_on did not) ---
+def test_create_audit_packet_render_prompt_coerces_depends_on(tmp_path):
+    manifest = {
+        "main_prompt": "main.prompt.md",
+        "max_active_branch_agents": 1,
+        "waves": [],
+        "branches": [
+            {
+                "id": "B01",
+                "prompt": "b.prompt.md",
+                "branch_name": "phaseX-B01",
+                "worktree_path": "wt/B01",
+                "status_path": "b.status.json",
+                "review_path": "b.review.json",
+                "depends_on": [1, 2],  # non-string elements used to crash str.join
+                "work_items": [],
+            }
+        ],
+    }
+    out = cap.render_prompt(tmp_path / "job.manifest.json", tmp_path, manifest)  # must not raise
+    assert "depends_on=1,2" in out
+
+
 # --- C1: the generated branch launch prompt interpolates the real branch id ---
 def test_cli_launch_prompt_interpolates_branch_id(tmp_path):
     branch = {

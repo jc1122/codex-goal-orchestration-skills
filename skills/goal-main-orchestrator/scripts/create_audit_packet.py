@@ -191,7 +191,7 @@ def render_prompt(manifest_path: Path, repo_root: Path, manifest: dict) -> str:
                 worktree=resolve_repo_path(repo_root, branch.get("worktree_path", ""), "worktree_path").as_posix(),
                 status=resolve_bundle_path(base, branch.get("status_path", ""), "status_path").as_posix(),
                 review=resolve_bundle_path(base, branch.get("review_path", ""), "review_path").as_posix(),
-                depends_on=",".join(branch.get("depends_on", []))
+                depends_on=",".join(str(dep) for dep in branch.get("depends_on", []))
                 if isinstance(branch.get("depends_on", []), list)
                 else "invalid",
                 max_workers=branch.get("max_active_worker_packets", "missing"),
