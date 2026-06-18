@@ -98,7 +98,10 @@ def require_launch_packet_validation(manifest_path: Path, proposal_path: Path, a
     decision = load_json_object(decision_path)
     if decision.get("decision") != "launch":
         raise SystemExit("refusing to apply amendment because its decision artifact is not a launch decision")
-    if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
+    if (
+        not isinstance(decision.get("reason_code"), str)
+        or decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES
+    ):
         raise SystemExit("refusing to apply amendment because its launch decision reason_code is invalid")
     if not packet_validation_path.exists():
         raise SystemExit(f"missing route-bound amender packet validation artifact: {packet_validation_path}")

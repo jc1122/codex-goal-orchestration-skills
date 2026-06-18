@@ -722,7 +722,11 @@ def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict
         if name == "launch":
             active.add(item_id)
             terminal.pop(item_id, None)
-        elif name == "finish" and event.get("status") in CONTRACT.SCHEDULER_TERMINAL_STATUSES:
+        elif (
+            name == "finish"
+            and isinstance(event.get("status"), str)
+            and event.get("status") in CONTRACT.SCHEDULER_TERMINAL_STATUSES
+        ):
             finished_status[item_id] = str(event["status"])
         elif name == "close":
             active.discard(item_id)
@@ -1158,7 +1162,7 @@ def validate_candidate_with_lint(
         if not isinstance(item, dict):
             continue
         severity = item.get("severity")
-        if severity in {"critical", "major"}:
+        if isinstance(severity, str) and severity in {"critical", "major"}:
             defects.append(f"candidate lint {severity}: {item.get('file')}: {item.get('message')}")
     return defects
 
