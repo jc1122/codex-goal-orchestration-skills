@@ -46,20 +46,6 @@ BRIDGE_SUPERVISOR_VERDICT_NAME = "supervisor_verdict.json"
 BRIDGE_WORKER_STATE_NAME = "opencode-worker-state.json"
 # Bridge lifecycle/verdict status -> success (returncode 0) classification.
 BRIDGE_PASS_STATUSES = frozenset({"passed", "completed", "done", "success"})
-# Bridge issue taxonomy ids (provider_error_code on failure).
-BRIDGE_ISSUE_IDS = frozenset(
-    {
-        "transport",
-        "model_output",
-        "validation",
-        "permission",
-        "timeout",
-        "cleanup",
-        "orchestrator_policy",
-        "harness_bug",
-        "unknown",
-    }
-)
 CACHE_PATH_PARTS = (
     "__pycache__",
     ".pytest_cache",

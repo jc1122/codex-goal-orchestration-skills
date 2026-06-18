@@ -43,15 +43,8 @@ BRIDGE_READONLY_PERMISSION_PROFILE = "read-only"
 BRIDGE_POOL_MAX_WORKERS = 4
 BRIDGE_RUN_DIR_PARENT = "bridge"
 BRIDGE_POOL_DIR = "bridge/pool"
-SPARK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-spark"]
-MINI_MODEL = CONTRACT.CODEX_ROUTE_MODELS["codex-mini"]
-RESEARCH_MODEL = CONTRACT.CODEX_ROUTE_MODELS[CONTRACT.RESEARCH_ALIASES[0]]
-RESEARCH_FALLBACK_MODEL = CONTRACT.CODEX_ROUTE_MODELS[CONTRACT.RESEARCH_ALIASES[1]]
 RESEARCH_ALIAS = CONTRACT.RESEARCH_ALIASES[0]
 RESEARCH_FALLBACK_ALIAS = CONTRACT.RESEARCH_ALIASES[1]
-REVIEWER_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.5"]
-REVIEWER_FALLBACK_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.4"]
-REVIEWER_MINI_MODEL = CONTRACT.CODEX_ROUTE_MODELS["gpt-5.4-mini"]
 WORKER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.WORKER_ATTEMPT_TIMEOUT_SECONDS
 RESEARCH_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.RESEARCH_ATTEMPT_TIMEOUT_SECONDS
 REVIEWER_ATTEMPT_TIMEOUT_SECONDS = CONTRACT.REVIEWER_ATTEMPT_TIMEOUT_SECONDS
@@ -70,17 +63,7 @@ DEFAULT_WORKER_ROUTE_CLASS = CONTRACT.DEFAULT_WORKER_ROUTE_CLASS
 ROUTE_POLICY_VERSION = "goal-route-policy-v2"
 WORKER_ROUTE_CLASSES = CONTRACT.WORKER_ROUTE_CLASSES
 WORKER_ROUTE_CLASS_LADDERS = CONTRACT.WORKER_ROUTE_CLASS_LADDERS
-WORKER_ROUTE_LABELS = {
-    "ds-pro-max": "DeepSeek Pro (max)",
-    "ds-flash-max": "DeepSeek Flash (max)",
-    "codex-spark": "Codex Spark",
-    "codex-mini": "Codex mini",
-}
 CODEX_LEAN_EXEC_FLAGS_TEXT = " ".join(CONTRACT.CODEX_LEAN_EXEC_FLAGS)
-WORKER_ROUTE_COMMANDS = {
-    "codex-spark": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {SPARK_MODEL} -s workspace-write",
-    "codex-mini": f"codex exec --ephemeral {CODEX_LEAN_EXEC_FLAGS_TEXT} -m {MINI_MODEL} -s workspace-write",
-}
 WORKER_ROUTE_EVENT_LABELS = {
     "ds-pro-max": "ds-pro-max",
     "ds-flash-max": "ds-flash-max",
@@ -89,11 +72,6 @@ WORKER_ROUTE_EVENT_LABELS = {
 }
 CODEX_WORKER_ROUTES = frozenset({"codex-spark", "codex-mini"})
 WORKER_PACKET_PROMPT = "Follow the complete worker packet instructions provided on stdin."
-REVIEW_ROUTE_MODELS = {
-    alias: (CONTRACT.bridge_model(alias) if CONTRACT.is_bridge_alias(alias) else CONTRACT.CODEX_ROUTE_MODELS[alias])
-    for route in CONTRACT.REVIEW_MODEL_ROUTES.values()
-    for alias in route
-}
 
 
 PATH_RULES = _load_shared_script("goal_shared_path_rules", "path_rules.py", "shared path rules")
@@ -1164,7 +1142,7 @@ def load_json(path: Path) -> dict:
 def read_json_or_none(path: Path) -> tuple[dict | None, str | None]:
     try:
         return load_json(path), None
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 -- load_json fails closed via SystemExit
         return None, str(exc)
 
 
@@ -1209,7 +1187,7 @@ def find_manifest_context(
             continue
         try:
             manifest = load_json(path)
-        except Exception:  # noqa: BLE001
+        except (Exception, SystemExit):  # noqa: BLE001 -- load_json fails closed via SystemExit
             continue
         branch_data = branch_entry(manifest, branch_id)
         if not branch_data:
@@ -1410,7 +1388,7 @@ def scheduler_closed_pass_for_packet(scheduler_path: Path, packet_id: str) -> bo
         return False
     try:
         ledger = load_json(scheduler_path)
-    except Exception:
+    except (Exception, SystemExit):  # noqa: BLE001 -- load_json fails closed via SystemExit
         return False
     events = ledger.get("events")
     if not isinstance(events, list):
@@ -1892,7 +1870,7 @@ def _summarize_reviewer_artifact(path: Path) -> dict[str, object]:
         return {"exists": False, "reason": "not a file"}
     try:
         data = load_json(path)
-    except Exception:
+    except (Exception, SystemExit):  # noqa: BLE001 -- load_json fails closed via SystemExit
         return {"exists": False, "reason": "invalid json"}
     return {
         "exists": True,

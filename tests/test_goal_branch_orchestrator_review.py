@@ -19,6 +19,7 @@ vbs = load_module("skills/goal-branch-orchestrator/scripts/validate_branch_statu
 asm = load_module("skills/goal-branch-orchestrator/scripts/assemble_branch_status.py", "asm_review")
 crp = load_module("skills/goal-branch-orchestrator/scripts/create_runtime_packet.py", "crp_review")
 prw = load_module("skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py", "prw_review")
+rpr = load_module("skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "rpr_review")
 
 
 # --- validate_branch_status: the gate fails closed on malformed JSON (no traceback) ---
@@ -137,3 +138,60 @@ def test_goal_config_from_manifest_fails_closed_on_malformed_config(tmp_path):
 def test_reviewer_allowed_aliases_include_bridge_routes():
     assert "ds-pro-max" in vbs.REVIEWER_ALLOWED_ALIASES
     assert "ds-flash-max" in vbs.REVIEWER_ALLOWED_ALIASES
+
+
+# --- 2026-06-18 convergence pass: create_runtime_packet's tolerant readers catch the
+#     SystemExit that load_json raises (except Exception alone could not), so a malformed/non-dict
+#     runtime artifact degrades instead of crashing packet creation ---
+def test_create_runtime_packet_tolerant_readers_absorb_systemexit(tmp_path):
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    arr = tmp_path / "arr.json"
+    arr.write_text("[]", encoding="utf-8")  # valid JSON, non-dict -> load_json SystemExit
+    # read_json_or_none must return (None, msg), never propagate SystemExit
+    data, err = crp.read_json_or_none(bad)
+    assert data is None and err
+    data2, err2 = crp.read_json_or_none(arr)
+    assert data2 is None and err2
+    # the reviewer-artifact summariser degrades to a structured "invalid json" marker
+    assert crp._summarize_reviewer_artifact(bad) == {"exists": False, "reason": "invalid json"}
+    # the scheduler closed-pass probe degrades to False, never crashes
+    assert crp.scheduler_closed_pass_for_packet(bad, "P01") is False
+
+
+# --- 2026-06-18 convergence pass: the debug-events reader tolerates a non-UTF-8 artifact
+#     (errors="replace") instead of escaping the gate as a UnicodeDecodeError ---
+def test_validate_launch_config_debug_events_tolerates_non_utf8(tmp_path):
+    (tmp_path / "debug.events.jsonl").write_bytes(b"\xff\xfe garbage\n")
+    defects: list[str] = []
+    # must not raise UnicodeDecodeError; unparseable content becomes a structured defect
+    vbs.validate_launch_config_debug_events(
+        defects,
+        {"debug_events_name": "debug.events.jsonl"},
+        tmp_path,
+        "$.launch_config",
+        packet_id="P01",
+    )
+    assert any("debug_events_name" in d for d in defects), defects
+
+
+# --- 2026-06-18 convergence pass: stale pre-bridge reviewer constants + transitively-dead
+#     route maps were removed (no consumer; verified repo-wide) ---
+def test_stale_reviewer_constants_removed():
+    for name in (
+        "REVIEWER_MODEL",
+        "REVIEWER_FALLBACK_MODEL",
+        "REVIEWER_MINI_MODEL",
+        "RESEARCH_MODEL",
+        "RESEARCH_FALLBACK_MODEL",
+        "WORKER_ROUTE_LABELS",
+        "WORKER_ROUTE_COMMANDS",
+        "REVIEW_ROUTE_MODELS",
+        "SPARK_MODEL",
+        "MINI_MODEL",
+    ):
+        assert not hasattr(crp, name), name
+    assert not hasattr(rpr, "BRIDGE_ISSUE_IDS")
+    # live siblings remain
+    assert hasattr(crp, "WORKER_ROUTE_EVENT_LABELS")
+    assert hasattr(crp, "CODEX_LEAN_EXEC_FLAGS_TEXT")

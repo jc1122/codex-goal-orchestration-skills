@@ -594,7 +594,10 @@ def validate_launch_config_debug_events(
         defect(defects, f"{path}.debug_events_name", f"debug events artifact does not exist: {debug_path}")
         return
     debug_events: list[dict] = []
-    for line_index, line in enumerate(debug_path.read_text(encoding="utf-8").splitlines(), start=1):
+    # errors="replace": a non-UTF-8 debug-events artifact must not crash the gate with a
+    # UnicodeDecodeError (main() does not wrap this traversal); unparseable lines below still
+    # record a structured defect. Matches runtime_packet_runner's debug/output reads.
+    for line_index, line in enumerate(debug_path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
         if not line.strip():
             continue
         try:
