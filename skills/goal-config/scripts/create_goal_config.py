@@ -277,7 +277,7 @@ def load_harness_spec(value: str) -> dict[str, Any]:
     if source.startswith("{"):
         try:
             data = json.loads(source)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SystemExit(f"inline --harness-spec is not valid JSON: {exc}") from exc
         source_name = "inline --harness-spec"
     else:
