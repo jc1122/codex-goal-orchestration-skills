@@ -69,7 +69,7 @@ def mark_preflight_report_initial_epoch(bundle_dir: Path, amendment_id: str, man
     report_path = bundle_dir / "PREFLIGHT_REPORT.md"
     if not report_path.exists():
         return
-    text = report_path.read_text(encoding="utf-8")
+    text = report_path.read_text(encoding="utf-8", errors="replace")
     marker = f"Accepted amendment: {amendment_id}"
     if marker in text and "initial_epoch_only" in text:
         return
@@ -206,7 +206,7 @@ def main() -> int:
         for path in branch_prompt_paths(bundle_dir, candidate, regenerated_branch_ids)
     }
     report_path = bundle_dir / "PREFLIGHT_REPORT.md"
-    report_backup = report_path.read_text(encoding="utf-8") if report_path.exists() else None
+    report_backup = report_path.read_text(encoding="utf-8", errors="replace") if report_path.exists() else None
     runtime_index_path = bundle_dir / "runtime.index.json"
     runtime_index_backup = runtime_index_path.read_text(encoding="utf-8") if runtime_index_path.exists() else None
     try:
