@@ -121,3 +121,14 @@ def test_create_loaders_fail_closed(tmp_path):
         crc.load_harness_spec("{not valid json")
     with pytest.raises(SystemExit):
         crc.load_harness_spec(str(tmp_path / "missing-harness.json"))
+
+
+# --- 2026-06-18 fresh-audit pass: F2 find_route rejects a JSON boolean selector instead of silently
+#     consuming it as a route index (bool is an int subclass: True->1, False->0). ---
+def test_find_route_rejects_bool_selector():
+    routes = [{"role": "lite"}, {"role": "demanding"}]
+    with pytest.raises(SystemExit):
+        crc.find_route(routes, True)
+    with pytest.raises(SystemExit):
+        crc.find_route(routes, False)
+    assert crc.find_route(routes, 0)["role"] == "lite"  # genuine int index still works

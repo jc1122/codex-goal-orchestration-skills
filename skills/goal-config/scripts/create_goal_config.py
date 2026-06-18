@@ -176,6 +176,9 @@ def normalize_role_model_for_harness(
             "or use a harness with an implied provider"
         )
 
+    # Implied-provider harnesses (codex / opencode-bridge) carry the provider in the model entry's
+    # own provider field, so the emitted model is the bare leaf id (no provider prefix). This is
+    # by design and is exercised by the opencode-deepseek-v4 preset fixture.
     if harness in IMPLIED_PROVIDER_BY_HARNESS:
         return provider, model_suffix
 
@@ -540,6 +543,10 @@ def route_model_entry(
 
 
 def find_route(routes: list[dict[str, Any]], selector: Any) -> dict[str, Any]:
+    if isinstance(selector, bool):
+        # bool is an int subclass, so without this guard True/False would be silently consumed as a
+        # route index (True->1, False->0) instead of failing closed on a nonsensical selector.
+        raise SystemExit(f"unsupported discovery mapping selector: {selector!r}")
     if isinstance(selector, int):
         index = selector
         if index < 0 or index >= len(routes):
