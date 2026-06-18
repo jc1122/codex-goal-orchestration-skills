@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:3491ea9d20d46c9cbe45390bae1eb879095e7cee62e33ad0fc5b5d1e0c3b7693"
+    "source_fingerprint": "sha256:c2331d560f17300abd70a43ad1f48df2ea98d2b883845b46349e493ffeabae7e"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -43,7 +43,7 @@
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
       "lines": 3362,
-      "approx_tokens": 33596,
+      "approx_tokens": 33648,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "3125:main:234l",
@@ -69,7 +69,7 @@
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
       "lines": 2874,
-      "approx_tokens": 32090,
+      "approx_tokens": 32112,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "2182:_lint_branch_worker_parallelism:135l",

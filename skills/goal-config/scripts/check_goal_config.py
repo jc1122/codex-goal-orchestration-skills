@@ -152,7 +152,8 @@ def load_smoke_cache(paths: list[Path]) -> dict[tuple[str, str, str], dict[str, 
     cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     for path in paths:
         report = load_json(path)
-        for item in report.get("harnesses") or []:
+        raw_harnesses = report.get("harnesses")
+        for item in raw_harnesses if isinstance(raw_harnesses, list) else []:
             if not isinstance(item, dict):
                 continue
             key = route_key(item)
@@ -190,7 +191,8 @@ def reusable_smoke_route_report(paths: list[Path]) -> dict[str, Any]:
                 "config_path": report.get("config_path"),
             }
         )
-        for role in report.get("checked_roles") or []:
+        raw_roles = report.get("checked_roles")
+        for role in raw_roles if isinstance(raw_roles, list) else []:
             if isinstance(role, str) and role not in checked_roles:
                 checked_roles.append(role)
         for key, target in [

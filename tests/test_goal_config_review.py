@@ -8,6 +8,8 @@ Pins the verified defects:
 - create_goal_config file-input loaders fail closed on malformed/missing JSON.
 """
 
+import json
+
 import pytest
 from conftest import REPO, load_module
 
@@ -97,6 +99,14 @@ def test_render_tokens_fails_closed_on_unknown_token():
 def test_profile_discovery_rejects_invalid_regex():
     with pytest.raises(SystemExit):
         cgc.profile_discovery_candidates("mixed-fast", model_filter="[", max_candidates=None)
+
+
+# --- 2026-06-18 convergence pass 7: --reuse-smoke-report reader tolerates a non-list
+#     harnesses/checked_roles (external semi-trusted artifact) instead of TypeError ---
+def test_load_smoke_cache_tolerates_non_list_harnesses(tmp_path):
+    rpt = tmp_path / "smoke.json"
+    rpt.write_text(json.dumps({"status": "pass", "harnesses": 5}), encoding="utf-8")
+    assert isinstance(cgc.load_smoke_cache([rpt]), dict)  # was TypeError on the non-list harnesses
 
 
 # --- create_goal_config: file-input loaders fail closed ---
