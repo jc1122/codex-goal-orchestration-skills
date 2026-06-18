@@ -101,7 +101,7 @@ def validate_route(
         selected = require_string_list(defects, route.get("selected_ladder"), "$.route.selected_ladder", min_items=1)
         try:
             normalized = normalize_amender_ladder(manifest, manifest_path, selected)
-        except ValueError as exc:
+        except (ValueError, SystemExit) as exc:
             defect(defects, "$.route.selected_ladder", str(exc))
             normalized = selected
         if selected and normalized != selected:
@@ -109,7 +109,7 @@ def validate_route(
     require_string(defects, route.get("selection_reason"), "$.route.selection_reason")
     try:
         policy = amender_model_policy(manifest, manifest_path)
-    except ValueError as exc:
+    except (ValueError, SystemExit) as exc:
         defect(defects, "$.manifest.amender_model_policy", str(exc))
         policy = {}
     if route.get("policy") != policy:
@@ -290,7 +290,7 @@ def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path)
     if manifest:
         try:
             validate_amender_model_policy(manifest, manifest_path)
-        except ValueError as exc:
+        except (ValueError, SystemExit) as exc:
             defect(defects, "$.manifest.amender_model_policy", str(exc))
     if packet_dir.name != f"{amendment_id}.packet":
         defect(defects, "$.packet_dir", f"must be named {amendment_id}.packet")
