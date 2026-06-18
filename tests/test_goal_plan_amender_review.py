@@ -108,6 +108,14 @@ def test_generate_proposal_requires_fields():
         cbr.generate_proposal({"repo_root": "/r", "amendment_id": "A1", "job_id": "j1"})  # missing manifest
 
 
+# --- 2026-06-18 convergence pass 5: the remaining nested-field iterations in create_blocker_repair
+#     (blockers/worker_statuses/owned_paths/recovers_from) also route through _as_list ---
+def test_blockers_from_status_tolerates_non_list():
+    assert cbr.blockers_from_status({"blockers": 5, "worker_statuses": 7}) == []  # used to raise TypeError
+    assert cbr.blockers_from_status({"blockers": ["b1"], "worker_statuses": [{"blockers": 9}]}) == ["b1"]
+    assert cbr.all_owned_paths({"branches": [{"id": "B01", "owned_paths": 5}]}) == {}  # non-list owned_paths
+
+
 # --- shared loader fails closed (SystemExit) on malformed JSON, not a raw traceback ---
 def test_load_json_object_fails_closed(tmp_path):
     bad = tmp_path / "job.manifest.json"

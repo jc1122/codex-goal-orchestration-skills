@@ -115,13 +115,13 @@ def review_items_for_repair(evidence: object) -> list[str]:
 
 def blockers_from_status(status: dict) -> list[str]:
     blockers: list[str] = []
-    for item in status.get("blockers", []):
+    for item in _as_list(status.get("blockers")):
         if isinstance(item, str) and item.strip():
             blockers.append(item.strip())
-    for worker in status.get("worker_statuses", []):
+    for worker in _as_list(status.get("worker_statuses")):
         if not isinstance(worker, dict):
             continue
-        for item in worker.get("blockers", []):
+        for item in _as_list(worker.get("blockers")):
             if isinstance(item, str) and item.strip():
                 blockers.append(item.strip())
     return blockers
@@ -191,7 +191,7 @@ def all_owned_paths(manifest: dict) -> dict[str, str]:
         if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
             continue
         branch_id = branch["id"]
-        for path in branch.get("owned_paths", []):
+        for path in _as_list(branch.get("owned_paths")):
             if isinstance(path, str):
                 owners.setdefault(path, branch_id)
     return owners
@@ -365,7 +365,7 @@ def generate_proposal(input_data: dict) -> dict:
         for branch in branches.values()
         if isinstance(branch, dict)
         for key in ("recovers_from", "supersedes")
-        for target in (branch.get(key) or [])
+        for target in _as_list(branch.get(key))
         if isinstance(target, str)
     }
     operations = []
