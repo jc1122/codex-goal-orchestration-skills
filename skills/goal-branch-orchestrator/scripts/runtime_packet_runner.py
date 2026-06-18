@@ -3373,9 +3373,12 @@ def _review_finalize_no_success(
     message = string_value(config, "terminal_message")
     parse_report = attempts[-1].get("_parse_report") if attempts else {}
     if isinstance(parse_report, dict):
+        # Nest the use inside the guard, matching the worker sibling _worker_finalize_no_success.
+        # Reading parse_messages outside the guard raised UnboundLocalError when _parse_report
+        # was not a dict — the exact case the isinstance check was written to defend against.
         parse_messages = _event_parse_messages(parse_report)
-    if parse_messages:
-        message = f"{message}: {parse_messages[-1]}"
+        if parse_messages:
+            message = f"{message}: {parse_messages[-1]}"
     final_attempt = attempts[-1] if attempts else {}
     final_state = "fail-clean" if attempts else None
     final_stop_reason = _attempt_stop_reason(final_attempt, final_state) if final_state else None

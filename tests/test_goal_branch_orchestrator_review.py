@@ -389,3 +389,126 @@ def test_validate_worker_status_tolerates_unhashable_status():
     defects: list[str] = []
     vbs.validate_worker_status(defects, {"status": ["pass"], "packet_id": "p"}, "$.w")  # must not raise
     assert any("status" in d for d in defects), defects
+
+
+# --- 2026-06-18 fresh-audit pass ---
+rws = load_module("skills/goal-branch-orchestrator/scripts/render_worker_schedule.py", "rws_review")
+
+
+# B1: _review_finalize_no_success used `parse_messages` outside the `isinstance(parse_report, dict)`
+#     guard, so a non-dict last-attempt _parse_report raised UnboundLocalError instead of writing the
+#     terminal blocked status (the worker sibling nests the use correctly). The writers are stubbed to
+#     isolate the message-building block that holds the fix.
+def test_review_finalize_no_success_tolerates_non_dict_parse_report(tmp_path, monkeypatch):
+    monkeypatch.setattr(rpr, "write_terminal", lambda *a, **k: None)
+    monkeypatch.setattr(rpr, "write_launcher_state", lambda *a, **k: None)
+    monkeypatch.setattr(rpr, "write_telemetry", lambda *a, **k: None)
+    monkeypatch.setattr(rpr, "cleanup_runtime_cache_evidence", lambda *a, **k: None)
+    config = {"terminal_message": "Reviewer primary and fallback failed."}
+    attempts = [{"_parse_report": "not-a-dict", "alias": "ds-pro-max"}]
+    assert rpr._review_finalize_no_success(tmp_path, config, attempts=attempts) == 1  # no UnboundLocalError
+
+
+# B2: render_worker_schedule.validate_work_items must accept the legacy worker_type alias "research"
+#     (every sibling consumer normalizes it) and fail closed (clean SystemExit, not TypeError) on a
+#     non-string worker_type.
+def _valid_research_branch():
+    return {
+        "max_active_worker_packets": 1,
+        "worker_parallelism": {
+            "parallelism_default": True,
+            "scheduling_mode": "rolling",
+            "max_active_worker_packets": 1,
+            "max_worker_packets_per_branch": 4,
+            "slot_refill": "launch replacements as slots free",
+            "dependency_policy": "respect depends_on",
+        },
+        "work_items": [
+            {
+                "id": "W01",
+                "packet_id": "B01-W01",
+                "worker_type": "research",
+                "owned_paths": ["src/a.py"],
+                "verification": ["pytest"],
+                "dod": ["done"],
+                "context_files": [],
+                "depends_on": [],
+            }
+        ],
+    }
+
+
+def test_validate_work_items_accepts_research_alias():
+    validated, max_active = rws.validate_work_items(_valid_research_branch(), "B01")  # must not raise
+    assert max_active == 1 and len(validated) == 1
+
+
+def test_validate_work_items_fails_closed_on_non_string_worker_type():
+    branch = _valid_research_branch()
+    branch["work_items"][0]["worker_type"] = ["worker"]  # unhashable, would TypeError on set membership
+    with pytest.raises(SystemExit):
+        rws.validate_work_items(branch, "B01")
+
+
+# --- 2026-06-18 fresh-audit RE-AUDIT pass: validate_branch_status set-membership over an unhashable
+#     verdict / review_status / worker_type — the exact sibling of the validate_main_status crashes,
+#     missed by the per-skill review AND the prior convergence sweep. Found by the re-audit AST scan. ---
+def test_validate_review_artifact_tolerates_unhashable_verdict():
+    defects: list[str] = []
+    vbs.validate_review_artifact(
+        defects,
+        {"verdict": ["mergeable"], "role": "reviewer", "findings": []},
+        "mergeable",
+        "$.r",
+        manifest={},
+        branch_id="B01",
+    )  # must not raise TypeError on `verdict not in REVIEW_STATUSES - {"missing"}`
+    assert any("verdict" in d for d in defects), defects
+
+
+def test_expected_worker_packet_roles_tolerates_unhashable_worker_type():
+    defects: list[str] = []
+    branch_entry = {"work_items": [{"id": "W01", "packet_id": "B01-W01", "worker_type": ["worker"]}]}
+    vbs.expected_worker_packet_roles(defects, branch_entry, "B01")  # must not raise TypeError
+    assert any("worker_type" in d for d in defects), defects
+
+
+def test_validate_branch_review_phase_tolerates_unhashable_review_status(tmp_path):
+    defects: list[str] = []
+    try:
+        vbs.validate_branch_review_phase(
+            defects,
+            {"review_status": ["mergeable"]},
+            {},
+            status="partial",
+            root_branch_id=None,
+            manifest={},
+            manifest_path=tmp_path / "m.json",
+            worktree=None,
+            allow_archived_manifest_hashes=False,
+            require_current_worktree_freshness=None,
+        )
+    except TypeError as exc:  # the regression we are pinning
+        pytest.fail(f"review_status membership crashed on an unhashable value: {exc}")
+    except Exception:
+        pass  # downstream checks on the dummy root may raise other errors; only the TypeError matters here
+    assert any("review_status" in d for d in defects), defects
+
+
+# --- 2026-06-18 RE-AUDIT pass (7th site): validate_branch_status_header records a $.status defect and
+#     NORMALIZES a non-string (unhashable) status to "" so the downstream `status in {...}` membership
+#     checks (validate_branch_worker_statuses_shape / _trailer) cannot raise TypeError. The helpers are
+#     also independently guarded for self-safety. ---
+def test_validate_branch_status_header_normalizes_unhashable_status():
+    defects: list[str] = []
+    status = vbs.validate_branch_status_header(
+        defects, {"status": ["pass"]}, branch_id=None, branch=None, worktree=None
+    )
+    assert status == ""  # normalized non-string status
+    assert any("$.status" in d for d in defects), defects
+
+
+def test_validate_branch_worker_statuses_shape_self_safe_on_unhashable_status():
+    defects: list[str] = []
+    vbs.validate_branch_worker_statuses_shape(defects, [], ["pass"])  # status is a list -> must not raise TypeError
+    assert isinstance(defects, list)

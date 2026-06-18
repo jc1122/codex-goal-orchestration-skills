@@ -1457,7 +1457,7 @@ def expected_worker_packet_roles(defects: list[str], branch_entry: dict, branch_
         role = item.get("worker_type", "worker")
         if role == "research":
             role = "research-worker"
-        if role not in WORK_ITEM_ROLES:
+        if not isinstance(role, str) or role not in WORK_ITEM_ROLES:
             defect(
                 defects, f"manifest.branch.work_items[{index}].worker_type", f"must be one of {sorted(WORK_ITEM_ROLES)}"
             )
@@ -2227,7 +2227,7 @@ def validate_review_artifact(
     if data.get("role") != "reviewer":
         defect(defects, f"{path}.role", "must be 'reviewer'")
     verdict = data.get("verdict")
-    if verdict not in REVIEW_STATUSES - {"missing"}:
+    if not isinstance(verdict, str) or verdict not in REVIEW_STATUSES - {"missing"}:
         defect(defects, f"{path}.verdict", f"must be one of {sorted(REVIEW_STATUSES - {'missing'})}")
     if expected_verdict != "missing" and verdict != expected_verdict:
         defect(defects, f"{path}.verdict", "must match branch review_status")
@@ -2329,7 +2329,7 @@ def validate_review_reuse_sources(
                 "must match current semantic input hashes for accepted reuse",
             )
         source_verdict = source_data.get("verdict")
-        if source_verdict not in REVIEW_STATUSES - {"missing"}:
+        if not isinstance(source_verdict, str) or source_verdict not in REVIEW_STATUSES - {"missing"}:
             defect(defects, f"{path}.reuse_policy.source_review_path.verdict", "must be a valid reviewer verdict")
     validate_telemetry_artifact(
         defects,
@@ -2669,6 +2669,11 @@ def validate_branch_status_header(
     status = root.get("status")
     if not isinstance(status, str) or status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
+        if not isinstance(status, str):
+            # Normalize a non-string (unhashable) status to "" after recording the defect, so the many
+            # downstream `status in {...}` set-membership checks (here and in validate_branch_worker_
+            # statuses_shape) cannot raise TypeError. Mirrors validate_prompt_audit's status="failed".
+            status = ""
     schema_status = root.get("schema_status")
     if not isinstance(schema_status, str) or schema_status not in {"pass", "failed"}:
         defect(defects, "$.schema_status", "must be 'pass' or 'failed'")
@@ -2695,7 +2700,7 @@ def validate_branch_status_header(
 
 
 def validate_branch_worker_statuses_shape(defects: list[str], worker_statuses: object, status: object) -> None:
-    min_workers = 1 if status in {"pass", "partial"} else 0
+    min_workers = 1 if isinstance(status, str) and status in {"pass", "partial"} else 0
     if (
         not isinstance(worker_statuses, list)
         or len(worker_statuses) < min_workers
@@ -2721,7 +2726,7 @@ def validate_branch_review_phase(
     require_current_worktree_freshness: bool | None,
 ) -> None:
     review_status = root.get("review_status")
-    if review_status not in REVIEW_STATUSES:
+    if not isinstance(review_status, str) or review_status not in REVIEW_STATUSES:
         defect(defects, "$.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")
     if status == "pass" and review_status != "mergeable":
         defect(defects, "$.review_status", "must be mergeable when branch status is pass")
@@ -2763,7 +2768,7 @@ def validate_branch_status_trailer(defects: list[str], root: dict, *, status: ob
     blockers = require_string_list(defects, root.get("blockers"), "$.blockers")
     if status == "pass" and blockers:
         defect(defects, "$.blockers", "must be empty when status is pass")
-    if status in {"partial", "blocked", "failed"} and not blockers:
+    if isinstance(status, str) and status in {"partial", "blocked", "failed"} and not blockers:
         defect(defects, "$.blockers", "must explain non-pass status")
     require_string(defects, root.get("handoff"), "$.handoff")
 

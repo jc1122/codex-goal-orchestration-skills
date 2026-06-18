@@ -127,7 +127,12 @@ def validate_work_items(branch: dict, branch_id: str) -> tuple[list[dict], int]:
         if packet_id != expected_packet_id:
             raise SystemExit(f"branch {branch_id} work_items[{index}].packet_id must be {expected_packet_id!r}")
         worker_type = item.get("worker_type", "worker")
-        if worker_type not in WORK_ITEM_ROLES:
+        if worker_type == "research":
+            # Normalize the legacy alias before the membership check, matching every sibling
+            # consumer (create_runtime_packet / validate_branch_status / assemble_branch_status):
+            # a manifest using worker_type:"research" must not be rejected only by this renderer.
+            worker_type = "research-worker"
+        if not isinstance(worker_type, str) or worker_type not in WORK_ITEM_ROLES:
             raise SystemExit(
                 f"branch {branch_id} work_items[{index}].worker_type must be 'worker' or 'research-worker'"
             )
