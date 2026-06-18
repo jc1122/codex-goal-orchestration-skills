@@ -78,7 +78,7 @@ def read_manifest(path: Path) -> dict[str, Any]:
     """
     try:
         return read_json(path)
-    except ValueError as exc:  # JSONDecodeError is a ValueError subclass
+    except (OSError, ValueError) as exc:  # JSONDecodeError is a ValueError subclass; OSError = dir/permission
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
 
 

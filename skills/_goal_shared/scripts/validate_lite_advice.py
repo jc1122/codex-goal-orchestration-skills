@@ -602,7 +602,7 @@ def main() -> int:
     if inputs_path:
         try:
             loaded_inputs = load_json(inputs_path)
-        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SystemExit(f"--inputs is not valid JSON: {exc}") from exc
         inputs = loaded_inputs if isinstance(loaded_inputs, dict) else None
         if inputs is None:
@@ -615,7 +615,7 @@ def main() -> int:
 
     try:
         advice_data = load_json(advice_path)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"--advice is not valid JSON: {exc}") from exc
     defects = validate(
         advice_data,

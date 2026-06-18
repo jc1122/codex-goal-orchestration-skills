@@ -44,7 +44,7 @@ def load_ledger(path: Path) -> dict:
         raise SystemExit(f"scheduler ledger does not exist: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"scheduler ledger must be a JSON object: {path}")

@@ -66,6 +66,20 @@ def test_json_readers_fail_closed_on_malformed(tmp_path):
         append_event.load_ledger(bad)
 
 
+# --- 2026-06-18 convergence pass 12: fail-closed JSON readers also fail closed on a DIRECTORY
+#     path (IsADirectoryError is an OSError, previously uncaught) ---
+def test_json_readers_fail_closed_on_directory(tmp_path):
+    for reader in (
+        scheduler_tick.read_json,
+        check_model_catalog.read_json,
+        repair_gate.load_json,
+        append_event.load_ledger,
+        reconcile.read_manifest,
+    ):
+        with pytest.raises(SystemExit):
+            reader(tmp_path)  # a directory -> clean SystemExit, not IsADirectoryError
+
+
 # --- 2026-06-18 convergence pass 3: fail-closed JSON readers also fail closed on a non-UTF-8
 #     file (UnicodeDecodeError is a ValueError, not JSONDecodeError) ---
 def test_json_readers_fail_closed_on_non_utf8(tmp_path):
