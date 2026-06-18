@@ -684,7 +684,11 @@ def _attempt_stop_reason(attempt: dict[str, Any], attempt_state: str) -> str | N
         return "harness_unavailable"
     if attempt.get("failure_class") == "schema_or_output_readback":
         return "schema_readback_failure"
-    if attempt.get("failure_subclass") in {"marker_protocol", "schema_validation_failure", "parser_failure"}:
+    if isinstance(attempt.get("failure_subclass"), str) and attempt.get("failure_subclass") in {
+        "marker_protocol",
+        "schema_validation_failure",
+        "parser_failure",
+    }:
         return "schema_readback_failure"
     if attempt_state == "timeout":
         return "timeout"
@@ -695,7 +699,7 @@ def _attempt_stop_reason(attempt: dict[str, Any], attempt_state: str) -> str | N
 
 def _parse_failure_detected(parse_report: dict[str, Any]) -> bool:
     failure_subclass = parse_report.get("failure_subclass")
-    return failure_subclass in {
+    return isinstance(failure_subclass, str) and failure_subclass in {
         "marker_protocol",
         "schema_validation_failure",
         "parser_failure",
@@ -885,7 +889,7 @@ def attempt_failure_class(
 ) -> str:
     parse_report = parse_report or {}
     state = event.get("state")
-    if state in {None, "active"}:
+    if state is None or state == "active":
         return "unknown"
     if state == "pass":
         return "none"
@@ -907,7 +911,7 @@ def attempt_failure_class(
     if event.get("dirty") is True:
         return "dirty_worktree"
     returncode = event.get("returncode")
-    if returncode in {126, 127}:
+    if returncode in (126, 127):
         return "harness_unavailable"
     if event.get("output_nonempty") is True:
         return "schema_or_output_readback"

@@ -380,3 +380,12 @@ def test_assemble_read_helpers_tolerate_non_utf8(tmp_path):
     blockers: list[str] = []
     assert asm.read_object_or_blocker(nonutf8, blockers, "worker artifact") is None
     assert blockers
+
+
+# --- 2026-06-18 convergence pass 15: set-membership over a tampered (unhashable) status field
+#     fails closed with a defect instead of `TypeError: unhashable type` (`status not in STATUSES`
+#     hashes the LHS). ---
+def test_validate_worker_status_tolerates_unhashable_status():
+    defects: list[str] = []
+    vbs.validate_worker_status(defects, {"status": ["pass"], "packet_id": "p"}, "$.w")  # must not raise
+    assert any("status" in d for d in defects), defects

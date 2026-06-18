@@ -180,7 +180,7 @@ def artifact_status(path: Path) -> str | None:
         return None
     data = load_json(path)
     status = data.get("status")
-    if status not in TERMINAL_STATUSES:
+    if not isinstance(status, str) or status not in TERMINAL_STATUSES:
         raise SystemExit(f"status artifact {path} must contain a terminal status")
     return str(status)
 
@@ -238,8 +238,10 @@ def scheduler_state_from_ledger(
             raise SystemExit(f"worker scheduler events[{index}] must be an object: {scheduler_path}")
         name = event.get("event")
         event_id = event.get("id")
-        if name in {"ready", "launch", "finish", "close", "defer", "blocked"} and (
-            not isinstance(event_id, str) or event_id not in known
+        if (
+            isinstance(name, str)
+            and name in {"ready", "launch", "finish", "close", "defer", "blocked"}
+            and (not isinstance(event_id, str) or event_id not in known)
         ):
             raise SystemExit(
                 f"worker scheduler events[{index}].id is not a manifest worker packet id: {scheduler_path}"
@@ -256,7 +258,7 @@ def scheduler_state_from_ledger(
             finished_status.pop(str(event_id), None)
         elif name == "finish":
             status = event.get("status")
-            if status not in TERMINAL_STATUSES:
+            if not isinstance(status, str) or status not in TERMINAL_STATUSES:
                 raise SystemExit(f"worker scheduler events[{index}].status must be terminal")
             if event_id not in active:
                 raise SystemExit(f"worker scheduler events[{index}] finishes inactive packet {event_id}")
@@ -268,7 +270,7 @@ def scheduler_state_from_ledger(
                 raise SystemExit(f"worker scheduler events[{index}] closes unfinished packet {event_id}")
             active.discard(str(event_id))
             terminal_status[str(event_id)] = finished_status[str(event_id)]
-        elif name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
+        elif isinstance(name, str) and name in {"ready", "defer", "blocked", "under_capacity", "refill"}:
             continue
         else:
             raise SystemExit(f"worker scheduler events[{index}].event is unsupported: {name!r}")

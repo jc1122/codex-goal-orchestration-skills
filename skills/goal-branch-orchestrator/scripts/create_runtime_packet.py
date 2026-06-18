@@ -708,7 +708,7 @@ def configured_telemetry_attempts(
             raise SystemExit(f"goal_config model {alias} references unknown harness: {harness_name}")
         kind = harness.get("kind")
         label = event_label_for_alias(alias)
-        event_suffix = "jsonl" if kind in {"codex", BRIDGE_HARNESS_KIND} else "log"
+        event_suffix = "jsonl" if isinstance(kind, str) and kind in {"codex", BRIDGE_HARNESS_KIND} else "log"
         attempt = {
             "alias": alias,
             "provider": kind,
@@ -1620,7 +1620,7 @@ def branch_route_classes(branch: dict) -> list[str]:
         if not isinstance(item, dict):
             continue
         worker_type = item.get("worker_type", "worker")
-        if worker_type in {"research-worker", "research"}:
+        if isinstance(worker_type, str) and worker_type in {"research-worker", "research"}:
             route_class = "research-worker"
         else:
             route_class = item.get("route_class", DEFAULT_WORKER_ROUTE_CLASS)
@@ -1941,9 +1941,11 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
         trigger_hits.append("complex-code route class")
     checks = gate.get("checks") if isinstance(gate.get("checks"), dict) else {}
     tests = checks.get("tests") if isinstance(checks.get("tests"), dict) else {}
-    if tests.get("status") not in {None, "pass"}:
+    tests_status = tests.get("status")
+    if tests_status is not None and tests_status != "pass":
         trigger_hits.append("incomplete verification")
-    if gate.get("status") not in {None, "pass"}:
+    gate_status = gate.get("status")
+    if gate_status is not None and gate_status != "pass":
         trigger_hits.append("incomplete pre-review gate")
     if trigger_hits:
         return "heavy", sorted(set(trigger_hits))
@@ -1956,7 +1958,7 @@ def infer_review_tier(manifest: dict, gate: dict, branch: dict) -> tuple[str, li
     policy = manifest.get("review_model_policy") if isinstance(manifest.get("review_model_policy"), dict) else {}
     default_tier = (
         policy.get("default_tier")
-        if policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS
+        if isinstance(policy.get("default_tier"), str) and policy.get("default_tier") in CONTRACT.REVIEW_ROUTE_TIERS
         else CONTRACT.REVIEW_MODEL_POLICY["default_tier"]
     )
     return str(default_tier), ["default deterministic review tier"]

@@ -771,7 +771,7 @@ def validate_worker_payload(
     require_string(defects, data.get("packet_id"), f"{path}.packet_id")
     if require_role and data.get("role") != "worker":
         defect(defects, f"{path}.role", "must be 'worker'")
-    if data.get("status") not in STATUSES:
+    if not isinstance(data.get("status"), str) or data.get("status") not in STATUSES:
         defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
     if require_branch:
         require_string(defects, data.get("branch"), f"{path}.branch")
@@ -801,7 +801,7 @@ def validate_worker_payload(
     blockers = require_string_list(defects, data.get("blockers"), f"{path}.blockers")
     if data.get("status") == "pass" and blockers:
         defect(defects, f"{path}.blockers", "must be empty when status is pass")
-    if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
+    if isinstance(data.get("status"), str) and data.get("status") in {"partial", "blocked", "failed"} and not blockers:
         defect(defects, f"{path}.blockers", "must explain non-pass status")
     require_string(defects, data.get("handoff"), f"{path}.handoff")
     return data
@@ -833,7 +833,7 @@ def validate_research_payload(
     require_string(defects, data.get("packet_id"), f"{path}.packet_id")
     if data.get("role") != "research-worker":
         defect(defects, f"{path}.role", "must be 'research-worker'")
-    if data.get("status") not in STATUSES:
+    if not isinstance(data.get("status"), str) or data.get("status") not in STATUSES:
         defect(defects, f"{path}.status", f"must be one of {sorted(STATUSES)}")
     if require_branch:
         require_string(defects, data.get("branch"), f"{path}.branch")
@@ -865,7 +865,7 @@ def validate_research_payload(
             defect(defects, f"{path}.source_urls", "must record at least one source URL when status is pass")
         if not data.get("tools_used"):
             defect(defects, f"{path}.tools_used", "must record at least one tool family when status is pass")
-    if data.get("status") in {"partial", "blocked", "failed"} and not blockers:
+    if isinstance(data.get("status"), str) and data.get("status") in {"partial", "blocked", "failed"} and not blockers:
         defect(defects, f"{path}.blockers", "must explain non-pass status")
     require_string(defects, data.get("handoff"), f"{path}.handoff")
     return data
@@ -1044,9 +1044,11 @@ def validate_worker_repair_promotion(
                 f"artifact does not exist: {source_telemetry_path}",
             )
     validate_repair_evidence_command_copy(defects, evidence_obj, worker, path)
-    if evidence_obj.get("work_item_id") not in {None, work_item_id}:
+    evidence_work_item_id = evidence_obj.get("work_item_id")
+    if evidence_work_item_id is not None and evidence_work_item_id != work_item_id:
         defect(defects, f"{path}.work_item_id", f"must be {work_item_id!r} when present")
-    if evidence_obj.get("worktree") not in {None, worktree}:
+    evidence_worktree = evidence_obj.get("worktree")
+    if evidence_worktree is not None and evidence_worktree != worktree:
         defect(defects, f"{path}.worktree", "must match promoted worker worktree when present")
     return True
 
@@ -1145,7 +1147,10 @@ def validate_worker_manifest_identity(
     allowed_manifest_hashes = {sha256_file(manifest_path)}
     if allow_archived_manifest_hashes:
         allowed_manifest_hashes.update(archived_manifest_sha256s(manifest_path))
-    if artifact.get("manifest_hash") not in allowed_manifest_hashes:
+    if (
+        not isinstance(artifact.get("manifest_hash"), str)
+        or artifact.get("manifest_hash") not in allowed_manifest_hashes
+    ):
         defect(defects, f"{item_path}.manifest_hash", "must match current or archived manifest sha256")
     if artifact.get("worktree_path") != artifact.get("worktree"):
         defect(defects, f"{item_path}.worktree_path", "must match worker worktree")
@@ -1182,7 +1187,9 @@ def validate_research_worker_telemetry(
         allowed_aliases=RESEARCH_ALIASES,
         require_called=True,
     )
-    if artifact.get("status") == "pass" and telemetry.get("accepted_alias") not in RESEARCH_ALIASES:
+    if artifact.get("status") == "pass" and (
+        not isinstance(telemetry.get("accepted_alias"), str) or telemetry.get("accepted_alias") not in RESEARCH_ALIASES
+    ):
         defect(
             defects,
             f"{item_path}.telemetry_path.accepted_alias",
@@ -2589,7 +2596,10 @@ def validate_review_waiver_artifact(
     )
     if waiver.get("schema_version") != 1:
         defect(defects, "$.review_waiver_path.schema_version", "must be 1")
-    if waiver.get("kind") not in {"review-waiver", "terminal-blocker-review"}:
+    if not isinstance(waiver.get("kind"), str) or waiver.get("kind") not in {
+        "review-waiver",
+        "terminal-blocker-review",
+    }:
         defect(defects, "$.review_waiver_path.kind", "must be review-waiver or terminal-blocker-review")
     if waiver.get("branch_id") != branch_id:
         defect(defects, "$.review_waiver_path.branch_id", f"must be {branch_id!r}")
@@ -2657,25 +2667,25 @@ def validate_branch_status_header(
         defect(defects, "$.worktree", f"must be {worktree!r}")
     require_string(defects, root.get("branch_id"), "$.branch_id")
     status = root.get("status")
-    if status not in STATUSES:
+    if not isinstance(status, str) or status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
     schema_status = root.get("schema_status")
-    if schema_status not in {"pass", "failed"}:
+    if not isinstance(schema_status, str) or schema_status not in {"pass", "failed"}:
         defect(defects, "$.schema_status", "must be 'pass' or 'failed'")
     runtime_status = root.get("runtime_status")
-    if runtime_status not in STATUSES:
+    if not isinstance(runtime_status, str) or runtime_status not in STATUSES:
         defect(defects, "$.runtime_status", f"must be one of {sorted(STATUSES)}")
     elif runtime_status != status:
         defect(defects, "$.runtime_status", "must match status")
     dod_status = root.get("dod_status")
-    if dod_status not in {"pass", "incomplete"}:
+    if not isinstance(dod_status, str) or dod_status not in {"pass", "incomplete"}:
         defect(defects, "$.dod_status", "must be 'pass' or 'incomplete'")
     elif status == "pass" and dod_status != "pass":
         defect(defects, "$.dod_status", "must be pass when branch status is pass")
-    elif status in {"partial", "blocked", "failed"} and dod_status == "pass":
+    elif isinstance(status, str) and status in {"partial", "blocked", "failed"} and dod_status == "pass":
         defect(defects, "$.dod_status", "must not be pass when branch status is non-pass")
     resume_action = root.get("resume_action")
-    if resume_action not in {"reuse_terminal_status", "repair_or_reassemble"}:
+    if not isinstance(resume_action, str) or resume_action not in {"reuse_terminal_status", "repair_or_reassemble"}:
         defect(defects, "$.resume_action", "must be reuse_terminal_status or repair_or_reassemble")
     require_string(defects, root.get("branch"), "$.branch")
     root_worktree = require_string(defects, root.get("worktree"), "$.worktree")
