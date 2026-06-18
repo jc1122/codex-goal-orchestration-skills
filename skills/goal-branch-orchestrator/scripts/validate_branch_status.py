@@ -1123,7 +1123,7 @@ def validate_worker_manifest_identity(
         defect(defects, f"{item_path}.route_id", "must match packet_id:route_class:selected_ladder")
     owned_paths = (
         [value for value in manifest_item.get("owned_paths", []) if isinstance(value, str) and value.strip()]
-        if isinstance(manifest_item, dict)
+        if isinstance(manifest_item, dict) and isinstance(manifest_item.get("owned_paths"), list)
         else []
     )
     validate_worker_changed_files(defects, artifact, item_path, owned_paths=owned_paths)
