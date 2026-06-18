@@ -263,7 +263,7 @@ def load_bundle_json(defect, bundle_dir: Path, relative_path: str, label: str) -
         return None
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         defect(relative_path, "critical", f"{label} must be valid JSON: {exc}")
         return None
     if not isinstance(data, dict):
@@ -1728,7 +1728,8 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
             defect("job.manifest.json", "critical", "each wave must be a JSON object")
             continue
         wid = wave.get("id")
-        wave_ids.append(wid)
+        if isinstance(wid, str):
+            wave_ids.append(wid)
         if not isinstance(wid, str) or not SAFE_LABEL_RE.fullmatch(wid):
             defect("job.manifest.json", "critical", f"wave id is not safe: {wid!r}")
         branch_ids = wave.get("branches", [])
@@ -1740,7 +1741,9 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
         for bid in branch_ids:
             if isinstance(bid, str) and isinstance(wid, str):
                 branch_to_wave.setdefault(bid, wid)
-        wave_branch_ids.extend(branch_ids)
+            elif not isinstance(bid, str):
+                defect("job.manifest.json", "critical", f"wave {wave.get('id')} branch entries must be strings")
+        wave_branch_ids.extend(bid for bid in branch_ids if isinstance(bid, str))
     if len(wave_ids) != len(set(wave_ids)):
         defect("job.manifest.json", "critical", "wave ids must be unique")
     if len(wave_branch_ids) != len(set(wave_branch_ids)):
