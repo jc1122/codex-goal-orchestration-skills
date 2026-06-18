@@ -240,7 +240,9 @@ def bundle_inside_git_unignored(repo_status: dict, bundle_dir: Path) -> str | No
     return None if result.returncode == 0 else relative.as_posix()
 
 
-def sha256_file(path: Path) -> str:
+def sha256_file(path: Path) -> str | None:
+    if not path.is_file():
+        return None
     digest = hashlib.sha256()
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -1756,6 +1758,9 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
         if branch_wave is None:
             continue
         branch_id = branch.get("id")
+        if not isinstance(branch_wave, str):
+            defect("job.manifest.json", "critical", f"branch {branch_id!r} wave must be a string")
+            continue
         if branch_wave not in declared_wave_ids:
             defect(
                 "job.manifest.json",

@@ -63,6 +63,22 @@ def test_normalize_brief_rejects_malformed_branches():
         cgb.normalize_brief({"job_id": "j1", "branches": ["not-a-dict"]}, validate_base_ref=False)
 
 
+# --- 2026-06-18 convergence pass 13: _lint_waves tolerates an unhashable per-branch `wave` field
+#     (was TypeError on `branch_wave not in declared_wave_ids` set membership) ---
+def test_lint_waves_tolerates_unhashable_branch_wave():
+    defects: list[str] = []
+
+    def _defect(_file, _sev, msg):
+        defects.append(msg)
+
+    manifest = {
+        "waves": [{"id": "W1", "branches": ["B01"]}],
+        "branches": [{"id": "B01", "wave": ["unhashable"]}],
+    }
+    lgb._lint_waves(_defect, manifest, manifest["branches"], ["B01"], True)  # must not raise TypeError
+    assert any("wave must be a string" in m for m in defects), defects
+
+
 # --- 2026-06-18 convergence pass 10: render_branch_source_contract tolerates a non-list
 #     required_evidence/final_dod (standalone create path) instead of TypeError ---
 def test_render_branch_source_contract_tolerates_non_list_fields():
