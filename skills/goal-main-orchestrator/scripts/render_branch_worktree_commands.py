@@ -267,7 +267,10 @@ def _validate_work_item_fields(work_items: list, bid: object) -> tuple[set, dict
         if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
             raise SystemExit(f"branch {bid} work_items[{index}].objective must be non-empty")
         worker_type = item.get("worker_type", "worker")
-        if worker_type not in WORK_ITEM_ROLES:
+        if worker_type == "research":
+            # Normalize the legacy alias before the membership check, matching every sibling consumer.
+            worker_type = "research-worker"
+        if not isinstance(worker_type, str) or worker_type not in WORK_ITEM_ROLES:
             raise SystemExit(f"branch {bid} work_items[{index}].worker_type must be 'worker' or 'research-worker'")
         for key, min_items in [
             ("owned_paths", 1),

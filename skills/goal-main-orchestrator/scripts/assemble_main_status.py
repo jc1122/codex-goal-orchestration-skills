@@ -184,10 +184,10 @@ def branch_summaries(bundle_dir: Path, branches: list[dict], blockers: list[str]
         status_data = safe_load_object(status_path, blockers, f"branch {branch_id} status artifact")
         status_value = status_data.get("status")
         review_status = status_data.get("review_status", "missing")
-        if status_value not in STATUSES:
+        if not isinstance(status_value, str) or status_value not in STATUSES:
             blockers.append(f"branch {branch_id} status artifact has invalid status: {status_value!r}")
             status_value = "failed"
-        if review_status not in REVIEW_STATUSES:
+        if not isinstance(review_status, str) or review_status not in REVIEW_STATUSES:
             blockers.append(f"branch {branch_id} status artifact has invalid review_status: {review_status!r}")
             review_status = "missing"
         summary = {
@@ -311,7 +311,8 @@ def current_amendment_records(
         reasons: list[str] = []
         if data.get("manifest") != manifest_path.as_posix():
             reasons.append("manifest path mismatch")
-        if data.get("manifest_sha256") not in allowed_manifest_shas:
+        manifest_sha = data.get("manifest_sha256")
+        if not isinstance(manifest_sha, str) or manifest_sha not in allowed_manifest_shas:
             reasons.append("manifest sha256 mismatch")
         overlap = sorted(active_ids & set(terminal_ids))
         if overlap:
@@ -486,8 +487,10 @@ def aggregate_review_status(branch_statuses: list[dict], expected_branch_count: 
     if review_statuses == {"mergeable"}:
         return "mergeable"
     # A "reject" verdict is a hard-negative review and must roll up as blocked (it previously
-    # fell through to "missing", i.e. was reported as merely unreviewed).
-    if review_statuses & {"failed", "blocked", "reject"}:
+    # fell through to "missing", i.e. was reported as merely unreviewed). "mergeable_after_fixes"
+    # is a valid REVIEW_STATUSES value (accepted by both validators) that is likewise not cleanly
+    # mergeable; it had the same "missing" fall-through, so roll it up with the non-mergeable states.
+    if review_statuses & {"failed", "blocked", "reject", "mergeable_after_fixes"}:
         return "blocked"
     return "missing"
 

@@ -27,6 +27,7 @@ dpa = load_module("skills/goal-main-orchestrator/scripts/deterministic_prompt_au
 stl = load_module("skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "stl_mo")
 cap = load_module("skills/goal-main-orchestrator/scripts/create_audit_packet.py", "cap_mo")
 vms = load_module("skills/goal-main-orchestrator/scripts/validate_main_status.py", "vms_mo")
+rpar = load_module("skills/goal-main-orchestrator/scripts/runtime_prompt_audit_runner.py", "rpar_mo")
 
 
 # --- 2026-06-18 convergence pass 13: validate_decision_artifact tolerates an unhashable element in
@@ -303,3 +304,159 @@ def test_resolve_selected_ids_rejects_non_string_wave_branches():
     sets = rgb.SchedulerSets([], set(), set(), set(), set(), set())
     with pytest.raises(SystemExit):
         rgb.resolve_selected_ids(args, waves, {}, sets, 1)
+
+
+# --- 2026-06-18 fresh-audit pass: residual unguarded set/frozenset membership over a non-string
+#     (unhashable) scalar that survived the pass-15 sweep in goal-main-orchestrator. Each site read
+#     a value from a semi-trusted artifact and did `x (not) in {set}` without an isinstance guard, so
+#     a tampered list/dict-valued field raised `TypeError: unhashable type` instead of failing closed.
+#     The fail-closed convention requires a structured defect/blocker, never an uncaught traceback. ---
+
+
+# C1: validate_branch_summary review_status (line 91 already guarded status; review_status was not).
+def test_validate_branch_summary_tolerates_unhashable_review_status():
+    defects: list[str] = []
+    vms.validate_branch_summary(
+        defects,
+        {"branch_id": "B01", "status": "partial", "status_path": "a", "review_path": "b", "review_status": ["x"]},
+        "$.b",
+    )  # must not raise TypeError on `review_status not in REVIEW_STATUSES`
+    assert any("review_status" in d for d in defects), defects
+
+
+# C2: validate_review_artifact verdict.
+def test_validate_review_artifact_tolerates_unhashable_verdict():
+    defects: list[str] = []
+    vms.validate_review_artifact(
+        defects,
+        {"verdict": ["mergeable"], "role": "reviewer", "findings": []},
+        "mergeable",
+        "$.review",
+        manifest={},
+        branch_id="B01",
+    )  # must not raise on `verdict not in REVIEW_STATUSES - {"missing"}`
+    assert any("verdict" in d for d in defects), defects
+
+
+# C3: validate_amendment_decision_blockers iterates branch_statuses and tests `item.get("status") in STATUSES`.
+def test_validate_amendment_decision_blockers_tolerates_unhashable_branch_status():
+    defects: list[str] = []
+    root = {
+        "amendment_decision_blockers": [],
+        "branch_statuses": [{"branch_id": "B01", "status": {"nested": "dict"}}],  # unhashable status
+    }
+    vms.validate_amendment_decision_blockers(defects, root, status="partial")  # must not raise
+    assert isinstance(defects, list)
+
+
+# C4: validate_prompt_audit status.
+def test_validate_prompt_audit_tolerates_unhashable_status(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    audit_path = tmp_path / "prompt-audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "manifest": manifest_path.as_posix(),
+                "repo_root": tmp_path.as_posix(),
+                "status": ["pass"],  # unhashable status
+                "can_start": True,
+                "checked_files": [],
+                "commands_run": [],
+                "missing_dod_items": [],
+                "defects": [],
+                "summary": "s",
+                "actionability_verdict": "failed",
+            }
+        ),
+        encoding="utf-8",
+    )
+    defects = vpa.validate_prompt_audit(audit_path, manifest_path, tmp_path, require_pass=False)  # must not raise
+    assert any("$.status" in d for d in defects), defects
+
+
+# C5: assemble branch_summaries status/review_status.
+def test_branch_summaries_tolerates_unhashable_status(tmp_path):
+    (tmp_path / "branches").mkdir()
+    (tmp_path / "branches" / "B01.status.json").write_text(
+        json.dumps({"status": ["pass"], "review_status": {"x": 1}}), encoding="utf-8"
+    )
+    branches = [{"id": "B01", "status_path": "branches/B01.status.json", "review_path": "branches/B01.review.json"}]
+    blockers: list[str] = []
+    summaries = ams.branch_summaries(tmp_path, branches, blockers)  # must not raise TypeError
+    assert summaries[0]["status"] == "failed"
+    assert any("invalid status" in b for b in blockers)
+
+
+# C6: assemble current_amendment_records manifest_sha256.
+def test_current_amendment_records_tolerates_unhashable_manifest_sha(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    (tmp_path / "amendments").mkdir()
+    (tmp_path / "amendments" / "A1.decision.json").write_text(
+        json.dumps({"amendment_id": "A1", "decision": "launch", "manifest_sha256": ["sha256:abc"]}),
+        encoding="utf-8",
+    )
+    blockers: list[str] = []
+    records, covered, ignored = ams.current_amendment_records(manifest_path, [], {}, blockers)  # must not raise
+    assert any("manifest sha256 mismatch" in r for r in ignored), ignored
+
+
+# C7: failure_summary's event-log-name fallback must match the run loop's `attempt-{index+1}` fallback
+#     (previously fell back to the bare "attempt", so an alias-less attempt mis-reported the log as missing).
+def test_failure_summary_log_name_fallback_matches_run_loop(tmp_path):
+    config = {"attempts": [{}]}  # one attempt, no alias, no event_logs
+    summary = rpar.failure_summary(tmp_path, config)
+    assert "events-attempt-1.jsonl" in summary, summary
+    assert "events-attempt.jsonl" not in summary, summary
+
+
+# --- 2026-06-18 RE-AUDIT pass: render_branch_worktree_commands._validate_work_item_fields must accept
+#     the legacy worker_type alias "research" and fail closed (clean SystemExit, not TypeError) on a
+#     non-string worker_type — the sibling of the render_worker_schedule fix. ---
+def _rbwc_item(worker_type):
+    return {
+        "id": "W01",
+        "packet_id": "B01-W01",
+        "objective": "do the thing",
+        "worker_type": worker_type,
+        "owned_paths": ["src/a.py"],
+        "verification": ["pytest"],
+        "dod": ["done"],
+        "context_files": [],
+        "depends_on": [],
+    }
+
+
+def test_rbwc_validate_work_item_fields_accepts_research_alias():
+    rgb._validate_work_item_fields([_rbwc_item("research")], "B01")  # must not raise
+
+
+def test_rbwc_validate_work_item_fields_fails_closed_on_unhashable_worker_type():
+    with pytest.raises(SystemExit):
+        rgb._validate_work_item_fields([_rbwc_item(["worker"])], "B01")
+
+
+# --- 2026-06-18 RE-AUDIT pass (final verification): validate_prompt_audit pass-branch crashed on a
+#     defect whose `severity` is a list/dict (item was dict-guarded but severity was not str-guarded
+#     before the `severity in {"critical","major"}` set-membership). ---
+def test_validate_prompt_audit_tolerates_unhashable_defect_severity(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    audit_path = tmp_path / "prompt-audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "manifest": manifest_path.as_posix(),
+                "repo_root": tmp_path.as_posix(),
+                "status": "pass",
+                "can_start": True,
+                "checked_files": ["job.manifest.json"],
+                "commands_run": ["python3 deterministic_prompt_audit.py"],
+                "missing_dod_items": [],
+                "actionability_verdict": "pass",
+                "defects": [{"severity": ["critical"], "file": "f.py", "message": "m"}],  # unhashable severity
+                "summary": "s",
+            }
+        ),
+        encoding="utf-8",
+    )
+    defects = vpa.validate_prompt_audit(audit_path, manifest_path, tmp_path, require_pass=False)  # must not raise
+    assert isinstance(defects, list)

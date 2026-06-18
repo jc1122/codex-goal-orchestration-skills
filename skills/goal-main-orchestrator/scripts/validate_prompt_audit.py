@@ -92,7 +92,7 @@ def validate_prompt_audit(audit_path: Path, manifest_path: Path, repo_root: Path
     if audit.get("repo_root") != repo_root.as_posix():
         defect(defects, "$.repo_root", "must match --repo-root")
     status = audit.get("status")
-    if status not in AUDIT_STATUSES:
+    if not isinstance(status, str) or status not in AUDIT_STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(AUDIT_STATUSES)}")
         status = "failed"
     if require_pass and status != "pass":
@@ -116,7 +116,8 @@ def validate_prompt_audit(audit_path: Path, manifest_path: Path, repo_root: Path
         if missing_dod:
             defect(defects, "$.missing_dod_items", "must be empty when status is pass")
         for index, item in enumerate(audit.get("defects", []) if isinstance(audit.get("defects"), list) else []):
-            if isinstance(item, dict) and item.get("severity") in {"critical", "major"}:
+            severity = item.get("severity") if isinstance(item, dict) else None
+            if isinstance(severity, str) and severity in {"critical", "major"}:
                 defect(
                     defects, f"$.defects[{index}].severity", "passing audit must not contain critical or major defects"
                 )

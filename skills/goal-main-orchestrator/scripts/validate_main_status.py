@@ -97,7 +97,7 @@ def validate_branch_summary(defects: list[str], value: object, path: str) -> Non
     if review_path and not is_repo_relative_path(review_path):
         defect(defects, f"{path}.review_path", "must be a repo-relative path without traversal")
     review_status = data.get("review_status")
-    if review_status not in REVIEW_STATUSES:
+    if not isinstance(review_status, str) or review_status not in REVIEW_STATUSES:
         defect(defects, f"{path}.review_status", f"must be one of {sorted(REVIEW_STATUSES)}")
     if data.get("status") == "pass" and review_status != "mergeable":
         defect(defects, f"{path}.review_status", "must be mergeable when branch status is pass")
@@ -414,7 +414,12 @@ def validate_amendment_decision_blockers(defects: list[str], root: dict, *, stat
     terminal_branch_statuses: dict[str, str] = {}
     if isinstance(branch_statuses, list):
         for item in branch_statuses:
-            if isinstance(item, dict) and isinstance(item.get("branch_id"), str) and item.get("status") in STATUSES:
+            if (
+                isinstance(item, dict)
+                and isinstance(item.get("branch_id"), str)
+                and isinstance(item.get("status"), str)
+                and item.get("status") in STATUSES
+            ):
                 terminal_branch_statuses[str(item.get("branch_id"))] = str(item.get("status"))
     covered: set[str] = set()
     for index, item in enumerate(records):
@@ -656,7 +661,10 @@ def validate_amendment_packet_coverage(
         terminal_branch_ids = {
             str(item.get("branch_id"))
             for item in branch_statuses
-            if isinstance(item, dict) and item.get("status") in STATUSES and isinstance(item.get("branch_id"), str)
+            if isinstance(item, dict)
+            and isinstance(item.get("branch_id"), str)
+            and isinstance(item.get("status"), str)
+            and item.get("status") in STATUSES
         }
         missing = sorted(terminal_branch_ids - decision_branch_ids - blocker_branch_ids)
         if missing:
@@ -937,7 +945,7 @@ def validate_review_artifact(
     if review.get("role") != "reviewer":
         defect(defects, f"{path}.role", "must be 'reviewer'")
     verdict = review.get("verdict")
-    if verdict not in REVIEW_STATUSES - {"missing"}:
+    if not isinstance(verdict, str) or verdict not in REVIEW_STATUSES - {"missing"}:
         defect(defects, f"{path}.verdict", f"must be one of {sorted(REVIEW_STATUSES - {'missing'})}")
     if expected_verdict != "missing" and verdict != expected_verdict:
         defect(defects, f"{path}.verdict", "must match branch summary review_status")
