@@ -73,6 +73,14 @@ def test_validate_path_list_rejects_porcelain_prefix():
     assert clean == []
 
 
+# --- 2026-06-18 convergence pass 9: load_task tolerates a non-UTF-8 --task-file (errors="replace",
+#     matching the validator side) instead of crashing packet creation ---
+def test_load_task_tolerates_non_utf8(tmp_path):
+    f = tmp_path / "task.md"
+    f.write_bytes(b"\xff\xfe task body")
+    assert isinstance(crp.load_task(f), str)  # was UnicodeDecodeError
+
+
 # --- 2026-06-18 convergence pass 7: configured_telemetry_attempts guards a non-dict
 #     goal_config.models/harnesses (.get on a non-dict used to AttributeError) ---
 def test_worker_telemetry_attempts_tolerates_non_dict_goal_config():

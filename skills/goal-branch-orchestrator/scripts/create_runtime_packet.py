@@ -1124,7 +1124,7 @@ def enforce_context_budget(packet_id: str, report: dict) -> None:
 def load_task(path: Path | None) -> str:
     if not path:
         return "- Replace this section with the bounded task objective before launch."
-    return path.read_text(encoding="utf-8")
+    return path.read_text(encoding="utf-8", errors="replace")
 
 
 def load_json(path: Path) -> dict:
