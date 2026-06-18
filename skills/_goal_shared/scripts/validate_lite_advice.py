@@ -451,6 +451,7 @@ def validate_source_files(defects: list[str], value: object, path: str, expected
                 "reason": item.get("reason"),
             }
             for item in expected
+            if isinstance(item, dict)
         ]
         if actual != expected_min:
             defect(defects, path, "must match input-files.json source metadata exactly and in order")

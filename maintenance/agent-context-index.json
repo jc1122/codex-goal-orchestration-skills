@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:42264f92d9408ab3292cd674d689e2b6f1653d8c54192999304a336964204401"
+    "source_fingerprint": "sha256:7523ed57bd49dc0caccc922b86e7753a462c6058beffc030b2893baa5cd1c9a2"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -30,7 +30,7 @@
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
       "lines": 3546,
-      "approx_tokens": 39743,
+      "approx_tokens": 39760,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "1846:normalize_brief:111l",
@@ -42,14 +42,14 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3361,
-      "approx_tokens": 33578,
+      "lines": 3362,
+      "approx_tokens": 33596,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "3124:main:234l",
-        "2425:compact_launch_config:139l",
+        "3125:main:234l",
+        "2426:compact_launch_config:139l",
         "1214:compact_worker_context:121l",
-        "2799:resolve_worker_routing:111l"
+        "2800:resolve_worker_routing:111l"
       ]
     },
     {

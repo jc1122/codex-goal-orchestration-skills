@@ -165,6 +165,13 @@ def test_check_model_catalog_read_json_handles_missing_file(tmp_path):
         check_model_catalog.read_json(nonutf8)
 
 
+# --- 2026-06-18 convergence pass 6: validate_source_files tolerates a non-dict element in the
+#     inputs source_files list (the standalone copy diverged from the in-process status_validation one) ---
+def test_validate_source_files_tolerates_non_dict_expected():
+    defects: list[str] = []
+    vla.validate_source_files(defects, [], "$.source_files", ["not-a-dict"])  # must not raise (was AttributeError)
+
+
 # --- 2026-06-18 convergence pass 2: validate_lite_advice tolerates a non-UTF-8 task.md (no
 #     UnicodeDecodeError) — it is also run in-process by status_validation, so a crash here would
 #     take down the whole status validator ---
