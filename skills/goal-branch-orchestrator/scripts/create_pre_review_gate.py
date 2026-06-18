@@ -378,7 +378,7 @@ def worker_pass_defects(bundle_dir: Path, branch: dict, branch_status: dict, bra
             defects.append(
                 "worker scheduler is missing finish evidence before reviewer launch: " + ", ".join(missing_finished)
             )
-    if branch_status.get("status") in {"blocked", "failed"}:
+    if isinstance(branch_status.get("status"), str) and branch_status.get("status") in {"blocked", "failed"}:
         defects.append(
             f"branch status is {branch_status.get('status')!r}; reviewer launch requires integrated worker evidence"
         )
