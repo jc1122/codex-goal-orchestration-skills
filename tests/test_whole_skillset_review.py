@@ -22,6 +22,14 @@ rpa = load_module("skills/goal-main-orchestrator/scripts/runtime_prompt_audit_ru
 rlr = load_module("skills/_goal_shared/scripts/runtime_lite_runner.py", "rlr_ws")
 cprg = load_module("skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py", "cprg_ws")
 cgb = load_module("skills/goal-preflight/scripts/create_goal_bundle.py", "cgb_ws")
+crel = load_module("scripts/check_release.py", "crel_ws")
+
+
+# --- 2026-06-18 convergence pass 9: the release gate enforces that the harness-contract gate
+#     ships in the package and is wired into npm run check (it could silently fall out before) ---
+def test_check_release_enforces_harness_gate():
+    assert "scripts/check_harness_contract.py" in crel.REQUIRED_PACKAGE_FILES
+    assert "scripts/check_harness_contract.py" in crel.REQUIRED_PACKAGE_FILES_ENTRIES
 
 
 # --- HIGH: amendment decision keyed to the archived (pre-apply) manifest sha is NOT dropped ---
