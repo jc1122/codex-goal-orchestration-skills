@@ -309,13 +309,13 @@ def recover_audit_from_events(log_path: Path, output_path: Path, config: dict[st
         candidates.append(stripped)
         try:
             event = json.loads(stripped)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
         candidates.extend(candidate_event_texts(event))
     for text in reversed(candidates):
         try:
             data = json.loads(text)
-        except (json.JSONDecodeError, UnicodeDecodeError):
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
             continue
         if valid_audit_data(
             data,

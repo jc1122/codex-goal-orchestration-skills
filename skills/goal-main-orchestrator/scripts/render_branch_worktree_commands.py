@@ -107,7 +107,7 @@ def load_json(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
             data = json.load(handle)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
     if not isinstance(data, dict):
         raise SystemExit(f"expected a JSON object: {path}")
@@ -957,6 +957,8 @@ def validate_manifest_waves(manifest: dict, serial_reasons: list) -> tuple[list,
             raise SystemExit(f"wave {wave.get('id')} must list at least one branch")
         if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
             raise SystemExit(f"wave {wave.get('id')} has more than 4 branches")
+        if any(not isinstance(bid, str) or not bid.strip() for bid in branch_ids):
+            raise SystemExit(f"wave {wave.get('id')} branches must be non-empty branch-id strings")
         wave_branch_ids.extend(branch_ids)
     if len(wave_branch_ids) != len(set(wave_branch_ids)):
         raise SystemExit("branch ids must not appear in more than one wave")

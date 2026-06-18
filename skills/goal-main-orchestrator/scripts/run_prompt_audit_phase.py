@@ -125,7 +125,7 @@ def parsed_validation(command_result: dict[str, Any]) -> dict[str, Any] | None:
         return None
     try:
         data = json.loads(stdout)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return None
     return data if isinstance(data, dict) else None
 

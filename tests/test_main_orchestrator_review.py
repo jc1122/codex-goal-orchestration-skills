@@ -66,6 +66,17 @@ def test_validate_manifest_waves_fails_closed_on_malformed_shape():
         rgb.validate_manifest_waves({"branches": ["not-a-dict"]}, [])
 
 
+# --- 2026-06-18 convergence pass 12: a non-string element inside a wave's `branches` fails closed
+#     (was a TypeError on set(wave_branch_ids) with an unhashable element) ---
+def test_validate_manifest_waves_rejects_non_string_wave_branch_element():
+    manifest = {
+        "branches": [{"id": "B01"}, {"id": "B02"}],
+        "waves": [{"id": "W1", "branches": [{"nested": "dict"}, "B02"]}],
+    }
+    with pytest.raises(SystemExit):
+        rgb.validate_manifest_waves(manifest, ["serial reason"])
+
+
 # --- 2026-06-18 convergence pass 3: create_audit_packet.render_prompt fails closed on a malformed
 #     manifest (the first audit step; was a KeyError/AttributeError traceback) ---
 def test_create_audit_packet_render_prompt_fails_closed(tmp_path):
