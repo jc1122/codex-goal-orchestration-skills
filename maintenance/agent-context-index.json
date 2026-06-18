@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:5cf980421151256eafd5df951ec4d280322478b76fe88aaf9ddb3d5ca498adf8"
+    "source_fingerprint": "sha256:3cdf18d3e6b96a8f32944c781896b51fb23c5ab036e1e4ec3c455fd9600eb640"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -29,14 +29,14 @@
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3556,
-      "approx_tokens": 39846,
+      "lines": 3608,
+      "approx_tokens": 40635,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1846:normalize_brief:111l",
-        "3148:render_branch_prompt_text:105l",
-        "2526:build_runtime_index:96l",
-        "2958:manifest_from_normalized_brief:94l"
+        "1898:normalize_brief:111l",
+        "3200:render_branch_prompt_text:105l",
+        "2578:build_runtime_index:96l",
+        "3010:manifest_from_normalized_brief:94l"
       ]
     },
     {
@@ -55,8 +55,8 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3511,
-      "approx_tokens": 33124,
+      "lines": 3514,
+      "approx_tokens": 33197,
       "rule": "manifest/help/defects before source",
       "top_functions": [
         "1910:run_opencode_bridge_model:280l",
@@ -68,14 +68,14 @@
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2889,
-      "approx_tokens": 32369,
+      "lines": 2903,
+      "approx_tokens": 32532,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2197:_lint_branch_worker_parallelism:135l",
-        "2675:lint:128l",
-        "1106:validate_goal_config_manifest:121l",
-        "1538:_lint_model_policies:107l"
+        "2201:_lint_branch_worker_parallelism:135l",
+        "2689:lint:128l",
+        "1110:validate_goal_config_manifest:121l",
+        "1542:_lint_model_policies:107l"
       ]
     }
   ],
