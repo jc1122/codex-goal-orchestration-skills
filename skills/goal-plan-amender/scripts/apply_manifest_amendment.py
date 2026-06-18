@@ -158,7 +158,10 @@ def main() -> int:
     if validation.get("proposal_sha256") != sha256_file(proposal_path):
         raise SystemExit("proposal sha256 does not match validation proposal_sha256")
 
-    amendment_id = ensure_amendment_id(validation.get("amendment_id"))
+    try:
+        amendment_id = ensure_amendment_id(validation.get("amendment_id"))
+    except ValueError as exc:  # non-string amendment_id in a hand-crafted "pass" validation artifact
+        raise SystemExit(f"validation amendment_id is invalid: {exc}") from exc
     bundle_dir = manifest_path.parent
     require_launch_packet_validation(manifest_path, proposal_path, amendment_id)
 

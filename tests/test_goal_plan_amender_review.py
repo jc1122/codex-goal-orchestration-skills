@@ -211,6 +211,9 @@ def test_load_json_object_fails_closed(tmp_path):
     nonutf8.write_bytes(b"\xff\xfe{}")
     with pytest.raises(SystemExit):
         amendment_lib.load_json_object(nonutf8)
+    # Pass-12: a directory path (IsADirectoryError, an OSError) also fails closed
+    with pytest.raises(SystemExit):
+        amendment_lib.load_json_object(tmp_path)
 
 
 # --- safe_path keeps .github/ paths (leading dot no longer stripped) ---
