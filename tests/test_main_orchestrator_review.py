@@ -55,6 +55,17 @@ def test_render_branch_worktree_load_json_rejects_non_dict(tmp_path):
     assert rgb.load_json(good) == {"schema_version": 1}
 
 
+# --- 2026-06-18 convergence pass: validate_manifest_waves fails closed (SystemExit) on a
+#     malformed waves/branches shape instead of an AttributeError/TypeError traceback ---
+def test_validate_manifest_waves_fails_closed_on_malformed_shape():
+    # non-list waves (the model-audit-pass path skips lint_goal_bundle, so this is reachable)
+    with pytest.raises(SystemExit):
+        rgb.validate_manifest_waves({"waves": "abc", "branches": [{"id": "B01"}]}, [])
+    # non-dict branch entry used to raise AttributeError on branch.get("id")
+    with pytest.raises(SystemExit):
+        rgb.validate_manifest_waves({"branches": ["not-a-dict"]}, [])
+
+
 # --- C1: the generated branch launch prompt interpolates the real branch id ---
 def test_cli_launch_prompt_interpolates_branch_id(tmp_path):
     branch = {

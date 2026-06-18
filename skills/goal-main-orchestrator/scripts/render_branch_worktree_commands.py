@@ -931,11 +931,15 @@ def validate_manifest_parallelization(manifest: dict) -> tuple[int, list]:
 
 def validate_manifest_waves(manifest: dict, serial_reasons: list) -> tuple[list, list]:
     waves = manifest.get("waves") or []
+    if not isinstance(waves, list):
+        raise SystemExit("manifest waves must be a JSON array")
     if len(waves) > MAX_WAVES:
         raise SystemExit("manifest must not contain more than 5 waves")
     manifest_branches = manifest.get("branches", [])
     if not isinstance(manifest_branches, list) or not manifest_branches:
         raise SystemExit("manifest branches must be a non-empty array")
+    if not all(isinstance(branch, dict) for branch in manifest_branches):
+        raise SystemExit("manifest branch entries must be objects")
     require_unique_manifest_values([branch for branch in manifest_branches if isinstance(branch, dict)])
     manifest_branch_ids = [branch.get("id") for branch in manifest_branches]
     if len(manifest_branch_ids) > MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES:
@@ -946,6 +950,8 @@ def validate_manifest_waves(manifest: dict, serial_reasons: list) -> tuple[list,
         raise SystemExit("manifest branch ids must be unique")
     wave_branch_ids = []
     for wave in waves:
+        if not isinstance(wave, dict):
+            raise SystemExit("each manifest wave must be a JSON object")
         branch_ids = wave.get("branches", [])
         if not isinstance(branch_ids, list) or not branch_ids:
             raise SystemExit(f"wave {wave.get('id')} must list at least one branch")
