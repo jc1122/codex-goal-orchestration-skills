@@ -30,6 +30,17 @@ def test_resolve_waves_rejects_non_list_waves():
         cgb._resolve_waves({"waves": "abc"}, [{"id": "B01"}], 4)
 
 
+# --- 2026-06-18 convergence pass 2: _resolve_waves also fails closed on malformed wave ELEMENTS
+#     (non-dict wave, wave without id, non-string branch entry) — pass-1 only guarded the list itself ---
+def test_resolve_waves_rejects_malformed_wave_elements():
+    with pytest.raises(SystemExit):  # non-dict wave element -> used to be TypeError(string indices)
+        cgb._resolve_waves({"waves": ["BR1"]}, [{"id": "B01"}], 4)
+    with pytest.raises(SystemExit):  # wave dict missing id -> used to be KeyError
+        cgb._resolve_waves({"waves": [{"branches": ["B01"]}]}, [{"id": "B01"}], 4)
+    with pytest.raises(SystemExit):  # non-string branch entry -> used to be TypeError(unhashable dict)
+        cgb._resolve_waves({"waves": [{"id": "W1", "branches": [{"nested": 1}]}]}, [{"id": "B01"}], 4)
+
+
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
 def test_placeholder_regex_ignores_operators_and_emails():
     clean = [

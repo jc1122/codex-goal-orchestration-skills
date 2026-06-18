@@ -1710,6 +1710,8 @@ def _resolve_waves(brief: dict, branches: list[dict], max_active: int) -> tuple[
     seen_wave_branches = []
     wave_by_branch: dict[str, str] = {}
     for wave in waves:
+        if not isinstance(wave, dict) or not isinstance(wave.get("id"), (str, int)):
+            raise SystemExit("each wave must be a JSON object with an id")
         wid = require_safe_label(str(wave["id"]), "wave id")
         if wid in seen_wave_ids:
             raise SystemExit(f"duplicate wave id: {wid}")
@@ -1721,6 +1723,8 @@ def _resolve_waves(brief: dict, branches: list[dict], max_active: int) -> tuple[
         if len(wave_branches) > max_active:
             raise SystemExit(f"wave {wid} has more than max_active_branch_agents={max_active} branches")
         for bid in wave_branches:
+            if not isinstance(bid, str):
+                raise SystemExit(f"wave {wid} branch entries must be strings")
             if bid not in branch_ids:
                 raise SystemExit(f"wave {wid} references unknown branch id: {bid}")
             if bid in wave_by_branch:
