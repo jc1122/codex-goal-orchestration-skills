@@ -62,6 +62,24 @@ def test_create_pre_review_gate_read_json_fails_closed_on_non_utf8(tmp_path):
         cprg.read_json(nonutf8)
 
 
+# --- 2026-06-18 convergence pass 7: configured_telemetry_attempts guards a non-dict
+#     goal_config.models/harnesses (.get on a non-dict used to AttributeError) ---
+def test_worker_telemetry_attempts_tolerates_non_dict_goal_config():
+    with pytest.raises(SystemExit):  # missing-role SystemExit, NOT AttributeError on 5.get(...)
+        crp.worker_telemetry_attempts(["codex-spark"], {"models": 5, "harnesses": []})
+
+
+# --- 2026-06-18 convergence pass 7: the research-worker read-only command-policy security branch
+#     is exercised (only the secret-marker sibling had coverage before) ---
+def test_validate_research_security_flags_forbidden_commands():
+    defects: list[str] = []
+    vbs.validate_research_security(defects, ["git push origin HEAD"], [], "$.research")
+    assert any("read-only security policy" in d for d in defects), defects
+    clean: list[str] = []
+    vbs.validate_research_security(clean, ["rg foo src/", "cat README.md"], [], "$.research")
+    assert clean == []
+
+
 # --- 2026-06-18 convergence pass 5: the base_ref command-injection gate is exercised (the 3rd
 #     sibling security gate; reject branches were gate-dark). Both byte-copies are tested. ---
 def test_validate_base_ref_rejects_injection():

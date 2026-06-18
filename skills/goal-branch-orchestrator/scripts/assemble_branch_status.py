@@ -760,7 +760,7 @@ def write_review_waiver(
     if isinstance(review_path, str) and review_path.strip():
         try:
             review_artifact_exists = safe_bundle_path(bundle_dir, review_path, "manifest branch review_path").exists()
-        except ValueError:
+        except (ValueError, SystemExit):  # safe_bundle_path raises SystemExit on an unsafe path
             review_artifact_exists = False
     waiver = {
         "schema_version": 1,

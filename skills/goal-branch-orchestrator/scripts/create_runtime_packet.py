@@ -505,8 +505,8 @@ def render_attempt_args(args: object, *, context: dict[str, str]) -> list[str]:
 
 
 def configured_route_commands(selected_ladder: list[str], goal_config: dict) -> list[str]:
-    models = goal_config.get("models", {})
-    harnesses = goal_config.get("harnesses", {})
+    models = goal_config.get("models") if isinstance(goal_config.get("models"), dict) else {}
+    harnesses = goal_config.get("harnesses") if isinstance(goal_config.get("harnesses"), dict) else {}
     commands: list[str] = []
     for alias in selected_ladder:
         model = models.get(alias, {})
@@ -682,8 +682,8 @@ def configured_telemetry_attempts(
     sandbox: str,
     role: str = "worker",
 ) -> list[dict]:
-    models = goal_config.get("models", {})
-    harnesses = goal_config.get("harnesses", {})
+    models = goal_config.get("models") if isinstance(goal_config.get("models"), dict) else {}
+    harnesses = goal_config.get("harnesses") if isinstance(goal_config.get("harnesses"), dict) else {}
     attempts: list[dict] = []
     for alias in selected_ladder:
         if CONTRACT.is_bridge_alias(alias):
