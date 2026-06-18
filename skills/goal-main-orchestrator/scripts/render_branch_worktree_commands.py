@@ -106,9 +106,12 @@ def branch_checked_out_in_worktree(repo_root: Path, name: str) -> bool:
 def load_json(path: Path) -> dict:
     try:
         with path.open("r", encoding="utf-8") as handle:
-            return json.load(handle)
+            data = json.load(handle)
     except json.JSONDecodeError as exc:
         raise SystemExit(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"expected a JSON object: {path}")
+    return data
 
 
 def write_json(path: Path, data: dict) -> None:

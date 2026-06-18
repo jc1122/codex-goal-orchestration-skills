@@ -138,7 +138,7 @@ def is_repo_relative_path(value: str) -> bool:
     return STATUS_VALIDATION.is_repo_relative_path(value, reject_porcelain=True)
 
 
-def goal_config_from_manifest(manifest: object, manifest_path: Path | None) -> dict | None:
+def goal_config_from_manifest(defects: list[str], manifest: object, manifest_path: Path | None) -> dict | None:
     if isinstance(manifest, dict) and isinstance(manifest.get("goal_config"), dict):
         return manifest["goal_config"]
     if isinstance(manifest, dict) and manifest_path is not None:
@@ -150,8 +150,10 @@ def goal_config_from_manifest(manifest: object, manifest_path: Path | None) -> d
             except ValueError:
                 return None
             if candidate.is_file():
-                data = load_json(candidate)
-                if isinstance(data, dict):
+                # Fail closed on a malformed referenced config: this validator must record a
+                # defect, never let a JSONDecodeError escape main() as a traceback.
+                data = load_json_artifact(defects, candidate, "manifest.goal_config_path")
+                if isinstance(data, dict) and data:
                     return data
     return None
 
@@ -159,7 +161,7 @@ def goal_config_from_manifest(manifest: object, manifest_path: Path | None) -> d
 def expected_review_model_policy(defects: list[str], manifest: object, manifest_path: Path | None) -> dict:
     manifest_root = require_object(defects, manifest, "manifest")
     policy = manifest_root.get("review_model_policy")
-    goal_config = goal_config_from_manifest(manifest_root, manifest_path)
+    goal_config = goal_config_from_manifest(defects, manifest_root, manifest_path)
     if goal_config is not None:
         model_policies = (
             goal_config.get("model_policies") if isinstance(goal_config.get("model_policies"), dict) else {}

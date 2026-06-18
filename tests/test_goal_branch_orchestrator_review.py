@@ -113,6 +113,26 @@ def test_evidence_commands_tolerates_non_list_fields():
     assert "git diff --check main...HEAD" in commands and any("pytest" in t for t in tests)
 
 
+# --- 2026-06-18 convergence pass: a malformed referenced goal_config file records a defect
+#     instead of crashing the defect-collecting validator with a raw JSONDecodeError ---
+def test_goal_config_from_manifest_fails_closed_on_malformed_config(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    manifest_path.write_text('{"goal_config_path": "goal-config.json"}', encoding="utf-8")
+    (tmp_path / "goal-config.json").write_text("{ not json", encoding="utf-8")
+    manifest_root = {"goal_config_path": "goal-config.json"}
+    defects: list[str] = []
+    # Must NOT raise: a valid manifest pointing at a malformed config used to escape main()
+    # as an unhandled JSONDecodeError; now it is a structured defect.
+    result = vbs.goal_config_from_manifest(defects, manifest_root, manifest_path)
+    assert result is None
+    assert any("goal_config_path" in d and "readable JSON" in d for d in defects), defects
+    # A well-formed referenced config is still returned unchanged.
+    (tmp_path / "goal-config.json").write_text('{"model_policies": {}}', encoding="utf-8")
+    ok_defects: list[str] = []
+    assert vbs.goal_config_from_manifest(ok_defects, manifest_root, manifest_path) == {"model_policies": {}}
+    assert ok_defects == []
+
+
 # --- pre-review-gate reviewer-reuse allowlist includes the bridge routes ---
 def test_reviewer_allowed_aliases_include_bridge_routes():
     assert "ds-pro-max" in vbs.REVIEWER_ALLOWED_ALIASES

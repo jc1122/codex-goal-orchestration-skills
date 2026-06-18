@@ -39,6 +39,22 @@ def test_create_audit_packet_load_manifest_fails_closed(tmp_path):
         cap.load_manifest(arr)  # non-dict manifest must fail closed, not AttributeError later
 
 
+# --- 2026-06-18 convergence pass: render_branch_worktree load_json fails closed on a
+#     non-dict top-level value, matching its twin render_worker_schedule.load_json (helper drift) ---
+def test_render_branch_worktree_load_json_rejects_non_dict(tmp_path):
+    arr = tmp_path / "arr.json"
+    arr.write_text("[]", encoding="utf-8")  # valid JSON, but not an object
+    with pytest.raises(SystemExit):
+        rgb.load_json(arr)  # used to return a list -> AttributeError on the caller's .get()
+    bad = tmp_path / "bad.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        rgb.load_json(bad)
+    good = tmp_path / "good.json"
+    good.write_text('{"schema_version": 1}', encoding="utf-8")
+    assert rgb.load_json(good) == {"schema_version": 1}
+
+
 # --- C1: the generated branch launch prompt interpolates the real branch id ---
 def test_cli_launch_prompt_interpolates_branch_id(tmp_path):
     branch = {
