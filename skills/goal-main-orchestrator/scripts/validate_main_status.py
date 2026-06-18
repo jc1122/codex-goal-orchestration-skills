@@ -389,10 +389,11 @@ def validate_decision_artifact(
     ):
         if isinstance(branch_id, str) and branch_id not in terminal_statuses:
             defect(defects, f"{path}.terminal_branch_statuses", f"missing terminal status for {branch_id}")
+    raw_terminal_ids = decision.get("terminal_branch_ids")
     terminal_ids = (
-        set(decision.get("terminal_branch_ids", [])) if isinstance(decision.get("terminal_branch_ids"), list) else set()
+        {item for item in raw_terminal_ids if isinstance(item, str)} if isinstance(raw_terminal_ids, list) else set()
     )
-    overlap = sorted(active_id_set & {item for item in terminal_ids if isinstance(item, str)})
+    overlap = sorted(active_id_set & terminal_ids)
     if overlap:
         defect(defects, f"{path}.active_branch_ids", "must not overlap terminal_branch_ids: " + ", ".join(overlap))
     return decision

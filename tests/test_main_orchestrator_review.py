@@ -25,6 +25,25 @@ vpa = load_module("skills/goal-main-orchestrator/scripts/validate_prompt_audit.p
 dpa = load_module("skills/goal-main-orchestrator/scripts/deterministic_prompt_audit.py", "dpa_mo")
 stl = load_module("skills/goal-main-orchestrator/scripts/summarize_telemetry.py", "stl_mo")
 cap = load_module("skills/goal-main-orchestrator/scripts/create_audit_packet.py", "cap_mo")
+vms = load_module("skills/goal-main-orchestrator/scripts/validate_main_status.py", "vms_mo")
+
+
+# --- 2026-06-18 convergence pass 13: validate_decision_artifact tolerates an unhashable element in
+#     a decision artifact's terminal_branch_ids (was TypeError on set(...)) ---
+def test_validate_decision_artifact_tolerates_unhashable_terminal_ids(tmp_path):
+    defects: list[str] = []
+    data = {
+        "schema_version": 1,
+        "amendment_id": "A1",
+        "decision": "skip",
+        "active_branch_ids": [],
+        "terminal_branch_ids": [["nested-list"]],  # unhashable element
+        "terminal_branch_statuses": {},
+    }
+    vms.validate_decision_artifact(
+        defects, data, "$.d", amendment_id="A1", manifest_path=tmp_path / "job.manifest.json"
+    )
+    assert isinstance(defects, list)  # must not raise TypeError on set(terminal_branch_ids)
 
 
 # --- 2026-06-18 re-review residual: create_audit_packet.load_manifest fails closed ---
