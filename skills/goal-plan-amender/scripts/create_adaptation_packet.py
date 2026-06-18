@@ -639,8 +639,14 @@ def _reconcile_protected_ids(
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    decision_active = sorted(item for item in decision.get("active_branch_ids", []) if isinstance(item, str))
-    decision_terminal = sorted(item for item in decision.get("terminal_branch_ids", []) if isinstance(item, str))
+    raw_active = decision.get("active_branch_ids")
+    decision_active = sorted(
+        item for item in (raw_active if isinstance(raw_active, list) else []) if isinstance(item, str)
+    )
+    raw_terminal = decision.get("terminal_branch_ids")
+    decision_terminal = sorted(
+        item for item in (raw_terminal if isinstance(raw_terminal, list) else []) if isinstance(item, str)
+    )
     if sorted(active) != decision_active:
         raise SystemExit("amendment decision active_branch_ids do not match packet protected active ids")
     if sorted(terminal) != decision_terminal:

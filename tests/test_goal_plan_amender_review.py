@@ -95,6 +95,16 @@ def test_reconcile_protected_ids_wraps_valueerror(monkeypatch):
         cap._reconcile_protected_ids(args, inputs, {})
 
 
+# --- 2026-06-18 convergence pass 6 (proactive sweep): a non-list active/terminal_branch_ids in the
+#     decision artifact yields a clean SystemExit (mismatch), not a TypeError on the comprehension ---
+def test_reconcile_protected_ids_tolerates_non_list_decision_ids(monkeypatch):
+    monkeypatch.setattr(cap, "protected_ids", lambda *_a, **_k: (["B01"], [], {}))
+    args = SimpleNamespace(active_branch=[], terminal_branch=[])
+    inputs = SimpleNamespace(manifest_path=Path("/abs/job.manifest.json"), manifest={})
+    with pytest.raises(SystemExit):  # clean mismatch, NOT TypeError on the non-list comprehension
+        cap._reconcile_protected_ids(args, inputs, {"active_branch_ids": 5, "terminal_branch_ids": []})
+
+
 # --- 2026-06-18 convergence pass 4: create_blocker_repair branch iterations tolerate a non-list
 #     `branches`/`obsolete_branches` (.get(k, []) only defaults on an ABSENT key, not a present null) ---
 def test_blocker_repair_branch_iterations_tolerate_non_list():
