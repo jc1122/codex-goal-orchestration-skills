@@ -1846,8 +1846,8 @@ def _build_branch_record(original: dict, idx: int, *, job_id: str, repo_root: Pa
 def normalize_brief(
     brief: dict, *, default_base_ref: str = "main", validate_base_ref: bool = True, repo_root: Path | None = None
 ) -> dict:
-    if "job_id" not in brief:
-        raise SystemExit("brief must include job_id")
+    if not isinstance(brief.get("job_id"), str) or not brief["job_id"].strip():
+        raise SystemExit("brief must include a non-empty string job_id")
     if not brief.get("branches"):
         raise SystemExit("brief must include synthesized branches before bundle generation")
     if not isinstance(brief["branches"], list) or not all(isinstance(item, dict) for item in brief["branches"]):

@@ -63,6 +63,13 @@ def test_normalize_brief_rejects_malformed_branches():
         cgb.normalize_brief({"job_id": "j1", "branches": ["not-a-dict"]}, validate_base_ref=False)
 
 
+# --- 2026-06-18 convergence pass 6: normalize_brief fails closed on a non-string job_id
+#     (slug() used to AttributeError on a dict/list job_id on the standalone create path) ---
+def test_normalize_brief_rejects_non_string_job_id():
+    with pytest.raises(SystemExit):
+        cgb.normalize_brief({"job_id": {"x": 1}, "branches": [{"id": "B01"}]}, validate_base_ref=False)
+
+
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
 def test_placeholder_regex_ignores_operators_and_emails():
     clean = [
