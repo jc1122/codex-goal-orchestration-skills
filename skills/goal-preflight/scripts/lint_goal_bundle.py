@@ -1787,7 +1787,7 @@ def _lint_main_prompt(defect, bundle_dir: Path, manifest: dict) -> None:
     if main_path is not None and not main_path.exists():
         defect(str(main_path), "critical", "main prompt is missing")
     elif main_path is not None:
-        main_text = main_path.read_text(encoding="utf-8")
+        main_text = main_path.read_text(encoding="utf-8", errors="replace")
         lint_generated_prompt_text(defect, str(main_path), main_text)
         lint_validator_command_snippets(
             defect,
@@ -1825,7 +1825,7 @@ def _lint_runtime_rules(defect, bundle_dir: Path, manifest: dict) -> None:
     if runtime_rules_path is None or not runtime_rules_path.exists():
         defect("runtime-rules.md", "critical", "runtime rules appendix is missing")
     else:
-        runtime_rules_text = runtime_rules_path.read_text(encoding="utf-8")
+        runtime_rules_text = runtime_rules_path.read_text(encoding="utf-8", errors="replace")
         lint_generated_prompt_text(defect, "runtime-rules.md", runtime_rules_text)
         require_text_phrases(
             defect,
@@ -1849,7 +1849,7 @@ def _lint_bootloader_and_report(defect, bundle_dir: Path, manifest: dict) -> Non
     if not bootloader_path.exists():
         defect("goal-bootloader.md", "critical", "bootloader is missing")
     else:
-        bootloader = bootloader_path.read_text(encoding="utf-8")
+        bootloader = bootloader_path.read_text(encoding="utf-8", errors="replace")
         lint_generated_prompt_text(defect, "goal-bootloader.md", bootloader)
         if len(bootloader) > 4000:
             defect("goal-bootloader.md", "critical", "bootloader exceeds 4000 characters")
@@ -1881,7 +1881,7 @@ def _lint_bootloader_and_report(defect, bundle_dir: Path, manifest: dict) -> Non
     if not report_path.exists():
         defect("PREFLIGHT_REPORT.md", "critical", "preflight report is missing")
     else:
-        report_text = report_path.read_text(encoding="utf-8")
+        report_text = report_path.read_text(encoding="utf-8", errors="replace")
         if repo_status.get("repo_is_git") is False and "Runtime readiness gate: blocked" not in report_text:
             defect(
                 "PREFLIGHT_REPORT.md",
@@ -2346,7 +2346,7 @@ def _lint_branch_paths_and_prompt(
     if not prompt_path.exists():
         defect(str(prompt_path), "critical", f"branch prompt missing for {branch.get('id')}")
         return
-    text = prompt_path.read_text(encoding="utf-8")
+    text = prompt_path.read_text(encoding="utf-8", errors="replace")
     lint_generated_prompt_text(defect, str(prompt_path), text, is_branch_prompt=True)
     expected_status_path = (
         branch.get("status_path") if isinstance(branch.get("status_path"), str) else "branches/Bxx.status.json"
