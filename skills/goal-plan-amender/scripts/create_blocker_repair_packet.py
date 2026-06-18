@@ -369,7 +369,7 @@ def generate_proposal(input_data: dict) -> dict:
         if isinstance(target, str)
     }
     operations = []
-    terminal_ids = [item for item in input_data.get("terminal_branch_ids", []) if isinstance(item, str)]
+    terminal_ids = [item for item in _as_list(input_data.get("terminal_branch_ids")) if isinstance(item, str)]
     branch_offset = 0
     for terminal_branch_id in terminal_ids:
         branch = branches.get(terminal_branch_id)
@@ -574,8 +574,8 @@ def create_packet(args: argparse.Namespace) -> Path:
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    decision_active = sorted(item for item in decision.get("active_branch_ids", []) if isinstance(item, str))
-    decision_terminal = sorted(item for item in decision.get("terminal_branch_ids", []) if isinstance(item, str))
+    decision_active = sorted(item for item in _as_list(decision.get("active_branch_ids")) if isinstance(item, str))
+    decision_terminal = sorted(item for item in _as_list(decision.get("terminal_branch_ids")) if isinstance(item, str))
     if sorted(active) != decision_active:
         raise SystemExit("amendment decision active_branch_ids do not match packet protected active ids")
     if sorted(terminal) != decision_terminal:

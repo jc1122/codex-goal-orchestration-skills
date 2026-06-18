@@ -7,6 +7,7 @@ Pins the verified defects:
 - create_blocker_repair_packet.safe_path no longer silently drops `.github/` paths.
 """
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -114,6 +115,21 @@ def test_blockers_from_status_tolerates_non_list():
     assert cbr.blockers_from_status({"blockers": 5, "worker_statuses": 7}) == []  # used to raise TypeError
     assert cbr.blockers_from_status({"blockers": ["b1"], "worker_statuses": [{"blockers": 9}]}) == ["b1"]
     assert cbr.all_owned_paths({"branches": [{"id": "B01", "owned_paths": 5}]}) == {}  # non-list owned_paths
+
+
+# --- 2026-06-18 convergence pass 6: generate_proposal tolerates a present non-list
+#     terminal_branch_ids in input-files.json (.get(k, []) only defaults on an ABSENT key) ---
+def test_generate_proposal_tolerates_non_list_terminal_ids(tmp_path):
+    manifest = tmp_path / "job.manifest.json"
+    manifest.write_text(json.dumps({"job_id": "j1", "branches": []}), encoding="utf-8")
+    inp = {
+        "manifest": str(manifest),
+        "repo_root": str(tmp_path),
+        "amendment_id": "A1",
+        "job_id": "j1",
+        "terminal_branch_ids": None,  # used to raise TypeError in the comprehension
+    }
+    assert isinstance(cbr.generate_proposal(inp), dict)  # must not raise
 
 
 # --- shared loader fails closed (SystemExit) on malformed JSON, not a raw traceback ---
