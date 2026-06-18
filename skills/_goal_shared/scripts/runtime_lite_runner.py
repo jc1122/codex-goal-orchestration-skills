@@ -209,7 +209,7 @@ def verify_inputs_current(config: dict[str, Any], inputs: dict[str, Any]) -> tup
             path.relative_to(base_dir.resolve())
         except ValueError:
             return False, f"Lite input escaped base_dir: {rel}"
-        if not path.exists():
+        if not path.is_file():
             return False, f"Lite input missing: {rel}"
         actual_hash = sha256_file(path)
         actual_size = path.stat().st_size
@@ -225,7 +225,7 @@ def verify_inputs_current(config: dict[str, Any], inputs: dict[str, Any]) -> tup
 def verify_file_hash(path: Path, expected: object, label: str) -> tuple[bool, str]:
     if not isinstance(expected, str) or not SHA256_RE.fullmatch(expected):
         return False, f"missing {label}_sha256 in input-files.json"
-    if not path.exists():
+    if not path.is_file():
         return False, f"Lite {label} missing: {path}"
     actual = sha256_file(path)
     if actual != expected:

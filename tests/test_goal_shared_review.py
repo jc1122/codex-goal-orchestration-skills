@@ -41,6 +41,17 @@ def test_runtime_lite_runner_verify_inputs_tolerates_non_list_source_files(tmp_p
     assert isinstance(ok, bool)
 
 
+# --- 2026-06-18 convergence pass 11: a directory source path is "missing", not IsADirectoryError
+#     from sha256_file (the .exists()->is_file() family fix) ---
+def test_runtime_lite_runner_verify_inputs_tolerates_directory_source(tmp_path):
+    (tmp_path / "srcdir").mkdir()
+    ok, _msg = rlr.verify_inputs_current(
+        {"base_dir": str(tmp_path)},
+        {"source_files": [{"path": "srcdir", "sha256": "x", "size_bytes": 0}]},
+    )
+    assert ok is False  # was IsADirectoryError
+
+
 # --- malformed JSON fails closed (SystemExit), never a raw traceback ---
 def test_json_readers_fail_closed_on_malformed(tmp_path):
     bad = tmp_path / "bad.json"

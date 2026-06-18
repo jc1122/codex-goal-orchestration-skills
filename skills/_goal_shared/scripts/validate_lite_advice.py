@@ -252,8 +252,12 @@ def validate_live_sources(defects: list[str], inputs: dict | None) -> None:
         except ValueError:
             defect(defects, f"input-files.json.source_files[{index}].path", "must stay inside base_dir")
             continue
-        if not source_path.exists():
-            defect(defects, f"input-files.json.source_files[{index}].path", f"does not exist: {source_path}")
+        if not source_path.is_file():
+            defect(
+                defects,
+                f"input-files.json.source_files[{index}].path",
+                f"does not exist or is not a file: {source_path}",
+            )
             continue
         actual_hash = sha256_file(source_path)
         actual_size = source_path.stat().st_size

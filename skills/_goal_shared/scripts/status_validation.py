@@ -368,8 +368,8 @@ def relative_hashes(
         except ValueError:
             defect(defects, item_path, "hash target escapes bundle root")
             continue
-        if not target.exists():
-            defect(defects, item_path, f"hash target does not exist: {target}")
+        if not target.is_file():
+            defect(defects, item_path, f"hash target does not exist or is not a file: {target}")
             continue
         actual = sha256_file(target)
         allowed_hashes = allowed_hashes_by_rel_path.get(key, set()) if allowed_hashes_by_rel_path else set()

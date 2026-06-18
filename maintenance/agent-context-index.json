@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:b8078522601608467ed23467263e01c5d611ef4135f5b483bca166a144738212"
+    "source_fingerprint": "sha256:61b894faf5c0c2f3bc33db961c353d73e3f7ca7132e7bd74129fa7b3912c2c77"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -42,14 +42,14 @@
     {
       "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
       "owner": "goal-branch-orchestrator",
-      "lines": 3363,
-      "approx_tokens": 33666,
+      "lines": 3365,
+      "approx_tokens": 33702,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "3126:main:234l",
-        "2427:compact_launch_config:139l",
-        "1215:compact_worker_context:121l",
-        "2801:resolve_worker_routing:111l"
+        "3128:main:234l",
+        "2429:compact_launch_config:139l",
+        "1217:compact_worker_context:121l",
+        "2803:resolve_worker_routing:111l"
       ]
     },
     {
