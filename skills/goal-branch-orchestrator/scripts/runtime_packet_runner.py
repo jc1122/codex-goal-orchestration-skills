@@ -455,7 +455,7 @@ def attempt_elapsed_ms(attempt: dict[str, Any]) -> int | None:
 def safe_json(data: str) -> dict[str, Any]:
     try:
         value = json.loads(data)
-    except (json.JSONDecodeError, UnicodeDecodeError):
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
 
