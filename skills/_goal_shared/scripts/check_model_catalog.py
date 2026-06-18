@@ -113,7 +113,9 @@ def safe_manifest_child(manifest_path: Path, value: Any) -> Path | None:
     return child
 
 
-def load_manifest_config(manifest_path: Path) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str]]:
+def load_manifest_config(
+    manifest_path: Path,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, list[str], Path | None, Path | None]:
     warnings: list[str] = []
     manifest = read_json(manifest_path)
     config_path = safe_manifest_child(manifest_path, manifest.get("goal_config_path"))
@@ -132,7 +134,7 @@ def load_manifest_config(manifest_path: Path) -> tuple[dict[str, Any] | None, di
         warnings.append(
             f"manifest goal_config_check_path does not resolve to an existing bundle file: {manifest.get('goal_config_check_path')}"
         )
-    return config, check, warnings
+    return config, check, warnings, config_path, check_path
 
 
 def collect_policy_aliases(value: Any, known_aliases: set[str], target: set[str]) -> None:
@@ -327,12 +329,16 @@ def build_report(*, source: str, require_codex: bool, manifest: Path | None = No
             "bridge_route_models": bridge_route_models,
         }
     if manifest is not None:
-        config, check, config_warnings = load_manifest_config(manifest)
+        config, check, config_warnings, config_path, check_path = load_manifest_config(manifest)
         report["warnings"].extend(config_warnings)
         report["manifest_path"] = manifest.as_posix()
-        report["goal_config_path"] = (manifest.parent / "goal.config.json").as_posix() if config is not None else None
+        # Report the paths actually resolved/loaded from the manifest, not the hardcoded defaults
+        # (the manifest may point goal_config_path/goal_config_check_path at other bundle filenames).
+        report["goal_config_path"] = (
+            config_path.as_posix() if (config is not None and config_path is not None) else None
+        )
         report["goal_config_check_path"] = (
-            (manifest.parent / "goal-config.check.json").as_posix() if check is not None else None
+            check_path.as_posix() if (check is not None and check_path is not None) else None
         )
         if config is None:
             report["checked_aliases"] = [row["alias"] for row in route_rows]

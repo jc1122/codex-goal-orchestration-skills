@@ -185,7 +185,7 @@ def candidate_roots(cli_roots: list[str], allow_fallback_roots: bool) -> list[Pa
 def declared_skill_name(skill_md: Path) -> str | None:
     if not skill_md.exists():
         return None
-    for line in skill_md.read_text(encoding="utf-8").splitlines():
+    for line in skill_md.read_text(encoding="utf-8", errors="replace").splitlines():
         match = re.match(r"\s*name:\s*['\"]?([^'\"\s]+)", line)
         if match:
             return match.group(1)

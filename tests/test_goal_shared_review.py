@@ -286,3 +286,49 @@ def test_validate_lite_advice_cli_fails_closed_on_malformed_inputs(tmp_path):
     assert proc.returncode != 0, combined
     assert "Traceback" not in proc.stderr, f"crashed instead of failing closed:\n{proc.stderr}"
     assert "--inputs is not valid JSON" in combined, combined
+
+
+# --- 2026-06-18 fresh-audit pass: A1 accepted_alias must not mark a *blocked* reviewer / research-worker
+#     attempt as accepted. The worker/lite_advisor branches key off the authoritative status, but the
+#     reviewer/research-worker branches only matched one hardcoded findings string, while the runtime's
+#     write_terminal_review/write_terminal_research emit verdict/status:"blocked" with a *variable* message. ---
+csa = load_module("skills/_goal_shared/scripts/check_goal_skill_availability.py", "gs_check_skill_availability")
+
+
+def test_accepted_alias_blocked_reviewer_is_not_accepted():
+    attempts = [{"called": True, "alias": "ds-pro-max"}]
+    blocked = {"role": "reviewer", "verdict": "blocked", "findings": ["could not complete review"]}
+    assert extract_telemetry.accepted_alias("reviewer", blocked, attempts) is None
+    # a real review (verdict reject/mergeable) still counts as a landed route
+    landed = {"role": "reviewer", "verdict": "reject", "findings": ["needs work"]}
+    assert extract_telemetry.accepted_alias("reviewer", landed, attempts) == "ds-pro-max"
+
+
+def test_accepted_alias_blocked_research_worker_is_not_accepted():
+    attempts = [{"called": True, "alias": "ds-flash-max"}]
+    blocked = {"role": "research-worker", "status": "blocked", "findings": ["totally failed"]}
+    assert extract_telemetry.accepted_alias("research-worker", blocked, attempts) is None
+    landed = {"role": "research-worker", "status": "ok", "findings": ["found it"]}
+    assert extract_telemetry.accepted_alias("research-worker", landed, attempts) == "ds-flash-max"
+
+
+# --- A2: check_model_catalog report advertises the manifest-resolved config paths, not hardcoded defaults ---
+def test_load_manifest_config_returns_resolved_paths(tmp_path):
+    import json as _json
+
+    manifest = tmp_path / "job.manifest.json"
+    (tmp_path / "custom.config.json").write_text(_json.dumps({"models": {}}), encoding="utf-8")
+    manifest.write_text(
+        _json.dumps({"goal_config_path": "custom.config.json", "goal_config_check_path": "custom.check.json"}),
+        encoding="utf-8",
+    )
+    config, check, warnings, config_path, check_path = check_model_catalog.load_manifest_config(manifest)
+    assert config is not None and config_path == tmp_path / "custom.config.json"
+    assert check is None and check_path == tmp_path / "custom.check.json"  # path resolved even when file absent
+
+
+# --- A3: declared_skill_name tolerates a non-UTF-8 SKILL.md instead of UnicodeDecodeError ---
+def test_declared_skill_name_tolerates_non_utf8(tmp_path):
+    skill_md = tmp_path / "SKILL.md"
+    skill_md.write_bytes(b"\xff\xfe---\nname: goal-config\n---\n")
+    assert csa.declared_skill_name(skill_md) == "goal-config"  # must not raise UnicodeDecodeError

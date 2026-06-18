@@ -459,20 +459,8 @@ def _event_reason(defects: list[str], event: dict, path: str) -> str:
 
 def _event_reason_code(defects: list[str], event: dict, path: str, *, required: bool) -> str:
     code = event.get("reason_code")
-    allowed = {
-        "artifact_invalid",
-        "capacity_limit",
-        "contention",
-        "dependency_failed",
-        "dependency_pending",
-        "launcher_failed",
-        "native_agent_unreachable",
-        "no_ready_work",
-        "operator_requested",
-        "process_exited_blocked",
-        "stale_active",
-        "timeout",
-    }
+    # Derive from the canonical contract tuple so the validator cannot silently drift from it.
+    allowed = set(CONTRACT.SCHEDULER_REASON_CODES)
     if code is None and not required:
         return ""
     if not isinstance(code, str) or code not in allowed:
@@ -481,17 +469,10 @@ def _event_reason_code(defects: list[str], event: dict, path: str, *, required: 
     return str(code)
 
 
-SCHEDULER_EVENT_NAMES = {
-    "ready",
-    "launch",
-    "finish",
-    "close",
-    "refill",
-    "defer",
-    "under_capacity",
-    "blocked",
-}
-SCHEDULER_REASON_EVENTS = {"defer", "under_capacity", "blocked"}
+# Derived from the canonical contract tuples (single source of truth; cannot drift from the contract).
+SCHEDULER_EVENT_NAMES = set(CONTRACT.SCHEDULER_EVENTS)
+SCHEDULER_REASON_EVENTS = set(CONTRACT.SCHEDULER_REASON_REQUIRED_EVENTS)
+# A curated subset of SCHEDULER_REASON_CODES (no contract mirror): reason codes that justify relaunch.
 STALE_RELAUNCH_REASON_CODES = {"stale_active", "native_agent_unreachable", "timeout", "launcher_failed"}
 
 

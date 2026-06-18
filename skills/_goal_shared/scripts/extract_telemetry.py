@@ -194,18 +194,23 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
             return None
     if role == "prompt-auditor" and output.get("status") == "blocked" and not output.get("checked_files"):
         return None
-    if (
-        role == "reviewer"
-        and output.get("role") == "reviewer"
-        and output.get("findings") == ["Reviewer primary and fallback failed without producing review.json."]
-    ):
-        return None
-    if (
-        role == "research-worker"
-        and output.get("role") == "research-worker"
-        and output.get("findings") == ["Research worker primary and fallback failed without producing research.json."]
-    ):
-        return None
+    if role == "reviewer" and output.get("role") == "reviewer":
+        # A blocked reviewer never produced a usable review, so its route attempt must not be
+        # marked accepted. Key off the authoritative verdict field: write_terminal_review emits
+        # verdict:"blocked" with a *variable* failure message, so the exact-findings guard below
+        # missed real blocker outputs (the same fail-open already fixed for worker / lite_advisor).
+        # verdict:"reject" stays accepted — that route did produce a real review.
+        if output.get("verdict") == "blocked":
+            return None
+        if output.get("findings") == ["Reviewer primary and fallback failed without producing review.json."]:
+            return None
+    if role == "research-worker" and output.get("role") == "research-worker":
+        # A blocked research worker never produced usable research; write_terminal_research emits
+        # status:"blocked" with a variable message. Mirror the worker/reviewer authoritative guard.
+        if output.get("status") == "blocked":
+            return None
+        if output.get("findings") == ["Research worker primary and fallback failed without producing research.json."]:
+            return None
     if role == "plan_amender":
         operations = output.get("operations")
         if not isinstance(operations, list) or not operations:
