@@ -192,6 +192,21 @@ def test_stale_reviewer_constants_removed():
     ):
         assert not hasattr(crp, name), name
     assert not hasattr(rpr, "BRIDGE_ISSUE_IDS")
+    # Pass-2: ALLOWED_WORKER_ROUTES in create_runtime_packet was the lone leftover dead const
+    assert not hasattr(crp, "ALLOWED_WORKER_ROUTES")
     # live siblings remain
     assert hasattr(crp, "WORKER_ROUTE_EVENT_LABELS")
     assert hasattr(crp, "CODEX_LEAN_EXEC_FLAGS_TEXT")
+
+
+# --- 2026-06-18 convergence pass 2: the assembler's tolerant reader degrades a non-UTF-8 artifact
+#     to a blocker instead of escaping as a UnicodeDecodeError (read_object_or_blocker only caught
+#     SystemExit; read_json now fails closed on non-UTF-8 too) ---
+def test_assemble_read_helpers_tolerate_non_utf8(tmp_path):
+    nonutf8 = tmp_path / "status.json"
+    nonutf8.write_bytes(b"\xff\xfe{}")
+    with pytest.raises(SystemExit):
+        asm.read_json(nonutf8)
+    blockers: list[str] = []
+    assert asm.read_object_or_blocker(nonutf8, blockers, "worker artifact") is None
+    assert blockers
