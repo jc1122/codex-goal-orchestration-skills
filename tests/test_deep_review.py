@@ -240,3 +240,93 @@ def test_lint_source_attachments_tolerates_non_int_bytes():
     }
     lgb._lint_source_attachments(defect, manifest)  # must not raise on non-int bytes
     assert any("large-source threshold" in a[2] for a in captured), captured
+
+
+# --- 2026-06-18 fresh-audit pass ---
+
+
+# D1: create must not auto-inject an untracked package __init__.py into context_files, because the
+#     bundle linter rejects any untracked context_files entry as a `major` defect (an un-launchable
+#     bundle the user never authored). In a git repo, only git-tracked skeletons are injected.
+def test_skeleton_injection_skips_untracked_init(tmp_path):
+    import subprocess
+
+    (tmp_path / "pkg" / "sub").mkdir(parents=True)
+    (tmp_path / "pkg" / "sub" / "mod.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    (tmp_path / "pkg" / "sub" / "__init__.py").write_text("", encoding="utf-8")
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    subprocess.run(["git", "-C", str(tmp_path), "add", "pkg/sub/mod.py"], check=True)  # __init__.py untracked
+
+    items = [{"owned_paths": ["pkg/sub/mod.py"], "context_files": []}]
+    cgb.assign_package_skeleton_context_files(items, repo_root=tmp_path)
+    assert items[0]["context_files"] == [], "untracked __init__.py skeleton must not be injected"
+
+    subprocess.run(["git", "-C", str(tmp_path), "add", "pkg/__init__.py", "pkg/sub/__init__.py"], check=True)
+    items2 = [{"owned_paths": ["pkg/sub/mod.py"], "context_files": []}]
+    cgb.assign_package_skeleton_context_files(items2, repo_root=tmp_path)
+    assert "pkg/__init__.py" in items2[0]["context_files"], "tracked skeleton should still be injected"
+    assert "pkg/sub/__init__.py" in items2[0]["context_files"]
+
+
+# D2: supplied waves are checked for dependency-vs-wave ordering and get a dependency_level stamp
+#     (previously the supplied-waves path diverged from the auto dependency_waves path).
+def test_resolve_waves_rejects_inverted_supplied_ordering():
+    branches = [{"id": "B01", "depends_on": []}, {"id": "B02", "depends_on": ["B01"]}]
+    inverted = {"waves": [{"id": "w1", "branches": ["B02"]}, {"id": "w2", "branches": ["B01"]}]}
+    with pytest.raises(SystemExit):  # B02 depends on B01 but is scheduled in an earlier wave
+        cgb._resolve_waves(inverted, branches, 4)
+
+
+def test_resolve_waves_stamps_dependency_level_on_supplied_waves():
+    branches = [{"id": "B01", "depends_on": []}, {"id": "B02", "depends_on": ["B01"]}]
+    correct = {"waves": [{"id": "w1", "branches": ["B01"]}, {"id": "w2", "branches": ["B02"]}]}
+    waves, _ = cgb._resolve_waves(correct, branches, 4)
+    by_id = {wave["id"]: wave for wave in waves}
+    assert by_id["w1"]["dependency_level"] == 1
+    assert by_id["w2"]["dependency_level"] == 2
+
+
+# D3: per-work-item validation (path-safety etc.) runs even when the work_items count is out of range,
+#     so a malformed bundle gets the complete defect set instead of only the count defect.
+def test_lint_branches_validates_items_even_when_count_out_of_range(tmp_path):
+    captured: list[str] = []
+
+    def defect(_file, _sev, msg):
+        captured.append(msg)
+
+    branch = {
+        "id": "B01",
+        "max_active_worker_packets": 1,
+        "owned_paths": ["src/a.py"],
+        "work_items": [
+            {
+                "id": f"W0{i}",
+                "packet_id": f"B01-W0{i}",
+                "objective": "do the thing",
+                "owned_paths": ["../escape.py"] if i == 0 else ["src/a.py"],
+                "verification": ["pytest"],
+                "dod": ["done"],
+            }
+            for i in range(5)  # 5 > 4: count out of range
+        ],
+    }
+    lgb._lint_branches(defect, tmp_path, {"branches": [branch]}, [branch], ["B01"], set(), {"repo_is_git": False}, None)
+    assert any("1 to 4 worker packets" in m for m in captured), "count defect missing"
+    assert any("escape.py" in m or "traversal" in m or "relative" in m.lower() for m in captured), (
+        "per-item path-safety defect missing -> D3 regressed (validation skipped on out-of-range count)"
+    )
+
+
+# D4: a brief whose normalization fails (e.g. non-list depends_on) must not also emit the spurious
+#     "must supply artifact_policy/cleanup_policy" major defects (the tool would have defaulted them).
+def test_lint_brief_no_spurious_policy_defects_when_normalization_fails():
+    brief = {
+        "goal": "x",
+        "branches": [{"id": "B01", "objective": "o", "owned_paths": ["src/a.py"], "depends_on": "W00"}],
+    }
+    defects = lpb.lint_brief(brief, repo_root=None)
+    paths = [d.get("path") for d in defects]
+    assert "$.artifact_policy" not in paths, f"spurious artifact_policy defect: {defects}"
+    assert "$.cleanup_policy" not in paths, f"spurious cleanup_policy defect: {defects}"
+    assert any(d.get("severity") == "critical" for d in defects), "the real normalization defect must remain"
