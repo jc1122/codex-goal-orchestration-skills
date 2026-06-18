@@ -865,7 +865,7 @@ def _lite_record_static_fields(defect, record: dict, path: str, packet_id: str) 
     cross-checks against the on-disk Lite artifacts.
     """
     purpose = record.get("purpose")
-    if purpose not in PREFLIGHT_LITE_PURPOSES:
+    if not isinstance(purpose, str) or purpose not in PREFLIGHT_LITE_PURPOSES:
         defect("job.manifest.json", "critical", f"{path}.purpose must be one of {sorted(PREFLIGHT_LITE_PURPOSES)}")
     if not isinstance(record.get("avoids_action"), str) or not record.get("avoids_action", "").strip():
         defect("job.manifest.json", "critical", f"{path}.avoids_action must be a non-empty string")
@@ -874,9 +874,9 @@ def _lite_record_static_fields(defect, record: dict, path: str, packet_id: str) 
         or not record.get("expected_savings_reason", "").strip()
     ):
         defect("job.manifest.json", "critical", f"{path}.expected_savings_reason must be a non-empty string")
-    if record.get("status") not in LITE_STATUSES:
+    if not isinstance(record.get("status"), str) or record.get("status") not in LITE_STATUSES:
         defect("job.manifest.json", "critical", f"{path}.status must be one of {sorted(LITE_STATUSES)}")
-    if record.get("disposition") not in LITE_DISPOSITIONS:
+    if not isinstance(record.get("disposition"), str) or record.get("disposition") not in LITE_DISPOSITIONS:
         defect("job.manifest.json", "critical", f"{path}.disposition must be one of {sorted(LITE_DISPOSITIONS)}")
     if record.get("disposition") == "used" and record.get("status") != "ok":
         defect("job.manifest.json", "critical", f"{path}.disposition may be used only when Lite status is ok")
@@ -888,7 +888,7 @@ def _lite_record_static_fields(defect, record: dict, path: str, packet_id: str) 
         defect("job.manifest.json", "critical", f"{path}.inputs_path must be {expected_inputs!r}")
     validation_status = record.get("validation_status")
     validation_defects = record.get("validation_defects")
-    if validation_status not in LITE_VALIDATION_STATUSES:
+    if not isinstance(validation_status, str) or validation_status not in LITE_VALIDATION_STATUSES:
         defect(
             "job.manifest.json",
             "critical",
@@ -1026,7 +1026,11 @@ def _lint_lite_orphan_packets(defect, bundle_dir: Path, reported_ids: set[str]) 
         skill = inputs_data.get("skill")
         input_packet_id = inputs_data.get("packet_id")
         packet_id = input_packet_id if isinstance(input_packet_id, str) and input_packet_id.strip() else packet_dir.name
-        relevant = purpose in PREFLIGHT_LITE_PURPOSES or skill == "goal-preflight" or packet_dir.name.startswith("P")
+        relevant = (
+            (isinstance(purpose, str) and purpose in PREFLIGHT_LITE_PURPOSES)
+            or skill == "goal-preflight"
+            or packet_dir.name.startswith("P")
+        )
         if relevant and packet_id not in reported_ids:
             defect(
                 "job.manifest.json",
@@ -1289,7 +1293,7 @@ def _validate_ownership_feasibility(defect, manifest: dict) -> dict:
         ownership = {}
     elif ownership.get("schema_version") != 1:
         defect("job.manifest.json", "critical", "ownership_feasibility.schema_version must be 1")
-    if ownership.get("status") not in {"pass", "needs_review"}:
+    if not isinstance(ownership.get("status"), str) or ownership.get("status") not in {"pass", "needs_review"}:
         defect("job.manifest.json", "critical", "ownership_feasibility.status must be pass or needs_review")
     commands = ownership.get("commands")
     if not isinstance(commands, list):
@@ -1300,7 +1304,7 @@ def _validate_ownership_feasibility(defect, manifest: dict) -> dict:
         if not isinstance(record, dict):
             defect("job.manifest.json", "critical", f"{path} must be an object")
             continue
-        if record.get("status") not in {"pass", "needs_review"}:
+        if not isinstance(record.get("status"), str) or record.get("status") not in {"pass", "needs_review"}:
             defect("job.manifest.json", "critical", f"{path}.status must be pass or needs_review")
         for key in ("branch_id", "work_item_id", "command", "recommended_action"):
             if not isinstance(record.get(key), str) or not record.get(key, "").strip():
@@ -2062,7 +2066,7 @@ def _lint_work_items(
         else:
             seen_work_item_ids.add(item_id)
         worker_type = item.get("worker_type", "worker")
-        if worker_type not in {"worker", RESEARCH_WORKER_TYPE}:
+        if not isinstance(worker_type, str) or worker_type not in {"worker", RESEARCH_WORKER_TYPE}:
             defect(
                 "job.manifest.json",
                 "critical",

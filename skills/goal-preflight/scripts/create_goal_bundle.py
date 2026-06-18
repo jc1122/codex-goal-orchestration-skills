@@ -2535,7 +2535,7 @@ def build_runtime_index(manifest: dict) -> dict:
                 continue
             packet_id = item.get("packet_id") or f"{branch.get('id')}-{item.get('id')}"
             worker_type = item.get("worker_type", "worker")
-            if worker_type in {"research", "research-worker"}:
+            if isinstance(worker_type, str) and worker_type in {"research", "research-worker"}:
                 artifact_root = "research"
                 status_name = "research.json"
                 role = "research-worker"

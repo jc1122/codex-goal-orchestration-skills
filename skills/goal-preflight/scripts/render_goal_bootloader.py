@@ -200,7 +200,7 @@ def _repair_gate_status(bundle_dir: Path) -> dict[str, object]:
     status = payload.get("status")
     raw_actions = payload.get("actions", [])
     actions = raw_actions if isinstance(raw_actions, list) else []
-    if status not in {"pass", "blocked", "failed"}:
+    if not isinstance(status, str) or status not in {"pass", "blocked", "failed"}:
         status = "pass" if payload.get("decision") == "pass_no_actions" else "blocked"
     return {
         "status": status,
@@ -1002,7 +1002,7 @@ def _has_only_bootloader_launch_phrase_defects(lint_bundle: dict[str, object]) -
         if not isinstance(defect, dict):
             return False
         severity = defect.get("severity")
-        if severity not in {"critical", "major"}:
+        if not isinstance(severity, str) or severity not in {"critical", "major"}:
             continue
         if defect.get("file") != "goal-bootloader.md":
             return False
