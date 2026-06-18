@@ -101,6 +101,20 @@ RESEARCH_SECRET_MARKERS = [
 WORKER_FORBIDDEN_COMMAND_PATTERNS = [
     (r"\bgit\s+(add|commit|push|reset|checkout|clean|merge|rebase|stash)\b", "git state mutation"),
 ]
+# Global git options that may appear between `git` and the subcommand; collapse them so a
+# mutating subcommand cannot evade the forbidden-command gate via `git -C dir commit` / `git -c k=v push`.
+_GIT_GLOBAL_OPT_RE = re.compile(
+    r"\bgit\s+(?:(?:-c\s+\S+|--git-dir(?:=|\s+)\S+|--work-tree(?:=|\s+)\S+"
+    r"|--exec-path(?:=\S+)?|--namespace(?:=|\s+)\S+|--no-pager|--paginate|-p)\s+)+"
+)
+
+
+def normalize_git_command(text: str) -> str:
+    """Collapse `git <global options> <subcommand>` to `git <subcommand>` for forbidden-command
+    matching. (-C is lowercased to -c by the caller, so the -c rule covers both -c and -C.)"""
+    return _GIT_GLOBAL_OPT_RE.sub("git ", text)
+
+
 SAFE_REVIEW_PACKET_RE = STATUS_VALIDATION.SAFE_PACKET_RE
 is_strict_int = STATUS_VALIDATION.is_strict_int
 resolve_absolute_path = STATUS_VALIDATION.resolve_absolute_path
@@ -298,7 +312,7 @@ def validate_url_list(defects: list[str], value: object, path: str) -> None:
 def validate_worker_command_evidence(defects: list[str], commands: object, path: str) -> None:
     values = require_string_list(defects, commands, path, min_items=1)
     for index, command in enumerate(values):
-        normalized = " ".join(command.lower().split())
+        normalized = normalize_git_command(" ".join(command.lower().split()))
         for pattern, reason in WORKER_FORBIDDEN_COMMAND_PATTERNS:
             if re.search(pattern, normalized):
                 defect(defects, f"{path}[{index}]", f"must not list mutating command evidence: {reason}")
@@ -307,8 +321,9 @@ def validate_worker_command_evidence(defects: list[str], commands: object, path:
 def validate_research_security(defects: list[str], commands: list[str], local_files: list[str], path: str) -> None:
     for index, command in enumerate(commands):
         normalized = " ".join(command.lower().split())
+        command_normalized = normalize_git_command(normalized)
         for pattern, reason in RESEARCH_FORBIDDEN_COMMAND_PATTERNS:
-            if re.search(pattern, normalized):
+            if re.search(pattern, command_normalized):
                 defect(
                     defects,
                     f"{path}.commands_run[{index}]",

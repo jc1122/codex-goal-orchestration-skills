@@ -509,7 +509,8 @@ def configured_route_commands(selected_ladder: list[str], goal_config: dict) -> 
     harnesses = goal_config.get("harnesses") if isinstance(goal_config.get("harnesses"), dict) else {}
     commands: list[str] = []
     for alias in selected_ladder:
-        model = models.get(alias, {})
+        model = models.get(alias)
+        model = model if isinstance(model, dict) else {}
         harness = harnesses.get(model.get("harness"), {})
         command = harness.get("command", model.get("harness", ""))
         args = harness.get("run_args") or harness.get("smoke_args") or []

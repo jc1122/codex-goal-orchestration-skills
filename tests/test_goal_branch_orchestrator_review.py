@@ -73,6 +73,35 @@ def test_validate_path_list_rejects_porcelain_prefix():
     assert clean == []
 
 
+# --- 2026-06-18 convergence pass 10: the git-mutation security gates are not evadable by global
+#     git options (git -C dir / git -c k=v) inserted between `git` and the subcommand ---
+def test_worker_command_gate_not_evaded_by_git_global_options():
+    for cmd in ("git -C /repo commit -m x", "git -c user.name=x commit -m y", "git -C /other push origin HEAD"):
+        defects: list[str] = []
+        vbs.validate_worker_command_evidence(defects, [cmd], "$.cr")
+        assert any("mutating command" in d for d in defects), cmd
+    clean: list[str] = []
+    vbs.validate_worker_command_evidence(clean, ["git -C /repo status"], "$.cr")  # read-only stays clean
+    assert clean == []
+
+
+def test_research_command_gate_not_evaded_and_secret_path_still_caught():
+    defects: list[str] = []
+    vbs.validate_research_security(defects, ["git -C /repo commit -m x"], [], "$.research")
+    assert any("read-only security policy" in d for d in defects), defects
+    # stripping git options for command matching must NOT lose a secret marker inside the command
+    secret: list[str] = []
+    vbs.validate_research_security(secret, ["cat /home/u/.ssh/id_rsa"], [], "$.research")
+    assert any("secret or credential" in d for d in secret), secret
+
+
+# --- 2026-06-18 convergence pass 10: configured_route_commands guards a non-dict per-alias model
+#     value (sibling configured_telemetry_attempts already did) ---
+def test_configured_route_commands_tolerates_non_dict_model():
+    cmds = crp.configured_route_commands(["ds-pro-max"], {"models": {"ds-pro-max": "not-a-dict"}, "harnesses": {}})
+    assert isinstance(cmds, list)  # was AttributeError on model.get(...)
+
+
 # --- 2026-06-18 convergence pass 9: load_task tolerates a non-UTF-8 --task-file (errors="replace",
 #     matching the validator side) instead of crashing packet creation ---
 def test_load_task_tolerates_non_utf8(tmp_path):
