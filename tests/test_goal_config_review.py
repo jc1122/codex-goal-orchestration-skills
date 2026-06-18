@@ -9,10 +9,20 @@ Pins the verified defects:
 """
 
 import pytest
-from conftest import load_module
+from conftest import REPO, load_module
 
 cgc = load_module("skills/goal-config/scripts/check_goal_config.py", "cgc_review")
 crc = load_module("skills/goal-config/scripts/create_goal_config.py", "crc_review")
+
+
+# --- 2026-06-18 convergence pass: docs must not advertise a check_goal_config.py flag that
+#     build_parser does not define (following the doc gave an argparse error). ---
+def test_docs_do_not_reference_nonexistent_check_flag():
+    parser_flags = {opt for action in cgc.build_parser()._actions for opt in action.option_strings}
+    assert "--include-raw-errors" not in parser_flags  # confirms reality: the flag does not exist
+    for rel in ("skills/goal-config/SKILL.md", "skills/goal-config/references/configuration-contract.md"):
+        text = (REPO / rel).read_text(encoding="utf-8")
+        assert "--include-raw-errors" not in text, f"{rel} still references the nonexistent flag"
 
 
 # --- check_goal_config: malformed / missing config fails closed (SystemExit, not traceback) ---

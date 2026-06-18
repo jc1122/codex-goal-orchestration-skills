@@ -75,7 +75,7 @@ For `opencode-bridge` roles, `check_goal_config.py` must:
 - set `token_telemetry.available=false` when a harness does not expose counters, so audits compare character counts and elapsed time instead of treating token totals as complete;
 - focus `response_excerpt` on the expected assistant smoke text when possible, so CLI boilerplate does not dominate scan output.
 
-Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When a harness emits JSON errors, the report should preserve actionable provider/status/message/count fields such as status `401` and message `AuthenticateToken authentication failed`. Full raw provider payloads belong only behind `check_goal_config.py --include-raw-errors`.
+Missing models, missing assistant text, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check. When a harness emits JSON errors, the report should preserve actionable provider/status/message/count fields such as status `401` and message `AuthenticateToken authentication failed`. Full raw provider payloads are intentionally not retained.
 
 For `codex` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation. Bare provider-implied forms such as `--role-model worker_codex_spark:codex:openai/gpt-5.3-codex-spark` are allowed. For `opencode-bridge` roles, use `--role-model ROLE:opencode-bridge:deepseek/deepseek-v4-flash` (or `deepseek-v4-pro`).
 
