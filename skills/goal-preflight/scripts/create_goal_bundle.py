@@ -2738,8 +2738,16 @@ def render_branch_source_contract(brief: dict, bundle_root: str) -> str:
         for text in [
             goal,
             source_summary,
-            "\n".join(str(item) for item in brief.get("required_evidence", []) if isinstance(item, str)),
-            "\n".join(str(item) for item in brief.get("final_dod", []) if isinstance(item, str)),
+            "\n".join(
+                str(item)
+                for item in (brief.get("required_evidence") if isinstance(brief.get("required_evidence"), list) else [])
+                if isinstance(item, str)
+            ),
+            "\n".join(
+                str(item)
+                for item in (brief.get("final_dod") if isinstance(brief.get("final_dod"), list) else [])
+                if isinstance(item, str)
+            ),
         ]
         if text
     )
