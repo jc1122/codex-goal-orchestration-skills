@@ -608,7 +608,10 @@ def _load_launch_decision(decision_path: Path, *, amendment_id: str, manifest_pa
         manifest_path
     ):
         raise SystemExit("amendment decision manifest path or sha256 does not match the live manifest")
-    if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
+    if (
+        not isinstance(decision.get("reason_code"), str)
+        or decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES
+    ):
         raise SystemExit("amendment decision reason_code is not valid for a launch decision")
     return decision
 

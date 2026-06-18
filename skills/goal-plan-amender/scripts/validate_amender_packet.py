@@ -70,7 +70,10 @@ def validate_decision(defects: list[str], decision: dict, *, amendment_id: str, 
         defect(defects, "$.decision.amendment_id", f"must be {amendment_id!r}")
     if decision.get("decision") != "launch":
         defect(defects, "$.decision.decision", "must be 'launch'")
-    if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
+    if (
+        not isinstance(decision.get("reason_code"), str)
+        or decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES
+    ):
         defect(defects, "$.decision.reason_code", f"must be one of {list(CONTRACT.AMENDMENT_LAUNCH_REASON_CODES)}")
     require_string(defects, decision.get("reason"), "$.decision.reason")
     if decision.get("manifest") != manifest_path.as_posix():

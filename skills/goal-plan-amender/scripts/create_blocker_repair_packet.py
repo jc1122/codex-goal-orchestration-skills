@@ -551,7 +551,10 @@ def create_packet(args: argparse.Namespace) -> Path:
         manifest_path
     ):
         raise SystemExit("amendment decision manifest path or sha256 does not match the live manifest")
-    if decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES:
+    if (
+        not isinstance(decision.get("reason_code"), str)
+        or decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES
+    ):
         raise SystemExit("amendment decision reason_code is not valid for a launch decision")
 
     packet_dir = amendments_dir / f"{amendment_id}.packet"
