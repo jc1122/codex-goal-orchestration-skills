@@ -700,6 +700,7 @@ def _cleanup_plan(bundle_dir: Path, repo_root: Path | None, warnings: list[dict[
         "telemetry.summary.json",
         "orchestration.state.json",
         "resume.report.json",
+        "stale-artifacts.index.json",
         "goal-config-selection.json",
         "runtime.index.json",
         "create-bundle-result.json",

@@ -1699,7 +1699,10 @@ def _annotate_worker_parallelism(
 
 
 def _resolve_waves(brief: dict, branches: list[dict], max_active: int) -> tuple[list[dict], dict[str, str]]:
-    waves = brief.get("waves") or dependency_waves(branches, max_active)
+    raw_waves = brief.get("waves")
+    if raw_waves is not None and not isinstance(raw_waves, list):
+        raise SystemExit("waves must be a JSON array")
+    waves = raw_waves or dependency_waves(branches, max_active)
     if len(waves) > MAX_WAVES:
         raise SystemExit(f"waves must not exceed {MAX_WAVES}")
     branch_ids = {branch["id"] for branch in branches}

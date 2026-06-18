@@ -3,6 +3,7 @@
 import shlex
 import sys
 
+import pytest
 from conftest import REPO, load_module
 
 sys.path.insert(0, str(REPO / "skills" / "_goal_shared" / "scripts"))
@@ -12,6 +13,21 @@ lpb = load_module("skills/goal-preflight/scripts/lint_preflight_brief.py", "lpb_
 rgb = load_module("skills/goal-preflight/scripts/render_goal_bootloader.py", "rgb_dr")
 pgb = load_module("skills/goal-preflight/scripts/prepare_goal_bundle.py", "pgb_dr")
 lgb = load_module("skills/goal-preflight/scripts/lint_goal_bundle.py", "lgb_dr")
+cgb = load_module("skills/goal-preflight/scripts/create_goal_bundle.py", "cgb_dr")
+
+
+# --- 2026-06-18 convergence pass: the preserve-config cleanup plan lists stale-artifacts.index.json
+#     (written by reconcile to the bundle root) so it cannot survive a cleanup as an orphan ---
+def test_cleanup_plan_includes_stale_artifacts_index(tmp_path):
+    plan = rgb._cleanup_plan(tmp_path, None, [])
+    assert "stale-artifacts.index.json" in plan["generated_artifacts"]
+
+
+# --- 2026-06-18 convergence pass: create_goal_bundle._resolve_waves fails closed on a non-list
+#     brief `waves` (the standalone entrypoint had no guard; the bundle linter already did) ---
+def test_resolve_waves_rejects_non_list_waves():
+    with pytest.raises(SystemExit):
+        cgb._resolve_waves({"waves": "abc"}, [{"id": "B01"}], 4)
 
 
 # --- PLACEHOLDER_RE: no longer false-positives on operators / generics-ish / emails ---
