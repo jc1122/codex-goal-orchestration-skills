@@ -1122,7 +1122,8 @@ def stale_active_branch_ids(main_scheduler: dict[str, Any], branch_reports: list
         str(branch.get("branch_id")): branch for branch in branch_reports if isinstance(branch.get("branch_id"), str)
     }
     result: list[str] = []
-    for branch_id in main_scheduler.get("active", []):
+    raw_active = main_scheduler.get("active")
+    for branch_id in raw_active if isinstance(raw_active, list) else []:
         if not isinstance(branch_id, str):
             continue
         branch = branch_by_id.get(branch_id)

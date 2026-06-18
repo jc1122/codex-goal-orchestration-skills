@@ -27,6 +27,18 @@ reconcile = load_module("skills/_goal_shared/scripts/reconcile_goal_run.py", "gs
 path_rules = load_module("skills/_goal_shared/scripts/path_rules.py", "gs_path_rules")
 contract = load_module("skills/_goal_shared/scripts/orchestration_contract.py", "gs_contract")
 vla = load_module("skills/_goal_shared/scripts/validate_lite_advice.py", "gs_validate_lite_advice")
+rlr = load_module("skills/_goal_shared/scripts/runtime_lite_runner.py", "gs_runtime_lite_runner")
+
+
+# --- 2026-06-18 convergence pass 6 (proactive sweep): iterations over semi-trusted artifact list
+#     fields tolerate a present non-list value instead of TypeError ---
+def test_reconcile_stale_active_branch_ids_tolerates_non_list():
+    assert reconcile.stale_active_branch_ids({"active": 5}, []) == []  # was TypeError on non-list active
+
+
+def test_runtime_lite_runner_verify_inputs_tolerates_non_list_source_files(tmp_path):
+    ok, _msg = rlr.verify_inputs_current({"base_dir": str(tmp_path)}, {"source_files": 5})  # must not raise
+    assert isinstance(ok, bool)
 
 
 # --- malformed JSON fails closed (SystemExit), never a raw traceback ---
