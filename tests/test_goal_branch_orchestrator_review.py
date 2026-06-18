@@ -32,6 +32,17 @@ def test_create_pre_review_gate_read_json_fails_closed_on_non_utf8(tmp_path):
         cprg.read_json(nonutf8)
 
 
+# --- 2026-06-18 convergence pass 5: the base_ref command-injection gate is exercised (the 3rd
+#     sibling security gate; reject branches were gate-dark). Both byte-copies are tested. ---
+def test_validate_base_ref_rejects_injection():
+    for mod in (cprg, asm):
+        assert mod.validate_base_ref("main") == "main"
+        assert mod.validate_base_ref(" release/1.2 ") == "release/1.2"
+        for bad in ("-rf", "a..b", "main; rm -rf /", "x.lock", "feat/", ""):
+            with pytest.raises(SystemExit):
+                mod.validate_base_ref(bad)
+
+
 # --- 2026-06-18 convergence pass 4: nested-field iteration guards — a non-list `tests` /
 #     work-item `dod` in a worker/manifest artifact is skipped, not a TypeError ---
 def test_collect_worker_tests_tolerates_non_list():
