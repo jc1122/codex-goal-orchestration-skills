@@ -175,7 +175,7 @@ def accepted_alias(role: str, output: dict[str, Any] | None, attempts: list[dict
     if not called or output is None:
         return None
     if role == "worker":
-        if output.get("status") in {"blocked", "failed"}:
+        if isinstance(output.get("status"), str) and output.get("status") in {"blocked", "failed"}:
             # A blocked/failed worker never landed a usable change, so its route attempt
             # must not be marked accepted. Key off the authoritative status field: the
             # substring-marker guard below missed real blocker messages outside the marker

@@ -114,7 +114,7 @@ def check_manifest_fields(actions: list[dict], checks: list[dict], manifest: dic
                 continue
             packet_id = item.get("packet_id", item.get("id", "<unknown>"))
             worker_type = item.get("worker_type", "worker")
-            if worker_type in {"research", "research-worker"}:
+            if isinstance(worker_type, str) and worker_type in {"research", "research-worker"}:
                 if (
                     not isinstance(item.get("route_class_reason"), str)
                     or not item.get("route_class_reason", "").strip()

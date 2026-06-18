@@ -384,7 +384,7 @@ def relative_hashes(
 def validate_reuse_policy(defects: list[str], value: object, path: str) -> None:
     data = require_object(defects, value, path)
     mode = data.get("mode")
-    if mode not in {"new", "reuse"}:
+    if not isinstance(mode, str) or mode not in {"new", "reuse"}:
         defect(defects, f"{path}.mode", "must be 'new' or 'reuse'")
     if not isinstance(data.get("accepted"), bool):
         defect(defects, f"{path}.accepted", "must be a boolean")
@@ -475,7 +475,7 @@ def _event_reason_code(defects: list[str], event: dict, path: str, *, required: 
     }
     if code is None and not required:
         return ""
-    if code not in allowed:
+    if not isinstance(code, str) or code not in allowed:
         defect(defects, f"{path}.reason_code", f"must be one of {sorted(allowed)}")
         return ""
     return str(code)
@@ -590,7 +590,7 @@ def _failed_dependency_ids(state: LedgerState, item_id: str) -> list[str]:
     failed = []
     for dep in state.dependencies.get(item_id, []):
         status = state.finished_status.get(dep)
-        if dep in state.closed and status in {"partial", "blocked", "failed"}:
+        if dep in state.closed and isinstance(status, str) and status in {"partial", "blocked", "failed"}:
             failed.append(dep)
     return failed
 
@@ -659,7 +659,7 @@ def _validate_event_envelope(defects: list[str], event: dict, event_path: str, *
         defect(defects, f"{event_path}.wall_clock_timestamp", "must be an ISO-like timestamp string")
     require_string(defects, event.get("runtime_ref"), f"{event_path}.runtime_ref")
     event_name = event.get("event")
-    if event_name not in SCHEDULER_EVENT_NAMES:
+    if not isinstance(event_name, str) or event_name not in SCHEDULER_EVENT_NAMES:
         defect(defects, f"{event_path}.event", "must be a supported scheduler event")
         return None
     if event.get("reason") is not None and event_name not in SCHEDULER_REASON_EVENTS:
@@ -804,7 +804,7 @@ def _handle_finish_event(defects: list[str], state: LedgerState, event: dict, ev
     if event_id in state.finished:
         defect(defects, f"{event_path}.id", "duplicates finish event")
     status = event.get("status")
-    if status not in {"pass", "partial", "blocked", "failed"}:
+    if not isinstance(status, str) or status not in {"pass", "partial", "blocked", "failed"}:
         defect(defects, f"{event_path}.status", "must be one of ['blocked', 'failed', 'partial', 'pass']")
     if event_id:
         state.finished.add(str(event_id))
@@ -1147,7 +1147,7 @@ def validate_pre_review_gate_artifact(
         defect(defects, f"{path}.schema_version", "must be 2")
     if gate.get("branch_id") != branch_id:
         defect(defects, f"{path}.branch_id", f"must be {branch_id!r}")
-    if gate.get("status") not in {"pass", "failed"}:
+    if not isinstance(gate.get("status"), str) or gate.get("status") not in {"pass", "failed"}:
         defect(defects, f"{path}.status", "must be 'pass' or 'failed'")
     if gate.get("status") != "pass":
         defect(defects, f"{path}.status", "must be pass before reviewer launch or accepted review")
@@ -1376,10 +1376,10 @@ def _validate_lite_entry_fields(
         defects, data.get("expected_savings_reason"), f"{item_path}.expected_savings_reason"
     )
     status = data.get("status")
-    if status not in LITE_STATUSES:
+    if not isinstance(status, str) or status not in LITE_STATUSES:
         defect(defects, f"{item_path}.status", f"must be one of {sorted(LITE_STATUSES)}")
     disposition = data.get("disposition")
-    if disposition not in LITE_DISPOSITIONS:
+    if not isinstance(disposition, str) or disposition not in LITE_DISPOSITIONS:
         defect(defects, f"{item_path}.disposition", f"must be one of {sorted(LITE_DISPOSITIONS)}")
     if disposition == "used" and status != "ok":
         defect(defects, f"{item_path}.disposition", "may be used only when Lite status is ok")
@@ -1390,7 +1390,7 @@ def _validate_lite_entry_fields(
     if inputs_path_value and not is_absolute_path(inputs_path_value):
         defect(defects, f"{item_path}.inputs_path", "must be an absolute path without traversal")
     validation_status = data.get("validation_status")
-    if validation_status not in LITE_VALIDATION_STATUSES:
+    if not isinstance(validation_status, str) or validation_status not in LITE_VALIDATION_STATUSES:
         defect(defects, f"{item_path}.validation_status", f"must be one of {sorted(LITE_VALIDATION_STATUSES)}")
     validation_defects = require_string_list(defects, data.get("validation_defects"), f"{item_path}.validation_defects")
     if validation_status == "pass" and validation_defects:

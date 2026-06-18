@@ -28,6 +28,7 @@ path_rules = load_module("skills/_goal_shared/scripts/path_rules.py", "gs_path_r
 contract = load_module("skills/_goal_shared/scripts/orchestration_contract.py", "gs_contract")
 vla = load_module("skills/_goal_shared/scripts/validate_lite_advice.py", "gs_validate_lite_advice")
 rlr = load_module("skills/_goal_shared/scripts/runtime_lite_runner.py", "gs_runtime_lite_runner")
+status_validation = load_module("skills/_goal_shared/scripts/status_validation.py", "gs_status_validation")
 
 
 # --- 2026-06-18 convergence pass 6 (proactive sweep): iterations over semi-trusted artifact list
@@ -39,6 +40,29 @@ def test_reconcile_stale_active_branch_ids_tolerates_non_list():
 def test_runtime_lite_runner_verify_inputs_tolerates_non_list_source_files(tmp_path):
     ok, _msg = rlr.verify_inputs_current({"base_dir": str(tmp_path)}, {"source_files": 5})  # must not raise
     assert isinstance(ok, bool)
+
+
+# --- 2026-06-18 convergence pass 15: set/frozenset membership over a tampered (unhashable) scalar
+#     field fails closed with a defect instead of crashing with TypeError. `x in {set}` hashes the
+#     LHS, so a list-valued `mode`/`status`/etc. raised `TypeError: unhashable type` before. (Tuple
+#     membership, by contrast, uses == iteration and was never affected.) ---
+def test_validate_reuse_policy_tolerates_unhashable_mode():
+    defects: list[str] = []
+    status_validation.validate_reuse_policy(defects, {"mode": ["new"], "accepted": True}, "$.x")  # must not raise
+    assert any("mode" in d for d in defects), defects
+
+
+def test_validate_lite_advice_status_membership_tolerates_unhashable():
+    # validate() does `root["status"] not in STATUSES` (a set) and `status in {"partial","blocked"}`.
+    defects = vla.validate(
+        {"status": ["partial"]},
+        packet_id=None,
+        purpose=None,
+        expected_sources=None,
+        inputs=None,
+        inputs_path=None,
+    )  # must not raise TypeError on the unhashable status
+    assert isinstance(defects, list) and any("status" in d for d in defects), defects
 
 
 # --- 2026-06-18 convergence pass 11: a directory source path is "missing", not IsADirectoryError

@@ -884,8 +884,12 @@ def branch_summary(
         "branch_name": branch.get("branch_name"),
         "status": status_value,
         "schema_status": "pass" if state.status_data is not None else "missing",
-        "runtime_status": status_value if status_value in RUNTIME_STATUS_VALUES else "missing",
-        "review_status": review_status if review_status in REVIEW_STATUS_VALUES else "missing",
+        "runtime_status": status_value
+        if isinstance(status_value, str) and status_value in RUNTIME_STATUS_VALUES
+        else "missing",
+        "review_status": review_status
+        if isinstance(review_status, str) and review_status in REVIEW_STATUS_VALUES
+        else "missing",
         "resume_action": "reuse_terminal_status"
         if state.status_data is not None and not validation_defects
         else "repair_or_reassemble",

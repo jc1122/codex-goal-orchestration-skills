@@ -215,7 +215,7 @@ def configured_route_rows(
             status = "failed"
             reason = f"configured Codex model absent from catalog: {configured_model}"
             failures.append(f"{alias}: {reason}")
-        elif check is not None and model_check.get("status") not in {None, "pass"}:
+        elif check is not None and model_check.get("status") is not None and model_check.get("status") != "pass":
             status = "failed"
             reason = f"model_check status is {model_check.get('status')!r}"
             failures.append(f"{alias}: {reason}")

@@ -352,8 +352,10 @@ def _reduce_ledger_events(ledger: dict, capacity: int, known: set[str]) -> _Repl
             raise SystemExit(f"scheduler events[{index}] must be an object")
         name = event.get("event")
         event_id = event.get("id")
-        if name in {"ready", "launch", "finish", "close", "defer", "blocked"} and (
-            not isinstance(event_id, str) or event_id not in known
+        if (
+            isinstance(name, str)
+            and name in {"ready", "launch", "finish", "close", "defer", "blocked"}
+            and (not isinstance(event_id, str) or event_id not in known)
         ):
             raise SystemExit(f"scheduler events[{index}].id must be a manifest scheduler id")
         if name == "ready":
@@ -377,7 +379,7 @@ def _reduce_ledger_events(ledger: dict, capacity: int, known: set[str]) -> _Repl
             under_capacity_excuses.discard(str(event_id))
         elif name == "finish":
             status = event.get("status")
-            if status not in TERMINAL_STATUSES:
+            if not isinstance(status, str) or status not in TERMINAL_STATUSES:
                 raise SystemExit(f"scheduler events[{index}].status must be terminal")
             if event_id not in active:
                 raise SystemExit(f"scheduler events[{index}] finishes inactive id {event_id}")
@@ -832,7 +834,7 @@ def artifact_statuses(manifest_path: Path, manifest: dict, scope: str, branch_id
             if not status_path.exists():
                 continue
             status = read_json(status_path).get("status")
-            if status not in TERMINAL_STATUSES:
+            if not isinstance(status, str) or status not in TERMINAL_STATUSES:
                 raise SystemExit(f"status artifact {status_path} must contain a terminal status")
             statuses[item_id] = str(status)
         return statuses
@@ -857,14 +859,14 @@ def artifact_statuses(manifest_path: Path, manifest: dict, scope: str, branch_id
         if not status_path.exists():
             continue
         status = read_json(status_path).get("status")
-        if status not in TERMINAL_STATUSES:
+        if not isinstance(status, str) or status not in TERMINAL_STATUSES:
             raise SystemExit(f"status artifact {status_path} must contain a terminal status")
         if worker_type != CONTRACT.RESEARCH_WORKER_TYPE and status == "pass":
             summary_path = bundle_dir / "workers" / packet_id / "packet.summary.json"
             if summary_path.exists():
                 summary = read_json(summary_path)
                 summary_status = summary.get("output_status")
-                if summary_status in TERMINAL_STATUSES and summary_status != "pass":
+                if isinstance(summary_status, str) and summary_status in TERMINAL_STATUSES and summary_status != "pass":
                     status = "blocked"
         statuses[packet_id] = str(status)
     return statuses

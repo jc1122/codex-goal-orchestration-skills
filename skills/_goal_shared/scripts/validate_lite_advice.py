@@ -212,7 +212,8 @@ def validate_telemetry(defects: list[str], inputs_path: Path | None, *, packet_i
         defect(defects, "telemetry.json.attempts[0].provider", f"must be {BRIDGE_HARNESS_KIND!r}")
     if attempt.get("model") != LITE_MODEL:
         defect(defects, "telemetry.json.attempts[0].model", f"must be {LITE_MODEL!r}")
-    if attempt.get("variant") not in (None, LITE_VARIANT):
+    attempt_variant = attempt.get("variant")
+    if attempt_variant is not None and attempt_variant != LITE_VARIANT:
         defect(defects, "telemetry.json.attempts[0].variant", f"must be {LITE_VARIANT!r}")
     if not isinstance(attempt.get("called"), bool):
         defect(defects, "telemetry.json.attempts[0].called", "must be a boolean")
@@ -347,7 +348,8 @@ def validate_inputs_envelope(
         defect(defects, "input-files.json.skill", f"must be {current_skill_name()!r}")
     if inputs.get("model") != LITE_MODEL:
         defect(defects, "input-files.json.model", f"must be {LITE_MODEL!r}")
-    if inputs.get("alias") not in (None, LITE_ROUTE_ALIAS):
+    inputs_alias = inputs.get("alias")
+    if inputs_alias is not None and inputs_alias != LITE_ROUTE_ALIAS:
         defect(defects, "input-files.json.alias", f"must be {LITE_ROUTE_ALIAS!r}")
     task_sha256 = inputs.get("task_sha256")
     if not isinstance(task_sha256, str) or not SHA256_RE.fullmatch(task_sha256):
@@ -554,7 +556,7 @@ def validate(
         if expected_savings_reason and expected_savings_reason != inputs.get("expected_savings_reason"):
             defect(defects, "$.expected_savings_reason", "must match input-files.json expected_savings_reason")
     status = root.get("status")
-    if status not in STATUSES:
+    if not isinstance(status, str) or status not in STATUSES:
         defect(defects, "$.status", f"must be one of {sorted(STATUSES)}")
     validate_inputs_envelope(defects, inputs, packet_id=actual_packet_id, purpose=actual_purpose, lite_status=status)
     validate_live_sources(defects, inputs)
@@ -575,7 +577,7 @@ def validate(
     commands = require_string_list(defects, root.get("commands_run"), "$.commands_run", min_items=1)
     if status == "ok" and blockers:
         defect(defects, "$.blockers", "must be empty when status is ok")
-    if status in {"partial", "blocked"} and not blockers:
+    if isinstance(status, str) and status in {"partial", "blocked"} and not blockers:
         defect(defects, "$.blockers", "must explain non-ok Lite advice")
     validate_telemetry(defects, inputs_path, packet_id=actual_packet_id, lite_status=status)
     if inputs is not None:
