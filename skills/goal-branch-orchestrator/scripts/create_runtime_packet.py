@@ -1458,7 +1458,8 @@ def reviewer_branch_status_context(bundle_dir: Path, branch_data: dict, gate: di
     data, _error = read_json_or_none(status_path)
     if not isinstance(data, dict):
         return context
-    blockers = [item for item in data.get("blockers", []) if isinstance(item, str)]
+    raw_blockers = data.get("blockers")
+    blockers = [item for item in raw_blockers if isinstance(item, str)] if isinstance(raw_blockers, list) else []
     missing_gate_blocker = any("pre-review gate" in item and "missing" in item for item in blockers)
     if gate.get("status") == "pass" and missing_gate_blocker:
         context.update(

@@ -201,9 +201,13 @@ def path_is_owned(path: str, owned_paths: list[str]) -> bool:
     return any(path == owned or path.startswith(f"{owned.rstrip('/')}/") for owned in owned_paths)
 
 
+def _str_list(value: object) -> list[str]:
+    return [item for item in value if isinstance(item, str)] if isinstance(value, list) else []
+
+
 def ownership_check(branch: dict, branch_status: dict) -> dict:
-    owned_paths = [item for item in branch.get("owned_paths", []) if isinstance(item, str)]
-    changed_files = [item for item in branch_status.get("changed_files", []) if isinstance(item, str)]
+    owned_paths = _str_list(branch.get("owned_paths"))
+    changed_files = _str_list(branch_status.get("changed_files"))
     defects = []
     for changed in changed_files:
         if not is_repo_relative_path(changed, reject_porcelain=True):
@@ -294,7 +298,11 @@ def packet_terminal_defects(bundle_dir: Path, branch: dict, branch_id: str, pack
     if not launcher_path.exists():
         defects.append(f"worker packet {packet_id} missing launcher-state.json before reviewer launch")
     else:
-        launcher = read_json(launcher_path)
+        try:
+            launcher = read_json(launcher_path)
+        except SystemExit as exc:
+            defects.append(f"worker packet {packet_id} launcher-state.json is not a readable JSON object: {exc}")
+            launcher = {}
         if status.get("status") == "pass" and launcher.get("terminal_state") != "pass":
             defects.append(
                 f"worker packet {packet_id} launcher-state terminal_state must be 'pass' before reviewer launch, "
@@ -303,7 +311,11 @@ def packet_terminal_defects(bundle_dir: Path, branch: dict, branch_id: str, pack
     if not summary_path.exists():
         defects.append(f"worker packet {packet_id} missing packet.summary.json before reviewer launch")
     else:
-        summary = read_json(summary_path)
+        try:
+            summary = read_json(summary_path)
+        except SystemExit as exc:
+            defects.append(f"worker packet {packet_id} packet.summary.json is not a readable JSON object: {exc}")
+            summary = {}
         if status.get("status") == "pass":
             if summary.get("terminal_state") != "pass":
                 defects.append(
@@ -358,7 +370,7 @@ def worker_pass_defects(bundle_dir: Path, branch: dict, branch_status: dict, bra
                     f"worker scheduler reports {field} before reviewer launch: "
                     + ", ".join(str(item) for item in values)
                 )
-        finished_ids = [item for item in parallelism.get("finished_ids", []) if isinstance(item, str)]
+        finished_ids = _str_list(parallelism.get("finished_ids"))
         missing_finished = [packet_id for packet_id in expected_ids if packet_id not in finished_ids]
         if missing_finished:
             defects.append(

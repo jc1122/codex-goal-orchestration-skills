@@ -9,6 +9,7 @@ Pins the verified defects:
 - the pre-review-gate reviewer-reuse allowlist includes the bridge routes.
 """
 
+import json
 import subprocess
 import sys
 
@@ -21,6 +22,35 @@ crp = load_module("skills/goal-branch-orchestrator/scripts/create_runtime_packet
 prw = load_module("skills/goal-branch-orchestrator/scripts/promote_worker_repair_evidence.py", "prw_review")
 rpr = load_module("skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "rpr_review")
 cprg = load_module("skills/goal-branch-orchestrator/scripts/create_pre_review_gate.py", "cprg_review")
+
+
+# --- 2026-06-18 convergence pass 6: pre-review-gate nested-field iterations over semi-trusted
+#     branch-status artifacts tolerate non-list values instead of TypeError ---
+def test_ownership_check_tolerates_non_list_fields():
+    assert isinstance(cprg.ownership_check({"owned_paths": None}, {"changed_files": 5}), dict)  # was TypeError
+
+
+def test_worker_pass_defects_tolerates_non_list_finished_ids(tmp_path):
+    branch_status = {
+        "worker_statuses": [],
+        "worker_parallelism": {"active_ids": [], "blocked_ids": [], "deferred_ids": [], "finished_ids": None},
+    }
+    assert isinstance(cprg.worker_pass_defects(tmp_path, {"work_items": []}, branch_status, "B01"), list)
+
+
+def test_packet_terminal_defects_degrades_malformed_launcher(tmp_path):
+    # the read_json SystemExit is now caught at the call site -> conservative defect, not a crash
+    pdir = tmp_path / "workers" / "P01"
+    pdir.mkdir(parents=True)
+    (pdir / "launcher-state.json").write_text("{ not json", encoding="utf-8")
+    defects = cprg.packet_terminal_defects(tmp_path, {"work_items": []}, "B01", "P01", {"status": "pass"})
+    assert any("not a readable JSON object" in d for d in defects), defects
+
+
+def test_reviewer_branch_status_context_tolerates_non_list_blockers(tmp_path):
+    (tmp_path / "B01.status.json").write_text(json.dumps({"status": "pass", "blockers": 5}), encoding="utf-8")
+    ctx = crp.reviewer_branch_status_context(tmp_path, {"status_path": "B01.status.json"}, {"status": "pass"})
+    assert isinstance(ctx, dict)  # was TypeError on the non-list blockers comprehension
 
 
 # --- 2026-06-18 convergence pass 3: create_pre_review_gate.read_json fails closed on a non-UTF-8
