@@ -1196,7 +1196,7 @@ def validate_proposal(
 
     try:
         amendment_id = ensure_amendment_id(proposal.get("amendment_id"))
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 -- ensure_amendment_id->require_safe_id raises SystemExit
         amendment_id = ""
         defects.append(str(exc))
     if proposal.get("schema_version") != 1:
@@ -1209,7 +1209,7 @@ def validate_proposal(
         defects.append("manifest adaptation_policy does not match the shared amendment proposal policy")
     try:
         validate_amender_model_policy(manifest, manifest_path)
-    except ValueError as exc:
+    except (ValueError, SystemExit) as exc:  # validate_amender_model_policy -> load_json_object raises SystemExit
         defects.append(str(exc))
 
     candidate = None

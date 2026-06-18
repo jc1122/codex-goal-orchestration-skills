@@ -105,6 +105,35 @@ def test_reconcile_protected_ids_tolerates_non_list_decision_ids(monkeypatch):
         cap._reconcile_protected_ids(args, inputs, {"active_branch_ids": 5, "terminal_branch_ids": []})
 
 
+# --- 2026-06-18 convergence pass 8: validate_proposal records a defect (no SystemExit escape) when
+#     ensure_amendment_id->require_safe_id raises SystemExit on a malformed proposal amendment_id ---
+def test_validate_proposal_absorbs_systemexit_on_bad_amendment_id(tmp_path):
+    manifest = tmp_path / "job.manifest.json"
+    manifest.write_text(json.dumps({"job_id": "j1"}), encoding="utf-8")
+    proposal = tmp_path / "A1.proposal.json"
+    proposal.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "amendment_id": "bad id!",  # fails require_safe_id -> SystemExit
+                "job_id": "j1",
+                "rationale": "x",
+                "operations": [{"op": "add_branch"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    record, _candidate, _brief = amendment_lib.validate_proposal(
+        manifest_path=manifest,
+        proposal_path=proposal,
+        active_branch_ids=[],
+        terminal_branch_ids=["B01"],
+        infer_scheduler=False,
+        run_lint=False,
+    )
+    assert isinstance(record, dict)  # must not raise SystemExit; bad id surfaced as a defect
+
+
 # --- 2026-06-18 convergence pass 4: create_blocker_repair branch iterations tolerate a non-list
 #     `branches`/`obsolete_branches` (.get(k, []) only defaults on an ABSENT key, not a present null) ---
 def test_blocker_repair_branch_iterations_tolerate_non_list():
