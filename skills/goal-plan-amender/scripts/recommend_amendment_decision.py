@@ -48,7 +48,7 @@ def load_terminal_status_files(manifest_path: Path, branches: list[dict]) -> dic
             continue
         try:
             status = load_json_object(status_path)
-        except Exception:
+        except (Exception, SystemExit):  # noqa: BLE001 -- load_json_object fails closed via SystemExit
             continue
         value = status.get("status")
         if value in CONTRACT.STATUSES:

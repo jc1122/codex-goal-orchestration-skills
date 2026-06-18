@@ -702,7 +702,7 @@ def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict
         return set(), {}
     try:
         ledger = load_json_object(ledger_path)
-    except Exception as exc:  # noqa: BLE001
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 -- load_json_object fails closed via SystemExit
         raise ValueError(
             f"could not read scheduler ledger for protected branch inference: {ledger_path}: {exc}"
         ) from exc
@@ -741,7 +741,7 @@ def status_file_terminal_state(manifest_path: Path, manifest: dict) -> dict[str,
             continue
         try:
             data = load_json_object(path)
-        except Exception as exc:  # noqa: BLE001
+        except (Exception, SystemExit) as exc:  # noqa: BLE001 -- load_json_object fails closed via SystemExit
             raise ValueError(
                 f"could not read terminal branch status artifact for protected branch inference: {path}: {exc}"
             ) from exc

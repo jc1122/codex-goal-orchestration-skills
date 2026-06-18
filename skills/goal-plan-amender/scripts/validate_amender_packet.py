@@ -232,9 +232,14 @@ def _validate_ladder_telemetry(
         defect(defects, "$.telemetry.accepted_alias", "must match the accepted attempt alias")
     if telemetry.get("accepted_alias") is None and accepted:
         defect(defects, "$.telemetry.accepted_alias", "must be set when a plan-amender attempt is accepted")
+    try:
+        derived_attempts = amender_telemetry_attempts(manifest, manifest_path, selected)
+    except (ValueError, SystemExit) as exc:
+        defect(defects, "$.telemetry.attempts", f"could not derive expected plan-amender attempts: {exc}")
+        derived_attempts = []
     expected_attempts = {
         item.get("alias"): item
-        for item in amender_telemetry_attempts(manifest, manifest_path, selected)
+        for item in derived_attempts
         if isinstance(item, dict) and isinstance(item.get("alias"), str)
     }
     for index, item in enumerate(attempts):

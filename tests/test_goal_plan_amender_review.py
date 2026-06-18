@@ -20,6 +20,65 @@ sys.path.insert(0, str(REPO / "skills" / "goal-plan-amender" / "scripts"))
 amendment_lib = load_module("skills/goal-plan-amender/scripts/amendment_lib.py", "amlib_review")
 cbr = load_module("skills/goal-plan-amender/scripts/create_blocker_repair_packet.py", "cbr_review")
 cap = load_module("skills/goal-plan-amender/scripts/create_adaptation_packet.py", "cap_review")
+rec = load_module("skills/goal-plan-amender/scripts/recommend_amendment_decision.py", "rec_review")
+vap = load_module("skills/goal-plan-amender/scripts/validate_amender_packet.py", "vap_review")
+
+
+# --- 2026-06-18 convergence pass 2: the protected-branch inference helpers convert a malformed
+#     ledger/status artifact into a ValueError (so validate_proposal's `except ValueError` records a
+#     defect) — `except Exception` could not catch the SystemExit load_json_object raises ---
+def test_scheduler_state_raises_valueerror_on_malformed_ledger(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    (tmp_path / "scheduler.json").write_text("{ not json", encoding="utf-8")
+    manifest = {"parallelization": {"scheduler_path": "scheduler.json"}}
+    with pytest.raises(ValueError):  # NOT a SystemExit escaping past the wrapper
+        amendment_lib.scheduler_state(manifest_path, manifest)
+
+
+def test_status_file_terminal_state_raises_valueerror_on_malformed_status(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    (tmp_path / "branches").mkdir()
+    (tmp_path / "branches" / "B01.status.json").write_text("{ not json", encoding="utf-8")
+    manifest = {"branches": [{"id": "B01", "status_path": "branches/B01.status.json"}]}
+    with pytest.raises(ValueError):
+        amendment_lib.status_file_terminal_state(manifest_path, manifest)
+
+
+# --- 2026-06-18 convergence pass 2: recommend's status-file loader skips a malformed status file
+#     instead of crashing (the `except Exception: continue` could not skip a SystemExit) ---
+def test_load_terminal_status_files_skips_malformed(tmp_path):
+    (tmp_path / "branches").mkdir()
+    (tmp_path / "branches" / "B01.status.json").write_text("{ not json", encoding="utf-8")
+    branches = [{"id": "B01", "status_path": "branches/B01.status.json"}]
+    assert rec.load_terminal_status_files(tmp_path / "job.manifest.json", branches) == {}  # must not raise
+
+
+# --- 2026-06-18 convergence pass 2: review_evidence_record raises SystemExit on a malformed review
+#     file — the reason create_packet's tolerant wrapper had to broaden to (Exception, SystemExit) ---
+def test_review_evidence_record_fails_closed_on_malformed(tmp_path):
+    bad = tmp_path / "review.json"
+    bad.write_text("{ not json", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        cbr.review_evidence_record(bad)
+
+
+# --- 2026-06-18 convergence pass 2: _validate_ladder_telemetry records a defect (no traceback)
+#     when amender_telemetry_attempts cannot derive expected attempts (e.g. tampered selected_ladder) ---
+def test_validate_ladder_telemetry_fails_closed_on_attempt_error(monkeypatch):
+    def boom(*_a, **_k):
+        raise SystemExit("tampered selected_ladder")
+
+    monkeypatch.setattr(vap, "amender_telemetry_attempts", boom)
+    defects: list[str] = []
+    vap._validate_ladder_telemetry(
+        defects,
+        {"accepted_alias": None},
+        [],
+        selected=["ds-pro-max"],
+        manifest={},
+        manifest_path=Path("/abs/job.manifest.json"),
+    )
+    assert any("could not derive expected plan-amender attempts" in d for d in defects), defects
 
 
 # --- 2026-06-18 convergence pass: _reconcile_protected_ids wraps protected_ids' ValueError as a

@@ -600,7 +600,7 @@ def create_packet(args: argparse.Namespace) -> Path:
             add_if_exists(records, review_path, f"terminal branch review {branch['id']}")
             try:
                 terminal_reviews[branch["id"]] = review_evidence_record(review_path)
-            except Exception as exc:  # noqa: BLE001
+            except (Exception, SystemExit) as exc:  # noqa: BLE001 -- load_json_object fails closed via SystemExit
                 terminal_reviews[branch["id"]] = {
                     "source_review_path": review_path.as_posix(),
                     "source_review_sha256": sha256_file(review_path),
