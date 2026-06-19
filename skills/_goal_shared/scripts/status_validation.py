@@ -1265,12 +1265,13 @@ def discover_unrecorded_lite_packets(
         inputs_data: object = {}
         if inputs_path.exists():
             inputs_data = load_json_artifact(defects, inputs_path, f"{path}.{packet_dir.name}.inputs_path")
+            if not isinstance(inputs_data, dict):
+                defect(defects, f"{path}.{packet_dir.name}.inputs_path", "must be an object")
+                continue
         elif advice_path.exists() and malformed_packet_prefix and packet_dir.name.startswith(malformed_packet_prefix):
             defect(
                 defects, path, f"unrecorded malformed {scope_label} Lite packet without input-files.json: {packet_dir}"
             )
-            continue
-        if not isinstance(inputs_data, dict):
             continue
         purpose = inputs_data.get("purpose")
         skill = inputs_data.get("skill")
@@ -1280,7 +1281,12 @@ def discover_unrecorded_lite_packets(
         prefix_scoped = bool(required_packet_prefix) and (
             packet_dir.name.startswith(required_packet_prefix) or packet_id.startswith(required_packet_prefix)
         )
-        relevant = purpose in allowed_purposes or skill == skill_name or prefix_relevant or prefix_scoped
+        relevant = (
+            (isinstance(purpose, str) and purpose in allowed_purposes)
+            or skill == skill_name
+            or prefix_relevant
+            or prefix_scoped
+        )
         if relevant and required_packet_prefix is not None and not prefix_scoped:
             defect(
                 defects,

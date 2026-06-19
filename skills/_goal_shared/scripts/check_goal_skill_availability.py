@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import re
@@ -11,8 +12,40 @@ import shutil
 from pathlib import Path
 import contextlib
 
+SHARED_WRAPPER_FALLBACK = (
+    "append_scheduler_event.py",
+    "check_model_catalog.py",
+    "create_lite_advice_packet.py",
+    "context_pack.py",
+    "extract_telemetry.py",
+    "runtime_lite_runner.py",
+    "runtime_phase_manifest.py",
+    "reconcile_goal_run.py",
+    "script_only_repair_gate.py",
+    "scheduler_tick.py",
+    "validate_lite_advice.py",
+    "check_goal_skill_availability.py",
+)
 
-REQUIRED_FILES = {
+
+def _load_sync_goal_shared_wrappers() -> tuple[str, ...]:
+    for ancestor in Path(__file__).resolve().parents:
+        candidate = ancestor / "scripts" / "sync_goal_shared.py"
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("_check_goal_sync_goal_shared", str(candidate))
+        if spec is None or spec.loader is None:
+            raise SystemExit(f"could not load sync_goal_shared.py at {candidate}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return tuple(f"scripts/{name}" for name in module.SHARED_SCRIPTS)
+    return tuple(f"scripts/{name}" for name in SHARED_WRAPPER_FALLBACK)
+
+
+_SYNC_SHARED_SCRIPTS = _load_sync_goal_shared_wrappers()
+
+
+_BASE_REQUIRED_FILES = {
     "goal-config": [
         "SKILL.md",
         "scripts/check_goal_config.py",
@@ -96,6 +129,7 @@ REQUIRED_FILES = {
         "scripts/amendment_lib.py",
         "scripts/create_amendment_decision.py",
         "scripts/create_adaptation_packet.py",
+        "scripts/create_blocker_repair_packet.py",
         "scripts/context_pack.py",
         "scripts/extract_telemetry.py",
         "scripts/append_scheduler_event.py",
@@ -112,6 +146,17 @@ REQUIRED_FILES = {
         "scripts/check_model_catalog.py",
     ],
 }
+
+
+def _append_shared_wrappers(required_files: list[str]) -> list[str]:
+    merged = list(required_files)
+    for rel_path in _SYNC_SHARED_SCRIPTS:
+        if rel_path not in merged:
+            merged.append(rel_path)
+    return merged
+
+
+REQUIRED_FILES = {skill: _append_shared_wrappers(files) for skill, files in _BASE_REQUIRED_FILES.items()}
 REQUIRED_SUPPORT_FILES = [
     "_goal_shared/scripts/append_scheduler_event.py",
     "_goal_shared/scripts/check_model_catalog.py",
@@ -122,6 +167,7 @@ REQUIRED_SUPPORT_FILES = [
     "_goal_shared/scripts/orchestration_contract.py",
     "_goal_shared/scripts/runtime_phase_manifest.py",
     "_goal_shared/scripts/reconcile_goal_run.py",
+    "_goal_shared/scripts/lite_prompt.py",
     "_goal_shared/scripts/script_only_repair_gate.py",
     "_goal_shared/scripts/scheduler_tick.py",
     "_goal_shared/scripts/validate_lite_advice.py",
@@ -221,11 +267,13 @@ def inspect_skill(root: Path, skill: str) -> dict:
     }
 
 
-def find_skill(roots: list[Path], skill: str) -> dict:
+def find_skill(roots: list[Path], skill: str, *, parity_check: bool = False) -> dict:
     attempts = [inspect_skill(root, skill) for root in roots]
     for attempt in attempts:
         if attempt["available"]:
             return {"status": "pass", "selected": attempt, "attempts": attempts}
+        if parity_check and "skill directory" not in attempt["missing"]:
+            return {"status": "missing", "selected": attempt, "attempts": attempts}
     return {"status": "missing", "selected": None, "attempts": attempts}
 
 
@@ -240,7 +288,8 @@ def main() -> int:
 
     required = args.require or sorted(REQUIRED_FILES)
     roots = candidate_roots(args.skills_root, args.allow_fallback_roots)
-    skills = {skill: find_skill(roots, skill) for skill in required}
+    parity_check = bool(args.skills_root)
+    skills = {skill: find_skill(roots, skill, parity_check=parity_check) for skill in required}
     codex_cli = shutil.which("codex") if args.require_codex_cli else None
     blockers = [skill for skill, result in skills.items() if result["status"] != "pass"]
     selected_roots = {result["selected"]["root"] for result in skills.values() if result.get("selected")}

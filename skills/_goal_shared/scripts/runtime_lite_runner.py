@@ -200,6 +200,8 @@ def verify_inputs_current(config: dict[str, Any], inputs: dict[str, Any]) -> tup
     if not base_dir.is_absolute() or not base_dir.exists():
         return False, f"invalid or missing Lite base_dir: {base_dir}"
     raw_sources = inputs.get("source_files")
+    if raw_sources is not None and not isinstance(raw_sources, list):
+        return False, "invalid source_files shape: expected list"
     for item in raw_sources if isinstance(raw_sources, list) else []:
         if not isinstance(item, dict):
             return False, "Lite source_files entries must be objects"

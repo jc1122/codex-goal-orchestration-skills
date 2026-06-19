@@ -1435,6 +1435,11 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
             "--no-write",
         ]
     )
+    scheduler_path = target_bundle / "schedulers" / "main.scheduler.json"
+    scheduler = read_json(scheduler_path)
+    scheduler["manifest_sha256"] = sha256_file(target_bundle / "job.manifest.json")
+    scheduler["item_ids"] = [BRANCH_ID, "B02"]
+    write_json(scheduler_path, scheduler)
     ready = run(
         [
             "python3",
@@ -1495,10 +1500,7 @@ def run_amendment_smoke(source_bundle: Path, target_bundle: Path) -> None:
         ]
     )
 
-    scheduler_path = target_bundle / "schedulers" / "main.scheduler.json"
     scheduler = read_json(scheduler_path)
-    scheduler["manifest_sha256"] = sha256_file(target_bundle / "job.manifest.json")
-    scheduler["item_ids"] = [BRANCH_ID, "B02"]
     scheduler["events"].append(scheduler_event(5, "refill", eligible_ids=["B02"]))
     scheduler["events"].append(
         scheduler_event(

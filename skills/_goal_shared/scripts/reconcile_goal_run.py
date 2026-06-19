@@ -963,7 +963,7 @@ def branch_state_counts(branch_reports: list[dict[str, Any]]) -> dict[str, int]:
     for branch in branch_reports:
         runtime_status = branch.get("runtime_status")
         validation = branch.get("validation") if isinstance(branch.get("validation"), dict) else {}
-        if runtime_status in RUNTIME_STATUS_VALUES:
+        if is_terminal_runtime_status(runtime_status):
             counts[str(runtime_status)] += 1
         else:
             counts["missing"] += 1
@@ -993,6 +993,14 @@ def branch_report_successful(branch: dict[str, Any]) -> bool:
     )
 
 
+def is_terminal_runtime_status(value: object) -> bool:
+    return isinstance(value, str) and value in RUNTIME_STATUS_VALUES
+
+
+def is_recoverable_runtime_status(value: object) -> bool:
+    return isinstance(value, str) and value in {"partial", "blocked", "failed"}
+
+
 def manifest_branch_declares_recovery(manifest_branch: dict[str, Any] | None, target_branch_id: str) -> bool:
     if not isinstance(manifest_branch, dict):
         return False
@@ -1009,11 +1017,7 @@ def recovered_branch_ids(branches: list[dict[str, Any]], branch_reports: list[di
     recovered: set[str] = set()
     for branch in branch_reports:
         target_branch_id = branch.get("branch_id")
-        if not isinstance(target_branch_id, str) or branch.get("runtime_status") not in {
-            "partial",
-            "blocked",
-            "failed",
-        }:
+        if not isinstance(target_branch_id, str) or not is_recoverable_runtime_status(branch.get("runtime_status")):
             continue
         if any(
             manifest_branch_declares_recovery(manifest_by_id.get(recovery_id), target_branch_id)
@@ -1406,7 +1410,12 @@ def _resume_status(pre_dispatch: bool, hard_issue_count: int, main_status_value:
     status = (
         "incomplete" if pre_dispatch else "pass" if hard_issue_count == 0 and main_status_value == "pass" else "blocked"
     )
-    if not pre_dispatch and hard_issue_count == 0 and main_status_value in {"partial", "blocked", "failed"}:
+    if (
+        not pre_dispatch
+        and hard_issue_count == 0
+        and isinstance(main_status_value, str)
+        and main_status_value in {"partial", "blocked", "failed"}
+    ):
         status = str(main_status_value)
     return status
 
@@ -1535,7 +1544,8 @@ def _derive_completion_state(
     terminal_branch_ids = [
         branch["branch_id"]
         for branch in branch_reports
-        if branch.get("runtime_status") in RUNTIME_STATUS_VALUES and branch.get("status_path", {}).get("exists") is True
+        if is_terminal_runtime_status(branch.get("runtime_status"))
+        and branch.get("status_path", {}).get("exists") is True
     ]
     recovered_ids = recovered_branch_ids(branches, branch_reports)
     blocked_branches = [
@@ -1546,8 +1556,7 @@ def _derive_completion_state(
             "validation_status": branch.get("validation", {}).get("status"),
         }
         for branch in branch_reports
-        if branch.get("runtime_status") in {"partial", "blocked", "failed"}
-        and branch.get("branch_id") not in recovered_ids
+        if is_recoverable_runtime_status(branch.get("runtime_status")) and branch.get("branch_id") not in recovered_ids
     ]
     missing_branch_ids = [
         branch["branch_id"]
@@ -1643,7 +1652,11 @@ def _assemble_report(
             "exists": main_status_path.exists(),
             "status": main_status_value,
             "schema_status": "pass" if main_status_data is not None else "missing",
-            "runtime_status": main_status_value if main_status_value in RUNTIME_STATUS_VALUES else "missing",
+            "runtime_status": (
+                main_status_value
+                if isinstance(main_status_value, str) and main_status_value in RUNTIME_STATUS_VALUES
+                else "missing"
+            ),
             "resume_action": "reuse_terminal_status"
             if main_status_data is not None and not main_validation_defects
             else "assemble_or_repair",

@@ -12,10 +12,12 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+import importlib.util
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_JSON = ROOT / "package.json"
+PACKAGE_LOCK = ROOT / "package-lock.json"
 README = ROOT / "README.md"
 SKILLS_DIR = ROOT / "skills"
 INSTALLER = ROOT / "bin" / "install-goal-skills.js"
@@ -36,7 +38,70 @@ SEMVER_RE = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
-REQUIRED_PACKAGE_FILES = {
+
+
+def _load_sync_goal_shared_module():
+    spec = importlib.util.spec_from_file_location(
+        "_check_release_sync_goal_shared",
+        str(ROOT / "scripts" / "sync_goal_shared.py"),
+    )
+    if spec is None or spec.loader is None:
+        raise SystemExit("failed to load sync_goal_shared.py while computing release requirements")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _goal_shared_required_package_files() -> set[str]:
+    """Package entries implied by sync_goal_shared generated shared files."""
+
+    module = _load_sync_goal_shared_module()
+    SHARED_REFERENCES = module.SHARED_REFERENCES
+    SHARED_SCRIPTS = module.SHARED_SCRIPTS
+    SKILLS = module.SKILLS
+
+    shared_scripts = {f"skills/_goal_shared/scripts/{script}" for script in SHARED_SCRIPTS}
+    shared_references = {f"skills/_goal_shared/references/{reference}" for reference in SHARED_REFERENCES}
+    skill_scripts = {f"skills/{skill}/scripts/{script}" for skill in SKILLS for script in SHARED_SCRIPTS}
+    skill_references = {f"skills/{skill}/references/{reference}" for skill in SKILLS for reference in SHARED_REFERENCES}
+    return shared_scripts | shared_references | skill_scripts | skill_references
+
+
+def _goal_shared_executable_script_paths(*, with_skills_prefix: bool = True) -> list[Path]:
+    module = _load_sync_goal_shared_module()
+    base = Path("skills") if with_skills_prefix else Path()
+    paths = {base / skill / "scripts" / script for skill in module.SKILLS for script in module.SHARED_SCRIPTS}
+    return sorted(paths)
+
+
+def check_goal_shared_executable_scripts(root: Path, *, scope: str, with_skills_prefix: bool = True) -> None:
+    for relpath in _goal_shared_executable_script_paths(with_skills_prefix=with_skills_prefix):
+        target = root / relpath
+        require(target.is_file(), f"{scope} is missing required shared script: {relpath}")
+        require(bool(target.stat().st_mode & 0o111), f"{scope} has non-executable shared script: {relpath}")
+
+
+def _run_installed_goal_checker(available_root: Path, *, rel_path: Path, scope: str) -> dict[str, object]:
+    command = [
+        sys.executable,
+        str(available_root / rel_path),
+        "--json",
+        "--skills-root",
+        str(available_root),
+    ]
+    result = run(command)
+    try:
+        payload = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise SystemExit(
+            f"{scope} did not emit valid JSON from {'/'.join(rel_path.parts)}: {exc}\n{result.stdout}"
+        ) from exc
+    require(isinstance(payload, dict), f"{scope} output is not a JSON object")
+    require(payload.get("status") == "pass", f"{scope} check failed: {payload.get('status')}")
+    return payload
+
+
+_BASE_REQUIRED_PACKAGE_FILES = {
     "AGENTS.md",
     "README.md",
     "package.json",
@@ -62,8 +127,10 @@ REQUIRED_PACKAGE_FILES = {
     "skills/_goal_shared/scripts/orchestration_contract.py",
     "skills/_goal_shared/scripts/runtime_lite_runner.py",
     "skills/_goal_shared/scripts/runtime_phase_manifest.py",
+    "skills/_goal_shared/scripts/lite_prompt.py",
     "skills/_goal_shared/scripts/reconcile_goal_run.py",
     "skills/_goal_shared/scripts/scheduler_tick.py",
+    "skills/_goal_shared/scripts/path_rules.py",
     "skills/_goal_shared/scripts/status_validation.py",
     "skills/goal-branch-orchestrator/SKILL.md",
     "skills/goal-branch-orchestrator/scripts/assemble_branch_status.py",
@@ -96,6 +163,7 @@ REQUIRED_PACKAGE_FILES = {
     "skills/goal-preflight/scripts/lint_preflight_brief.py",
     "skills/goal-preflight/scripts/runtime_phase_manifest.py",
 }
+REQUIRED_PACKAGE_FILES = _BASE_REQUIRED_PACKAGE_FILES | _goal_shared_required_package_files()
 REQUIRED_PACKAGE_FILES_ENTRIES = {
     "AGENTS.md",
     "bin/",
@@ -149,6 +217,13 @@ def load_package() -> dict:
     data = json.loads(PACKAGE_JSON.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise SystemExit("package.json must be a JSON object")
+    return data
+
+
+def load_package_lock() -> dict:
+    data = json.loads(PACKAGE_LOCK.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise SystemExit("package-lock.json must be a JSON object")
     return data
 
 
@@ -209,6 +284,26 @@ def check_metadata(package: dict) -> str:
     return version
 
 
+def check_package_lock(version: str) -> None:
+    package_lock = load_package_lock()
+    require(package_lock.get("name") == "codex-goal-orchestration-skills", "package-lock.json name is wrong")
+    require(
+        package_lock.get("version") == version,
+        f"package-lock.json version {package_lock.get('version')!r} must match package version {version!r}",
+    )
+    packages = package_lock.get("packages")
+    require(isinstance(packages, dict), "package-lock.json packages must be an object")
+    root_package = packages.get("")
+    require(isinstance(root_package, dict), "package-lock.json root package must be an object")
+    require(
+        root_package.get("name") == "codex-goal-orchestration-skills", "package-lock.json root package name is wrong"
+    )
+    require(
+        root_package.get("version") == version,
+        f"package-lock.json root package version {root_package.get('version')!r} must match package version {version!r}",
+    )
+
+
 def check_readme(version: str) -> None:
     text = README.read_text(encoding="utf-8")
     for phrase in [
@@ -266,6 +361,12 @@ def check_installer(version: str) -> None:
             run(["diff", "-qr", (ROOT / "skills" / name).as_posix(), (dest / name).as_posix()])
         for name in EXPECTED_METADATA_FILES:
             run(["diff", "-q", (ROOT / name).as_posix(), (dest / name).as_posix()])
+        check_goal_shared_executable_scripts(ROOT, scope="source tree")
+        check_goal_shared_executable_scripts(dest, scope="installed tree", with_skills_prefix=False)
+        shared_checker = Path("_goal_shared/scripts/check_goal_skill_availability.py")
+        local_checker = Path("goal-config/scripts/check_goal_skill_availability.py")
+        _run_installed_goal_checker(dest, rel_path=shared_checker, scope="installed shared checker")
+        _run_installed_goal_checker(dest, rel_path=local_checker, scope="installed skill-local checker")
 
 
 def check_pack(version: str) -> None:
@@ -316,6 +417,7 @@ def main() -> int:
     require(shutil.which("npm") is not None, "npm must be available")
     package = load_package()
     version = check_metadata(package)
+    check_package_lock(version)
     check_readme(version)
     check_skill_versions(version)
     check_installer(version)

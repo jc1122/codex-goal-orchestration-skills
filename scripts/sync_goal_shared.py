@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 
 
@@ -121,6 +120,14 @@ def summary_payload(*, drift: list[Path]) -> dict:
     }
 
 
+def _script_requires_execute(path: Path) -> bool:
+    return path.suffix == ".py" and path.parent.name == "scripts" and path.name in SHARED_SCRIPTS
+
+
+def _is_executable(path: Path) -> bool:
+    return bool(path.stat().st_mode & 0o111)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--write", action="store_true", help="Rewrite generated wrappers.")
@@ -132,11 +139,14 @@ def main() -> int:
         if args.write:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(expected, encoding="utf-8")
-            if path.suffix == ".py":
-                os.chmod(path, 0o755)
+            if _script_requires_execute(path):
+                path.chmod(0o755)
             continue
-        actual = path.read_text(encoding="utf-8") if path.exists() else None
-        if actual != expected:
+        if not path.exists():
+            drift.append(path)
+            continue
+        actual = path.read_text(encoding="utf-8")
+        if actual != expected or (_script_requires_execute(path) and not _is_executable(path)):
             drift.append(path)
 
     if args.json:

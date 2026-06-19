@@ -317,6 +317,7 @@ def check_amendments_and_blockers(
     data = load_json(status_path)
     blockers = status_blockers(data)
     status = data.get("status") if isinstance(data, dict) else None
+    effective_status = status if isinstance(status, str) else "failed"
     status_branch_id = data.get("branch_id") if isinstance(data, dict) else None
     terminal_branch = branch_id or (
         status_branch_id if isinstance(status_branch_id, str) and status_branch_id.strip() else None
@@ -330,7 +331,7 @@ def check_amendments_and_blockers(
             "blocker_count": len(blockers),
         }
     )
-    if status in {"partial", "blocked", "failed"}:
+    if effective_status in {"partial", "blocked", "failed"}:
         amend_script = skills_root() / "goal-plan-amender" / "scripts" / "recommend_amendment_decision.py"
         terminal_arg = f" --terminal-branch {terminal_branch}" if terminal_branch else ""
         action(

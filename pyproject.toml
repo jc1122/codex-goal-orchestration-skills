@@ -8,3 +8,7 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["F"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["maintenance/reports"]
