@@ -1,0 +1,447 @@
+{
+  "baseline_revision": "349086c264d889621adef3255cd7ca27cfb3e922",
+  "baseline_tests": 190,
+  "branch": "main",
+  "convergence": {
+    "consecutive_clean_passes": [
+      45,
+      46
+    ],
+    "evidence": [
+      "pass45: deterministic wave active=0, coverage-gap active=0, test-audit stage_status all ok, semantic reviewers CLEAN",
+      "pass46: deterministic wave active=0, coverage-gap active=0, test-audit stage_status all ok, semantic reviewers CLEAN"
+    ],
+    "status": "achieved"
+  },
+  "date": "2026-06-19",
+  "final_tests": 491,
+  "fixes": [
+    {
+      "defect": "Configuration docs and contract examples drifted from required --config usage, DeepSeek-only opencode-bridge policy, bridge JSON-ok smoke semantics, and model policy nesting.",
+      "regression_tests": [
+        "test_goal_config_skill_check_commands_parse_with_required_config",
+        "test_docs_do_not_advertise_openrouter_for_opencode_bridge",
+        "test_contract_documents_bridge_doctor_smoke_status_ok_exemption",
+        "test_contract_documents_model_policy_nesting_requirements",
+        "test_contract_documents_default_harness_runtime_invocation_model"
+      ],
+      "skill": "goal-config"
+    },
+    {
+      "defect": "Malformed model ladders, harness refs, provider overrides, and policy refs could crash or pass with incoherent route policy.",
+      "regression_tests": [
+        "test_ensure_harness_smokes_fails_closed_on_malformed_lite_ladder_entry",
+        "test_build_model_policies_fails_closed_on_malformed_worker_ladder_entry",
+        "test_check_goal_config_fails_closed_on_unhashable_model_harness",
+        "test_check_goal_config_rejects_default_opencode_policy_bypass_incoherence",
+        "test_check_goal_config_fails_closed_on_non_string_policy_ref"
+      ],
+      "skill": "goal-config"
+    },
+    {
+      "defect": "Standard/preflight smoke reuse trusted stale, hashless, failed, empty, or poisoned matching-SHA evidence.",
+      "regression_tests": [
+        "test_standard_smoke_reuse_ignores_failed_top_level_report_and_runs_current_smoke",
+        "test_standard_smoke_reuse_ignores_stale_config_sha_and_runs_current_smoke",
+        "test_standard_smoke_reuse_rejects_hashless_top_level_pass_and_runs_current_smoke",
+        "test_standard_smoke_reuse_rejects_poisoned_matching_config_sha",
+        "test_for_preflight_reuse_smoke_report_rejects_empty_route_evidence"
+      ],
+      "skill": "goal-config"
+    },
+    {
+      "defect": "Discovery mapping could bind roles from bad route metadata, unaccepted raw route objects, explicit demanding downgrades, or null selectors for missing route fields.",
+      "regression_tests": [
+        "test_apply_discovery_mapping_auto_fails_closed_with_bad_route_metadata",
+        "test_apply_discovery_mapping_rejects_raw_unaccepted_route_object",
+        "test_apply_discovery_mapping_object_selector_null_requires_existing_route_field",
+        "test_apply_discovery_mapping_rejects_explicit_demanding_downgrade_when_demanding_route_exists"
+      ],
+      "skill": "goal-config"
+    },
+    {
+      "defect": "Fixture/config inventory helpers accepted unhashable alias, question, and option ids.",
+      "regression_tests": [
+        "test_check_goal_config_fixtures_rejects_unhashable_alias_in_configured_rows",
+        "test_check_goal_config_fixtures_rejects_unhashable_alias_in_codex_rows",
+        "test_check_goal_config_fixtures_rejects_unhashable_question_id",
+        "test_check_goal_config_fixtures_rejects_unhashable_option_id"
+      ],
+      "skill": "goal-config"
+    },
+    {
+      "defect": "Bundle creation and linting reused stale or legacy goal-config checks and route evidence instead of failing closed or refreshing evidence.",
+      "regression_tests": [
+        "test_report_matches_config_legacy_report_without_sha_fails_closed",
+        "test_find_reusable_route_verified_check_rejects_legacy_report_without_sha",
+        "test_prepare_goal_bundle_uses_fresh_check_when_reusing_stale_route_evidence",
+        "test_direct_create_rejects_stale_goal_config_check_sha",
+        "test_lint_rejects_copied_stale_goal_config_check_sha_pair"
+      ],
+      "skill": "goal-preflight"
+    },
+    {
+      "defect": "Readiness/lint reports accepted malformed required manifest sections, repo status, telemetry policy, branch caps, and dependency shapes.",
+      "regression_tests": [
+        "test_render_readiness_json_blocks_missing_required_manifest_sections",
+        "test_render_readiness_and_json_fail_closed_with_missing_repo_status",
+        "test_render_readiness_and_json_blocks_bool_branch_cap_fields",
+        "test_render_readiness_and_json_fail_closed_with_malformed_manifest_sections",
+        "test_render_readiness_and_json_fail_closed_with_scalar_branch_depends_on"
+      ],
+      "skill": "goal-preflight"
+    },
+    {
+      "defect": "Wave and branch identity checks had unhashable-input crashes or accepted inconsistent wave declarations.",
+      "regression_tests": [
+        "test_lint_branch_identity_handles_unhashable_identity_fields",
+        "test_lint_work_item_cross_checks_blocks_unhashable_work_item_ids",
+        "test_lint_tolerates_unhashable_work_item_depends_on_in_bundle_lint",
+        "test_lint_waves_rejects_case_mismatched_branch_wave_declaration",
+        "test_lint_waves_rejects_inverted_supplied_ordering_for_case_mismatch_depends_on"
+      ],
+      "skill": "goal-preflight"
+    },
+    {
+      "defect": "Preparedness fixtures and cleanup planning failed to guard malformed action, wave, telemetry, and recovered-branch payloads.",
+      "regression_tests": [
+        "test_prepare_preparedness_fixtures_guards_non_string_action_kinds",
+        "test_prepare_preparedness_fixtures_rejects_non_list_actions_payload",
+        "test_prepare_preparedness_fixtures_guards_non_string_recovered_branch_id",
+        "test_check_preparedness_fixtures_rejects_non_string_wave_branch_id",
+        "test_cleanup_plan_removes_runtime_status_and_catalog_artifacts"
+      ],
+      "skill": "goal-preflight"
+    },
+    {
+      "defect": "Launch config validation disagreed between adapter and status validator, especially for generic-cli/opencode-bridge providers and selected ladders.",
+      "regression_tests": [
+        "test_validate_launch_config_adapter_rejects_non_string_provider",
+        "test_validate_launch_config_adapter_and_validator_disagree_without_provider",
+        "test_validate_launch_config_attempts_rejects_generic_cli_without_command_binary",
+        "test_validate_launch_config_attempts_rejects_opencode_bridge_without_bridge_run_fields",
+        "test_validate_launch_config_attempts_rejects_non_list_selected_ladder"
+      ],
+      "skill": "goal-branch-orchestrator"
+    },
+    {
+      "defect": "Route-health persistence crashed or misclassified corrupt, malformed, nonnumeric, or negative counters.",
+      "regression_tests": [
+        "test_record_bundle_route_failure_tolerates_malformed_persisted_counter",
+        "test_record_bundle_route_failure_clamps_negative_persisted_counter",
+        "test_run_packet_fails_closed_with_malformed_persisted_bundle_route_health",
+        "test_attempt_failure_subclass_normalizes_negative_transport_disconnect_count",
+        "test_write_packet_summary_fails_closed_with_malformed_route_health"
+      ],
+      "skill": "goal-branch-orchestrator"
+    },
+    {
+      "defect": "Packet status and cleanup helpers used hash membership/int conversion on tainted values and could crash instead of failing closed.",
+      "regression_tests": [
+        "test_packet_next_action_fail_closed_for_unhashable_status_and_terminal_state",
+        "test_write_packet_summary_fails_closed_with_unhashable_output_and_terminal_state",
+        "test_record_generated_artifact_cleanup_tolerates_malformed_persisted_counts",
+        "test_validate_worker_status_tolerates_unhashable_status"
+      ],
+      "skill": "goal-branch-orchestrator"
+    },
+    {
+      "defect": "Research worker alias handling and worker status path helpers were inconsistent and unguarded for malformed worker_type.",
+      "regression_tests": [
+        "test_validate_work_items_accepts_research_alias",
+        "test_completed_research_alias_uses_research_status_path",
+        "test_validate_completed_worker_statuses_rejects_non_string_worker_type_path",
+        "test_validate_work_items_rejects_boolean_work_item_id"
+      ],
+      "skill": "goal-branch-orchestrator"
+    },
+    {
+      "defect": "Scheduler rollups and route command helpers did not tolerate malformed event names, harness entries, or manifest routing values.",
+      "regression_tests": [
+        "test_scheduler_rollup_tolerates_malformed_event_name",
+        "test_configured_route_commands_tolerates_non_dict_harness_entry",
+        "test_resolve_worker_routing_fails_closed_for_manifest_custom_route_class",
+        "test_resolve_worker_routing_allows_manifest_custom_route_class_with_explicit_route_class"
+      ],
+      "skill": "goal-branch-orchestrator"
+    },
+    {
+      "defect": "Main manifest wave/dependency validation had unhashable or non-string branch id paths and stale scheduler replay gaps.",
+      "regression_tests": [
+        "test_validate_manifest_waves_rejects_non_string_manifest_branch_id",
+        "test_validate_branch_dependencies_rejects_unhashable_branch_id",
+        "test_validate_branch_dependencies_preserves_prior_dependency_ordering",
+        "test_main_scheduler_replay_rejects_stale_item_ids_and_unknown_launch",
+        "test_current_amendment_records_tolerates_unhashable_branch_status"
+      ],
+      "skill": "goal-main-orchestrator"
+    },
+    {
+      "defect": "Research worker alias \"research\" bypassed required research_worker_policy checks.",
+      "regression_tests": [
+        "test_rbwc_research_alias_requires_research_worker_policy",
+        "test_rbwc_validate_work_item_fields_accepts_research_alias",
+        "test_rbwc_validate_work_item_fields_fails_closed_on_unhashable_worker_type"
+      ],
+      "skill": "goal-main-orchestrator"
+    },
+    {
+      "defect": "Prompt-audit/runtime prompt recovery helpers had malformed artifact, fallback, and timeout edge cases.",
+      "regression_tests": [
+        "test_runtime_prompt_audit_validation_helpers",
+        "test_runtime_prompt_audit_packet_paths_and_cleanup",
+        "test_recover_audit_from_events_reads_embedded_json",
+        "test_failure_summary_and_write_terminal_audit_fallback_commands",
+        "test_run_with_timeout_and_process_cleanup"
+      ],
+      "skill": "goal-main-orchestrator"
+    },
+    {
+      "defect": "Amender scheduler state and protected-id reconciliation mishandled malformed status files, obsolete branch ids, and explicit no-infer terminal statuses.",
+      "regression_tests": [
+        "test_scheduler_state_rejects_unknown_branch_ids",
+        "test_scheduler_state_considers_live_events_for_obsolete_manifest_ids",
+        "test_protected_ids_preserves_explicit_no_infer_terminal_statuses",
+        "test_protected_ids_no_infer_ignores_malformed_terminal_status_path",
+        "test_validate_proposal_preserves_explicit_terminal_statuses_on_fallback"
+      ],
+      "skill": "goal-plan-amender"
+    },
+    {
+      "defect": "Amendment/adaptation/blocker packets allowed unsafe prompt artifacts or invalid scheduler_inference_enabled shapes.",
+      "regression_tests": [
+        "test_validate_packet_rejects_missing_scheduler_inference_enabled",
+        "test_validate_packet_rejects_malformed_scheduler_inference_enabled",
+        "test_validate_packet_rejects_unsafe_prompt_artifact_traversal",
+        "test_validate_packet_rejects_absolute_prompt_artifact",
+        "test_apply_manifest_amendment_acceptance_skips_malformed_regenerated_branch_id"
+      ],
+      "skill": "goal-plan-amender"
+    },
+    {
+      "defect": "Replacement/split/blocker repair flows were not idempotent or failed to preserve existing packets on invalid decisions.",
+      "regression_tests": [
+        "test_create_adaptation_packet_replace_preserves_existing_packet_on_invalid_decision",
+        "test_create_blocker_repair_packet_replace_preserves_existing_packet_on_invalid_decision",
+        "test_create_amendment_decision_roundtrip_to_apply_preserves_no_infer_scheduler",
+        "test_split_rejects_replacement_id_duplicating_existing_branch",
+        "test_recommendation_launches_when_failed_terminal_is_unrecovered"
+      ],
+      "skill": "goal-plan-amender"
+    },
+    {
+      "defect": "Generated wrappers and release checks did not enforce executable bits, support files, installed-tree checks, and generated path coverage.",
+      "regression_tests": [
+        "test_sync_goal_shared_detects_non_executable_generated_script_wrapper",
+        "test_sync_goal_shared_write_restores_generated_wrapper_execute_bit",
+        "test_check_release_rejects_non_executable_goal_shared_script",
+        "test_check_release_includes_all_goal_shared_scripts_and_references_from_sync",
+        "test_check_release_runs_installed_goal_checkers_against_target_root"
+      ],
+      "skill": "_goal_shared"
+    },
+    {
+      "defect": "Shared status/lite-advice/runtime helpers had malformed status, stale prompt, missing timeout, and bridge-control fail-open/crash paths.",
+      "regression_tests": [
+        "test_script_only_repair_gate_check_amendments_and_blockers_tolerates_unhashable_status",
+        "test_reconcile_main_status_rejects_non_string_without_type_error",
+        "test_runtime_lite_runner_verify_inputs_stale_and_hash",
+        "test_runtime_lite_runner_run_bridge_subcommand_rejects_missing_timeout",
+        "test_validate_lite_advice_enforces_control_for_non_blocked"
+      ],
+      "skill": "_goal_shared"
+    },
+    {
+      "defect": "Goal skill availability/model catalog checks missed generated wrappers, mixed roots, support files, and stale install roots.",
+      "regression_tests": [
+        "test_check_goal_skill_availability_includes_all_sync_goal_shared_wrappers",
+        "test_check_goal_skill_availability_requires_amender_blocker_repair_packet",
+        "test_check_goal_skill_availability_main_rejects_stale_root_even_with_good_source_root",
+        "test_check_goal_skill_availability_main_reports_mixed_roots",
+        "test_check_model_catalog_routes_and_manifest_paths"
+      ],
+      "skill": "_goal_shared"
+    },
+    {
+      "defect": "Root pytest collected archived maintenance report tests and failed on unrelated toyoptimization sources.",
+      "files": [
+        "pyproject.toml"
+      ],
+      "regression_tests": [
+        "pytest -q --collect-only",
+        "pytest -q"
+      ],
+      "skill": "repo/test harness"
+    },
+    {
+      "defect": "Release checks did not catch stale package-lock version metadata.",
+      "regression_tests": [
+        "test_check_release_rejects_stale_package_lock_top_level_version",
+        "test_check_release_rejects_stale_package_lock_root_package_version"
+      ],
+      "skill": "repo/release"
+    }
+  ],
+  "lanes_run": [
+    "code-health: complexity, duplication, dead-code, structure, quality, docs, dependency, hygiene",
+    "coverage-gap",
+    "test-audit: TQA and redundancy triage",
+    "security/bandit",
+    "hotspot",
+    "growth",
+    "semantic: per-skill and cross-cutting AST/type-aware review"
+  ],
+  "objective": "Audit, remediate, and re-audit the goal orchestration skills until two consecutive full passes find zero genuine non-accepted issues.",
+  "passes": [
+    {
+      "coverage_gap": {
+        "accepted": 49,
+        "active": 0,
+        "raw": 49
+      },
+      "deterministic_wave": {
+        "accepted": 3400,
+        "active": 0,
+        "lane_summary": {
+          "code-health": {
+            "exit": 1,
+            "findings": 1887,
+            "status": "findings"
+          },
+          "dependency": {
+            "exit": 1,
+            "findings": 7,
+            "status": "findings"
+          },
+          "docs": {
+            "exit": 0,
+            "findings": 0,
+            "status": "ok"
+          },
+          "growth": {
+            "exit": 0,
+            "findings": 0,
+            "status": "ok"
+          },
+          "hotspot": {
+            "exit": 1,
+            "findings": 360,
+            "status": "findings"
+          },
+          "hygiene": {
+            "exit": 0,
+            "findings": 0,
+            "status": "ok"
+          },
+          "security": {
+            "exit": 1,
+            "findings": 1146,
+            "status": "findings"
+          }
+        },
+        "raw": 3400
+      },
+      "pass": 45,
+      "semantic": "clean",
+      "test_audit": {
+        "stage_status": {
+          "coverage": "ok",
+          "tqa": "ok",
+          "triage": "ok"
+        },
+        "tqa_findings": 0,
+        "triage_decisions": {
+          "KEEP_FOR_SIGNAL": 62,
+          "MERGE_RECOMMENDED": 375
+        },
+        "triage_total_candidates": 437
+      }
+    },
+    {
+      "coverage_gap": {
+        "accepted": 49,
+        "active": 0,
+        "raw": 49
+      },
+      "deterministic_wave": {
+        "accepted": 3400,
+        "active": 0,
+        "lane_summary": {
+          "code-health": {
+            "exit": 1,
+            "findings": 1887,
+            "status": "findings"
+          },
+          "dependency": {
+            "exit": 1,
+            "findings": 7,
+            "status": "findings"
+          },
+          "docs": {
+            "exit": 0,
+            "findings": 0,
+            "status": "ok"
+          },
+          "growth": {
+            "exit": 0,
+            "findings": 0,
+            "status": "ok"
+          },
+          "hotspot": {
+            "exit": 1,
+            "findings": 360,
+            "status": "findings"
+          },
+          "hygiene": {
+            "exit": 0,
+            "findings": 0,
+            "status": "ok"
+          },
+          "security": {
+            "exit": 1,
+            "findings": 1146,
+            "status": "findings"
+          }
+        },
+        "raw": 3400
+      },
+      "pass": 46,
+      "semantic": "clean",
+      "test_audit": {
+        "stage_status": {
+          "coverage": "ok",
+          "tqa": "ok",
+          "triage": "ok"
+        },
+        "tqa_findings": 0,
+        "triage_decisions": {
+          "KEEP_FOR_SIGNAL": 62,
+          "MERGE_RECOMMENDED": 375
+        },
+        "triage_total_candidates": 437
+      }
+    }
+  ],
+  "repo": "/home/jakub/projects/codex-goal-orchestration-skills",
+  "run_dir": "/tmp/repo-audit-refactor-optimize/codex-goal-orchestration-skills/20260618T134557Z",
+  "schema_version": 1,
+  "triaged_not_fixed": [
+    {
+      "item": "code-health complexity/structure/hotspot/security advisory floor",
+      "rationale": "Accepted in .repo-audit/accept.json after prior decomposition and hardening; current findings are the documented advisory floor and active count is zero under check_wave_baseline."
+    },
+    {
+      "item": "coverage-gap generated wrapper findings",
+      "rationale": "49 findings are accepted because sync_goal_shared.py owns generated skill-local wrappers and canonical behavior is covered in _goal_shared or release/shared checks."
+    },
+    {
+      "item": "test-audit redundancy MERGE_RECOMMENDED/KEEP_FOR_SIGNAL decisions",
+      "rationale": "Advisory test-suite triage only; no TQA findings and deleting/merging regression tests would reduce defect coverage added by this campaign."
+    }
+  ],
+  "verification": {
+    "final_gate": "FINAL_FULL_GATE_EXIT_CODE=0; 491 passed",
+    "post_pass43_gate": "FULL_GATE_AFTER_PASS43_REMEDIATION_EXIT_CODE=0; 490 passed",
+    "post_pass44_gate": "FULL_GATE_AFTER_PASS44_REMEDIATION_EXIT_CODE=0; 491 passed"
+  }
+}

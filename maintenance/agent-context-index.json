@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:3cdf18d3e6b96a8f32944c781896b51fb23c5ab036e1e4ec3c455fd9600eb640"
+    "source_fingerprint": "sha256:e0c509ba348459489109b5d54d572b82a6febb2ab6a580ca94d098d0cd482c24"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -16,66 +16,66 @@
     {
       "path": "scripts/check_preparedness_fixtures.py",
       "owner": "repo-scripts",
-      "lines": 10649,
-      "approx_tokens": 120166,
+      "lines": 10885,
+      "approx_tokens": 122768,
       "rule": "failures/function search; table repeats",
       "top_functions": [
-        "4824:run_runtime_packet_fixtures:1618l",
-        "7215:run_base_ref_default_fixture:1490l",
-        "9641:run_branch_status_negative_fixtures:964l",
-        "3900:run_launch_ready_helper_fixtures:434l"
+        "4998:run_runtime_packet_fixtures:1618l",
+        "7410:run_base_ref_default_fixture:1536l",
+        "9882:run_branch_status_negative_fixtures:958l",
+        "4074:run_launch_ready_helper_fixtures:434l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/create_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 3608,
-      "approx_tokens": 40635,
+      "lines": 3639,
+      "approx_tokens": 40989,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "1898:normalize_brief:111l",
-        "3200:render_branch_prompt_text:105l",
-        "2578:build_runtime_index:96l",
-        "3010:manifest_from_normalized_brief:94l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 3367,
-      "approx_tokens": 33755,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "3130:main:234l",
-        "2431:compact_launch_config:139l",
-        "1217:compact_worker_context:121l",
-        "2805:resolve_worker_routing:111l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 3514,
-      "approx_tokens": 33197,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "1910:run_opencode_bridge_model:280l",
-        "1409:summarize_dirty_stop_salvage:131l",
-        "2582:extract_status_json:116l",
-        "3096:_run_worker_packet:100l"
+        "1906:normalize_brief:111l",
+        "3230:render_branch_prompt_text:105l",
+        "2608:build_runtime_index:96l",
+        "3040:manifest_from_normalized_brief:94l"
       ]
     },
     {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
-      "lines": 2903,
-      "approx_tokens": 32532,
+      "lines": 3020,
+      "approx_tokens": 34040,
       "rule": "manifest/help/defects before source",
       "top_functions": [
-        "2201:_lint_branch_worker_parallelism:135l",
-        "2689:lint:128l",
-        "1110:validate_goal_config_manifest:121l",
-        "1542:_lint_model_policies:107l"
+        "1141:validate_goal_config_manifest:142l",
+        "2798:lint:136l",
+        "2309:_lint_branch_worker_parallelism:135l",
+        "1594:_lint_model_policies:107l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/create_runtime_packet.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 3374,
+      "approx_tokens": 33858,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "3137:main:234l",
+        "2434:compact_launch_config:139l",
+        "1219:compact_worker_context:121l",
+        "2808:resolve_worker_routing:115l"
+      ]
+    },
+    {
+      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 3552,
+      "approx_tokens": 33506,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "1948:run_opencode_bridge_model:280l",
+        "1447:summarize_dirty_stop_salvage:131l",
+        "2620:extract_status_json:116l",
+        "3134:_run_worker_packet:100l"
       ]
     }
   ],

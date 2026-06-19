@@ -2,136 +2,626 @@
   "version": 1,
   "accept": [
     {
-      "match": {"kind": "rule", "leaf": "hotspot"},
+      "match": {
+        "kind": "rule",
+        "leaf": "hotspot"
+      },
       "reason": "Repo-wide git-history churn / temporal-coupling. Advisory only and not code-fixable in source; the wave's hotspot lane mines whole-repo history and ignores --source-prefix, so it cannot be driven to zero by editing skill code."
     },
     {
-      "match": {"kind": "rule", "leaf": "complexity"},
+      "match": {
+        "kind": "rule",
+        "leaf": "complexity"
+      },
       "reason": "Residual complexity after decomposing EVERY CC>40 god-function (lint() 407->17, validate_scheduler_ledger 127->17, validate_branch_status validators, render_branch_worktree main 150, summarize_telemetry, create_runtime_packet/runtime_packet_runner, reconcile_goal_run, check_goal_config, amendment_lib, validate_main_status, promote, extract_telemetry, scheduler_tick). Max CC is now <=40. The remaining CC 11-40 + function_nloc + parameter_count + MI findings are the irreducible idiom floor: pervasive defensive `x.get() if isinstance(x.get(),dict) else {}` guards (each counted as a branch) and the explicit keyword-threaded helpers produced by the decompositions. Advisory (Tier-2)."
     },
     {
-      "match": {"kind": "rule", "leaf": "quality", "metric": "E501"},
+      "match": {
+        "kind": "rule",
+        "leaf": "quality",
+        "metric": "E501"
+      },
       "reason": "Irreducible long single-line string literals after `ruff format` (line-length 120): prompt/manifest templates, raise/defect error-message f-strings, and route-policy text. Wrapping would split string contents (changing generated output) for zero behavior value."
     },
     {
-      "match": {"kind": "rule", "leaf": "quality", "metric": "SIM108"},
+      "match": {
+        "kind": "rule",
+        "leaf": "quality",
+        "metric": "SIM108"
+      },
       "reason": "Three if/else blocks left explicit because the ternary rewrite produces hard-to-read nested/mixed-precedence expressions; readability over the lint nit."
     },
     {
-      "match": {"kind": "rule", "leaf": "duplication", "metric": "duplicate_tokens"},
+      "match": {
+        "kind": "rule",
+        "leaf": "duplication",
+        "metric": "duplicate_tokens"
+      },
       "reason": "Standalone-script idiom by design. The skill scripts are intentionally self-contained: generated 36-line importlib wrapper shims, the per-script _load_module/sys.path bootstrap, and the read_json/write_json/sha256_file helpers are duplicated so each script runs standalone; the three runtime runners are deliberately decoupled. Genuine logic clones were extracted (source_record/add_if_exists -> amendment_lib); the rest must stay duplicated to preserve the standalone design."
     },
     {
-      "match": {"kind": "rule", "leaf": "docs-consistency", "metric": "doc_path_missing"},
+      "match": {
+        "kind": "rule",
+        "leaf": "docs-consistency",
+        "metric": "doc_path_missing"
+      },
       "reason": "Linter base-path false positives: references resolve bundle-relative / skill-relative (e.g. amendments/, lite/, scripts/..., ../../_goal_shared/...) and do not resolve from the repo root, but all targets exist. The standalone docs-consistency wave lane reports 0."
     },
     {
-      "match": {"kind": "rule", "leaf": "dependency", "metric": "import_undeclared"},
+      "match": {
+        "kind": "rule",
+        "leaf": "dependency",
+        "metric": "import_undeclared"
+      },
       "reason": "Standalone-script sibling imports (e.g. amendment_lib, render_bootloader) resolved at runtime via the per-script sys.path bootstrap; not missing PyPI dependencies."
     },
     {
-      "match": {"kind": "rule", "leaf": "dependency", "metric": "declared_unused"},
+      "match": {
+        "kind": "rule",
+        "leaf": "dependency",
+        "metric": "declared_unused"
+      },
       "reason": "ruff/pyright are dev CLI tools declared in requirements-dev.txt / devDependencies and invoked as commands, not imported as modules; AST import scanning cannot see them."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B105"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B105"
+      },
       "reason": "False positive: bandit matches the string literals \"pass\"/\"partial\" (run/branch status outcome keys and sentinel values) as hardcoded passwords. No credentials are present anywhere in the package."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B603"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B603"
+      },
       "reason": "By design: deterministic subprocess launches of git / codex / the opencode-worker-bridge control script, always list-form argv with shell=False; base_ref and other interpolated values are validated (validate_base_ref). This is a CLI orchestration tool whose purpose is launching those processes."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B607"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B607"
+      },
       "reason": "By design: partial executable paths (git, codex, opencode_worker.py) are resolved via shutil.which / known skill roots; list-form, no shell. Expected for a CLI orchestration tool."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B404"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B404"
+      },
       "reason": "By design: `import subprocess` is required - this package's function is to launch and supervise model/CLI worker processes."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B112"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B112"
+      },
       "reason": "By design: try/except/continue in tolerant artifact/ledger parsers, intentionally skipping malformed entries rather than crashing the orchestrator."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B103"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B103"
+      },
       "reason": "By design: os.chmod(launch.sh, 0o755) makes the generated launcher script executable; world-writable bit is not set."
     },
     {
-      "match": {"kind": "rule", "leaf": "security", "metric": "bandit_B108"},
+      "match": {
+        "kind": "rule",
+        "leaf": "security",
+        "metric": "bandit_B108"
+      },
       "reason": "By design: /dev/shm is used as a faster scratch root ONLY when writable (mkdir + exist_ok, writability-gated) with a packet-local fallback; it is a directory root, not a predictable-filename temp file (CWE-377 does not apply)."
     },
     {
-      "match": {"kind": "path", "glob": "tests/**"},
+      "match": {
+        "kind": "path",
+        "glob": "tests/**"
+      },
       "reason": "False positive: bandit B101 (assert_used) flags pytest assertions in the repo's own regression suite (tests/test_bug_classes.py, tests/test_owned_paths_guard.py). assert is pytest's assertion mechanism, not an -O-stripped runtime guard. The diagnosis wave already excludes tests/ from source lanes by default; the bandit security lane is the only leaf that reaches into it."
     },
     {
-      "match": {"kind": "path", "glob": "maintenance/reports/**"},
+      "match": {
+        "kind": "path",
+        "glob": "maintenance/reports/**"
+      },
       "reason": "Archived audit-report artifacts (a captured git-worktree snapshot under maintenance/reports/toyoptimization-*/), not package source. The repo's own ruff config already sets extend-exclude=[\"maintenance/reports\"]; bandit B101 (assert_used) hits inside the snapshot's test_toyopt.py are doubly out of scope."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_ladder_list", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script by sibling skills via the importlib bootstrap (CONTRACT.worker_ladder_list in goal-preflight lint_goal_bundle); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/append_scheduler_event.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/append_scheduler_event.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "worker_route_class_reason", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.worker_route_class_reason in goal-branch-orchestrator create_runtime_packet); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/check_goal_skill_availability.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_goal_skill_availability.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "format_worker_ladder", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script via the importlib bootstrap (CONTRACT.format_worker_ladder); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/check_model_catalog.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_model_catalog.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "review_route_for_tier", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script via the importlib bootstrap (CONTRACT.review_route_for_tier); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/extract_telemetry.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/extract_telemetry.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "codex_telemetry_attempts", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.codex_telemetry_attempts in create_audit_packet and runtime runners); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/reconcile_goal_run.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/reconcile_goal_run.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "research_policy_defects", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.research_policy_defects in render_branch_worktree_commands and lint_goal_bundle); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/runtime_lite_runner.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/runtime_lite_runner.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/orchestration_contract.py", "symbol": "telemetry_shell_function", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared contract API consumed cross-script (CONTRACT.telemetry_shell_function in create_runtime_packet and create_adaptation_packet); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/script_only_repair_gate.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/script_only_repair_gate.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/path_rules.py", "symbol": "require_relative_path", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared path-rule API consumed cross-script by many skill scripts via the importlib bootstrap (31 repo-wide uses); vulture cannot trace importlib consumers. Verified consumed 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-branch-orchestrator/scripts/validate_lite_advice.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/validate_lite_advice.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/path_rules.py", "symbol": "require_branch_name", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared path-rule API consumed cross-script (require_branch_name in create_goal_bundle / lint_goal_bundle / amendment_lib); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/append_scheduler_event.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/append_scheduler_event.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_telemetry_artifact", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_telemetry_artifact in validate_main_status / validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/check_goal_skill_availability.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_goal_skill_availability.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "archived_manifest_hashes_by_rel_path", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared validation API consumed cross-script via the importlib bootstrap (STATUS_VALIDATION.archived_manifest_hashes_by_rel_path); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/check_model_catalog.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_model_catalog.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_scheduler_rollup", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_scheduler_rollup in validate_main_status and assemble_main_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/context_pack.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/context_pack.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_pre_review_gate_artifact", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_pre_review_gate_artifact in validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/create_lite_advice_packet.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/create_lite_advice_packet.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/_goal_shared/scripts/status_validation.py", "symbol": "validate_runtime_lite_advice_entries", "metric": "dead_code_confidence"},
-      "reason": "False positive: public _goal_shared validation API consumed cross-script (STATUS_VALIDATION.validate_runtime_lite_advice_entries in validate_main_status / validate_branch_status); vulture cannot trace importlib consumers. Verified consumed repo-wide 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/extract_telemetry.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/extract_telemetry.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py", "symbol": "is_worktree_dirty", "metric": "dead_code_confidence"},
-      "reason": "Tested utility consumed only by the preparedness fixture harness (scripts/check_preparedness_fixtures.py asserts archived-vs-live worktree dirtiness incl. ignore_runtime_cache), which is gated by npm run check:fixtures; vulture cannot see the importlib consumer. Production dirty-detection uses packet_delta_changed_files. Verified 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/reconcile_goal_run.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/reconcile_goal_run.py."
     },
     {
-      "match": {"kind": "finding", "leaf": "dead-code", "path": "skills/goal-branch-orchestrator/scripts/validate_branch_status.py", "symbol": "clear_git_stdout_cache", "metric": "dead_code_confidence"},
-      "reason": "Legitimate test-support utility: scripts/check_preparedness_fixtures.py clears the per-process git stdout cache between archived-mode and live-mode freshness assertions (after git branch -f moves the ref) so the live snapshot recomputes; gated by npm run check:fixtures. vulture cannot see the importlib consumer. Verified 2026-06-18."
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/runtime_lite_runner.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/runtime_lite_runner.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/runtime_phase_manifest.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/runtime_phase_manifest.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/scheduler_tick.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/scheduler_tick.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/script_only_repair_gate.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/script_only_repair_gate.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-config/scripts/validate_lite_advice.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/validate_lite_advice.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/check_goal_skill_availability.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_goal_skill_availability.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/check_model_catalog.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_model_catalog.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/context_pack.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/context_pack.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/create_lite_advice_packet.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/create_lite_advice_packet.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/extract_telemetry.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/extract_telemetry.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/runtime_lite_runner.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/runtime_lite_runner.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/script_only_repair_gate.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/script_only_repair_gate.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-main-orchestrator/scripts/validate_lite_advice.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/validate_lite_advice.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/append_scheduler_event.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/append_scheduler_event.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/check_goal_skill_availability.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_goal_skill_availability.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/check_model_catalog.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_model_catalog.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/context_pack.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/context_pack.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/create_lite_advice_packet.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/create_lite_advice_packet.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/extract_telemetry.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/extract_telemetry.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/reconcile_goal_run.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/reconcile_goal_run.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/runtime_lite_runner.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/runtime_lite_runner.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/scheduler_tick.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/scheduler_tick.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/script_only_repair_gate.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/script_only_repair_gate.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-plan-amender/scripts/validate_lite_advice.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/validate_lite_advice.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/append_scheduler_event.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/append_scheduler_event.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/check_goal_skill_availability.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_goal_skill_availability.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/check_model_catalog.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/check_model_catalog.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/context_pack.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/context_pack.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/create_lite_advice_packet.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/create_lite_advice_packet.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/extract_telemetry.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/extract_telemetry.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/reconcile_goal_run.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/reconcile_goal_run.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/runtime_lite_runner.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/runtime_lite_runner.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/scheduler_tick.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/scheduler_tick.py."
+    },
+    {
+      "match": {
+        "kind": "finding",
+        "leaf": "coverage-gap",
+        "path": "skills/goal-preflight/scripts/script_only_repair_gate.py",
+        "symbol": "<file>",
+        "metric": "file_coverage_percent"
+      },
+      "reason": "Coverage false positive for generated skill-local wrapper. sync_goal_shared.py owns this checked-in wrapper and canonical behavior is covered in skills/_goal_shared/scripts/script_only_repair_gate.py."
     }
   ]
 }
