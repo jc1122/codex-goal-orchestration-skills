@@ -10,6 +10,22 @@ import shlex
 import subprocess
 from pathlib import Path
 
+BASE_REF_STATUSES = {"exists", "not_checked", "missing", "not_requested"}
+
+
+def _is_manifest_int(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _string_members(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _list_members(value: object) -> list:
+    return value if isinstance(value, list) else []
+
 
 def _read_json(path: Path, label: str) -> dict:
     try:
@@ -38,10 +54,10 @@ def _read_bootloader(bundle_dir: Path) -> str:
 
 def _wave_lookup(manifest: dict) -> dict[str, dict[str, object]]:
     lookup: dict[str, dict[str, object]] = {}
-    for wave in manifest.get("waves", []):
+    for wave in _list_members(manifest.get("waves")):
         if not isinstance(wave, dict):
             continue
-        for branch_id in wave.get("branches", []):
+        for branch_id in _list_members(wave.get("branches")):
             if isinstance(branch_id, str):
                 lookup[branch_id] = wave
     return lookup
@@ -50,7 +66,7 @@ def _wave_lookup(manifest: dict) -> dict[str, dict[str, object]]:
 def _collect_bundle_dag(manifest: dict) -> list[dict[str, list[str] | str | int]]:
     wave_lookup = _wave_lookup(manifest)
     branches = []
-    for branch in manifest.get("branches", []):
+    for branch in _list_members(manifest.get("branches")):
         if not isinstance(branch, dict):
             continue
         wave = wave_lookup.get(str(branch.get("id", "")), {})
@@ -59,7 +75,7 @@ def _collect_bundle_dag(manifest: dict) -> list[dict[str, list[str] | str | int]
                 "id": str(branch.get("id", "<missing>")),
                 "wave": str(branch.get("wave", "")),
                 "dependency_level": wave.get("dependency_level", ""),
-                "depends_on": sorted([str(dep) for dep in branch.get("depends_on", []) if isinstance(dep, str)]),
+                "depends_on": sorted(_string_members(branch.get("depends_on", []))),
                 "worker_cap": branch.get("max_active_worker_packets", ""),
             }
         )
@@ -72,7 +88,7 @@ def _branch_dependency_levels(branches: list[dict]) -> dict[str, int]:
     while remaining:
         progressed = False
         for branch_id, branch in list(remaining.items()):
-            deps = [str(dep) for dep in branch.get("depends_on", []) if isinstance(dep, str)]
+            deps = _string_members(branch.get("depends_on", []))
             if any(dep in remaining for dep in deps):
                 continue
             dep_levels = [levels.get(dep, 0) for dep in deps]
@@ -87,7 +103,7 @@ def _branch_dependency_levels(branches: list[dict]) -> dict[str, int]:
 
 
 def _branch_utilization_summary(manifest: dict) -> dict[str, object]:
-    branches = [branch for branch in manifest.get("branches", []) if isinstance(branch, dict)]
+    branches = [branch for branch in _list_members(manifest.get("branches")) if isinstance(branch, dict)]
     max_active = manifest.get("max_active_branch_agents")
     if not isinstance(max_active, int) or isinstance(max_active, bool):
         max_active = 0
@@ -117,7 +133,9 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
     routes: dict[str, object] = {}
     verified_routes = _verified_routes_summary(manifest)
     recommendations_suppressed = verified_routes.get("route_model_availability_verified") is not True
-    worker_policy = manifest.get("worker_model_policy", {})
+    worker_policy = manifest.get("worker_model_policy")
+    if not isinstance(worker_policy, dict):
+        worker_policy = {}
     routes["worker_recommendations_suppressed"] = recommendations_suppressed
     if recommendations_suppressed:
         routes["worker"] = []
@@ -129,13 +147,21 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
         )
     else:
         routes["worker"] = worker_policy.get("default_ladder", [])
-    amender_policy = manifest.get("amender_model_policy", {})
+    amender_policy = manifest.get("amender_model_policy")
+    if not isinstance(amender_policy, dict):
+        amender_policy = {}
     routes["amender"] = amender_policy.get("default_ladder", [])
-    lite_policy = manifest.get("lite_model_policy", {})
+    lite_policy = manifest.get("lite_model_policy")
+    if not isinstance(lite_policy, dict):
+        lite_policy = {}
     routes["lite"] = lite_policy.get("allowed_routes", [])
-    review_policy = manifest.get("review_model_policy", {})
+    review_policy = manifest.get("review_model_policy")
+    if not isinstance(review_policy, dict):
+        review_policy = {}
     routes["reviewer"] = review_policy.get("routes", {})
-    parallelization = manifest.get("parallelization", {})
+    parallelization = manifest.get("parallelization")
+    if not isinstance(parallelization, dict):
+        parallelization = {}
     routes["dependency_parallel_policy"] = {
         "max_active_branch_agents": parallelization.get(
             "max_active_branch_agents", manifest.get("max_active_branch_agents")
@@ -147,10 +173,12 @@ def _route_policy_summary(manifest: dict) -> dict[str, object]:
 
 
 def _caps_summary(manifest: dict) -> dict[str, object]:
-    parallelization = manifest.get("parallelization", {})
+    parallelization = manifest.get("parallelization")
+    if not isinstance(parallelization, dict):
+        parallelization = {}
     branch_caps = {
         str(branch.get("id")): branch.get("max_active_worker_packets")
-        for branch in manifest.get("branches", [])
+        for branch in _list_members(manifest.get("branches"))
         if isinstance(branch, dict) and isinstance(branch.get("id"), str)
     }
     numeric_caps = [value for value in branch_caps.values() if isinstance(value, int) and not isinstance(value, bool)]
@@ -178,7 +206,9 @@ def _lint_status(bundle_dir: Path, label: str) -> dict[str, object]:
     payload = _read_json(path, f"{label} lint report")
     if not isinstance(payload, dict):
         return {"label": label, "status": "invalid", "path": str(path)}
-    schema_status = payload.get("schema_lint_status") or payload.get("status", "unknown")
+    schema_status = (
+        payload["schema_lint_status"] if "schema_lint_status" in payload else payload.get("status", "unknown")
+    )
     raw_defects = payload.get("defects", payload.get("errors", []))
     defect_list = raw_defects if isinstance(raw_defects, list) else []
     return {
@@ -345,7 +375,7 @@ def _prompt_size_report(bundle_dir: Path, manifest: dict) -> dict[str, object]:
     entries = [_prompt_entry(bundle_dir, str(manifest.get("main_prompt") or "main.prompt.md"))]
     if isinstance(manifest.get("runtime_rules_path"), str):
         entries.append(_prompt_entry(bundle_dir, str(manifest["runtime_rules_path"])))
-    for branch in manifest.get("branches", []):
+    for branch in _list_members(manifest.get("branches")):
         if isinstance(branch, dict) and isinstance(branch.get("prompt"), str):
             entries.append(_prompt_entry(bundle_dir, branch["prompt"]))
     total_chars = sum(int(item["chars"]) for item in entries)
@@ -462,15 +492,236 @@ def _config_status_blocks_launch(goal_config_status: str) -> bool:
 
 
 def _repo_runtime_gate(manifest: dict) -> dict[str, object]:
-    repo_status = manifest.get("repo_status") if isinstance(manifest.get("repo_status"), dict) else {}
+    repo_status = manifest.get("repo_status")
+    if not isinstance(repo_status, dict):
+        return {"status": "blocked", "reason": "manifest.repo_status must be an object"}
+    repo_is_git = repo_status.get("repo_is_git")
+    if "repo_is_git" not in repo_status:
+        return {"status": "blocked", "reason": "manifest.repo_status.repo_is_git must be present and a boolean"}
+    if not isinstance(repo_is_git, bool):
+        return {"status": "blocked", "reason": "manifest.repo_status.repo_is_git must be a boolean"}
+    base_ref_status = repo_status.get("base_ref_status")
+    if "base_ref_status" not in repo_status:
+        return {
+            "status": "blocked",
+            "reason": "manifest.repo_status.base_ref_status must be present and one of {'exists','not_checked','missing','not_requested'}",
+        }
+    if not isinstance(base_ref_status, str):
+        return {"status": "blocked", "reason": "manifest.repo_status.base_ref_status must be a string"}
+    if base_ref_status not in BASE_REF_STATUSES:
+        return {
+            "status": "blocked",
+            "reason": f"manifest.repo_status.base_ref_status must be one of: {', '.join(sorted(BASE_REF_STATUSES))}",
+        }
     if repo_status.get("repo_is_git") is False:
         return {
             "status": "blocked",
             "reason": "directory mode is unsupported for runtime branch/worktree orchestration; use a git work tree or add an explicit supported no-git runtime mode",
         }
-    if repo_status.get("base_ref_status") == "missing":
+    if base_ref_status == "missing":
         return {"status": "blocked", "reason": f"base_ref does not exist: {repo_status.get('base_ref')}"}
     return {"status": "pass", "reason": "git worktree/base_ref gate passed or was not required"}
+
+
+def _telemetry_policy_value_blockers(policy: dict) -> list[str]:
+    blockers: list[str] = []
+    schema_version = policy.get("schema_version")
+    if not _is_manifest_int(schema_version) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
+        blockers.append(f"manifest.telemetry_policy.schema_version must be {TELEMETRY_POLICY_SCHEMA_VERSION}")
+
+    mode = policy.get("mode")
+    if not isinstance(mode, str) or mode not in TELEMETRY_POLICY_MODES:
+        mode_display = ", ".join(sorted(TELEMETRY_POLICY_MODES))
+        blockers.append(f"manifest.telemetry_policy.mode must be one of: {mode_display}")
+
+    if policy.get("raw_text") is not False:
+        blockers.append("manifest.telemetry_policy.raw_text must be false")
+
+    collect = policy.get("collect", [])
+    if collect is None:
+        collect = []
+    elif isinstance(collect, str):
+        collect = [collect]
+    elif not isinstance(collect, list):
+        blockers.append("manifest.telemetry_policy.collect must be a list")
+        collect = []
+
+    unsupported_collect: list[str] = []
+    for index, item in enumerate(collect):
+        if not isinstance(item, str) or not item.strip():
+            blockers.append(f"manifest.telemetry_policy.collect[{index}] must be a non-empty string")
+            continue
+        if item not in TELEMETRY_COLLECT_ITEMS:
+            unsupported_collect.append(item)
+    if unsupported_collect:
+        blockers.append(
+            "manifest.telemetry_policy.collect has unsupported names: " + ", ".join(sorted(unsupported_collect))
+        )
+
+    for key in policy:
+        lowered = str(key).lower()
+        if "usd" in lowered or "pricing" in lowered:
+            blockers.append(f"manifest.telemetry_policy contains unsupported billing field: {key}")
+    allowed_keys = {"schema_version", "mode", "raw_text", "collect"}
+    unknown = sorted((key for key in policy if key not in allowed_keys), key=str)
+    if unknown:
+        blockers.append(
+            "manifest.telemetry_policy contains unsupported keys: " + ", ".join(str(key) for key in unknown)
+        )
+    return blockers
+
+
+def _branch_dependency_topology_blockers(branches: list[object], waves: object) -> list[str]:
+    blockers: list[str] = []
+    branch_order: dict[str, int] = {}
+    for index, branch in enumerate(branches):
+        if not isinstance(branch, dict):
+            continue
+        branch_id = branch.get("id")
+        if isinstance(branch_id, str):
+            branch_order.setdefault(branch_id, index)
+        else:
+            blockers.append(f"manifest.branches[{index}].id must be a string")
+
+    wave_positions: dict[str, int] = {}
+    branch_to_wave: dict[str, str] = {}
+    if isinstance(waves, list):
+        for wave_index, wave in enumerate(waves):
+            if not isinstance(wave, dict):
+                continue
+            wave_id = wave.get("id")
+            if isinstance(wave_id, str):
+                wave_positions.setdefault(wave_id, wave_index)
+            branches_in_wave = wave.get("branches")
+            if not isinstance(branches_in_wave, list):
+                continue
+            for branch_id in branches_in_wave:
+                if isinstance(branch_id, str) and isinstance(wave_id, str):
+                    branch_to_wave.setdefault(branch_id, wave_id)
+
+    for index, branch in enumerate(branches):
+        if not isinstance(branch, dict):
+            continue
+        branch_id = branch.get("id")
+        if not isinstance(branch_id, str):
+            continue
+        depends_on = branch.get("depends_on")
+        if not isinstance(depends_on, list):
+            continue
+        branch_wave = branch_to_wave.get(branch_id)
+        branch_wave_position = wave_positions.get(branch_wave) if branch_wave is not None else None
+        for dep in depends_on:
+            if not isinstance(dep, str):
+                continue
+            dep_index = branch_order.get(dep)
+            if dep_index is None:
+                blockers.append(f"manifest branch {branch_id!r} depends on unknown branch {dep!r}")
+                continue
+            if dep_index >= index:
+                blockers.append(
+                    f"manifest branch {branch_id!r} depends_on must reference only prior branch ids; invalid dependency: {dep!r}"
+                )
+            dep_wave = branch_to_wave.get(dep)
+            dep_wave_position = wave_positions.get(dep_wave) if dep_wave is not None else None
+            if (
+                branch_wave_position is not None
+                and dep_wave_position is not None
+                and dep_wave_position >= branch_wave_position
+            ):
+                blockers.append(f"manifest branch {branch_id!r} must come after the wave of its dependency {dep!r}")
+    return blockers
+
+
+def _manifest_readiness_blockers(manifest: dict) -> list[str]:
+    blockers: list[str] = []
+    for key in MANIFEST_REQUIRED_KEYS:
+        if key not in manifest:
+            blockers.append(f"manifest missing required key: {key}")
+    branches = manifest.get("branches")
+    if "branches" in manifest and not isinstance(branches, list):
+        blockers.append("manifest.branches must be an array")
+    elif isinstance(branches, list):
+        for index, branch in enumerate(branches):
+            if not isinstance(branch, dict):
+                blockers.append(f"manifest.branches[{index}] must be an object")
+                continue
+            depends_on = branch.get("depends_on")
+            if depends_on is not None:
+                if not isinstance(depends_on, list):
+                    blockers.append(f"manifest.branches[{index}].depends_on must be an array")
+                elif any(not isinstance(dep, str) for dep in depends_on):
+                    blockers.append(f"manifest.branches[{index}].depends_on entries must be strings")
+        blockers.extend(_branch_dependency_topology_blockers(branches, manifest.get("waves")))
+    waves = manifest.get("waves")
+    if "waves" in manifest and not isinstance(waves, list):
+        blockers.append("manifest.waves must be an array")
+    preflight_warnings = manifest.get("preflight_warnings")
+    if "preflight_warnings" in manifest and not isinstance(preflight_warnings, list):
+        blockers.append("manifest.preflight_warnings must be an array")
+    max_active_branch_agents = manifest.get("max_active_branch_agents")
+    if max_active_branch_agents is not None:
+        if not _is_manifest_int(max_active_branch_agents):
+            blockers.append("manifest.max_active_branch_agents must be an integer")
+        elif not (1 <= max_active_branch_agents <= MAX_ACTIVE_BRANCH_AGENTS):
+            blockers.append(
+                f"manifest.max_active_branch_agents must be an integer from 1 to {MAX_ACTIVE_BRANCH_AGENTS}"
+            )
+        else:
+            if isinstance(waves, list):
+                for wave in waves:
+                    if not isinstance(wave, dict):
+                        blockers.append("manifest.waves must be an array of wave objects")
+                        continue
+                    branches_in_wave = wave.get("branches")
+                    if not isinstance(branches_in_wave, list):
+                        blockers.append(f"manifest wave {wave.get('id')!r} branches must be an array")
+                        continue
+                    if len(branches_in_wave) > max_active_branch_agents:
+                        blockers.append(
+                            f"manifest wave {wave.get('id')!r} contains {len(branches_in_wave)} branches but max_active_branch_agents is {max_active_branch_agents}"
+                        )
+    telemetry_policy = manifest.get("telemetry_policy")
+    if telemetry_policy is not None:
+        if not isinstance(telemetry_policy, dict):
+            blockers.append("manifest.telemetry_policy must be an object")
+        else:
+            mode = telemetry_policy.get("mode")
+            if not isinstance(mode, str):
+                blockers.append("manifest.telemetry_policy.mode must be a string")
+            blockers.extend(_telemetry_policy_value_blockers(telemetry_policy))
+    worker_model_policy = manifest.get("worker_model_policy")
+    if worker_model_policy is not None:
+        if not isinstance(worker_model_policy, dict):
+            blockers.append("manifest.worker_model_policy must be an object")
+        else:
+            default_ladder = worker_model_policy.get("default_ladder")
+            if default_ladder is not None and not isinstance(default_ladder, list):
+                blockers.append("manifest.worker_model_policy.default_ladder must be a list")
+    parallelization = manifest.get("parallelization")
+    if parallelization is not None:
+        if not isinstance(parallelization, dict):
+            blockers.append("manifest.parallelization must be an object")
+        else:
+            if "serial_reasons" in parallelization and not isinstance(parallelization.get("serial_reasons"), list):
+                blockers.append("manifest.parallelization")
+            if "max_branches_per_wave" in parallelization and (
+                not _is_manifest_int(parallelization.get("max_branches_per_wave"))
+                or parallelization.get("max_branches_per_wave") != MAX_ACTIVE_BRANCH_AGENTS
+            ):
+                blockers.append(f"manifest.parallelization.max_branches_per_wave must be {MAX_ACTIVE_BRANCH_AGENTS}")
+            if "max_waves" in parallelization and (
+                not _is_manifest_int(parallelization.get("max_waves")) or parallelization.get("max_waves") != MAX_WAVES
+            ):
+                blockers.append(f"manifest.parallelization.max_waves must be {MAX_WAVES}")
+    return blockers
+
+
+def _telemetry_mode_summary(manifest: dict) -> str:
+    telemetry_policy = manifest.get("telemetry_policy")
+    if not isinstance(telemetry_policy, dict):
+        return "standard"
+    mode = telemetry_policy.get("mode")
+    return mode if isinstance(mode, str) and mode in TELEMETRY_POLICY_MODES else "standard"
 
 
 def _launch_blockers(
@@ -484,6 +735,7 @@ def _launch_blockers(
     runtime_gate: dict[str, object],
 ) -> list[str]:
     blockers: list[str] = []
+    blockers.extend(_manifest_readiness_blockers(manifest))
     if _config_status_blocks_launch(goal_config_status):
         blockers.append(goal_config_status)
     token_telemetry = (
@@ -505,13 +757,21 @@ def _launch_blockers(
         and not waiver_accepted
     ):
         blockers.append("route_token_telemetry_degraded_without_waiver")
-    if lint_brief["status"] not in {"pass", "missing"}:
-        blockers.append(f"brief lint {lint_brief['status']}")
-    if lint_bundle["status"] != "pass":
-        blockers.append(f"bundle lint {lint_bundle['status']}")
-    if repair_gate["status"] != "pass":
-        blockers.append(f"repair gate {repair_gate['status']}")
-    if runtime_gate["status"] != "pass":
+    brief_status = lint_brief.get("status")
+    if not isinstance(brief_status, str) or not brief_status:
+        blockers.append("brief lint malformed")
+    elif brief_status not in {"pass", "missing"}:
+        blockers.append(f"brief lint {brief_status}")
+    bundle_status = lint_bundle.get("status")
+    if not isinstance(bundle_status, str) or not bundle_status:
+        blockers.append("bundle lint malformed")
+    elif bundle_status != "pass":
+        blockers.append(f"bundle lint {bundle_status}")
+    repair_status = repair_gate.get("status")
+    if repair_status != "pass":
+        blockers.append(f"repair gate {repair_status}")
+    runtime_status = runtime_gate.get("status")
+    if runtime_status != "pass":
         blockers.append(f"runtime gate blocked: {runtime_gate.get('reason')}")
     return blockers
 
@@ -526,7 +786,7 @@ def _readiness_warnings(
     utilization: dict[str, object],
 ) -> list[dict[str, object]]:
     warnings: list[dict[str, object]] = []
-    for warning in manifest.get("preflight_warnings", []):
+    for warning in _list_members(manifest.get("preflight_warnings")):
         if isinstance(warning, dict) and _manifest_warning_still_applies(
             warning, bundle_dir=bundle_dir, repo_root=repo_root
         ):
@@ -576,7 +836,7 @@ def _readiness_warnings(
         isinstance(max_ready, int)
         and max_ready <= 1
         and any(marker in rationale for marker in ("concurrent", "parallel", "saturat"))
-        and len(manifest.get("branches", [])) > 1
+        and len(_list_members(manifest.get("branches"))) > 1
     ):
         warnings.append(
             {
@@ -753,7 +1013,7 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
     bootloader_text = _read_bootloader(bundle_dir)
     bootloader_path = bundle_dir / "goal-bootloader.md"
     resolved_repo_root = _resolve_repo_root(bundle_dir, repo_root, bootloader_text)
-    telemetry_mode = manifest.get("telemetry_policy", {}).get("mode", "standard")
+    telemetry_mode = _telemetry_mode_summary(manifest)
     status = "pass"
     goal_config_status = _config_compatibility(manifest)
     lint_brief = _lint_status(bundle_dir, "brief")
@@ -775,6 +1035,8 @@ def render_readiness(bundle_dir: Path, repo_root: Path | None = None) -> str:
         repair_gate=repair_gate,
         defer_missing_reports=False,
     )
+    if not bootloader_path.exists():
+        launch_blockers = [*launch_blockers, "goal-bootloader.md missing"]
     if not launch_blockers and _bootloader_launch_handoff_is_stale(bootloader_text, lint_bundle, repair_gate):
         launch_blockers = ["bootloader launch handoff stale"]
     if launch_blockers:
@@ -846,7 +1108,7 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
     bootloader_text = _read_bootloader(bundle_dir)
     bootloader_path = bundle_dir / "goal-bootloader.md"
     resolved_repo_root = _resolve_repo_root(bundle_dir, repo_root, bootloader_text)
-    telemetry_mode = manifest.get("telemetry_policy", {}).get("mode", "standard")
+    telemetry_mode = _telemetry_mode_summary(manifest)
     status = "pass"
     goal_config_status = _config_compatibility(manifest)
     lint_brief = _lint_status(bundle_dir, "brief")
@@ -868,6 +1130,8 @@ def render_readiness_json(bundle_dir: Path, repo_root: Path | None = None) -> st
         repair_gate=repair_gate,
         defer_missing_reports=False,
     )
+    if not bootloader_path.exists():
+        launch_blockers = [*launch_blockers, "goal-bootloader.md missing"]
     if not launch_blockers and _bootloader_launch_handoff_is_stale(bootloader_text, lint_bundle, repair_gate):
         launch_blockers = ["bootloader launch handoff stale"]
     if launch_blockers:
@@ -1189,10 +1453,30 @@ def _load_contract():
     return module
 
 
+def _load_manifest_required_keys() -> tuple[str, ...]:
+    path = Path(__file__).with_name("lint_goal_bundle.py")
+    if not path.exists():
+        raise SystemExit(f"missing goal bundle linter: {path}")
+    spec = importlib.util.spec_from_file_location("goal_preflight_lint_goal_bundle_contract", path)
+    if spec is None or spec.loader is None:
+        raise SystemExit(f"could not load goal bundle linter: {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    required_keys = getattr(module, "MANIFEST_REQUIRED_KEYS", None)
+    if not isinstance(required_keys, tuple) or any(not isinstance(key, str) for key in required_keys):
+        raise SystemExit(f"goal bundle linter MANIFEST_REQUIRED_KEYS is malformed: {path}")
+    return required_keys
+
+
 PATH_RULES = _load_path_rules()
 CONTRACT = _load_contract()
+MANIFEST_REQUIRED_KEYS = _load_manifest_required_keys()
 resolve_absolute_path = PATH_RULES.resolve_absolute_path
 MAX_ACTIVE_BRANCH_AGENTS = CONTRACT.MAX_ACTIVE_BRANCH_AGENTS
+MAX_WAVES = CONTRACT.MAX_WAVES
+TELEMETRY_POLICY_SCHEMA_VERSION = CONTRACT.TELEMETRY_POLICY_SCHEMA_VERSION
+TELEMETRY_POLICY_MODES = CONTRACT.TELEMETRY_POLICY_MODES
+TELEMETRY_COLLECT_ITEMS = CONTRACT.TELEMETRY_COLLECT_ITEMS
 
 
 def render_bootloader(bundle_dir: Path, repo_root: Path) -> str:

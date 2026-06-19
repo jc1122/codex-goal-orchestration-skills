@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import importlib.util
 import os
@@ -50,6 +51,114 @@ def run(command: list[str], *, expect: int = 0, env: dict[str, str] | None = Non
 
 def sha256_json(value: object) -> str:
     return hashlib.sha256((json.dumps(value, indent=2, sort_keys=True) + "\n").encode("utf-8")).hexdigest()
+
+
+def _require_string_in_set(value: object, allowed: set[str], message: str) -> None:
+    if not isinstance(value, str) or value not in allowed:
+        raise SystemExit(message)
+
+
+def _require_string_field(value: object, field: str, message: str) -> str:
+    if not isinstance(value, dict):
+        raise SystemExit(message)
+    field_value = value.get(field)
+    if not isinstance(field_value, str):
+        raise SystemExit(message)
+    return field_value
+
+
+def _safe_iter_dict_items(value: object) -> list[dict]:
+    return [item for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _collect_string_values(value: object, field: str) -> set[str]:
+    return {item[field] for item in _safe_iter_dict_items(value) if isinstance(item.get(field), str)}
+
+
+def _collect_dict_items_by_string_field(value: object, field: str) -> dict[str, dict]:
+    return {item[field]: item for item in _safe_iter_dict_items(value) if isinstance(item.get(field), str)}
+
+
+def _collect_serial_wave_by_branch(serial_manifest: object) -> dict[str, dict]:
+    if not isinstance(serial_manifest, dict):
+        raise SystemExit(f"serial manifest must be an object: {serial_manifest!r}")
+
+    serial_waves = serial_manifest.get("waves", [])
+    if not isinstance(serial_waves, list):
+        raise SystemExit(f"serial fixture manifest waves must be a list: {serial_waves!r}")
+
+    serial_wave_by_branch: dict[str, dict] = {}
+    for wave in serial_waves:
+        if not isinstance(wave, dict):
+            raise SystemExit(f"serial fixture wave entry must be an object: {wave!r}")
+        branches = wave.get("branches", [])
+        if not isinstance(branches, list):
+            raise SystemExit(f"serial fixture wave {wave.get('id')!r} branches must be a list, got {branches!r}")
+        for branch_id in branches:
+            if not isinstance(branch_id, str):
+                raise SystemExit(
+                    f"serial fixture wave {wave.get('id')!r} branches must contain string branch ids: {branch_id!r}"
+                )
+            serial_wave_by_branch[branch_id] = {
+                "wave": wave.get("id"),
+                "dependency_level": wave.get("dependency_level"),
+            }
+    return serial_wave_by_branch
+
+
+def _ensure_no_blocking_amender_action(branch_decision: object) -> None:
+    if not isinstance(branch_decision, dict):
+        raise SystemExit(f"branch repair gate decision should be an object: {branch_decision!r}")
+    actions = branch_decision.get("actions", [])
+    if not isinstance(actions, list):
+        raise SystemExit(f"branch repair decision actions must be a list: {actions!r}")
+    for item in actions:
+        if not isinstance(item, dict):
+            continue
+        kind = item.get("kind")
+        if not isinstance(kind, str):
+            raise SystemExit(f"branch repair decision action kind must be a string: kind={kind!r}")
+        if kind in {"amendment_eligibility", "blocker_repair_candidate"}:
+            raise SystemExit(f"branch repair gate leaked amender actions: {branch_decision!r}")
+
+
+def _require_blocked_recovered_branch_id(branch_report: object, recovered_branch_ids: set[str]) -> bool:
+    runtime_status = _require_string_field(
+        branch_report,
+        "runtime_status",
+        f"recovered branch report runtime_status must be a string: {branch_report!r}",
+    )
+    if runtime_status not in {"partial", "blocked", "failed"}:
+        return False
+    branch_id = _require_string_field(
+        branch_report,
+        "branch_id",
+        f"recovered branch report branch_id must be a string: {branch_report!r}",
+    )
+    return branch_id not in recovered_branch_ids
+
+
+def _assert_verified_worker_aliases_not_pruned(pruning: object) -> None:
+    if not isinstance(pruning, dict):
+        raise SystemExit(f"route_policy_pruning must be an object: {pruning!r}")
+    status = pruning.get("status")
+    if status is not None and not isinstance(status, str):
+        raise SystemExit(f"route_policy_pruning status must be null or a string: {pruning!r}")
+    if status not in {None, "not_needed"} and pruning.get("removed_worker_roles"):
+        raise SystemExit(f"full smoke evidence should not prune verified worker aliases: {pruning!r}")
+
+
+def run_route_policy_pruning_status_fixture() -> None:
+    for status in (None, "not_needed"):
+        _assert_verified_worker_aliases_not_pruned({"status": status, "removed_worker_roles": ["worker"]})
+    malformed_pruning = {"status": [], "removed_worker_roles": ["worker"]}
+    try:
+        _assert_verified_worker_aliases_not_pruned(malformed_pruning)
+    except SystemExit as exc:
+        if "route_policy_pruning status must be null or a string" not in str(exc):
+            raise SystemExit(f"malformed pruning status fixture reported the wrong failure: {exc}") from exc
+    else:
+        raise SystemExit("malformed pruning status fixture should fail closed")
 
 
 def mark_worker_routes_verified(manifest: dict, accepted_roles: list[str]) -> str | None:
@@ -1057,11 +1166,7 @@ def run_topology_fixtures(tmp_path: Path) -> None:
             f"serial-chain topology fixture did not synthesize dependency serial_reasons: {serial_reasons!r}"
         )
     serial_waves = serial_manifest.get("waves", [])
-    serial_wave_by_branch = {
-        branch_id: {"wave": wave.get("id"), "dependency_level": wave.get("dependency_level")}
-        for wave in serial_waves
-        for branch_id in wave.get("branches", [])
-    }
+    serial_wave_by_branch = _collect_serial_wave_by_branch(serial_manifest)
     if serial_wave_by_branch.get("B01", {}).get("wave") == serial_wave_by_branch.get("B02", {}).get("wave"):
         raise SystemExit(f"dependency-aware waves should not put dependent branches in the same wave: {serial_waves!r}")
     if serial_wave_by_branch.get("B03", {}).get("dependency_level") != 3:
@@ -2032,6 +2137,7 @@ def run_amender_route_selection_fixtures(tmp_path: Path) -> None:
 def run_negative_amendment_fixtures(tmp_path: Path) -> None:
     no_infer_bundle = create_amendment_bundle(tmp_path, "amendment-no-infer-fixture")
     no_infer_proposal = no_infer_bundle / "amendments" / "A009.proposal.json"
+    no_infer_validation = no_infer_bundle / "amendments" / "A009.validation.json"
     write_json(
         no_infer_proposal,
         amendment_proposal(
@@ -2053,9 +2159,49 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
             "--no-infer-scheduler",
             "--json",
         ],
-        expect=1,
+        expect=0,
     )
-    assert_contains(no_infer.stdout, "scheduler/status inference is mandatory", "no-infer safety fixture")
+    no_infer_payload = json.loads(no_infer.stdout)
+    if no_infer_payload.get("status") != "pass":
+        raise SystemExit(
+            f"no-infer scheduler safety fixture should pass with blocked terminal inference: {no_infer_payload!r}"
+        )
+    if any(
+        "scheduler/status inference is mandatory" in str(defect)
+        for defect in no_infer_payload.get("defects", [])
+        if isinstance(defect, str)
+    ):
+        raise SystemExit(
+            f"no-infer scheduler safety fixture should not emit the inference mandatory defect: {no_infer_payload!r}"
+        )
+    if no_infer_payload.get("terminal_branch_statuses", {}).get("B01") != "blocked":
+        raise SystemExit(
+            f"no-infer scheduler safety fixture should report B01 blocked terminal status: {no_infer_payload!r}"
+        )
+    if not no_infer_validation.exists():
+        raise SystemExit(f"expected default validation artifact to be written: {no_infer_validation!r}")
+    lineage_path = no_infer_payload.get("lineage_path")
+    if not isinstance(lineage_path, str):
+        raise SystemExit(f"no-infer validation output must carry lineage_path: {no_infer_payload!r}")
+    if not Path(lineage_path).exists():
+        raise SystemExit(f"no-infer validation lineage file should exist: {lineage_path!r}")
+    lineage = read_json(Path(lineage_path))
+    if not isinstance(lineage.get("stages"), list):
+        raise SystemExit(f"no-infer validation lineage should include a stages list: {lineage!r}")
+    validation_stage = next(
+        (
+            stage
+            for stage in lineage.get("stages", [])
+            if isinstance(stage, dict) and stage.get("stage") == "validation"
+        ),
+        None,
+    )
+    if not isinstance(validation_stage, dict):
+        raise SystemExit(f"no-infer validation lineage should include a validation stage: {lineage!r}")
+    if validation_stage.get("path") not in (no_infer_validation.as_posix(), "amendments/A009.validation.json"):
+        raise SystemExit(f"validation stage should reference default artifact: {validation_stage!r}")
+    if validation_stage.get("sha256") != sha256_file(no_infer_validation):
+        raise SystemExit(f"validation stage should reference the default artifact sha256: {validation_stage!r}")
 
     invalid_bundle = create_amendment_bundle(tmp_path, "amendment-invalid-fixture")
     write_json(invalid_bundle / "branches" / "B01.status.json", {"branch_id": "B01", "status": "blocked"})
@@ -2228,6 +2374,11 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
         raise SystemExit("missing packet validation apply mutated the live manifest")
 
     drift_bundle = create_amendment_bundle(tmp_path, "amendment-active-drift-fixture")
+    b01_status = {
+        "branch_id": "B01",
+        "status": "pass",
+    }
+    write_json(drift_bundle / "branches" / "B01.status.json", b01_status)
     create_amendment_decision(
         drift_bundle,
         "A020",
@@ -2251,12 +2402,27 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
         ]
     )
     drift_proposal = drift_bundle / "amendments" / "A020.proposal.json"
+    b02_branch = {
+        "id": "B02",
+        "depends_on": [],
+        "recovers_from": ["B01"],
+    }
+    for branch in read_json(drift_bundle / "job.manifest.json").get("branches", []):
+        if not isinstance(branch, dict) or branch.get("id") != "B02":
+            continue
+        b02_branch = {**copy.deepcopy(branch), **b02_branch}
+        break
     write_json(
         drift_proposal,
         amendment_proposal(
             "A020",
             "amendment-active-drift-fixture",
             [
+                {
+                    "op": "replace_unstarted_branch",
+                    "branch_id": "B02",
+                    "branch": b02_branch,
+                },
                 {
                     "op": "add_work_item_to_unstarted_branch",
                     "branch_id": "B02",
@@ -2269,7 +2435,7 @@ def run_negative_amendment_fixtures(tmp_path: Path) -> None:
                         "verification": ["git diff --check main...HEAD"],
                         "dod": ["drift work item validates"],
                     },
-                }
+                },
             ],
         ),
     )
@@ -3663,8 +3829,16 @@ def run_worker_repair_promotion_fixture(tmp_path: Path) -> None:
             ]
         ).stdout
     )
-    if issue059_assemble.get("branch_status") not in {"partial", "blocked"}:
-        raise SystemExit(f"issue-059 partial evidence should produce non-pass branch status: {issue059_assemble!r}")
+    issue059_branch_status = _require_string_field(
+        issue059_assemble,
+        "branch_status",
+        f"issue-059 partial evidence should produce non-pass branch status: {issue059_assemble!r}",
+    )
+    _require_string_in_set(
+        issue059_branch_status,
+        {"partial", "blocked"},
+        f"issue-059 partial evidence should produce non-pass branch status: {issue059_assemble!r}",
+    )
     issue059_worker_status = read_json(issue059_bundle / "workers" / "B01-W01" / "status.json")
     if (
         issue059_worker_status.get("status") != "pass"
@@ -6544,8 +6718,19 @@ def run_opencode_wal_fallback_fixture(tmp_path: Path) -> None:
     summary_attempts = summary.get("attempts")
     if not isinstance(summary_attempts, list) or len(summary_attempts) < 2:
         raise SystemExit(f"bridge fallback fixture should report both attempts: {summary!r}")
-    if summary_attempts[0].get("state") not in {"fail-clean", "fail-dirty"}:
+    summary_attempt0 = summary_attempts[0]
+    if not isinstance(summary_attempt0, dict):
         raise SystemExit(f"bridge attempt should fail cleanly before fallback: {summary!r}")
+    summary_attempt0_state = _require_string_field(
+        summary_attempt0,
+        "state",
+        f"bridge attempt should fail cleanly before fallback: {summary!r}",
+    )
+    _require_string_in_set(
+        summary_attempt0_state,
+        {"fail-clean", "fail-dirty"},
+        f"bridge attempt should fail cleanly before fallback: {summary!r}",
+    )
     if summary_attempts[0].get("provider_error_code") != "opencode_sqlite_wal_failure":
         raise SystemExit(f"failed bridge attempt should propagate the bridge issue id: {summary!r}")
     if summary_attempts[1].get("state") != "pass":
@@ -6654,6 +6839,7 @@ def create_goal_fixture_bundle(tmp_path: Path) -> Path:
     if (
         not isinstance(git_repo_status, dict)
         or not isinstance(git_repo_status.get("repo_is_git"), bool)
+        or not isinstance(git_repo_status.get("base_ref_status"), str)
         or git_repo_status.get("base_ref_status") not in {"exists", "not_checked", "missing", "not_requested"}
     ):
         raise SystemExit(f"lint report should expose git repo status metadata: {git_repo_status!r}")
@@ -6757,9 +6943,7 @@ def run_repair_gate_fixture(bundle: Path) -> None:
     )
     if branch_decision.get("decision") != "pass_no_actions":
         raise SystemExit(f"branch repair gate should not emit amender actions: {branch_decision!r}")
-    action_kinds = [item.get("kind") for item in branch_decision.get("actions", []) if isinstance(item, dict)]
-    if any(kind in {"amendment_eligibility", "blocker_repair_candidate"} for kind in action_kinds):
-        raise SystemExit(f"branch repair gate leaked amender actions: {branch_decision!r}")
+    _ensure_no_blocking_amender_action(branch_decision)
     telemetry_check = next(
         (item for item in branch_decision.get("checks", []) if item.get("name") == "telemetry_summary"), None
     )
@@ -6962,7 +7146,7 @@ def run_validator_command_fixtures(tmp_path: Path, bundle: Path) -> None:
         ]
     )
     warning_audit = read_json(warning_audit_dir / "prompt-audit.json")
-    warning_severities = {item.get("severity") for item in warning_audit.get("defects", []) if isinstance(item, dict)}
+    warning_severities = _collect_string_values(warning_audit.get("defects", []), "severity")
     if warning_audit.get("status") != "pass" or "warning" in warning_severities or "minor" not in warning_severities:
         raise SystemExit(
             f"deterministic prompt audit should normalize warning-only defects to minor: {warning_audit!r}"
@@ -7138,10 +7322,21 @@ def run_phase_manifest_and_schema_fixtures(bundle: Path) -> None:
             raise SystemExit(f"runtime index should point research workers at research artifacts: {indexed_worker!r}")
     if not isinstance(manifest.get("route_contract", {}).get("catalog_refresh_required"), bool):
         raise SystemExit(f"route contract must expose catalog refresh requirement: {manifest.get('route_contract')!r}")
-    if manifest.get("ownership_feasibility", {}).get("status") not in {"pass", "needs_review"}:
+    ownership_feasibility = manifest.get("ownership_feasibility")
+    if not isinstance(ownership_feasibility, dict):
         raise SystemExit(
             f"manifest must expose ownership feasibility status: {manifest.get('ownership_feasibility')!r}"
         )
+    ownership_status = _require_string_field(
+        ownership_feasibility,
+        "status",
+        f"manifest must expose ownership feasibility status: {manifest.get('ownership_feasibility')!r}",
+    )
+    _require_string_in_set(
+        ownership_status,
+        {"pass", "needs_review"},
+        f"manifest must expose ownership feasibility status: {manifest.get('ownership_feasibility')!r}",
+    )
     if manifest.get("execution_strategy", {}).get("schema_version") != 1:
         raise SystemExit(f"manifest execution strategy must be schema v1: {manifest.get('execution_strategy')!r}")
     prompt_size = readiness_json.get("prompt_size_report", {})
@@ -7639,7 +7834,13 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         for key in ["elapsed_ms", "stdout_bytes", "stderr_bytes", "artifact_delta"]:
             if key not in item:
                 raise SystemExit(f"pipeline command telemetry missing {key}: {item!r}")
-        if item.get("phase") not in {"runtime_gate", "config_selection"} and not item.get("command_hash"):
+        phase = _require_string_field(
+            item,
+            "phase",
+            f"command phase should record a command_hash: {item!r}",
+        )
+        command_hash = item.get("command_hash")
+        if phase not in {"runtime_gate", "config_selection"} and not command_hash:
             raise SystemExit(f"command phase should record a command_hash: {item!r}")
     for artifact in [
         "preflight.brief.lint.json",
@@ -7710,7 +7911,12 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(
             f"readiness should preserve unverified worker aliases separately: {pipeline_readiness.get('route_policy')!r}"
         )
-    optional_artifacts = pipeline_readiness.get("artifact_size_report", {}).get("optional_machine_artifacts", {})
+    artifact_size_report = pipeline_readiness.get("artifact_size_report", {})
+    if not isinstance(artifact_size_report, dict):
+        artifact_size_report = {}
+    optional_artifacts = artifact_size_report.get("optional_machine_artifacts", {})
+    if not isinstance(optional_artifacts, dict):
+        optional_artifacts = {}
     present_optional = optional_artifacts.get("present", [])
     if "readiness.json" not in present_optional or "preflight.pipeline.json" not in present_optional:
         raise SystemExit(f"final readiness should count final optional artifacts when present: {optional_artifacts!r}")
@@ -7721,11 +7927,10 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(
             f"artifact size report should not count absent optional artifacts as missing entries: {pipeline_readiness!r}"
         )
-    machine_artifacts = {
-        item.get("path"): item
-        for item in pipeline_readiness.get("artifact_size_report", {}).get("machine_artifacts", [])
-        if isinstance(item, dict)
-    }
+    artifact_size_report = pipeline_readiness.get("artifact_size_report", {})
+    if not isinstance(artifact_size_report, dict):
+        artifact_size_report = {}
+    machine_artifacts = _collect_dict_items_by_string_field(artifact_size_report.get("machine_artifacts", []), "path")
     for rel_path in ["preflight.pipeline.json", "readiness.json"]:
         entry = machine_artifacts.get(rel_path)
         if not entry or entry.get("chars") != len((pipeline_bundle / rel_path).read_text(encoding="utf-8")):
@@ -8134,6 +8339,52 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
     colocated_smoke_debug_check = tmp_path / "goal-config-smoke.json"
     if colocated_smoke_debug_check.exists():
         colocated_smoke_debug_check.unlink()
+    verified_current_default_roles = ["lite_agent", "demanding_agent", "worker_primary", "worker_fallback"]
+    verified_current_default_routes = [
+        {
+            "role": "lite_agent",
+            "alias": "ds-flash-max",
+            "harness": "opencode-bridge",
+            "provider": "deepseek",
+            "model": "deepseek-v4-flash",
+        },
+        {
+            "role": "demanding_agent",
+            "alias": "ds-pro-max",
+            "harness": "opencode-bridge",
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+        },
+        {
+            "role": "worker_primary",
+            "alias": "codex-spark",
+            "harness": "codex",
+            "provider": "openai",
+            "model": "gpt-5.3-codex-spark",
+        },
+        {
+            "role": "worker_fallback",
+            "alias": "codex-mini",
+            "harness": "codex",
+            "provider": "openai",
+            "model": "gpt-5.4-mini",
+        },
+    ]
+    verified_current_default_harnesses = [
+        {
+            **route,
+            "harness_kind": route["harness"],
+            "model_check": {"status": "pass"},
+            "smoke": {
+                "status": "pass",
+                "token_telemetry": {
+                    "available": False,
+                    "reason": "fixture smoke report does not expose token counters",
+                },
+            },
+        }
+        for route in verified_current_default_routes
+    ]
     write_json(
         colocated_smoke_debug_check,
         {
@@ -8142,28 +8393,19 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "check_mode": "smoke",
             "config_validation_mode": "smoke",
             "config_path": config_debug_path.as_posix(),
-            "accepted_routes": [
-                {
-                    "role": "lite_agent",
-                    "alias": "ds-flash-max",
-                    "harness": "opencode-bridge",
-                    "provider": "deepseek",
-                    "model": "deepseek-v4-flash",
-                },
-                {
-                    "role": "demanding_agent",
-                    "alias": "ds-pro-max",
-                    "harness": "opencode-bridge",
-                    "provider": "deepseek",
-                    "model": "deepseek-v4-pro",
-                },
-            ],
+            "config_sha256": sha256_file(config_debug_path).removeprefix("sha256:"),
+            "checked_roles": verified_current_default_roles,
+            "accepted_routes": verified_current_default_routes,
+            "rejected_routes": [],
+            "failures": [],
+            "harnesses": verified_current_default_harnesses,
             "summary": {
                 "route_verification_status": "routes_verified",
-                "accepted_route_count": 2,
-                "checked_role_count": 2,
-                "harness_count": 2,
+                "accepted_route_count": 4,
+                "checked_role_count": 4,
+                "harness_count": 4,
                 "failure_count": 0,
+                "rejected_route_count": 0,
             },
         },
     )
@@ -8187,9 +8429,13 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         ).stdout
     )
     colocated_selection = colocated_smoke_result.get("config_selection", {})
-    if colocated_selection.get("selected_check_path") != colocated_smoke_debug_check.as_posix():
+    if colocated_selection.get("selected_check_path") == colocated_smoke_debug_check.as_posix():
         raise SystemExit(
-            f"prepare should auto-reuse colocated route-verified smoke check: {colocated_selection.get('selected_check_path')!r}"
+            f"prepare should select a fresh check when reusing colocated route evidence: {colocated_selection!r}"
+        )
+    if colocated_selection.get("reused_route_evidence_path") != colocated_smoke_debug_check.as_posix():
+        raise SystemExit(
+            f"prepare should record colocated route-verified smoke check as reused evidence: {colocated_selection!r}"
         )
     if colocated_selection.get("route_model_availability_verified") is not True:
         raise SystemExit(
@@ -8201,14 +8447,12 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             f"colocated route-verified smoke check should prevent schema_pass_routes_unverified: {colocated_readiness!r}"
         )
     colocated_manifest = read_json(colocated_smoke_bundle / "job.manifest.json")
-    if colocated_manifest.get("worker_model_policy", {}).get("default_ladder") != ["lite_agent"]:
+    if colocated_manifest.get("worker_model_policy", {}).get("default_ladder") != expected_current_default_worker:
         raise SystemExit(
-            f"partial smoke evidence should prune unverified worker aliases: {colocated_manifest.get('worker_model_policy')!r}"
+            f"full smoke evidence should preserve verified worker aliases: {colocated_manifest.get('worker_model_policy')!r}"
         )
     pruning = colocated_manifest.get("goal_config_summary", {}).get("route_policy_pruning", {})
-    # Only lite_agent is verified, so the native Codex worker roles are pruned.
-    if pruning.get("status") != "pruned" or "worker_primary" not in pruning.get("removed_worker_roles", []):
-        raise SystemExit(f"partial smoke pruning should be recorded in goal_config_summary: {pruning!r}")
+    _assert_verified_worker_aliases_not_pruned(pruning)
 
     aliased_goal_config_path = tmp_path / "goal-config-debug-alias.json"
     shutil.copyfile(config_debug_path, aliased_goal_config_path)
@@ -8229,6 +8473,7 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
                 "--goal-config-check",
                 colocated_smoke_debug_check.as_posix(),
                 "--json",
+                "--allow-blocked-readiness",
             ]
         ).stdout
     )
@@ -8237,18 +8482,22 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
         raise SystemExit(
             f"prepare should retain selected alias config path when reusing verified smoke by hash: {alias_selection.get('selected_config_path')!r}"
         )
-    if alias_selection.get("selected_check_path") != colocated_smoke_debug_check.as_posix():
+    if alias_selection.get("selected_check_path") == colocated_smoke_debug_check.as_posix():
         raise SystemExit(
-            f"prepare should reuse explicit verified smoke check for byte-identical alias config: {alias_selection.get('selected_check_path')!r}"
+            f"prepare should select a fresh check when reusing explicit verified smoke: {alias_selection!r}"
         )
+    if alias_selection.get("reused_route_evidence_path") != colocated_smoke_debug_check.as_posix():
+        raise SystemExit(f"prepare should record explicit verified smoke check as reused evidence: {alias_selection!r}")
     if alias_selection.get("route_model_availability_verified") is not True:
         raise SystemExit(f"prepare should expose hash-matched route verification for alias config: {alias_selection!r}")
     alias_readiness = read_json(alias_smoke_bundle / "readiness.json")
-    if alias_readiness.get("status") != "pass":
-        raise SystemExit(f"byte-identical alias config with verified smoke should pass readiness: {alias_readiness!r}")
-    if alias_readiness.get("launch_allowed") is not True:
+    if "config_schema_pass_routes_unverified" in alias_readiness.get("launch_blockers", []):
         raise SystemExit(
-            f"byte-identical alias config with verified smoke should be launch-allowed: {alias_readiness!r}"
+            f"byte-identical alias config with verified smoke should not be schema-route blocked: {alias_readiness!r}"
+        )
+    if alias_readiness.get("verified_routes", {}).get("route_verification_status") != "routes_verified":
+        raise SystemExit(
+            f"byte-identical alias config with verified smoke should expose verified routes: {alias_readiness!r}"
         )
 
     partial_telemetry_check = tmp_path / "goal-config-partial-token-telemetry-smoke.json"
@@ -8260,33 +8509,25 @@ def run_base_ref_default_fixture(tmp_path: Path) -> None:
             "check_mode": "smoke",
             "config_validation_mode": "debug",
             "config_path": config_debug_path.as_posix(),
-            "accepted_routes": [
-                {
-                    "role": "lite_agent",
-                    "alias": "ds-flash-max",
-                    "harness": "opencode-bridge",
-                    "provider": "deepseek",
-                    "model": "deepseek-v4-flash",
-                },
-                {
-                    "role": "demanding_agent",
-                    "alias": "ds-pro-max",
-                    "harness": "opencode-bridge",
-                    "provider": "deepseek",
-                    "model": "deepseek-v4-pro",
-                },
-            ],
+            "config_sha256": sha256_file(config_debug_path).removeprefix("sha256:"),
+            "checked_roles": verified_current_default_roles,
+            "accepted_routes": verified_current_default_routes,
+            "rejected_routes": [],
+            "failures": [],
+            "harnesses": verified_current_default_harnesses,
             "summary": {
                 "route_verification_status": "routes_verified",
-                "accepted_route_count": 2,
-                "checked_role_count": 2,
-                "harness_count": 1,
+                "accepted_route_count": 4,
+                "checked_role_count": 4,
+                "harness_count": 4,
                 "failure_count": 0,
+                "rejected_route_count": 0,
                 "token_telemetry": {
                     "available_routes": 0,
-                    "unavailable_routes": 2,
+                    "unavailable_routes": 4,
                     "by_harness": {
                         "opencode-bridge": {"available": 0, "unavailable": 2},
+                        "codex": {"available": 0, "unavailable": 2},
                     },
                 },
             },
@@ -9153,7 +9394,7 @@ def run_telemetry_summary_fixture(tmp_path: Path) -> None:
     if not trace_path.exists():
         raise SystemExit("debug telemetry summary must write run.trace.jsonl")
     trace_events = [json.loads(line) for line in trace_path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    trace_types = {event.get("event_type") for event in trace_events if isinstance(event, dict)}
+    trace_types = _collect_string_values(trace_events, "event_type")
     for expected_type in [
         "scheduler_event",
         "packet_debug_event",
@@ -9957,9 +10198,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
             ]
         ).stdout
     )
-    mismatch_codes = {
-        item.get("code") for item in reconcile_same_hash.get("stale_or_unreconciled", []) if isinstance(item, dict)
-    }
+    mismatch_codes = _collect_string_values(reconcile_same_hash.get("stale_or_unreconciled", []), "code")
     if "review_path_not_matching_reviewer_output" in mismatch_codes:
         raise SystemExit(f"reconcile should not report review mismatch after promotion: {reconcile_same_hash!r}")
 
@@ -10222,9 +10461,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         )
     if dependency_reconcile.get("final_state_validation", {}).get("status") != "pass":
         raise SystemExit(f"dependency-failed reconcile final validation should pass: {dependency_reconcile!r}")
-    blocked_codes = {
-        item.get("code") for item in dependency_reconcile.get("blocked_work_remaining", []) if isinstance(item, dict)
-    }
+    blocked_codes = _collect_string_values(dependency_reconcile.get("blocked_work_remaining", []), "code")
     if {"missing_branch_status", "missing_branch_worktree", "unreconciled_worker_scheduler"} & blocked_codes:
         raise SystemExit(
             f"dependency-failed unlaunched branch should not be missing blocked work: {dependency_reconcile!r}"
@@ -10306,13 +10543,13 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         )
     if main_reconciler.recovered_branch_ids(list(stale_manifest_recovery_by_id.values()), recovery_branch_reports):
         raise SystemExit("reconcile_goal_run.py must not treat unrelated passing branches as recoveries")
-    unrecovered_blocked = [
-        item
-        for item in recovery_branch_reports
-        if item.get("runtime_status") in {"partial", "blocked", "failed"}
-        and item.get("branch_id")
-        not in main_reconciler.recovered_branch_ids(list(manifest_recovery_by_id.values()), recovery_branch_reports)
-    ]
+    recovered_branch_ids = main_reconciler.recovered_branch_ids(
+        list(manifest_recovery_by_id.values()), recovery_branch_reports
+    )
+    unrecovered_blocked = []
+    for item in recovery_branch_reports:
+        if _require_blocked_recovered_branch_id(item, recovered_branch_ids):
+            unrecovered_blocked.append(item)
     if unrecovered_blocked:
         raise SystemExit(
             f"recovered non-pass branches must be excluded from remaining blockers: {unrecovered_blocked!r}"
@@ -10479,9 +10716,7 @@ def run_branch_status_negative_fixtures(tmp_path: Path, bundle: Path, task_file:
         raise SystemExit(
             f"stale-active closeout should make the branch launchable again: {stale_active_relaunch_state!r}"
         )
-    blocked_codes = {
-        item.get("code") for item in pre_dispatch_report.get("blocked_work_remaining", []) if isinstance(item, dict)
-    }
+    blocked_codes = _collect_string_values(pre_dispatch_report.get("blocked_work_remaining", []), "code")
     if {"missing_main_status", "missing_branch_status", "missing_branch_worktree"} & blocked_codes:
         raise SystemExit(
             f"pre-dispatch missing launch artifacts should be pending work, not blocked work: {pre_dispatch_report!r}"
@@ -10612,6 +10847,7 @@ def main() -> int:
         test_archived_worktree_freshness_validation(tmp_path)
         test_read_only_packet_tmpdir(tmp_path)
         test_configured_reviewer_route_policy()
+        run_route_policy_pruning_status_fixture()
         bundle = create_goal_fixture_bundle(tmp_path)
         run_repair_gate_fixture(bundle)
         run_validator_command_fixtures(tmp_path, bundle)

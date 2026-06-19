@@ -18,6 +18,7 @@ PREFLIGHT_LITE_PURPOSES = {"preflight-decomposition", "lint-repair"}
 LITE_STATUSES = {"ok", "partial", "blocked"}
 LITE_DISPOSITIONS = {"unused", "used", "ignored"}
 LITE_VALIDATION_STATUSES = {"pass", "failed"}
+BASE_REF_STATUSES = {"exists", "not_checked", "missing", "not_requested"}
 
 
 def _load_path_rules():
@@ -202,6 +203,29 @@ def _manifest_git_repo_status(manifest: dict, fallback: dict) -> dict:
         else:
             result["status"] = "unknown"
     return result
+
+
+def _lint_repo_status(defect, repo_status: dict) -> None:
+    repo_is_git = repo_status.get("repo_is_git")
+    if "repo_is_git" not in repo_status:
+        defect("job.manifest.json", "critical", "manifest.repo_status.repo_is_git must be present and a boolean")
+    if "repo_is_git" in repo_status and not isinstance(repo_is_git, bool):
+        defect("job.manifest.json", "critical", "manifest.repo_status.repo_is_git must be boolean")
+    base_ref_status = repo_status.get("base_ref_status")
+    if "base_ref_status" not in repo_status:
+        defect(
+            "job.manifest.json",
+            "critical",
+            "manifest.repo_status.base_ref_status must be present and one of {'exists','not_checked','missing','not_requested'}",
+        )
+    if "base_ref_status" in repo_status and not isinstance(base_ref_status, str):
+        defect("job.manifest.json", "critical", "manifest.repo_status.base_ref_status must be a string")
+    if isinstance(base_ref_status, str) and base_ref_status not in BASE_REF_STATUSES:
+        defect(
+            "job.manifest.json",
+            "critical",
+            f"manifest.repo_status.base_ref_status must be one of: {', '.join(sorted(BASE_REF_STATUSES))}",
+        )
 
 
 def git_tracks_manifest_path(repo_status: dict, rel_path: str) -> bool | None:
@@ -656,14 +680,21 @@ def concrete_runtime_cap(value: object) -> bool:
 
 
 def dependency_closure(branch_id: str, branch_deps: dict[str, list[str]]) -> set[str]:
-    remaining = list(branch_deps.get(branch_id, []))
+    if not isinstance(branch_id, str):
+        return set()
+    raw_deps = branch_deps.get(branch_id, [])
+    if not isinstance(raw_deps, list):
+        return set()
+    remaining = [dep for dep in raw_deps if isinstance(dep, str)]
     seen: set[str] = set()
     while remaining:
         current = remaining.pop()
         if current in seen:
             continue
         seen.add(current)
-        remaining.extend(dep for dep in branch_deps.get(current, []) if dep not in seen)
+        next_deps = branch_deps.get(current, [])
+        if isinstance(next_deps, list):
+            remaining.extend(dep for dep in next_deps if isinstance(dep, str) and dep not in seen)
     return seen
 
 
@@ -1057,7 +1088,7 @@ def validate_telemetry_policy(defect, manifest: dict) -> None:
         return
 
     schema_version = policy.get("schema_version")
-    if not isinstance(schema_version, int) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
+    if not is_strict_int(schema_version) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
         defect(
             "job.manifest.json",
             "critical",
@@ -1182,6 +1213,13 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
             )
             continue
         for role in ladder:
+            if not isinstance(role, str):
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"goal_config.model_ladders.{ladder_name} entries must be strings",
+                )
+                continue
             if role not in models:
                 defect(
                     "job.manifest.json",
@@ -1226,6 +1264,20 @@ def validate_goal_config_manifest(defect, bundle_dir: Path, manifest: dict) -> t
         status = "failed"
     if check.get("status") != "pass":
         defect("job.manifest.json", "critical", "goal_config_check.status must be pass")
+        status = "failed"
+    check_config_hash = check.get("config_sha256")
+    provenance = (
+        manifest.get("goal_config_provenance") if isinstance(manifest.get("goal_config_provenance"), dict) else {}
+    )
+    config_provenance = provenance.get("config") if isinstance(provenance.get("config"), dict) else {}
+    expected_config_hash = config_provenance.get("source_sha256")
+    if not isinstance(expected_config_hash, str) or not expected_config_hash:
+        expected_config_hash = sha256_file(bundle_dir / "goal.config.json")
+    if not isinstance(check_config_hash, str) or not check_config_hash:
+        defect("goal-config.check.json", "critical", "goal_config_check.config_sha256 must be a non-empty string")
+        status = "failed"
+    elif check_config_hash != expected_config_hash:
+        defect("goal-config.check.json", "critical", "goal_config_check.config_sha256 does not match goal.config.json")
         status = "failed"
     return config, status
 
@@ -1682,14 +1734,20 @@ def _lint_branch_identity(defect, branches: list) -> list:
     for bid in ids:
         if not isinstance(bid, str) or not SAFE_ID_RE.fullmatch(bid):
             defect("job.manifest.json", "critical", f"branch id is not safe: {bid!r}")
-    if len(ids) != len(set(ids)):
+    for path in worktree_paths:
+        if not isinstance(path, str):
+            defect("job.manifest.json", "critical", f"branch worktree_path is not a string: {path!r}")
+    safe_ids = [bid for bid in ids if isinstance(bid, str)]
+    if len(safe_ids) != len(set(safe_ids)):
         defect("job.manifest.json", "critical", "branch ids must be unique")
     for name in names:
         if not safe_branch_name(name):
             defect("job.manifest.json", "critical", f"branch name is not safe: {name!r}")
-    if len(names) != len(set(names)):
+    safe_names = [name for name in names if isinstance(name, str)]
+    if len(safe_names) != len(set(safe_names)):
         defect("job.manifest.json", "critical", "branch names must be unique")
-    if len(worktree_paths) != len(set(worktree_paths)):
+    safe_worktree_paths = [path for path in worktree_paths if isinstance(path, str)]
+    if len(safe_worktree_paths) != len(set(safe_worktree_paths)):
         defect("job.manifest.json", "critical", "branch worktree_path values must be unique")
     return ids
 
@@ -1700,6 +1758,7 @@ def _lint_reserved_bundle_paths(defect, branches: list) -> None:
         "job.manifest.json",
         "main.prompt.md",
         "runtime-rules.md",
+        "runtime.index.json",
         "goal-bootloader.md",
         "PREFLIGHT_REPORT.md",
         "preflight.brief.lint.json",
@@ -1708,6 +1767,8 @@ def _lint_reserved_bundle_paths(defect, branches: list) -> None:
         "readiness.json",
         "goal-config-selection.json",
         "preflight.pipeline.json",
+        "goal.config.json",
+        "goal-config.check.json",
     }
     branch_bundle_paths: dict[str, str] = {}
     for branch in branches:
@@ -1725,7 +1786,9 @@ def _lint_reserved_bundle_paths(defect, branches: list) -> None:
                 branch_bundle_paths[value] = label
 
 
-def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_reason: bool) -> None:
+def _lint_waves(
+    defect, manifest: dict, branches: list, ids: list, max_active_branch_agents: object, has_serial_reason: bool
+) -> None:
     """Validate waves coverage/uniqueness and long serial branch chains."""
     waves = manifest.get("waves", [])
     wave_branch_ids = []
@@ -1736,6 +1799,7 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
         waves = []
     if len(waves) > MAX_WAVES:
         defect("job.manifest.json", "critical", "more than 5 waves is not allowed")
+    wave_cap = max_active_branch_agents if is_strict_int(max_active_branch_agents) else MAX_ACTIVE_BRANCH_AGENTS
     for wave in waves:
         if not isinstance(wave, dict):
             defect("job.manifest.json", "critical", "each wave must be a JSON object")
@@ -1749,8 +1813,14 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
         if not isinstance(branch_ids, list) or not branch_ids:
             defect("job.manifest.json", "critical", f"wave {wave.get('id')} must list at least one branch")
             branch_ids = []
-        if len(branch_ids) > MAX_ACTIVE_BRANCH_AGENTS:
-            defect("job.manifest.json", "critical", f"wave {wave.get('id')} has more than 4 branches")
+        if len(branch_ids) > wave_cap:
+            defect(
+                "job.manifest.json",
+                "critical",
+                f"wave {wave.get('id')} has more than {wave_cap} branches"
+                if is_strict_int(wave_cap)
+                else f"wave {wave.get('id')} has more than 4 branches",
+            )
         for bid in branch_ids:
             if isinstance(bid, str) and isinstance(wid, str):
                 branch_to_wave.setdefault(bid, wid)
@@ -1761,29 +1831,58 @@ def _lint_waves(defect, manifest: dict, branches: list, ids: list, has_serial_re
         defect("job.manifest.json", "critical", "wave ids must be unique")
     if len(wave_branch_ids) != len(set(wave_branch_ids)):
         defect("job.manifest.json", "critical", "branch ids must not appear in more than one wave")
-    if set(wave_branch_ids) != set(ids):
+    safe_ids = {bid for bid in ids if isinstance(bid, str)}
+    if set(wave_branch_ids) != safe_ids:
         defect("job.manifest.json", "critical", "waves must cover exactly the manifest branch ids")
     declared_wave_ids = {wid for wid in wave_ids if isinstance(wid, str)}
+    wave_id_ci: dict[str, str] = {wid.lower(): wid for wid in declared_wave_ids}
+    wave_positions = {wid: index for index, wid in enumerate(wave_ids) if isinstance(wid, str)}
+    branch_to_wave_ci: dict[str, str] = {
+        branch_id.lower(): wave_id for branch_id, wave_id in branch_to_wave.items() if isinstance(branch_id, str)
+    }
     for branch in branches:
         branch_wave = branch.get("wave")
+        branch_id = branch.get("id")
+        if branch_wave is None and isinstance(branch_id, str):
+            branch_wave = branch_to_wave.get(branch_id)
         if branch_wave is None:
             continue
-        branch_id = branch.get("id")
         if not isinstance(branch_wave, str):
             defect("job.manifest.json", "critical", f"branch {branch_id!r} wave must be a string")
             continue
-        if branch_wave not in declared_wave_ids:
+        branch_wave_normalized = wave_id_ci.get(str(branch_wave).lower(), str(branch_wave))
+        if branch_wave_normalized not in declared_wave_ids:
             defect(
                 "job.manifest.json",
                 "critical",
                 f"branch {branch_id!r} references unknown wave {branch_wave!r}",
             )
-        elif isinstance(branch_id, str) and branch_to_wave.get(branch_id) not in (None, branch_wave):
+            continue
+        if isinstance(branch_id, str) and branch_to_wave.get(branch_id) not in (None, branch_wave):
             defect(
                 "job.manifest.json",
                 "critical",
                 f"branch {branch_id!r} declares wave {branch_wave!r} but is listed under wave {branch_to_wave[branch_id]!r}",
             )
+        depends_on = branch.get("depends_on")
+        branch_wave_position = wave_positions.get(branch_wave_normalized)
+        if not isinstance(branch_id, str) or branch_wave_position is None:
+            continue
+        for dep in depends_on if isinstance(depends_on, list) else []:
+            if not isinstance(dep, str):
+                continue
+            dependency_wave = branch_to_wave.get(dep) or branch_to_wave_ci.get(dep.lower())
+            if dependency_wave is None:
+                continue
+            dependency_wave_position = wave_positions.get(dependency_wave)
+            if dependency_wave_position is None:
+                continue
+            if dependency_wave_position >= branch_wave_position:
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch {branch_id!r} must come after the wave of its dependency {dep!r}",
+                )
     if isinstance(branches, list) and not has_serial_reason:
         chain = longest_branch_chain(branches)
         if len(branches) > 2 and chain >= len(branches) - 1:
@@ -2120,7 +2219,9 @@ def _lint_work_items(
 
 def _lint_work_item_cross_checks(defect, branch: dict, work_items: list, branch_owned_paths_value: list) -> None:
     """Validate cross-item depends_on ordering, owned_paths overlap, and derived branch ownership."""
-    known_work_item_ids = {item.get("id") for item in work_items if isinstance(item, dict)}
+    known_work_item_ids = {
+        item.get("id") for item in work_items if isinstance(item, dict) and isinstance(item.get("id"), str)
+    }
     work_item_order = {
         item.get("id"): index
         for index, item in enumerate(work_items)
@@ -2131,6 +2232,13 @@ def _lint_work_item_cross_checks(defect, branch: dict, work_items: list, branch_
             continue
         raw_deps = item.get("depends_on")
         for dep in raw_deps if isinstance(raw_deps, list) else []:
+            if not isinstance(dep, str):
+                defect(
+                    "job.manifest.json",
+                    "critical",
+                    f"branch {branch.get('id')} work_items[{index}] depends_on element must be a string",
+                )
+                continue
             if dep not in known_work_item_ids:
                 defect(
                     "job.manifest.json",
@@ -2503,7 +2611,8 @@ def _lint_cross_branch_ownership(defect, branches: list) -> None:
         if not isinstance(branch, dict) or not isinstance(branch.get("id"), str):
             continue
         bid = branch["id"]
-        branch_deps[bid] = branch.get("depends_on", []) if isinstance(branch.get("depends_on"), list) else []
+        depends_on = branch.get("depends_on")
+        branch_deps[bid] = [dep for dep in depends_on if isinstance(dep, str)] if isinstance(depends_on, list) else []
         branch_contention[bid] = branch.get("contention_reason")
         owned = (
             [path for path in branch.get("owned_paths", []) if isinstance(path, str)]
@@ -2746,6 +2855,14 @@ def lint(bundle_dir: Path) -> dict:
     for key in MANIFEST_REQUIRED_KEYS:
         if key not in manifest:
             defect("job.manifest.json", "critical", f"missing key: {key}")
+    if "preflight_warnings" in manifest and not isinstance(manifest.get("preflight_warnings"), list):
+        defect("job.manifest.json", "critical", "preflight_warnings must be a JSON array")
+    if "repo_status" not in manifest:
+        defect("job.manifest.json", "critical", "missing key: repo_status")
+    elif not isinstance(manifest.get("repo_status"), dict):
+        defect("job.manifest.json", "critical", "repo_status must be an object")
+    else:
+        _lint_repo_status(defect, manifest["repo_status"])
     validate_preflight_lite_records(defect, bundle_dir, manifest)
     validate_telemetry_policy(defect, manifest)
     goal_config, config_check_status = validate_goal_config_manifest(defect, bundle_dir, manifest)
@@ -2779,7 +2896,7 @@ def lint(bundle_dir: Path) -> dict:
 
     ids = _lint_branch_identity(defect, branches)
     _lint_reserved_bundle_paths(defect, branches)
-    _lint_waves(defect, manifest, branches, ids, has_serial_reason)
+    _lint_waves(defect, manifest, branches, ids, max_active, has_serial_reason)
     _lint_main_prompt(defect, bundle_dir, manifest)
     _lint_runtime_rules(defect, bundle_dir, manifest)
     _lint_bootloader_and_report(defect, bundle_dir, manifest)
@@ -2809,7 +2926,7 @@ def lint(bundle_dir: Path) -> dict:
         defects,
         bundle_dir=bundle_dir,
         manifest_path=manifest_path,
-        branch_count=len(manifest.get("branches", [])) if isinstance(manifest, dict) else 0,
+        branch_count=len(branches),
         config_check_status=config_check_status,
         compatibility_status=compatibility_status,
         git_repo_status=git_status,

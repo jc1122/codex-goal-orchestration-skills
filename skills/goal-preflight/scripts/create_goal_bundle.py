@@ -628,7 +628,11 @@ def normalize_telemetry_policy(value: object) -> dict:
         raise SystemExit("telemetry_policy must be an object")
 
     schema_version = value.get("schema_version", TELEMETRY_POLICY_SCHEMA_VERSION)
-    if not isinstance(schema_version, int) or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION:
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != TELEMETRY_POLICY_SCHEMA_VERSION
+    ):
         raise SystemExit(f"telemetry_policy.schema_version must be {TELEMETRY_POLICY_SCHEMA_VERSION}")
 
     mode = value.get("mode", "standard")
@@ -1661,6 +1665,8 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
     reserved_bundle_paths = {
         "job.manifest.json",
         "main.prompt.md",
+        "runtime-rules.md",
+        "runtime.index.json",
         "goal-bootloader.md",
         "PREFLIGHT_REPORT.md",
         "preflight.brief.lint.json",
@@ -1669,6 +1675,8 @@ def ensure_unique_branch_values(branches: list[dict]) -> None:
         "readiness.json",
         "goal-config-selection.json",
         "preflight.pipeline.json",
+        "goal.config.json",
+        "goal-config.check.json",
     }
     seen_paths: dict[str, str] = {}
     for branch in branches:
@@ -1956,10 +1964,10 @@ def normalize_brief(
         brief.get("route_policy_degraded_telemetry_waiver")
     )
 
+    normalize_branch_dependencies(branches)
     waves, wave_by_branch = _resolve_waves(brief, branches, max_active)
     for branch in branches:
         branch["wave"] = wave_by_branch[branch["id"]]
-    normalize_branch_dependencies(branches)
     for branch in branches:
         work_items = branch.get("work_items") if isinstance(branch.get("work_items"), list) else []
         has_context = any(
@@ -2076,10 +2084,15 @@ def _compatibility_check_defects(
         defects.append("goal_config_check is required when goal_config is supplied")
     elif check_status != "pass":
         defects.append(f"goal_config_check.status must be pass; got {check_status!r}")
-    if config_validation_mode in {"smoke", "debug"} and check_mode not in {"smoke", "discover"}:
-        defects.append(
-            f"config validation mode {config_validation_mode!r} requires a smoke/discovery check report; got check mode {check_mode!r}"
-        )
+    if config_validation_mode is not None and not isinstance(config_validation_mode, str):
+        defects.append(f"config validation.mode must be a string when set; got {config_validation_mode!r}")
+    if isinstance(config_validation_mode, str) and config_validation_mode in {"smoke", "debug"}:
+        if check_mode is not None and not isinstance(check_mode, str):
+            defects.append(f"check mode must be a string when set; got {check_mode!r}")
+        elif check_mode not in {"smoke", "discover"}:
+            defects.append(
+                f"config validation mode {config_validation_mode!r} requires a smoke/discovery check report; got check mode {check_mode!r}"
+            )
     return defects
 
 
@@ -2163,6 +2176,17 @@ def load_goal_config_check(path: Path | None) -> dict | None:
     if failures not in ([], None):
         raise SystemExit(f"goal config check must not contain failures: {path}")
     return data
+
+
+def validate_goal_config_check_pair(config_path: Path | None, check: dict | None) -> None:
+    if config_path is None or check is None:
+        return
+    recorded_sha = check.get("config_sha256")
+    config_sha = sha256_file(config_path)
+    if not isinstance(recorded_sha, str) or not recorded_sha:
+        raise SystemExit("goal config check config_sha256 must be a non-empty string")
+    if recorded_sha != config_sha:
+        raise SystemExit("goal config check config_sha256 does not match goal config")
 
 
 def apply_goal_config_to_brief(brief: dict, config: dict | None) -> dict:
@@ -2504,14 +2528,20 @@ def build_ownership_feasibility(branches: list[dict], repo_root: Path | None) ->
     dependency_recommendations = []
     for branch in branches:
         branch_id = branch["id"]
+        depends_on = branch.get("depends_on")
+        if not isinstance(depends_on, list):
+            depends_on = []
+        dependency_set = {dep for dep in depends_on if isinstance(dep, str)}
         ownership = _BranchOwnership(
             branch_id=branch_id,
             branch_paths=branch_owned.get(branch_id, []),
-            dependency_paths=[path for dep_id in branch.get("depends_on", []) for path in branch_owned.get(dep_id, [])],
+            dependency_paths=[
+                path for dep_id in depends_on if isinstance(dep_id, str) for path in branch_owned.get(dep_id, [])
+            ],
             other_branch_paths={
                 other_id: paths
                 for other_id, paths in branch_owned.items()
-                if other_id != branch_id and other_id not in set(branch.get("depends_on", []))
+                if other_id != branch_id and other_id not in dependency_set
             },
         )
         for item in branch.get("work_items", []):
@@ -3432,6 +3462,7 @@ def create_bundle(
     goal_config_check_source = goal_config_inputs.check_source
     if goal_config is not None and goal_config_check is None:
         raise SystemExit("--goal-config requires --goal-config-check with status=pass")
+    validate_goal_config_check_pair(goal_config_source, goal_config_check)
     original_brief = dict(brief)
     runtime_goal_config = None
     route_policy_pruning = {}

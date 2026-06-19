@@ -60,16 +60,6 @@ def safe_name(path: Path) -> str:
     return value or "goal-config"
 
 
-def config_path_from_report(report: dict) -> Path | None:
-    value = report.get("config_path")
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return Path(value).resolve()
-    except (OSError, ValueError):
-        return None
-
-
 def report_matches_config(report: dict, config: Path, config_sha256: str | None = None) -> bool:
     config_sha = config_sha256
     if config_sha is None:
@@ -78,21 +68,8 @@ def report_matches_config(report: dict, config: Path, config_sha256: str | None 
         return False
     recorded_sha = report.get("config_sha256")
     if isinstance(recorded_sha, str) and recorded_sha:
-        # Authoritative freshness check: the candidate config must be byte-identical
-        # to what the check actually validated. Path equality alone is not enough —
-        # the file may have been edited after the check ran.
         return recorded_sha == config_sha
-    # Backward compatibility for check reports written before config_sha256 existed.
-    report_config = config_path_from_report(report)
-    if report_config is None:
-        return False
-    try:
-        if report_config.resolve() == config.resolve():
-            return True
-    except (OSError, ValueError):
-        pass
-    report_hash = sha256_file(report_config)
-    return report_hash is not None and report_hash == config_sha
+    return False
 
 
 def routes_verified(report: dict) -> bool:
@@ -107,6 +84,92 @@ def routes_verified(report: dict) -> bool:
         and not isinstance(accepted_route_count, bool)
         and accepted_route_count > 0
     )
+
+
+def route_key(route: dict) -> tuple[str, str, str] | None:
+    harness = route.get("harness")
+    provider = route.get("provider")
+    model = route.get("model")
+    if not all(isinstance(value, str) and value.strip() for value in (harness, provider, model)):
+        return None
+    return harness.strip(), provider.strip(), model.strip()
+
+
+def config_route_keys(config_data: dict) -> set[tuple[str, str, str]] | None:
+    models = config_data.get("models") if isinstance(config_data.get("models"), dict) else {}
+    if not models:
+        return None
+    keys: set[tuple[str, str, str]] = set()
+    for model in models.values():
+        if not isinstance(model, dict):
+            return None
+        key = route_key(model)
+        if key is None:
+            return None
+        keys.add(key)
+    return keys or None
+
+
+def report_route_keys(report: dict, key: str) -> set[tuple[str, str, str]] | None:
+    routes = report.get(key)
+    if not isinstance(routes, list) or not routes:
+        return None
+    keys: set[tuple[str, str, str]] = set()
+    for route in routes:
+        if not isinstance(route, dict):
+            return None
+        route_id = route_key(route)
+        if route_id is None:
+            return None
+        keys.add(route_id)
+    return keys or None
+
+
+def route_verified_report_matches_config_routes(report: dict, config_data: dict) -> bool:
+    if not isinstance(report, dict) or report.get("status") != "pass":
+        return False
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    if summary.get("route_verification_status") != "routes_verified":
+        return False
+    for key in ("failure_count", "rejected_route_count"):
+        value = summary.get(key)
+        if value is not None and value != 0:
+            return False
+    checked_roles = report.get("checked_roles")
+    if (
+        not isinstance(checked_roles, list)
+        or not checked_roles
+        or not all(isinstance(role, str) and role.strip() for role in checked_roles)
+    ):
+        return False
+    if report.get("failures") != []:
+        return False
+    if report.get("rejected_routes") != []:
+        return False
+
+    expected = config_route_keys(config_data)
+    accepted = report_route_keys(report, "accepted_routes")
+    if expected is None or accepted != expected:
+        return False
+
+    harnesses = report.get("harnesses")
+    if not isinstance(harnesses, list) or not harnesses:
+        return False
+    harness_keys: set[tuple[str, str, str]] = set()
+    for harness in harnesses:
+        if not isinstance(harness, dict):
+            return False
+        key = route_key(harness)
+        if key is None:
+            return False
+        model_check = harness.get("model_check")
+        if not isinstance(model_check, dict) or model_check.get("status") != "pass":
+            return False
+        smoke = harness.get("smoke")
+        if not isinstance(smoke, dict) or smoke.get("status") != "pass":
+            return False
+        harness_keys.add(key)
+    return harness_keys == expected
 
 
 def accepted_route_roles(report: dict | None) -> set[str]:
@@ -162,6 +225,7 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
     if explicit is not None:
         candidate_paths.append(explicit)
     config_sha256 = sha256_file(config)
+    config_data: dict | None = None
 
     preferred = (
         f"{config.name}.smoke.json",
@@ -194,7 +258,19 @@ def find_reusable_route_verified_check(config: Path, explicit: Path | None, chec
             report = read_json(candidate)
         except (SystemExit, Exception):  # noqa: BLE001 - tolerant read: treat unreadable/non-object as absent
             continue
-        if routes_verified(report) and report_matches_config(report, config, config_sha256=config_sha256):
+        if not routes_verified(report):
+            continue
+        if report_matches_config(report, config, config_sha256=config_sha256):
+            return candidate
+        recorded_sha = report.get("config_sha256")
+        if not isinstance(recorded_sha, str) or not recorded_sha:
+            continue
+        if config_data is None:
+            try:
+                config_data = read_json(config)
+            except (SystemExit, Exception):  # noqa: BLE001 - invalid config cannot safely reuse stale evidence
+                config_data = {}
+        if route_verified_report_matches_config_routes(report, config_data):
             return candidate
     return None
 
@@ -473,6 +549,8 @@ def selected_config_summary(candidate: dict | None) -> dict:
         "selected_config_sha256": sha256_file(config_path),
         "selected_check_path": check_path.as_posix() if check_path else None,
         "selected_check_sha256": sha256_file(check_path),
+        "reused_route_evidence_path": candidate.get("reused_route_evidence_path"),
+        "reused_route_evidence_sha256": candidate.get("reused_route_evidence_sha256"),
         "selection_reason": candidate.get("selection_reason"),
         "selection_kind": "remediated_derivative" if candidate.get("remediated_passed") else "original",
         "eligible": candidate.get("eligible"),
@@ -694,6 +772,8 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         "selected": False,
         "selected_config_path": None,
         "selected_check_path": None,
+        "reused_route_evidence_path": None,
+        "reused_route_evidence_sha256": None,
         "selection_reason": None,
         "route_coverage_missing_worker_roles": missing_worker_route_roles(config_data, original),
         "original_check_telemetry": subprocess_telemetry(command, result, elapsed_ms),
@@ -702,9 +782,9 @@ def check_config_candidate(config: Path, check_dir: Path, explicit_check: Path |
         selected_check_path = original_report
         selection_reason = "original config passed preflight compatibility"
         if reusable_check is not None:
-            selected_check_path = reusable_check
-            reused_report = read_json(reusable_check)
-            candidate["route_coverage_missing_worker_roles"] = missing_worker_route_roles(config_data, reused_report)
+            candidate["reused_route_evidence_path"] = reusable_check.as_posix()
+            candidate["reused_route_evidence_sha256"] = sha256_file(reusable_check)
+            candidate["route_coverage_missing_worker_roles"] = missing_worker_route_roles(config_data, original)
             selection_reason = (
                 "original config passed preflight compatibility "
                 "with route verification reused from explicit/colocated smoke evidence"
