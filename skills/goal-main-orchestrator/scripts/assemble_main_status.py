@@ -274,7 +274,9 @@ def _terminal_statuses(branch_statuses: list[dict]) -> dict[str, str]:
     return {
         str(item["branch_id"]): str(item["status"])
         for item in branch_statuses
-        if item.get("status") in STATUSES and isinstance(item.get("branch_id"), str)
+        if isinstance(item.get("status"), str)
+        and item.get("status") in STATUSES
+        and isinstance(item.get("branch_id"), str)
     }
 
 

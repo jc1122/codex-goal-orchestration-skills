@@ -90,9 +90,96 @@ def test_validate_manifest_waves_fails_closed_on_malformed_shape():
     # non-list waves (the model-audit-pass path skips lint_goal_bundle, so this is reachable)
     with pytest.raises(SystemExit):
         rgb.validate_manifest_waves({"waves": "abc", "branches": [{"id": "B01"}]}, [])
+    # present-null waves must fail closed; missing waves retain the legacy default below.
+    with pytest.raises(SystemExit):
+        rgb.validate_manifest_waves({"waves": None, "branches": [{"id": "B01"}]}, ["serial reason"])
     # non-dict branch entry used to raise AttributeError on branch.get("id")
     with pytest.raises(SystemExit):
         rgb.validate_manifest_waves({"branches": ["not-a-dict"]}, [])
+
+
+def test_validate_manifest_waves_rejects_non_string_manifest_branch_id():
+    with pytest.raises(SystemExit):
+        rgb.validate_manifest_waves(
+            {"branches": [{"id": ["B01"]}], "waves": []},
+            ["serial"],
+        )
+    with pytest.raises(SystemExit):
+        rgb.validate_manifest_waves(
+            {"branches": [{"id": {"value": "B01"}}], "waves": []},
+            ["serial"],
+        )
+
+
+def test_validate_branch_dependencies_rejects_unhashable_branch_id():
+    for branch_id in (["B01"], {"value": "B01"}):
+        with pytest.raises(SystemExit):
+            rgb.validate_branch_dependencies([{"id": branch_id, "depends_on": []}])
+
+
+def test_validate_branch_dependencies_preserves_prior_dependency_ordering():
+    assert rgb.validate_branch_dependencies(
+        [
+            {"id": "B01", "depends_on": []},
+            {"id": "B02", "depends_on": ["B01"]},
+        ]
+    ) == {"B01": [], "B02": ["B01"]}
+    with pytest.raises(SystemExit):
+        rgb.validate_branch_dependencies(
+            [
+                {"id": "B01", "depends_on": ["B02"]},
+                {"id": "B02", "depends_on": []},
+            ]
+        )
+
+
+def _write_main_scheduler_ledger(tmp_path: Path, *, item_ids: list[str], events: list[dict]) -> None:
+    scheduler_path = tmp_path / rgb.CONTRACT.MAIN_SCHEDULER_PATH
+    scheduler_path.parent.mkdir(parents=True, exist_ok=True)
+    scheduler_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "scheduler_kind": "main-branch-pool",
+                "scheduler_path": rgb.CONTRACT.MAIN_SCHEDULER_PATH,
+                "capacity": 1,
+                "item_ids": item_ids,
+                "events": events,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def test_main_scheduler_replay_rejects_stale_item_ids_and_unknown_launch(tmp_path):
+    _write_main_scheduler_ledger(tmp_path, item_ids=["B99"], events=[{"event": "launch", "id": "B99"}])
+    with pytest.raises(SystemExit):
+        rgb.scheduler_state_from_ledger(tmp_path / "job.manifest.json", ["B01"], 1)
+
+
+def test_main_scheduler_replay_preserves_valid_states(tmp_path):
+    _write_main_scheduler_ledger(
+        tmp_path,
+        item_ids=["B01", "B02", "B03"],
+        events=[
+            {"event": "launch", "id": "B01"},
+            {"event": "finish", "id": "B01", "status": "pass"},
+            {"event": "close", "id": "B01"},
+            {"event": "launch", "id": "B02"},
+            {"event": "finish", "id": "B02", "status": "blocked"},
+            {"event": "blocked", "id": "B02", "reason_code": "timeout"},
+            {"event": "close", "id": "B02"},
+            {"event": "launch", "id": "B03"},
+        ],
+    )
+
+    active, passed, non_pass, relaunchable = rgb.scheduler_state_from_ledger(
+        tmp_path / "job.manifest.json", ["B01", "B02", "B03"], 1
+    )
+    assert active == {"B03"}
+    assert passed == {"B01"}
+    assert non_pass == {"B02"}
+    assert relaunchable == {"B02"}
 
 
 # --- 2026-06-18 convergence pass 12: a non-string element inside a wave's `branches` fails closed
@@ -400,6 +487,47 @@ def test_current_amendment_records_tolerates_unhashable_manifest_sha(tmp_path):
     assert any("manifest sha256 mismatch" in r for r in ignored), ignored
 
 
+def test_current_amendment_records_tolerates_unhashable_branch_status(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    (tmp_path / "amendments").mkdir()
+    (tmp_path / "amendments" / "A1.decision.json").write_text(
+        json.dumps(
+            {
+                "amendment_id": "A1",
+                "decision": "launch",
+                "manifest": manifest_path.as_posix(),
+                "manifest_sha256": ams.sha256_file(manifest_path),
+                "terminal_branch_ids": ["B01"],
+                "terminal_branch_statuses": {"B01": "pass"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    blockers: list[str] = []
+    records, covered, ignored = ams.current_amendment_records(
+        manifest_path,
+        [{"branch_id": "B01", "status": ["pass"]}],
+        {},
+        blockers,
+    )
+
+    assert records == []
+    assert covered == set()
+    assert any("terminal_branch_ids not present in current branch summaries: B01" in r for r in ignored), ignored
+
+    records, covered, ignored = ams.current_amendment_records(
+        manifest_path,
+        [{"branch_id": "B01", "status": "pass"}],
+        {},
+        [],
+    )
+    assert [record["amendment_id"] for record in records] == ["A1"]
+    assert covered == {"B01"}
+    assert ignored == []
+
+
 # C7: failure_summary's event-log-name fallback must match the run loop's `attempt-{index+1}` fallback
 #     (previously fell back to the bare "attempt", so an alias-less attempt mis-reported the log as missing).
 def test_failure_summary_log_name_fallback_matches_run_loop(tmp_path):
@@ -428,6 +556,11 @@ def _rbwc_item(worker_type):
 
 def test_rbwc_validate_work_item_fields_accepts_research_alias():
     rgb._validate_work_item_fields([_rbwc_item("research")], "B01")  # must not raise
+
+
+def test_rbwc_research_alias_requires_research_worker_policy():
+    with pytest.raises(SystemExit, match="research_worker_policy is required"):
+        rgb.validate_research_worker_policy({}, [{"work_items": [_rbwc_item("research")]}])
 
 
 def test_rbwc_validate_work_item_fields_fails_closed_on_unhashable_worker_type():

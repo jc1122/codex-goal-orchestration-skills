@@ -69,6 +69,12 @@ CLI_BRANCH_MODEL_ENVS = (
 SAFE_CODEX_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 
+def normalize_work_item_worker_type(worker_type: object) -> object:
+    if worker_type == "research":
+        return RESEARCH_WORKER_TYPE
+    return worker_type
+
+
 def git_ok(repo_root: Path, *args: str) -> bool:
     return (
         subprocess.run(
@@ -210,12 +216,15 @@ def require_string_list(value: object, field: str, *, min_items: int = 0) -> lis
 
 
 def validate_branch_dependencies(branches: list[dict]) -> dict[str, list[str]]:
-    order = {branch.get("id"): index for index, branch in enumerate(branches)}
-    dependencies: dict[str, list[str]] = {}
+    order: dict[str, int] = {}
     for index, branch in enumerate(branches):
         bid = branch.get("id")
         if not isinstance(bid, str) or not SAFE_LABEL_RE.fullmatch(bid):
             raise SystemExit(f"branch id is not safe: {bid!r}")
+        order[bid] = index
+    dependencies: dict[str, list[str]] = {}
+    for index, branch in enumerate(branches):
+        bid = branch.get("id")
         deps = require_string_list(branch.get("depends_on", []), f"branch {bid}.depends_on")
         seen = set()
         normalized = []
@@ -266,10 +275,7 @@ def _validate_work_item_fields(work_items: list, bid: object) -> tuple[set, dict
             raise SystemExit(f"branch {bid} work_items[{index}].packet_id must be {expected_packet_id!r}")
         if not isinstance(item.get("objective"), str) or not item.get("objective", "").strip():
             raise SystemExit(f"branch {bid} work_items[{index}].objective must be non-empty")
-        worker_type = item.get("worker_type", "worker")
-        if worker_type == "research":
-            # Normalize the legacy alias before the membership check, matching every sibling consumer.
-            worker_type = "research-worker"
+        worker_type = normalize_work_item_worker_type(item.get("worker_type", "worker"))
         if not isinstance(worker_type, str) or worker_type not in WORK_ITEM_ROLES:
             raise SystemExit(f"branch {bid} work_items[{index}].worker_type must be 'worker' or 'research-worker'")
         for key, min_items in [
@@ -356,7 +362,11 @@ def validate_research_worker_policy(manifest: dict, branches: list[dict]) -> Non
         work_items = branch.get("work_items", [])
         if not isinstance(work_items, list):
             continue
-        if any(isinstance(item, dict) and item.get("worker_type") == RESEARCH_WORKER_TYPE for item in work_items):
+        if any(
+            isinstance(item, dict)
+            and normalize_work_item_worker_type(item.get("worker_type", "worker")) == RESEARCH_WORKER_TYPE
+            for item in work_items
+        ):
             has_research_worker = True
             break
     if not has_research_worker:
@@ -439,9 +449,8 @@ def scheduler_state_from_ledger(
         raise SystemExit(f"main scheduler ledger path mismatch: {scheduler_path}")
     if ledger.get("capacity") != max_active:
         raise SystemExit(f"main scheduler ledger capacity is stale: {scheduler_path}")
-    ledger_ids = ledger.get("item_ids")
-    if not isinstance(ledger_ids, list) or any(not isinstance(item, str) for item in ledger_ids):
-        raise SystemExit(f"main scheduler ledger item_ids must be an array of strings: {scheduler_path}")
+    if ledger.get("item_ids") != ordered_branch_ids:
+        raise SystemExit(f"main scheduler ledger item_ids are stale: {scheduler_path}")
     events = ledger.get("events")
     if not isinstance(events, list):
         raise SystemExit(f"main scheduler ledger events must be an array: {scheduler_path}")
@@ -456,11 +465,12 @@ def scheduler_state_from_ledger(
             raise SystemExit(f"main scheduler events[{index}] must be an object: {scheduler_path}")
         name = event.get("event")
         event_id = event.get("id")
-        if isinstance(name, str) and name in {"ready", "launch", "finish", "close", "defer", "blocked"}:
-            if not isinstance(event_id, str):
-                raise SystemExit(f"main scheduler events[{index}].id must be a string: {scheduler_path}")
-            if event_id not in known:
-                continue
+        if (
+            isinstance(name, str)
+            and name in {"ready", "launch", "finish", "close", "defer", "blocked"}
+            and (not isinstance(event_id, str) or event_id not in known)
+        ):
+            raise SystemExit(f"main scheduler events[{index}].id is not a manifest branch id: {scheduler_path}")
         if name == "launch":
             if event_id in active:
                 raise SystemExit(f"main scheduler events[{index}] duplicates active launch for {event_id}")
@@ -933,7 +943,7 @@ def validate_manifest_parallelization(manifest: dict) -> tuple[int, list]:
 
 
 def validate_manifest_waves(manifest: dict, serial_reasons: list) -> tuple[list, list]:
-    waves = manifest.get("waves") or []
+    waves = manifest.get("waves", [])
     if not isinstance(waves, list):
         raise SystemExit("manifest waves must be a JSON array")
     if len(waves) > MAX_WAVES:
@@ -944,7 +954,12 @@ def validate_manifest_waves(manifest: dict, serial_reasons: list) -> tuple[list,
     if not all(isinstance(branch, dict) for branch in manifest_branches):
         raise SystemExit("manifest branch entries must be objects")
     require_unique_manifest_values([branch for branch in manifest_branches if isinstance(branch, dict)])
-    manifest_branch_ids = [branch.get("id") for branch in manifest_branches]
+    manifest_branch_ids: list[str] = []
+    for branch in manifest_branches:
+        branch_id = branch.get("id")
+        if not isinstance(branch_id, str):
+            raise SystemExit("manifest branch ids must be strings")
+        manifest_branch_ids.append(branch_id)
     if len(manifest_branch_ids) > MAX_ACTIVE_BRANCH_AGENTS * MAX_WAVES:
         raise SystemExit("manifest must not contain more than 20 branches")
     if len(manifest_branch_ids) == 1 and not serial_reasons:
