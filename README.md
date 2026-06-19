@@ -143,7 +143,7 @@ python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --output /abs/goal.config.json
 ```
 
-The preset emits the two bridge routes — `ds-flash-max` (`deepseek/deepseek-v4-flash`) as `lite_agent` and `ds-pro-max` (`deepseek/deepseek-v4-pro`) as `demanding_agent`, both on harness kind `opencode-bridge` with `--variant max` — plus native Codex fallback rungs (`codex-spark`, `codex-mini`), native read-only research (`codex --search`), and native prompt audit (`gpt-5.5`). It records effort in tokens, characters, and elapsed time only.
+The preset emits the two bridge routes — `ds-flash-max` (`deepseek-v4-flash`) as `lite_agent` and `ds-pro-max` (`deepseek-v4-pro`) as `demanding_agent`, both on harness kind `opencode-bridge` with provider `deepseek` and `--variant max` — plus native Codex fallback rungs (`codex-spark`, `codex-mini`), native read-only research (`codex --search`), and native prompt audit (`gpt-5.5`). It records effort in tokens, characters, and elapsed time only.
 
 Create flags are binding. If the user supplies caps, wave count, timeout flags, ladders, role-models, provider/model strings, or harness specs, the rendered `goal.config.json` must apply those values or the command must fail.
 
@@ -164,14 +164,14 @@ To use user-supplied models, keep roles explicit:
 ```bash
 python3 "$GOAL_SKILLS_ROOT/goal-config/scripts/create_goal_config.py" \
   --preset opencode-deepseek-v4 \
-  --role-model lite_agent:opencode-bridge:deepseek/deepseek-v4-flash \
-  --role-model demanding_agent:opencode-bridge:deepseek/deepseek-v4-pro \
+  --role-model lite_agent:opencode-bridge:deepseek-v4-flash \
+  --role-model demanding_agent:opencode-bridge:deepseek-v4-pro \
   --worker-ladder demanding_agent,lite_agent \
   --reviewer-ladder demanding_agent \
   --output /abs/goal.config.json
 ```
 
-For `codex`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4`. Bare provider-implied forms also work, for example `--role-model worker_codex_spark:codex:openai/gpt-5.3-codex-spark`.
+For `codex`, `ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately and renders the provider-free model id for the CLI, such as `gpt-5.4`. Bare provider-implied forms also work, for example `--role-model worker_codex_spark:codex:openai/gpt-5.3-codex-spark`. For `opencode-bridge`, the provider is always `deepseek`; use bridge model IDs such as `deepseek-v4-flash` or `deepseek-v4-pro`. Provider-qualified `deepseek/deepseek-v4-*` input is normalized, but nested OpenRouter IDs are not valid bridge routes.
 
 To plug in another CLI harness, provide a JSON harness spec path or inline JSON and map roles to it. Built-in harness kinds are `opencode-bridge`, `codex`, and `generic-cli`; `opencode-bridge` routes deepseek work through the bridge `opencode_worker.py`, and `generic-cli` is for harnesses such as antigravity that can be represented as a command plus prompt/model templates.
 
@@ -230,7 +230,7 @@ jq '.unvisited_routes' /abs/goal-config-smoke.json
 
 Generated configs include `harness_smokes` for every configured model role. If a selected role lacks a smoke definition, the checker fails before running route smokes. The canonical `/goal` smoke report should omit `--harness` so it covers worker, reviewer, amender, Lite, and demanding aliases that runtime packets may use. To isolate a failing route after the full report fails, pass repeated or comma-separated `--harness` values, for example `--harness worker_codex_spark`.
 
-The checker accepts nested model ids such as `openrouter/deepseek/deepseek-v4-pro` and normalizes JSON/API errors into provider, status, short message, and count fields. Generated `opencode-bridge` route smokes use the bridge offline `doctor --json` readiness command for both `ds-flash-max` and `ds-pro-max` (`--variant max` is preserved in the runtime args). Full raw provider error payloads are intentionally not retained. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
+The checker normalizes JSON/API errors into provider, status, short message, and count fields. Generated `opencode-bridge` route smokes use the bridge offline `doctor --json` readiness command for both `ds-flash-max` and `ds-pro-max` (`--variant max` is preserved in the runtime args). Full raw provider error payloads are intentionally not retained. If the user asks to use all available models, treat that as discovery: list candidates, smoke selected routes, and report `accepted_routes` and `rejected_routes` with reasons before preflight consumes the config.
 
 Discovery mode checks provider-listed candidates without manually writing every role first:
 

@@ -48,6 +48,23 @@ def require(condition: bool, message: str) -> None:
         raise SystemExit(message)
 
 
+def _require_string_field(item: object, *, field: str, context: str) -> str:
+    require(isinstance(item, dict), f"{context} must be an object: {item!r}")
+    field_value = item.get(field)
+    require(isinstance(field_value, str), f"{context} {field} must be a string: {field_value!r}")
+    return field_value
+
+
+def _collect_dict_items_by_string_field(value: object, *, field: str, context: str) -> dict[str, dict]:
+    require(isinstance(value, list), f"{context} should be a list: {type(value)!r}")
+    return {_require_string_field(item, field=field, context=context): item for item in value}
+
+
+def _collect_string_values(value: object, *, field: str, context: str) -> set[str]:
+    require(isinstance(value, list), f"{context} should be a list: {type(value)!r}")
+    return {_require_string_field(item, field=field, context=context) for item in value}
+
+
 def run_goal_config_availability_fixture() -> None:
     result = run(
         [
@@ -230,15 +247,8 @@ def build_integration_brief(path: Path) -> None:
                         "owned_paths": ["README.md"],
                         "context_files": ["README.md"],
                         "depends_on": [],
-                        # small-edit maps to the native Codex fallback rungs
-                        # (worker_codex_spark -> worker_codex_mini). B9/P3 LEFTOVER: the
-                        # bridge-led route classes (normal-code/complex-code begin with the
-                        # opencode-bridge lite_agent) currently fail create_runtime_packet's
-                        # own launch-config adapter -- configured_telemetry_attempts builds
-                        # an opencode-bridge attempt for a goal-config role whose alias is
-                        # not a contract bridge alias, so it omits the required `bridge`
-                        # block. That is a runtime-packet skill bug to fix in B9/P3, out of
-                        # this fixtures-only batch; we exercise the working native path here.
+                        # small-edit maps to the configured bridge lite route plus native
+                        # Codex mini fallback.
                         "route_class": "small-edit",
                         "verification": ["true"],
                         "dod": ["Launch config contains the configured harness and model ladder."],
@@ -296,11 +306,12 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     )
     require((bundle_dir / "goal.config.json").exists(), "bundle must copy goal.config.json")
     require((bundle_dir / "goal-config.check.json").exists(), "bundle must copy goal-config.check.json")
-    # The opencode-deepseek-v4 profile now derives the worker ladder from the bridge
-    # lite route plus native Codex spark/mini, and the light reviewer route follows the
-    # native Codex fallbacks (the demanding bridge route stays the standard reviewer).
+    # The opencode-deepseek-v4 profile now derives worker classes from the bridge/codex
+    # aliases in contract, and review routes now include the contract heavy route that
+    # uses prompt-audit for the second slot.
     require(
-        manifest["worker_model_policy"]["default_ladder"] == ["lite_agent", "worker_codex_spark", "worker_codex_mini"],
+        manifest["worker_model_policy"]["default_ladder"]
+        == ["demanding_agent", "lite_agent", "worker_codex_spark", "worker_codex_mini"],
         "manifest worker model policy should come from goal config",
     )
     require(
@@ -308,8 +319,8 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
         "manifest reviewer policy should come from goal config",
     )
     require(
-        manifest["review_model_policy"]["routes"]["light"] == ["worker_codex_spark", "worker_codex_mini"],
-        "manifest light reviewer policy should use the configured native fallback routes",
+        manifest["review_model_policy"]["routes"]["light"] == ["lite_agent"],
+        "manifest light reviewer policy should use the bridge flash route",
     )
     route_catalog = json.loads(
         run(
@@ -325,14 +336,18 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     require(route_catalog["status"] == "pass", "manifest route catalog should validate configured routes")
     require(
         route_catalog.get("checked_aliases")
-        == ["demanding_agent", "lite_agent", "worker_codex_mini", "worker_codex_spark"],
+        == ["demanding_agent", "lite_agent", "prompt_audit_agent", "worker_codex_mini", "worker_codex_spark"],
         "manifest route catalog should check every configured route alias",
     )
     require(
         route_catalog.get("checked_harnesses") == ["codex", "opencode-bridge"],
         "manifest route catalog should cover the configured native codex and opencode-bridge harnesses",
     )
-    configured_rows = {row.get("alias"): row for row in route_catalog.get("configured_route_models", [])}
+    configured_rows = _collect_dict_items_by_string_field(
+        route_catalog.get("configured_route_models", []),
+        field="alias",
+        context="configured route model row",
+    )
     expected_kinds = {
         "demanding_agent": "opencode-bridge",
         "lite_agent": "opencode-bridge",
@@ -382,6 +397,12 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
         json.dumps(
             {
                 "schema_version": 1,
+                "validation": {"mode": "model-check"},
+                "usage_units": {
+                    "token_counts": ["input"],
+                    "text_counts": ["prompt_chars"],
+                    "time_counts": ["elapsed_ms"],
+                },
                 "models": {
                     "bad_codex": {
                         "alias": "bad-codex",
@@ -395,14 +416,40 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
                 "harnesses": {
                     "codex": {
                         "kind": "codex",
-                        "command": "codex",
+                        "command": "python3",
+                        "smoke_args": ["{prompt}"],
                     }
                 },
                 "model_policies": {
                     "worker_model_policy": {
+                        "route_classes": {
+                            "mechanical": ["bad_codex"],
+                            "docs": ["bad_codex"],
+                            "small-edit": ["bad_codex"],
+                            "normal-code": ["bad_codex"],
+                            "complex-code": ["bad_codex"],
+                            "custom": ["bad_codex"],
+                        },
                         "default_ladder": ["bad_codex"],
-                        "routes": {"normal-code": ["bad_codex"]},
-                    }
+                        "allowed_routes": ["bad_codex"],
+                    },
+                    "review_model_policy": {
+                        "default_tier": "standard",
+                        "routes": {
+                            "light": ["bad_codex"],
+                            "standard": ["bad_codex"],
+                            "heavy": ["bad_codex"],
+                        },
+                    },
+                    "amender_model_policy": {
+                        "default_ladder": ["bad_codex"],
+                        "allowed_routes": ["bad_codex"],
+                    },
+                    "lite_model_policy": {
+                        "default_ladder": ["bad_codex"],
+                        "allowed_routes": ["bad_codex"],
+                        "model_map": {"bad_codex": "gpt-missing-fixture"},
+                    },
                 },
                 "model_ladders": {"worker": ["bad_codex"]},
             },
@@ -412,6 +459,31 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
         + "\n",
         encoding="utf-8",
     )
+    codex_goal_check_path = codex_manifest_dir / "goal.config.check.json"
+    run(
+        [
+            sys.executable,
+            CHECK.as_posix(),
+            "--config",
+            codex_config_path.as_posix(),
+            "--require-models",
+            "--output",
+            codex_goal_check_path.as_posix(),
+            "--harness",
+            "bad_codex",
+        ],
+        expect=1,
+    )
+    codex_goal_check = json.loads(codex_goal_check_path.read_text(encoding="utf-8"))
+    require(
+        codex_goal_check["status"] == "failed",
+        "missing Codex catalog model should fail check_goal_config --require-models",
+    )
+    require(
+        any("absent from catalog" in failure for failure in codex_goal_check.get("failures", [])),
+        "missing Codex catalog model should be a fail reason in check_goal_config --require-models report",
+    )
+
     codex_check_path.write_text(
         json.dumps(
             {
@@ -466,7 +538,11 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
         absent_configured_codex["status"] == "failed",
         "manifest route catalog must fail when a configured Codex model is absent from the live catalog",
     )
-    codex_rows = {row.get("alias"): row for row in absent_configured_codex.get("configured_route_models", [])}
+    codex_rows = _collect_dict_items_by_string_field(
+        absent_configured_codex.get("configured_route_models", []),
+        field="alias",
+        context="configured codex route row",
+    )
     missing_codex_row = codex_rows.get("bad_codex", {})
     require(missing_codex_row.get("present") is False, "missing configured Codex model should report present=false")
     require(missing_codex_row.get("status") == "failed", "missing configured Codex model should fail its row")
@@ -507,13 +583,13 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     route = json.loads((packet_dir / "route.json").read_text(encoding="utf-8"))
     launch_config = json.loads((packet_dir / "launch-config.json").read_text(encoding="utf-8"))
     status_schema = json.loads((packet_dir / "status.schema.json").read_text(encoding="utf-8"))
-    # small-edit selects the native Codex fallback rungs from the configured ladder.
+    # small-edit selects the configured bridge lite route plus native Codex mini fallback.
     require(
-        route["selected_ladder"] == ["worker_codex_spark", "worker_codex_mini"],
+        route["selected_ladder"] == ["lite_agent", "worker_codex_mini"],
         "packet route must use configured small-edit route-class ladder",
     )
     require(
-        route["default_ladder"] == ["lite_agent", "worker_codex_spark", "worker_codex_mini"],
+        route["default_ladder"] == ["demanding_agent", "lite_agent", "worker_codex_spark", "worker_codex_mini"],
         "packet default ladder must use config",
     )
     require(
@@ -524,14 +600,15 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
     require(
         selected_ladder_schema.get("minItems") == 2
         and selected_ladder_schema.get("maxItems") == 2
-        and selected_ladder_schema.get("items", {}).get("enum") == ["worker_codex_spark", "worker_codex_mini"],
+        and selected_ladder_schema.get("items", {}).get("enum") == ["lite_agent", "worker_codex_mini"],
         "worker status schema must accept the configured selected ladder",
     )
     attempts = launch_config.get("attempts", [])
-    require(len(attempts) == 2, "configured small-edit route-class worker launch should have two native attempts")
-    require(attempts[0]["alias"] == "worker_codex_spark", "first attempt should be the native Codex Spark route")
-    require(attempts[0]["harness_kind"] == "codex", "first attempt should use the native codex harness")
-    require(attempts[0]["model"] == "gpt-5.3-codex-spark", "first attempt model mismatch")
+    require(len(attempts) == 2, "configured small-edit route-class worker launch should have two attempts")
+    require(attempts[0]["alias"] == "lite_agent", "first attempt should be the bridge lite route")
+    require(attempts[0]["harness_kind"] == "opencode-bridge", "first attempt should use the bridge harness")
+    require(attempts[0]["model"] == "deepseek-v4-flash", "first attempt model mismatch")
+    require(attempts[0].get("bridge", {}).get("provider") == "deepseek", "bridge attempt provider mismatch")
     require(attempts[0]["effort"] == "configured", "configured attempt effort must be telemetry-valid")
     require(attempts[0].get("run_args"), "configured harness attempts must carry rendered run args")
     require(attempts[1]["alias"] == "worker_codex_mini", "second attempt should be the native Codex mini fallback")
@@ -547,7 +624,7 @@ def main() -> int:
         generic_config_path = tmp_path / "goal.config.generic.json"
         current_override_path = tmp_path / "goal.config.current-overrides.json"
         normalized_roles_path = tmp_path / "goal.config.normalized-roles.json"
-        openrouter_config_path = tmp_path / "goal.config.openrouter.json"
+        deepseek_provider_config_path = tmp_path / "goal.config.deepseek-provider.json"
         discover_config_path = tmp_path / "goal.config.discover.json"
         profile_discover_config_path = tmp_path / "goal.config.profile-discover.json"
         from_discovery_config_path = tmp_path / "goal.config.from-discovery.json"
@@ -563,11 +640,9 @@ def main() -> int:
         for_preflight_remediated_report_path = tmp_path / "goal-config-bad-caps-remediated-report.json"
         for_preflight_bad_telemetry_path = tmp_path / "goal-config-bad-telemetry.json"
         for_preflight_bad_telemetry_report_path = tmp_path / "goal-config-bad-telemetry-report.json"
-        discovery_reuse_count_path = tmp_path / "opencode-discovery-smoke-count.txt"
         discover_smoke_script = tmp_path / "fake_opencode_smoke.py"
         counting_smoke_count_path = tmp_path / "generic-smoke-count.txt"
         models_path = tmp_path / "deepseek-models.txt"
-        openrouter_models_path = tmp_path / "openrouter-models.txt"
         missing_models_path = tmp_path / "missing-models.txt"
         billing_config_path = tmp_path / "goal.config.billing.json"
         models_path.write_text(
@@ -575,10 +650,6 @@ def main() -> int:
             "deepseek/deepseek-reasoner\n"
             "deepseek/deepseek-v4-flash\n"
             "deepseek/deepseek-v4-pro\n",
-            encoding="utf-8",
-        )
-        openrouter_models_path.write_text(
-            "openrouter/deepseek/deepseek-v4-flash\nopenrouter/deepseek/deepseek-v4-pro\n~openrouter/latest\n",
             encoding="utf-8",
         )
         missing_models_path.write_text("deepseek/deepseek-chat\n", encoding="utf-8")
@@ -1048,48 +1119,50 @@ def main() -> int:
                 "--preset",
                 "opencode-deepseek-v4",
                 "--provider",
-                "openrouter",
+                "deepseek",
                 "--lite-model",
                 "deepseek/deepseek-v4-flash",
                 "--demanding-model",
                 "deepseek/deepseek-v4-pro",
                 "--output",
-                openrouter_config_path.as_posix(),
+                deepseek_provider_config_path.as_posix(),
             ]
         )
-        openrouter_config = json.loads(openrouter_config_path.read_text(encoding="utf-8"))
-        # B4: the bridge harness carries the provider explicitly via --provider, so a
-        # --provider override changes the role provider while the model stays the bare
-        # bridge model id (the old direct-opencode nested "openrouter/deepseek/..." id
-        # no longer applies). The bridge launch contract passes the override provider.
+        deepseek_provider_config = json.loads(deepseek_provider_config_path.read_text(encoding="utf-8"))
+        # With bridge-model checks now enforcing deepseek for opencode-bridge, an explicit
+        # --provider still sets the provider field directly while the bare bridge model id
+        # remains unchanged.
         require(
-            openrouter_config["models"]["demanding_agent"]["provider"] == "openrouter",
+            deepseek_provider_config["models"]["demanding_agent"]["provider"] == "deepseek",
             "bridge provider override must set the role provider",
         )
         require(
-            openrouter_config["models"]["demanding_agent"]["model"] == "deepseek-v4-pro",
+            deepseek_provider_config["models"]["demanding_agent"]["model"] == "deepseek-v4-pro",
             "bridge provider override must keep the bare bridge model id",
         )
         require(
-            openrouter_config["models"]["demanding_agent"]["harness"] == "opencode-bridge",
+            deepseek_provider_config["models"]["demanding_agent"]["harness"] == "opencode-bridge",
             "bridge provider override must keep the opencode-bridge harness",
         )
-        openrouter_report_path = tmp_path / "goal-config-openrouter-check.json"
+        deepseek_provider_report_path = tmp_path / "goal-config-deepseek-provider-check.json"
         check_summary = run(
             [
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                openrouter_config_path.as_posix(),
+                deepseek_provider_config_path.as_posix(),
                 "--output",
-                openrouter_report_path.as_posix(),
+                deepseek_provider_report_path.as_posix(),
             ]
         )
-        openrouter_report = json.loads(openrouter_report_path.read_text(encoding="utf-8"))
-        require(openrouter_report["status"] == "pass", "bridge provider-override config should validate offline")
-        require(openrouter_report["rejected_routes"] == [], "passing provider-override check should not reject routes")
+        deepseek_provider_report = json.loads(deepseek_provider_report_path.read_text(encoding="utf-8"))
+        require(deepseek_provider_report["status"] == "pass", "bridge provider-override config should validate offline")
         require(
-            all(harness["model_check"].get("status") == "pass" for harness in openrouter_report["harnesses"]),
+            deepseek_provider_report["rejected_routes"] == [],
+            "passing provider-override check should not reject routes",
+        )
+        require(
+            all(harness["model_check"].get("status") == "pass" for harness in deepseek_provider_report["harnesses"]),
             "bridge provider-override model checks should pass offline",
         )
 
@@ -1209,16 +1282,8 @@ def main() -> int:
         require("--smoke" in from_discovery_state["next_command"], "from-discovery state should route to smoke check")
 
         # Smoke-reuse: a final check that supplies the discovery report as prior smoke
-        # evidence must reuse the matching route smokes rather than re-running them.
-        discovery_reuse_count_path.write_text("0\n", encoding="utf-8")
-        discovery_reuse_final_config_path = tmp_path / "goal.config.discovery-reuse-final.json"
-        discovery_reuse_counting_smoke_script = tmp_path / "fake-discovery-reuse-smoke.py"
-        write_fake_echo_smoke_script(discovery_reuse_counting_smoke_script, discovery_reuse_count_path)
-        build_offline_smoke_config(
-            discovery_reuse_final_config_path,
-            config_path,
-            smoke_script=discovery_reuse_counting_smoke_script,
-        )
+        # evidence must reuse the matching route smokes when the checked config is
+        # exactly the config that produced the report.
         final_reuse_smoke_report_path = tmp_path / "goal-config-discovery-reuse-smoke-final.json"
         final_reuse_smoke_state_path = tmp_path / "goal-config-discovery-reuse-state.json"
         run(
@@ -1226,7 +1291,7 @@ def main() -> int:
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                discovery_reuse_final_config_path.as_posix(),
+                discover_config_path.as_posix(),
                 "--require-models",
                 "--smoke",
                 "--harness",
@@ -1242,8 +1307,8 @@ def main() -> int:
         final_reuse_smoke_report = json.loads(final_reuse_smoke_report_path.read_text(encoding="utf-8"))
         require(final_reuse_smoke_report["status"] == "pass", "final smoke should pass using reused discovery evidence")
         require(
-            int(discovery_reuse_count_path.read_text(encoding="utf-8")) == 0,
-            "reused routes should not rerun smoke for routes already passed in discovery report",
+            final_reuse_smoke_report.get("config_sha256") == discover_report.get("config_sha256"),
+            "fresh smoke reuse should validate the same config hash as the discovery report",
         )
         for harness_report in final_reuse_smoke_report["harnesses"]:
             require(
@@ -1405,6 +1470,24 @@ def main() -> int:
             all(route["harness"] != "opencode-bridge" for route in auth_stop_report["accepted_routes"]),
             "the failing bridge routes must not be accepted",
         )
+        skipped_bridge = [
+            report
+            for report in auth_stop_report["harnesses"]
+            if report.get("harness") == "opencode-bridge" and report.get("smoke", {}).get("status") == "skipped"
+        ]
+        require(
+            skipped_bridge,
+            "auth failure should skip later bridge discovery candidates",
+        )
+        bridge_skip = skipped_bridge[0]
+        require(
+            bridge_skip["smoke"].get("provider_status") == 401,
+            "skipped bridge smoke should retain auth status",
+        )
+        require(
+            "AuthenticateToken" in bridge_skip["smoke"].get("provider_message", ""),
+            "skipped bridge smoke should retain auth message",
+        )
 
         scan = run([sys.executable, SCAN.as_posix(), "--json"]).stdout
         inventory = json.loads(scan)
@@ -1419,7 +1502,11 @@ def main() -> int:
             require(category in inventory["categories"], f"missing inventory category: {category}")
         questions = json.loads(run([sys.executable, SCAN.as_posix(), "--questions-json"]).stdout)
         require(questions["status"] == "pass", "preference question inventory should pass")
-        question_ids = {item.get("id") for item in questions.get("questions", []) if isinstance(item, dict)}
+        question_ids = _collect_string_values(
+            questions.get("questions", []),
+            field="id",
+            context="preference question",
+        )
         for question_id in ("model_profile", "effort_profile", "validation_mode"):
             require(question_id in question_ids, f"missing preference question: {question_id}")
         interaction = questions.get("interaction", {})
@@ -1460,7 +1547,11 @@ def main() -> int:
             require(question.get("explain_to_user"), f"{question_id} must explain the preference to the user")
             options = question.get("options", [])
             require(all(isinstance(option, dict) for option in options), f"{question_id} options must be structured")
-            found_option_ids = {option.get("id") for option in options}
+            found_option_ids = _collect_string_values(
+                options,
+                field="id",
+                context=f"{question_id} preference option",
+            )
             require(option_ids <= found_option_ids, f"{question_id} missing user-visible options")
             for option in options:
                 require(option.get("label"), f"{question_id} option missing label")
@@ -1562,7 +1653,15 @@ def main() -> int:
             "/home/jakub/.agents/skills/.system/goal-config/SKILL.md" not in readme_text,
             "README should not advertise a stale absolute .system runtime path",
         )
+        require(
+            "openrouter/deepseek/deepseek-v4-pro" not in readme_text,
+            "README should not advertise OpenRouter nested model ids for opencode-bridge",
+        )
         contract_text = (GOAL_CONFIG / "references" / "configuration-contract.md").read_text(encoding="utf-8")
+        require(
+            "openrouter/deepseek/deepseek-v4-pro" not in contract_text,
+            "contract should not advertise OpenRouter nested model ids for opencode-bridge",
+        )
         require(
             "Prefer smoke by default and reserve debug for trace analysis." in contract_text,
             "contract should default to smoke and reserve debug",
@@ -1904,6 +2003,11 @@ def main() -> int:
         bridge_failed_smoke = bridge_smoke_report["harnesses"][0]["smoke"]
         require(bridge_smoke_report["status"] == "failed", "bridge smoke failure should fail the check")
         require(bridge_failed_smoke.get("status") == "failed", "failing bridge route smoke must be marked failed")
+        require(bridge_failed_smoke.get("provider_status") == 401, "bridge smoke should retain provider status")
+        require(
+            bridge_failed_smoke.get("provider_message") == "AuthenticateToken authentication failed",
+            "bridge smoke should retain provider message",
+        )
         require(bridge_smoke_report["accepted_routes"] == [], "smoke-failed route should not be accepted")
         require(bridge_smoke_report["rejected_routes"], "smoke-failed route should be rejected with reasons")
         require(
@@ -1960,7 +2064,7 @@ def main() -> int:
             any("billing" in failure.lower() for failure in billing_report["failures"]),
             "billing-bearing config should fail with billing rejection",
         )
-        run_integration_fixture(tmp_path, config_path, smoke_report_path)
+        run_integration_fixture(tmp_path, discover_config_path, smoke_report_path)
 
     print("status=pass")
     return 0

@@ -78,9 +78,24 @@ def load_contract() -> Any:
 
 # Single source of truth for harness kinds (orchestration_contract); kept in lockstep
 # with the runtime launcher's dispatchable kinds by scripts/check_harness_contract.py.
-HARNESS_KIND_VALUES = frozenset(load_contract().SUPPORTED_HARNESS_KINDS)
-BRIDGE_HARNESS_KIND = load_contract().BRIDGE_HARNESS_KIND
-BRIDGE_ROUTE_MODEL_IDS = frozenset(load_contract().BRIDGE_ROUTE_MODELS.values())
+_CONTRACT = load_contract()
+HARNESS_KIND_VALUES = frozenset(_CONTRACT.SUPPORTED_HARNESS_KINDS)
+BRIDGE_HARNESS_KIND = _CONTRACT.BRIDGE_HARNESS_KIND
+BRIDGE_PROVIDER_ID = _CONTRACT.BRIDGE_PROVIDER_ID
+BRIDGE_ROUTE_MODEL_IDS = frozenset(_CONTRACT.BRIDGE_ROUTE_MODELS.values())
+_CODEX_CATALOG_MODULE_PATH = Path(__file__).resolve().parents[2] / "_goal_shared" / "scripts" / "check_model_catalog.py"
+_CODEX_CATALOG_BY_SLUG: dict[str, dict[str, Any]] | None = None
+_CODEX_CATALOG_WARNING: str | None = None
+WORKER_POLICY_ROUTE_CLASSES = frozenset(_CONTRACT.WORKER_ROUTE_CLASS_LADDERS)
+REVIEW_POLICY_ROUTE_TIERS = frozenset(_CONTRACT.REVIEW_MODEL_ROUTES)
+REQUIRED_MODEL_POLICY_KEYS = frozenset(
+    {
+        "worker_model_policy",
+        "review_model_policy",
+        "amender_model_policy",
+        "lite_model_policy",
+    }
+)
 
 
 def command_result(command: list[str], *, timeout_seconds: int | None = None) -> dict[str, Any]:
@@ -148,10 +163,151 @@ def json_clone(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
-def load_smoke_cache(paths: list[Path]) -> dict[tuple[str, str, str], dict[str, Any]]:
+def _current_config_route_keys(models: dict[str, Any]) -> tuple[set[tuple[str, str, str]], list[str]]:
+    keys: set[tuple[str, str, str]] = set()
+    failures: list[str] = []
+    if not models:
+        return keys, ["current config has no model routes"]
+    for role, model in models.items():
+        if not isinstance(model, dict):
+            failures.append(f"current config model {role!r} must be an object")
+            continue
+        key = route_key(model)
+        if key is None:
+            failures.append(f"current config model {role!r} has incomplete route metadata")
+            continue
+        keys.add(key)
+    if not keys:
+        failures.append("current config has no reusable route keys")
+    return keys, failures
+
+
+def _route_keys_from_report_list(
+    report: dict[str, Any], key: str, path: Path
+) -> tuple[set[tuple[str, str, str]], list[str]]:
+    values = report.get(key)
+    if not isinstance(values, list):
+        return set(), [f"reusable smoke report {key} must be an array: {path}"]
+    if not values:
+        if key == "accepted_routes":
+            return set(), ["reusable smoke report contains no accepted route evidence"]
+        return set(), [f"reusable smoke report {key} must not be empty: {path}"]
+    keys: set[tuple[str, str, str]] = set()
+    failures: list[str] = []
+    for item in values:
+        if not isinstance(item, dict):
+            failures.append(f"reusable smoke report {key} contains non-object route evidence: {path}")
+            continue
+        route = route_key(item)
+        if route is None:
+            failures.append(f"reusable smoke report {key} route has incomplete metadata: {path}")
+            continue
+        keys.add(route)
+    return keys, failures
+
+
+def _matching_route_evidence_failures(report: dict[str, Any], *, models: dict[str, Any], path: Path) -> list[str]:
+    failures: list[str] = []
+    expected_route_keys, config_failures = _current_config_route_keys(models)
+    failures.extend(config_failures)
+
+    if report.get("failures") != []:
+        failures.append(f"reusable smoke report failures must be an empty array: {path}")
+
+    checked_roles = report.get("checked_roles")
+    if (
+        not isinstance(checked_roles, list)
+        or not checked_roles
+        or not all(isinstance(role, str) for role in checked_roles)
+    ):
+        failures.append(f"reusable smoke report checked_roles must be a non-empty string array: {path}")
+
+    rejected_routes = report.get("rejected_routes")
+    if not isinstance(rejected_routes, list):
+        failures.append(f"reusable smoke report rejected_routes must be an array: {path}")
+    elif rejected_routes:
+        failures.append(f"reusable smoke report contains rejected route evidence: {path}")
+
+    accepted_route_keys, accepted_failures = _route_keys_from_report_list(report, "accepted_routes", path)
+    failures.extend(accepted_failures)
+    if expected_route_keys and accepted_route_keys and accepted_route_keys != expected_route_keys:
+        failures.append(
+            "reusable smoke report accepted route set does not match current config: "
+            f"{path} has {sorted(accepted_route_keys)!r}, current config has {sorted(expected_route_keys)!r}"
+        )
+
+    harness_values = report.get("harnesses")
+    if not isinstance(harness_values, list):
+        failures.append(f"reusable smoke report harnesses must be an array: {path}")
+        return failures
+    if not harness_values:
+        failures.append(f"reusable smoke report harnesses must not be empty: {path}")
+        return failures
+
+    harness_route_keys: set[tuple[str, str, str]] = set()
+    for item in harness_values:
+        if not isinstance(item, dict):
+            failures.append(f"reusable smoke report harnesses contains non-object route evidence: {path}")
+            continue
+        route = route_key(item)
+        if route is None:
+            failures.append(f"reusable smoke report harnesses route has incomplete metadata: {path}")
+            continue
+        model_check = item.get("model_check")
+        if not isinstance(model_check, dict) or model_check.get("status") != "pass":
+            failures.append(f"reusable smoke report harness route lacks passing model_check evidence: {path}")
+        smoke = item.get("smoke")
+        if not isinstance(smoke, dict) or smoke.get("status") != "pass":
+            failures.append(f"reusable smoke report harness route lacks passing smoke evidence: {path}")
+        harness_route_keys.add(route)
+
+    if expected_route_keys and harness_route_keys and harness_route_keys != expected_route_keys:
+        failures.append(
+            "reusable smoke report harness route set does not match current config: "
+            f"{path} has {sorted(harness_route_keys)!r}, current config has {sorted(expected_route_keys)!r}"
+        )
+    return failures
+
+
+def _smoke_report_can_reuse_for_config(
+    report: dict[str, Any],
+    *,
+    path: Path,
+    expected_config_sha256: str | None,
+    current_models: dict[str, Any] | None,
+) -> bool:
+    if report.get("status") != "pass":
+        return False
+    if expected_config_sha256 is None:
+        if current_models is None:
+            return True
+        return not _matching_route_evidence_failures(report, models=current_models, path=path)
+    report_config_sha256 = report.get("config_sha256")
+    if isinstance(report_config_sha256, str) and report_config_sha256 == expected_config_sha256:
+        if current_models is None:
+            return True
+        return not _matching_route_evidence_failures(report, models=current_models, path=path)
+    if not isinstance(report_config_sha256, str) or current_models is None:
+        return False
+    return not _matching_route_evidence_failures(report, models=current_models, path=path)
+
+
+def load_smoke_cache(
+    paths: list[Path],
+    *,
+    expected_config_sha256: str | None = None,
+    current_models: dict[str, Any] | None = None,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
     cache: dict[tuple[str, str, str], dict[str, Any]] = {}
     for path in paths:
         report = load_json(path)
+        if not _smoke_report_can_reuse_for_config(
+            report,
+            path=path,
+            expected_config_sha256=expected_config_sha256,
+            current_models=current_models,
+        ):
+            continue
         raw_harnesses = report.get("harnesses")
         for item in raw_harnesses if isinstance(raw_harnesses, list) else []:
             if not isinstance(item, dict):
@@ -168,7 +324,12 @@ def load_smoke_cache(paths: list[Path]) -> dict[tuple[str, str, str], dict[str, 
     return cache
 
 
-def reusable_smoke_route_report(paths: list[Path]) -> dict[str, Any]:
+def reusable_smoke_route_report(
+    paths: list[Path],
+    *,
+    expected_config_sha256: str | None = None,
+    current_models: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     checked_roles: list[str] = []
     accepted_routes: list[dict[str, Any]] = []
     rejected_routes: list[dict[str, Any]] = []
@@ -183,12 +344,27 @@ def reusable_smoke_route_report(paths: list[Path]) -> dict[str, Any]:
         if report.get("status") != "pass":
             failures.append(f"reusable smoke report status must be pass: {path}")
             continue
+        report_config_sha256 = report.get("config_sha256")
+        hash_mismatch = expected_config_sha256 is not None and report_config_sha256 != expected_config_sha256
+        if hash_mismatch and (not isinstance(report_config_sha256, str) or current_models is None):
+            failures.append(f"reusable smoke report config_sha256 mismatch without route evidence: {path}")
+            continue
+        if current_models is not None:
+            route_failures = _matching_route_evidence_failures(report, models=current_models, path=path)
+            if route_failures:
+                if hash_mismatch:
+                    failures.append(
+                        f"reusable smoke report config_sha256 mismatch and route evidence is not reusable: {path}"
+                    )
+                failures.extend(route_failures)
+                continue
         used_reports.append(
             {
                 "path": path.resolve().as_posix(),
                 "mode": report.get("mode"),
                 "check_mode": report.get("check_mode"),
                 "config_path": report.get("config_path"),
+                "config_sha256": report_config_sha256,
             }
         )
         raw_roles = report.get("checked_roles")
@@ -207,6 +383,12 @@ def reusable_smoke_route_report(paths: list[Path]) -> dict[str, Any]:
                 for item in values:
                     if isinstance(item, dict):
                         target.append(json_clone(item))
+
+    if used_reports:
+        if not accepted_routes:
+            failures.append("reusable smoke report contains no accepted route evidence")
+        if not checked_roles:
+            failures.append("reusable smoke report contains no checked role evidence")
 
     return {
         "checked_roles": checked_roles,
@@ -288,6 +470,44 @@ def focused_response_excerpt(output: str, expected: str, *, limit: int = 240) ->
         end = min(len(output), index + len(expected) + 80)
         return output[start:end].strip()[:limit], "window_containing_expected"
     return output[:limit], "raw_prefix"
+
+
+def extract_smoke_error_payload(output: str) -> dict[str, Any]:
+    """Extract a JSON error payload from smoke output when available."""
+    candidates: list[str] = [output.strip()]
+    candidates.extend([line.strip() for line in output.splitlines() if line.strip()])
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return {}
+
+
+def _bridge_auth_status(smoke_report: dict[str, Any]) -> int | None:
+    status = smoke_report.get("provider_status")
+    try:
+        return int(status)
+    except (TypeError, ValueError):
+        return None
+
+
+def _provider_error_payload(smoke_report: dict[str, Any]) -> dict[str, Any]:
+    provider_status = smoke_report.get("provider_status")
+    provider_message = smoke_report.get("provider_message")
+    provider_count = smoke_report.get("provider_count")
+    payload: dict[str, Any] = {}
+    if provider_status is not None:
+        payload["status"] = provider_status
+    if provider_message is not None:
+        payload["message"] = provider_message
+    if provider_count is not None:
+        payload["count"] = provider_count
+    return payload
 
 
 def model_roles(config: dict[str, Any], selected: list[str]) -> list[str]:
@@ -615,6 +835,26 @@ def check_non_opencode_model(model: dict[str, Any], *, harness: dict[str, Any]) 
     return result, failures
 
 
+def _load_codex_catalog() -> tuple[dict[str, dict[str, Any]] | None, str | None]:
+    global _CODEX_CATALOG_BY_SLUG, _CODEX_CATALOG_WARNING
+    if _CODEX_CATALOG_BY_SLUG is not None or _CODEX_CATALOG_WARNING is not None:
+        return _CODEX_CATALOG_BY_SLUG, _CODEX_CATALOG_WARNING
+    spec = importlib.util.spec_from_file_location("goal_shared_check_model_catalog", _CODEX_CATALOG_MODULE_PATH)
+    if spec is None or spec.loader is None:
+        _CODEX_CATALOG_WARNING = f"could not load catalog helper: {_CODEX_CATALOG_MODULE_PATH}"
+        return None, _CODEX_CATALOG_WARNING
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+
+    catalog, source, warnings = module.load_catalog("live")
+    if catalog is None:
+        _CODEX_CATALOG_WARNING = f"live Codex catalog unavailable ({source}): {'; '.join(warnings)}"
+        return None, _CODEX_CATALOG_WARNING
+    _CODEX_CATALOG_BY_SLUG = {row["slug"]: row for row in module.model_rows(catalog["models"])}
+    return _CODEX_CATALOG_BY_SLUG, None
+
+
 def run_harness_smoke(
     role: str,
     model: dict[str, Any],
@@ -665,12 +905,55 @@ def run_harness_smoke(
     result = command_result([resolved, *smoke_args], timeout_seconds=timeout_seconds)
     output = result["stdout"] + result["stderr"]
     response_excerpt, response_excerpt_source = focused_response_excerpt(output, expected)
+
+    def is_provider_status_success(status: Any) -> bool:
+        if status is None:
+            return False
+        if isinstance(status, bool):
+            return bool(status)
+        if isinstance(status, int):
+            if status == 0:
+                return True
+            return 200 <= status <= 299
+        if isinstance(status, str):
+            normalized = status.strip().lower()
+            if normalized:
+                return normalized in {"ok", "pass", "success", "passed", "1", "true"}
+            return False
+        return False
+
+    provider_status = None
+    provider_message = None
+    provider_count = None
+    provider_error: dict[str, Any] = {}
+    provider_failed = False
+    error_payload = extract_smoke_error_payload(output)
+    if error_payload:
+        if "status" in error_payload:
+            provider_status = error_payload.get("status")
+            provider_error["status"] = provider_status
+            if not is_provider_status_success(provider_status):
+                failures.append(f"{role} {kind} smoke response status={provider_status}")
+                provider_failed = True
+        if "message" in error_payload:
+            provider_message = error_payload.get("message")
+            provider_error["message"] = provider_message
+            if provider_failed and isinstance(provider_message, str) and provider_message:
+                failures.append(f"{role} {kind} smoke response: {provider_message}")
+        if "count" in error_payload:
+            provider_count = error_payload.get("count")
+            provider_error["count"] = provider_count
     contains_expected = expected in output
     if result["timed_out"]:
         failures.append(f"{role} {kind} smoke timed out")
     if result["returncode"] != 0:
         failures.append(f"{role} {kind} smoke returncode={result['returncode']}")
-    if not contains_expected:
+    if not contains_expected and not (
+        kind == BRIDGE_HARNESS_KIND
+        and isinstance(error_payload, dict)
+        and is_provider_status_success(error_payload.get("status"))
+        and result["returncode"] == 0
+    ):
         failures.append(f"{role} {kind} smoke output did not contain expected text")
 
     return {
@@ -678,6 +961,10 @@ def run_harness_smoke(
         "returncode": result["returncode"],
         "timed_out": result["timed_out"],
         "elapsed_ms": result["elapsed_ms"],
+        "provider_status": provider_status,
+        "provider_message": provider_message,
+        "provider_count": provider_count,
+        **({"provider_error": provider_error} if provider_error else {}),
         "stdout_chars": len(result["stdout"]),
         "stderr_chars": len(result["stderr"]),
         "response_chars": len(output),
@@ -729,6 +1016,245 @@ def validate_config_shape(config: dict[str, Any]) -> list[str]:
     if not isinstance(models, dict) or not models:
         failures.append("models must be a non-empty object")
     failures.extend(validate_harness_shape(config))
+    return failures
+
+
+def _validate_role_reference_list(
+    failures: list[str],
+    role_refs: Any,
+    path: str,
+    *,
+    defined_roles: set[str],
+) -> None:
+    if not isinstance(role_refs, list):
+        failures.append(f"{path} must be an array of role IDs")
+        return
+    for role in role_refs:
+        if not isinstance(role, str):
+            failures.append(f"{path} contains non-string role reference: {role!r}")
+            continue
+        if role not in defined_roles:
+            failures.append(f"{path} references unknown model role: {role!r}")
+
+
+def _role_ref_set(role_refs: Any) -> set[str] | None:
+    if not isinstance(role_refs, list):
+        return None
+    return {role for role in role_refs if isinstance(role, str)}
+
+
+def _validate_roles_within_allowed(
+    failures: list[str],
+    role_refs: Any,
+    path: str,
+    *,
+    allowed_roles: set[str],
+    allowed_path: str,
+) -> None:
+    roles = _role_ref_set(role_refs)
+    if roles is None:
+        return
+    unexpected = roles - allowed_roles
+    if unexpected:
+        failures.append(f"{path} references roles outside {allowed_path}: " + ", ".join(sorted(unexpected)))
+
+
+def _validate_role_reference_map(
+    failures: list[str],
+    policy: dict[str, Any],
+    field: str,
+    *,
+    defined_roles: set[str],
+    required_route_keys: frozenset[str] | None = None,
+) -> None:
+    value = policy.get(field)
+    if not isinstance(value, dict):
+        failures.append(f"{field} in {policy.get('router', 'model policy')} must be an object")
+        return
+    if required_route_keys is not None:
+        missing = required_route_keys - set(value)
+        if missing:
+            failures.append(
+                f"{policy.get('source', 'model policy')}.{field} missing required route keys: "
+                f"{', '.join(sorted(missing))}"
+            )
+    for route, role_refs in value.items():
+        if not isinstance(route, str):
+            failures.append(f"{field} contains non-string route key: {route!r}")
+            continue
+        _validate_role_reference_list(failures, role_refs, f"{field}.{route}", defined_roles=defined_roles)
+
+
+def validate_model_policy_references(
+    config: dict[str, Any],
+    *,
+    required_model_policy_keys: frozenset[str] = REQUIRED_MODEL_POLICY_KEYS,
+    required_worker_route_classes: frozenset[str] = WORKER_POLICY_ROUTE_CLASSES,
+    required_review_route_tiers: frozenset[str] = REVIEW_POLICY_ROUTE_TIERS,
+) -> list[str]:
+    failures: list[str] = []
+    models = config.get("models")
+    if not isinstance(models, dict):
+        return failures
+    model_roles = set(models)
+    model_policies = config.get("model_policies")
+    if not isinstance(model_policies, dict):
+        failures.append("model_policies must be an object")
+        return failures
+    if not required_model_policy_keys.issubset(model_policies):
+        missing = ", ".join(sorted(required_model_policy_keys - set(model_policies)))
+        failures.append(f"model_policies missing required keys: {missing}")
+    for policy_key in sorted(required_model_policy_keys & set(model_policies)):
+        if not isinstance(model_policies.get(policy_key), dict):
+            failures.append(f"{policy_key} must be an object")
+
+    worker_model_policy = model_policies.get("worker_model_policy")
+    if isinstance(worker_model_policy, dict):
+        worker_allowed_roles = _role_ref_set(worker_model_policy.get("allowed_routes"))
+        worker_default_roles = _role_ref_set(worker_model_policy.get("default_ladder"))
+        _validate_role_reference_list(
+            failures,
+            worker_model_policy.get("default_ladder"),
+            "worker_model_policy.default_ladder",
+            defined_roles=model_roles,
+        )
+        _validate_role_reference_list(
+            failures,
+            worker_model_policy.get("allowed_routes"),
+            "worker_model_policy.allowed_routes",
+            defined_roles=model_roles,
+        )
+        _validate_role_reference_map(
+            failures,
+            worker_model_policy,
+            "route_classes",
+            defined_roles=model_roles,
+            required_route_keys=required_worker_route_classes,
+        )
+        route_classes = worker_model_policy.get("route_classes")
+        if worker_allowed_roles is not None and isinstance(route_classes, dict):
+            for route, role_refs in route_classes.items():
+                if isinstance(route, str):
+                    _validate_roles_within_allowed(
+                        failures,
+                        role_refs,
+                        f"worker_model_policy.route_classes.{route}",
+                        allowed_roles=worker_allowed_roles,
+                        allowed_path="worker_model_policy.allowed_routes",
+                    )
+        if worker_default_roles is not None and isinstance(route_classes, dict):
+            for route, role_refs in route_classes.items():
+                if isinstance(route, str):
+                    _validate_roles_within_allowed(
+                        failures,
+                        role_refs,
+                        f"worker_model_policy.route_classes.{route}",
+                        allowed_roles=worker_default_roles,
+                        allowed_path="worker_model_policy.default_ladder",
+                    )
+
+    review_model_policy = model_policies.get("review_model_policy")
+    if isinstance(review_model_policy, dict):
+        default_tier = review_model_policy.get("default_tier")
+        if not isinstance(default_tier, str) or default_tier not in required_review_route_tiers:
+            failures.append(
+                f"review_model_policy.default_tier must be one of {', '.join(sorted(required_review_route_tiers))}; "
+                f"got {default_tier!r}"
+            )
+        _validate_role_reference_map(
+            failures,
+            review_model_policy,
+            "routes",
+            defined_roles=model_roles,
+            required_route_keys=required_review_route_tiers,
+        )
+        ladders = config.get("model_ladders")
+        reviewer_ladder = ladders.get("reviewer") if isinstance(ladders, dict) else None
+        reviewer_roles = _role_ref_set(reviewer_ladder)
+        routes = review_model_policy.get("routes")
+        if reviewer_roles is not None and isinstance(routes, dict):
+            for tier, role_refs in routes.items():
+                if isinstance(tier, str):
+                    _validate_roles_within_allowed(
+                        failures,
+                        role_refs,
+                        f"review_model_policy.routes.{tier}",
+                        allowed_roles=reviewer_roles,
+                        allowed_path="model_ladders.reviewer",
+                    )
+
+    amender_model_policy = model_policies.get("amender_model_policy")
+    if isinstance(amender_model_policy, dict):
+        _validate_role_reference_list(
+            failures,
+            amender_model_policy.get("default_ladder"),
+            "amender_model_policy.default_ladder",
+            defined_roles=model_roles,
+        )
+        _validate_role_reference_list(
+            failures,
+            amender_model_policy.get("allowed_routes"),
+            "amender_model_policy.allowed_routes",
+            defined_roles=model_roles,
+        )
+
+    lite_model_policy = model_policies.get("lite_model_policy")
+    if isinstance(lite_model_policy, dict):
+        default_ladder = lite_model_policy.get("default_ladder")
+        allowed_routes = lite_model_policy.get("allowed_routes")
+        expected_model_map_roles: set[str] = set()
+        for role_refs in (default_ladder, allowed_routes):
+            roles = _role_ref_set(role_refs)
+            if roles is not None:
+                expected_model_map_roles.update(roles)
+        _validate_role_reference_list(
+            failures,
+            default_ladder,
+            "lite_model_policy.default_ladder",
+            defined_roles=model_roles,
+        )
+        _validate_role_reference_list(
+            failures,
+            allowed_routes,
+            "lite_model_policy.allowed_routes",
+            defined_roles=model_roles,
+        )
+        model_map = lite_model_policy.get("model_map")
+        if not isinstance(model_map, dict):
+            failures.append("lite_model_policy.model_map must be an object")
+        else:
+            missing_model_map_roles = expected_model_map_roles - set(model_map)
+            if missing_model_map_roles:
+                failures.append(
+                    "lite_model_policy.model_map is missing entries for roles: "
+                    + ", ".join(sorted(missing_model_map_roles))
+                )
+            unexpected_model_map_roles = set(model_map) - expected_model_map_roles
+            if unexpected_model_map_roles:
+                failures.append(
+                    "lite_model_policy.model_map has entries for roles outside policy routes: "
+                    + ", ".join(sorted(unexpected_model_map_roles))
+                )
+            for role, model_id in model_map.items():
+                if not isinstance(role, str):
+                    failures.append(f"lite_model_policy.model_map contains non-string role key: {role!r}")
+                    continue
+                if role not in model_roles:
+                    failures.append(f"lite_model_policy.model_map contains unknown model role key: {role!r}")
+                if not isinstance(model_id, str):
+                    failures.append(f"lite_model_policy.model_map[{role!r}] must be a model ID string")
+                    continue
+                expected_model_id = models.get(role)
+                if not isinstance(expected_model_id, dict) or not isinstance(expected_model_id.get("model"), str):
+                    failures.append(
+                        f"lite_model_policy.model_map[{role}] references model role with missing model id: {role}"
+                    )
+                elif model_id != expected_model_id["model"]:
+                    failures.append(
+                        f"lite_model_policy.model_map[{role}] must match config.models[{role}].model "
+                        f"({model_id!r} != {expected_model_id['model']!r})"
+                    )
+
     return failures
 
 
@@ -823,14 +1349,19 @@ def profile_discovery_candidates(
 
 
 def _bridge_route_failures(model: dict[str, Any]) -> list[str]:
-    # Contract (configuration-contract "Harness Checks"): for opencode-bridge roles the exact
-    # provider/model must be a known bridge route, accepting nested provider ids such as
-    # openrouter/deepseek/deepseek-v4-pro (the trailing model segment must match).
+    # Contract (configuration-contract "Harness Checks"): opencode-bridge is a deepseek-only
+    # harness, and the model must resolve to one of the known bridge route IDs.
     provider_model = model.get("model")
+    provider = model.get("provider")
+    if isinstance(provider, str) and provider != BRIDGE_PROVIDER_ID:
+        return [f"opencode-bridge provider {provider!r} is not {BRIDGE_PROVIDER_ID!r}"]
     if not isinstance(provider_model, str) or not provider_model:
         return []  # already reported as "missing model" by check_non_opencode_model
-    leaf = provider_model.rsplit("/", 1)[-1]
-    if provider_model in BRIDGE_ROUTE_MODEL_IDS or leaf in BRIDGE_ROUTE_MODEL_IDS:
+    if "/" in provider_model:
+        listed_provider, provider_model = provider_model.split("/", 1)
+        if listed_provider != BRIDGE_PROVIDER_ID:
+            return [f"opencode-bridge provider {listed_provider!r} is not {BRIDGE_PROVIDER_ID!r}"]
+    if provider_model in BRIDGE_ROUTE_MODEL_IDS:
         return []
     return [f"opencode-bridge model {provider_model!r} is not a known bridge route {sorted(BRIDGE_ROUTE_MODEL_IDS)}"]
 
@@ -839,6 +1370,7 @@ def check_model_for_harness(
     model: dict[str, Any],
     *,
     harness: dict[str, Any],
+    require_model_catalog: bool = False,
 ) -> tuple[dict[str, Any], list[str]]:
     kind = harness.get("kind")
     if not isinstance(kind, str) or kind not in HARNESS_KIND_VALUES:
@@ -846,6 +1378,14 @@ def check_model_for_harness(
             f"unsupported harness kind: {kind}"
         ]
     result, failures = check_non_opencode_model(model, harness=harness)
+    if kind == "codex" and require_model_catalog and not failures:
+        catalog, catalog_warning = _load_codex_catalog()
+        if catalog_warning is not None:
+            failures.append(f"Codex catalog unavailable: {catalog_warning}")
+            result["status"] = "failed"
+        elif str(model.get("model")) not in catalog:
+            failures.append(f"configured Codex model absent from catalog: {model.get('model')}")
+            result["status"] = "failed"
     if kind == BRIDGE_HARNESS_KIND:
         bridge_failures = _bridge_route_failures(model)
         if bridge_failures:
@@ -860,6 +1400,7 @@ def discover_profile_routes(
     profile_name: str,
     model_filter: str | None,
     max_candidates: int | None,
+    require_model_catalog: bool,
     smoke: bool,
     smoke_cache: dict[tuple[str, str, str], dict[str, Any]],
     discover_all_candidates: bool,
@@ -881,6 +1422,17 @@ def discover_profile_routes(
     unvisited_routes: list[dict[str, Any]] = []
     accepted_count = 0
     early_accept_count = int(profile.get("early_accept_count") or 0)
+    bridge_auth_stops: dict[tuple[str, str], dict[str, Any]] = {}
+
+    def provider_key(candidate: dict[str, Any]) -> tuple[str, str]:
+        return (str(candidate.get("harness") or ""), str(candidate.get("provider") or ""))
+
+    def should_skip_provider(candidate: dict[str, Any]) -> bool:
+        if not smoke:
+            return False
+        if candidate.get("harness") != BRIDGE_HARNESS_KIND:
+            return False
+        return provider_key(candidate) in bridge_auth_stops
 
     for index, candidate in enumerate(candidates):
         model = {
@@ -893,6 +1445,25 @@ def discover_profile_routes(
         report: dict[str, Any] = dict(model)
         report["profile"] = profile_name
 
+        if should_skip_provider(candidate):
+            reason = bridge_auth_stops[provider_key(candidate)]
+            provider_error_payload = _provider_error_payload(reason)
+            report["model_check"] = {
+                "status": "skipped",
+                "reason": "provider auth failure",
+            }
+            report["smoke"] = {
+                "status": "skipped",
+                "reason": "provider auth failure",
+                "provider_status": provider_error_payload.get("status"),
+                "provider_message": provider_error_payload.get("message"),
+                "provider_count": provider_error_payload.get("count"),
+            }
+            if provider_error_payload:
+                report["smoke"]["provider_error"] = provider_error_payload
+            reports.append(report)
+            continue
+
         harness = harnesses.get(candidate["harness"])
         if not isinstance(harness, dict):
             report["model_check"] = {"status": "failed", "reason": "harness not configured"}
@@ -903,6 +1474,7 @@ def discover_profile_routes(
         model_check, model_failures = check_model_for_harness(
             model,
             harness=harness,
+            require_model_catalog=require_model_catalog,
         )
         report["model_check"] = model_check
         if model_failures:
@@ -916,6 +1488,10 @@ def discover_profile_routes(
                 smoke_cache=smoke_cache,
             )
             report["smoke"] = smoke_report
+            if candidate.get("harness") == BRIDGE_HARNESS_KIND:
+                auth_status = _bridge_auth_status(smoke_report)
+                if auth_status == 401:
+                    bridge_auth_stops[provider_key(candidate)] = smoke_report
         elif smoke:
             report["smoke"] = {"status": "skipped", "reason": "model check failed"}
         reports.append(report)
@@ -994,19 +1570,26 @@ def attach_summary(result: dict[str, Any]) -> None:
     accepted_route_count = len(result.get("accepted_routes") or [])
     checked_role_count = len(result.get("checked_roles") or [])
     harness_count = len(result.get("harnesses") or [])
-    route_model_availability_verified = accepted_route_count > 0
-    route_verification_status = (
-        "routes_verified"
-        if route_model_availability_verified
-        else "schema_pass_routes_not_checked"
-        if result.get("status") == "pass"
-        else "failed"
+    rejected_route_count = len(result.get("rejected_routes") or [])
+    route_model_availability_verified = (
+        accepted_route_count > 0
+        and rejected_route_count == 0
+        and harness_count > 0
+        and accepted_route_count == harness_count
     )
+    if result.get("status") != "pass":
+        route_verification_status = "failed"
+    elif route_model_availability_verified:
+        route_verification_status = "routes_verified"
+    elif accepted_route_count > 0:
+        route_verification_status = "routes_partially_verified"
+    else:
+        route_verification_status = "schema_pass_routes_not_checked"
     result["route_model_availability_verified"] = route_model_availability_verified
     result["route_verification_status"] = route_verification_status
     result["summary"] = {
         "accepted_route_count": accepted_route_count,
-        "rejected_route_count": len(result.get("rejected_routes") or []),
+        "rejected_route_count": rejected_route_count,
         "skipped_route_count": len(result.get("skipped_routes") or []),
         "unvisited_route_count": len(result.get("unvisited_routes") or []),
         "checked_role_count": checked_role_count,
@@ -1242,9 +1825,14 @@ def build_check_context(args: argparse.Namespace) -> CheckContext:
     config = load_json(args.config)
     contract = load_contract()
     failures = validate_config_shape(config)
+    failures.extend(validate_model_policy_references(config))
     models = config.get("models", {})
     harnesses = config.get("harnesses", {})
-    smoke_cache = load_smoke_cache(args.reuse_smoke_report)
+    smoke_cache = load_smoke_cache(
+        args.reuse_smoke_report,
+        expected_config_sha256=_config_sha256(args.config),
+        current_models=models if isinstance(models, dict) else None,
+    )
     if args.discover_max is not None and args.discover_max <= 0:
         failures.append("--discover-max must be a positive integer")
     mode = report_mode(
@@ -1330,7 +1918,11 @@ def run_for_preflight_mode(args: argparse.Namespace, ctx: CheckContext) -> tuple
         else None,
     }
     if args.smoke and args.reuse_smoke_report:
-        reused = reusable_smoke_route_report(args.reuse_smoke_report)
+        reused = reusable_smoke_route_report(
+            args.reuse_smoke_report,
+            expected_config_sha256=_config_sha256(args.config),
+            current_models=ctx.models if isinstance(ctx.models, dict) else None,
+        )
         failures.extend(reused["failures"])
         result = base_check_result(
             args,
@@ -1392,6 +1984,7 @@ def run_discover_mode(
             profile_name=args.discover_profile,
             model_filter=args.discover_model_filter,
             max_candidates=args.discover_max,
+            require_model_catalog=args.require_models,
             smoke=args.smoke,
             smoke_cache=smoke_cache,
             discover_all_candidates=args.discover_all_candidates,
@@ -1452,7 +2045,6 @@ def collect_role_reports(args: argparse.Namespace, ctx: CheckContext) -> tuple[l
             continue
 
         harness_name = model.get("harness")
-        harness = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
 
         report: dict[str, Any] = {
             "role": role,
@@ -1467,6 +2059,7 @@ def collect_role_reports(args: argparse.Namespace, ctx: CheckContext) -> tuple[l
             failures.append(f"{role}: missing harness")
             harness_reports.append(report)
             continue
+        harness = harnesses.get(harness_name) if isinstance(harnesses, dict) else None
         if harness is None or not isinstance(harness, dict):
             report["model_check"] = {"status": "failed", "reason": "harness not configured"}
             if args.require_models or args.smoke:
@@ -1475,11 +2068,22 @@ def collect_role_reports(args: argparse.Namespace, ctx: CheckContext) -> tuple[l
             continue
 
         report["harness_kind"] = harness.get("kind")
-        model_check, model_failures = check_model_for_harness(model, harness=harness)
+        model_check, model_failures = check_model_for_harness(
+            model,
+            harness=harness,
+            require_model_catalog=args.require_models,
+        )
 
         report["model_check"] = model_check
-        if args.require_models:
+        if model_failures:
+            report["model_failures"] = model_failures
+        if args.require_models or args.smoke:
             failures.extend(f"{role}: {failure}" for failure in model_failures)
+
+        if args.smoke and model_check.get("status") != "pass":
+            report["smoke"] = {"status": "skipped", "reason": "model check failed"}
+            harness_reports.append(report)
+            continue
 
         if args.smoke and missing_smoke_roles:
             if role in missing_smoke_roles:

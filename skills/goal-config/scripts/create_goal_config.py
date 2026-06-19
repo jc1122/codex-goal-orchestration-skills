@@ -132,7 +132,7 @@ def normalize_aggressiveness_with_preflight_caps(
     )
 
 
-def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str, str]:
+def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str, Any]:
     parts = spec.split(":")
     if len(parts) < 3:
         raise SystemExit(
@@ -145,7 +145,8 @@ def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str
     if len(aliases) > 2:
         raise SystemExit(f"invalid role-model spec with too many suffixes: {spec}")
 
-    alias = aliases[0] if len(aliases) >= 1 and aliases[0] else role
+    alias_is_default = len(aliases) < 1 or not aliases[0]
+    alias = aliases[0] if not alias_is_default else role
     purpose = aliases[1] if len(aliases) >= 2 and aliases[1] else f"{role} model"
     provider, model = normalize_role_model_for_harness(provider_model, harness, default_provider)
     return {
@@ -154,6 +155,7 @@ def parse_role_model(spec: str, default_provider: str | None = None) -> dict[str
         "provider": provider,
         "model": model,
         "alias": alias,
+        "alias_is_default": alias_is_default,
         "purpose": purpose,
     }
 
@@ -165,6 +167,7 @@ def normalize_role_model_for_harness(
 ) -> tuple[str, str]:
     implied_provider = IMPLIED_PROVIDER_BY_HARNESS.get(harness)
     provider = default_provider or implied_provider
+    listed_provider: str | None = None
     if "/" in provider_model:
         listed_provider, model_suffix = provider_model.split("/", 1)
         provider = provider or listed_provider
@@ -180,7 +183,15 @@ def normalize_role_model_for_harness(
     # own provider field, so the emitted model is the bare leaf id (no provider prefix). This is
     # by design and is exercised by the opencode-deepseek-v4 preset fixture.
     if harness in IMPLIED_PROVIDER_BY_HARNESS:
-        return provider, model_suffix
+        if default_provider is not None and default_provider != implied_provider:
+            raise SystemExit(
+                f"--provider {default_provider!r} is not valid for harness {harness!r}; use {implied_provider!r}"
+            )
+        if listed_provider is not None and listed_provider != implied_provider:
+            raise SystemExit(
+                f"provider {listed_provider!r} is not valid for harness {harness!r}; use {implied_provider!r}"
+            )
+        return implied_provider, model_suffix
 
     if default_provider:
         if "/" in provider_model:
@@ -256,8 +267,13 @@ def default_harnesses() -> dict[str, Any]:
 def apply_role_overrides(models: dict[str, Any], role_models: list[str], default_provider: str | None) -> None:
     for spec in role_models:
         mapping = parse_role_model(spec, default_provider)
+        alias = mapping["alias"]
+        if mapping["alias_is_default"]:
+            current = models.get(mapping["role"])
+            if isinstance(current, dict) and isinstance(current.get("alias"), str) and current.get("alias"):
+                alias = current["alias"]
         models[mapping["role"]] = model_entry(
-            alias=mapping["alias"],
+            alias=alias,
             role=mapping["role"],
             harness=mapping["harness"],
             provider=mapping["provider"],
@@ -419,12 +435,24 @@ def smoke_token(role: str) -> str:
     return f"GOAL_CONFIG_{normalized or 'ROLE'}_SMOKE_OK"
 
 
+def model_ladder_roles(ladders: dict[str, Any], ladder_name: str) -> list[str]:
+    value = ladders.get(ladder_name) or []
+    if not isinstance(value, list):
+        raise SystemExit(f"model_ladders.{ladder_name} must be a list of model role strings")
+    roles: list[str] = []
+    for index, role in enumerate(value):
+        if not isinstance(role, str) or not role:
+            raise SystemExit(f"model_ladders.{ladder_name}[{index}] must be a non-empty string model role")
+        roles.append(role)
+    return roles
+
+
 def role_smoke_timeout(role: str, config: dict[str, Any]) -> int:
     ladders = config.get("model_ladders") if isinstance(config.get("model_ladders"), dict) else {}
     effort = config.get("effort") if isinstance(config.get("effort"), dict) else {}
-    if role in set(ladders.get("lite") or []):
+    if role in set(model_ladder_roles(ladders, "lite")):
         return int(effort.get("lite_timeout_seconds") or 600)
-    if role in set(ladders.get("worker") or []):
+    if role in set(model_ladder_roles(ladders, "worker")):
         return int(effort.get("worker_timeout_seconds") or effort.get("demanding_timeout_seconds") or 1200)
     return int(effort.get("demanding_timeout_seconds") or 1200)
 
@@ -522,6 +550,26 @@ def route_score(route: dict[str, Any], *, purpose: str) -> tuple[int, str]:
     return score, text
 
 
+def route_has_demanding_signal(route: dict[str, Any]) -> bool:
+    text = " ".join(str(route.get(key, "")).lower() for key in ("role", "alias", "model"))
+    return any(marker in text for marker in ("demanding", "heavy", "premium", "pro", "gpt-5.5"))
+
+
+def role_requires_demanding_discovery_route(role: str) -> bool:
+    return role in {"demanding_agent", "reviewer"}
+
+
+def require_policy_correct_manual_route(role: str, route: dict[str, Any], routes: list[dict[str, Any]]) -> None:
+    if not role_requires_demanding_discovery_route(role):
+        return
+    demanding_route_exists = any(route_has_demanding_signal(candidate) for candidate in routes)
+    if demanding_route_exists and not route_has_demanding_signal(route):
+        raise SystemExit(
+            f"discovery mapping for {role} would downgrade to non-demanding route "
+            f"{route.get('alias') or route.get('role') or route.get('model')!r} while a demanding route exists"
+        )
+
+
 def select_route(routes: list[dict[str, Any]], *, purpose: str) -> dict[str, Any]:
     return sorted(routes, key=lambda route: route_score(route, purpose=purpose))[0]
 
@@ -542,6 +590,28 @@ def route_model_entry(
     )
 
 
+def _required_discovery_route(routes: list[dict[str, Any]], *, role: str) -> dict[str, Any]:
+    if role == "lite_agent":
+        return select_route(routes, purpose="lite")
+    if role == "demanding_agent":
+        return select_route(routes, purpose="demanding")
+    raise SystemExit(f"unsupported required discovery role: {role}")
+
+
+def _discovery_route_model_key(route: dict[str, Any]) -> tuple[str, str, str]:
+    """Return a validated tuple key for deduplicating discovery routes."""
+    harness = route.get("harness")
+    provider = route.get("provider")
+    model = route.get("model")
+    if not isinstance(harness, str) or not harness:
+        raise SystemExit(f"accepted route missing harness: {route}")
+    if not isinstance(provider, str) or not provider:
+        raise SystemExit(f"accepted route missing provider: {route}")
+    if not isinstance(model, str) or not model:
+        raise SystemExit(f"accepted route missing model: {route}")
+    return (harness, provider, model)
+
+
 def find_route(routes: list[dict[str, Any]], selector: Any) -> dict[str, Any]:
     if isinstance(selector, bool):
         # bool is an int subclass, so without this guard True/False would be silently consumed as a
@@ -554,15 +624,16 @@ def find_route(routes: list[dict[str, Any]], selector: Any) -> dict[str, Any]:
         return routes[index]
     if isinstance(selector, str):
         for route in routes:
-            if selector in {route.get("role"), route.get("alias"), route.get("model")}:
+            if any(selector == route.get(key) for key in ("role", "alias", "model") if isinstance(route.get(key), str)):
                 return route
         raise SystemExit(f"discovery mapping selector did not match accepted route: {selector}")
     if isinstance(selector, dict):
+        if not selector:
+            raise SystemExit(f"discovery mapping selector must be a non-empty object: {selector!r}")
         for route in routes:
-            if all(route.get(key) == value for key, value in selector.items()):
+            if all(key in route and route.get(key) == value for key, value in selector.items()):
                 return route
-        if all(isinstance(selector.get(key), str) and selector.get(key) for key in ("harness", "provider", "model")):
-            return selector
+        raise SystemExit(f"discovery mapping selector did not match accepted route: {selector!r}")
     raise SystemExit(f"unsupported discovery mapping selector: {selector!r}")
 
 
@@ -594,7 +665,7 @@ def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None,
         }
         extra_roles: list[str] = []
         seen_route_keys = {
-            (models["lite_agent"]["harness"], models["lite_agent"]["provider"], models["lite_agent"]["model"]),
+            _discovery_route_model_key(lite_route),
             (
                 models["demanding_agent"]["harness"],
                 models["demanding_agent"]["provider"],
@@ -602,7 +673,7 @@ def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None,
             ),
         }
         for route in routes:
-            key = (route.get("harness"), route.get("provider"), route.get("model"))
+            key = _discovery_route_model_key(route)
             if key in seen_route_keys:
                 continue
             role = f"discovered_{len(extra_roles) + 1}_{route_id(str(route.get('model', 'route')))}"
@@ -617,15 +688,21 @@ def apply_discovery_mapping(config: dict[str, Any], discovery_path: Path | None,
             raise SystemExit(f"could not read discovery mapping {mapping_path}: {exc}") from exc
         if not isinstance(data, dict) or not data:
             raise SystemExit(f"discovery mapping must be a non-empty JSON object: {mapping_path}")
-        models = {
-            role: route_model_entry(role, find_route(routes, selector), alias=role) for role, selector in data.items()
-        }
+        models = {}
+        for role, selector in data.items():
+            route = find_route(routes, selector)
+            require_policy_correct_manual_route(str(role), route, routes)
+            models[role] = route_model_entry(str(role), route, alias=str(role))
+        for required_role in ("lite_agent", "demanding_agent"):
+            if required_role in models:
+                continue
+            route = _required_discovery_route(routes, role=required_role)
+            models[required_role] = route_model_entry(
+                required_role,
+                route,
+                alias="discovered-lite" if required_role == "lite_agent" else "discovered-demanding",
+            )
         extra_roles = [role for role in models if role not in {"lite_agent", "demanding_agent"}]
-
-    if "lite_agent" not in models:
-        models["lite_agent"] = route_model_entry("lite_agent", routes[0], alias="discovered-lite")
-    if "demanding_agent" not in models:
-        models["demanding_agent"] = route_model_entry("demanding_agent", routes[0], alias="discovered-demanding")
 
     worker = unique(["demanding_agent", "lite_agent", *extra_roles])
     config["profile"] = "from-discovery"
@@ -652,14 +729,46 @@ def require_roles(config: dict[str, Any], ladder_name: str, ladder: list[str]) -
             raise SystemExit(f"model_ladders.{ladder_name} references unknown model role: {role}")
 
 
-def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any]:
+def opencode_alias_to_role_map(models: dict[str, Any]) -> dict[str, str]:
+    """Resolve opencode policy contract aliases even after alias overrides."""
+    alias_to_role = {
+        str(model.get("alias")): role
+        for role, model in models.items()
+        if isinstance(role, str) and isinstance(model, dict) and isinstance(model.get("alias"), str)
+    }
+    alias_to_role.update(
+        {
+            "ds-flash-max": "lite_agent",
+            "ds-pro-max": "demanding_agent",
+            "codex-spark": "worker_codex_spark",
+            "codex-mini": "worker_codex_mini",
+            "gpt-5.5": "prompt_audit_agent",
+        }
+    )
+    # Keep only aliases with concrete target roles present in config.
+    return {alias: role for alias, role in alias_to_role.items() if role in models}
+
+
+def build_model_policies(
+    config: dict[str, Any],
+    contract: Any,
+    *,
+    bind_worker_ladder: bool = False,
+    bind_reviewer_ladder: bool = False,
+) -> dict[str, Any]:
     ladders = config.get("model_ladders")
     if not isinstance(ladders, dict):
         raise SystemExit("model_ladders must be an object")
-    worker = list(ladders.get("worker") or [])
-    reviewer = list(ladders.get("reviewer") or ladders.get("demanding") or worker)
-    amender = list(ladders.get("amender") or reviewer)
-    lite = list(ladders.get("lite") or worker[-1:])
+    worker = model_ladder_roles(ladders, "worker")
+    reviewer = (
+        model_ladder_roles(ladders, "reviewer")
+        if ladders.get("reviewer")
+        else model_ladder_roles(ladders, "demanding")
+        if ladders.get("demanding")
+        else worker
+    )
+    amender = model_ladder_roles(ladders, "amender") if ladders.get("amender") else reviewer
+    lite = model_ladder_roles(ladders, "lite") if ladders.get("lite") else worker[-1:]
     for name, ladder in {
         "worker": worker,
         "reviewer": reviewer,
@@ -685,49 +794,115 @@ def build_model_policies(config: dict[str, Any], contract: Any) -> dict[str, Any
             return cheap[-2:]
         return candidates[-1:] if candidates else reviewer[-1:]
 
+    def bind_to_ladder(values: list[str], ladder: list[str]) -> list[str]:
+        bound = [role for role in values if role in ladder]
+        return unique(bound or ladder)
+
     def reviewer_routes() -> dict[str, list[str]]:
+        if str(config.get("profile")) == "opencode-deepseek-v4":
+            alias_to_role = opencode_alias_to_role_map(models)
+            valid_aliases = ", ".join(sorted(alias_to_role))
+            known_roles = set(models)
+
+            def roles_from_aliases(values: list[str]) -> list[str]:
+                resolved: list[str] = []
+                for alias in values:
+                    role = alias_to_role.get(alias)
+                    if role is None:
+                        raise SystemExit(
+                            f"unknown contract alias in opencode-deepseek-v4 review policy: {alias!r}; "
+                            f"expected one of {valid_aliases}"
+                        )
+                    if role not in known_roles:
+                        raise SystemExit(f"model-policy reference resolved to unknown model role: {role!r}")
+                    resolved.append(role)
+                return unique(resolved)
+
+            routes = {
+                "light": roles_from_aliases(list(contract.REVIEW_MODEL_ROUTES["light"])),
+                "standard": roles_from_aliases(list(contract.REVIEW_MODEL_ROUTES["standard"])),
+                "heavy": roles_from_aliases(list(contract.REVIEW_MODEL_ROUTES["heavy"])),
+            }
+            if bind_reviewer_ladder:
+                return {tier: bind_to_ladder(route, reviewer) for tier, route in routes.items()}
+            return routes
         light = cheaper_review_ladder(lite, worker, reviewer)
         standard = unique(reviewer)
         heavy = unique(reviewer)
-        return {
+        routes = {
             "light": light,
             "standard": standard,
             "heavy": heavy,
         }
+        if bind_reviewer_ladder:
+            return {tier: bind_to_ladder(route, reviewer) for tier, route in routes.items()}
+        return routes
 
     models = config.get("models") if isinstance(config.get("models"), dict) else {}
-
-    def external_worker_ladder(values: list[str]) -> list[str]:
-        external: list[str] = []
-        for alias in values:
-            model = models.get(alias)
-            harness = model.get("harness") if isinstance(model, dict) else None
-            if str(harness).lower() != "codex":
-                external.append(alias)
-        return unique(external)
-
     worker_allowed = unique(worker)
-    cheaper_ladder = cheaper_worker_ladder(worker)
-    if len(worker) > 3:
-        terminal_ladder = external_worker_ladder(worker) or unique(worker[-2:])
-        small_ladder = unique(worker[1:])
-        normal_ladder = worker
-    elif len(worker) > 2:
-        terminal_ladder = [worker[-1]]
-        small_ladder = cheaper_ladder
-        normal_ladder = worker
+
+    if str(config.get("profile")) == "opencode-deepseek-v4":
+        alias_to_role = opencode_alias_to_role_map(models)
+        valid_aliases = ", ".join(sorted(alias_to_role))
+        known_roles = set(models)
+
+        def roles_from_aliases(values: list[str]) -> list[str]:
+            resolved: list[str] = []
+            for alias in values:
+                role = alias_to_role.get(alias)
+                if role is None:
+                    raise SystemExit(
+                        f"unknown contract alias in opencode-deepseek-v4 worker policy: {alias!r}; "
+                        f"expected one of {valid_aliases}"
+                    )
+                if role not in known_roles:
+                    raise SystemExit(f"model-policy reference resolved to unknown model role: {role!r}")
+                resolved.append(role)
+            return unique(resolved)
+
+        worker_route_classes = {
+            route_class: roles_from_aliases(list(route_roles))
+            for route_class, route_roles in contract.WORKER_ROUTE_CLASS_LADDERS.items()
+        }
+        if bind_worker_ladder:
+            worker_route_classes = {
+                route_class: bind_to_ladder(route_roles, worker_allowed)
+                for route_class, route_roles in worker_route_classes.items()
+            }
     else:
-        terminal_ladder = [worker[-1]]
-        small_ladder = cheaper_ladder
-        normal_ladder = cheaper_ladder
-    worker_route_classes = {
-        "mechanical": terminal_ladder,
-        "docs": terminal_ladder,
-        "small-edit": small_ladder,
-        "normal-code": normal_ladder,
-        "complex-code": worker,
-        "custom": worker,
-    }
+
+        def external_worker_ladder(values: list[str]) -> list[str]:
+            external: list[str] = []
+            for alias in values:
+                model = models.get(alias)
+                harness = model.get("harness") if isinstance(model, dict) else None
+                if str(harness).lower() != "codex":
+                    external.append(alias)
+            return unique(external)
+
+        worker_allowed = unique(worker)
+        cheaper_ladder = cheaper_worker_ladder(worker)
+        if len(worker) > 3:
+            terminal_ladder = external_worker_ladder(worker) or unique(worker[-2:])
+            small_ladder = unique(worker[1:])
+            normal_ladder = worker
+        elif len(worker) > 2:
+            terminal_ladder = [worker[-1]]
+            small_ladder = cheaper_ladder
+            normal_ladder = worker
+        else:
+            terminal_ladder = [worker[-1]]
+            small_ladder = cheaper_ladder
+            normal_ladder = cheaper_ladder
+        worker_route_classes = {
+            "mechanical": terminal_ladder,
+            "docs": terminal_ladder,
+            "small-edit": small_ladder,
+            "normal-code": normal_ladder,
+            "complex-code": worker,
+            "custom": worker,
+        }
+
     effort_cfg = config.get("effort") if isinstance(config.get("effort"), dict) else {}
     return {
         "worker_model_policy": {
@@ -794,7 +969,30 @@ def finalize_config(config: dict[str, Any], contract: Any, args: argparse.Namesp
     if "amender" not in ladders and "reviewer" in ladders:
         ladders["amender"] = list(ladders["reviewer"])
     ensure_harness_smokes(config)
-    config["model_policies"] = build_model_policies(config, contract)
+    config["model_policies"] = build_model_policies(
+        config,
+        contract,
+        bind_worker_ladder=args.worker_ladder is not None,
+        bind_reviewer_ladder=args.reviewer_ladder is not None,
+    )
+    if args.reviewer_ladder is None:
+        review_policy = config["model_policies"].get("review_model_policy")
+        routes = review_policy.get("routes") if isinstance(review_policy, dict) else {}
+        if isinstance(routes, dict):
+            reviewer_ladder = ladders.get("reviewer")
+            if isinstance(reviewer_ladder, list):
+                ladders["reviewer"] = unique(
+                    [
+                        *[role for role in reviewer_ladder if isinstance(role, str)],
+                        *[
+                            role
+                            for route_roles in routes.values()
+                            if isinstance(route_roles, list)
+                            for role in route_roles
+                            if isinstance(role, str)
+                        ],
+                    ]
+                )
     return config
 
 
@@ -941,8 +1139,8 @@ def opencode_deepseek_v4_config(contract: Any, args: argparse.Namespace) -> dict
     }
     config["model_ladders"] = {
         "lite": ["lite_agent"],
-        "worker": ["lite_agent", "worker_codex_spark", "worker_codex_mini"],
-        "reviewer": ["demanding_agent"],
+        "worker": ["demanding_agent", "lite_agent", "worker_codex_spark", "worker_codex_mini"],
+        "reviewer": ["lite_agent", "demanding_agent", "prompt_audit_agent"],
         "amender": ["demanding_agent", "lite_agent"],
         "demanding": ["demanding_agent", "lite_agent"],
     }
