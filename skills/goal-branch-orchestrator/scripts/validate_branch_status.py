@@ -654,37 +654,55 @@ def validate_launch_config_debug_events(
 def validate_launch_attempt_provider(defects: list[str], attempt: dict, attempt_path: str, *, alias: str) -> None:
     provider = require_string(defects, attempt.get("provider"), f"{attempt_path}.provider")
     model = require_string(defects, attempt.get("model"), f"{attempt_path}.model")
-    if provider and provider not in {"codex", CONTRACT.BRIDGE_HARNESS_KIND}:
+    if provider and provider not in set(CONTRACT.SUPPORTED_HARNESS_KINDS):
         defect(
             defects,
             f"{attempt_path}.provider",
-            f"must be a supported route adapter (codex or {CONTRACT.BRIDGE_HARNESS_KIND}), got {provider!r}",
+            "must be a supported route adapter, got " + repr(provider),
         )
     if provider == "codex" and alias in CONTRACT.CODEX_ROUTE_MODELS:
         expected_model = CONTRACT.codex_model(alias)
         if model != expected_model:
             defect(defects, f"{attempt_path}.model", f"must be {expected_model!r} for alias {alias!r}")
-    if provider == CONTRACT.BRIDGE_HARNESS_KIND and CONTRACT.is_bridge_alias(alias):
-        expected_model = CONTRACT.bridge_model(alias)
-        if model != expected_model:
-            defect(defects, f"{attempt_path}.model", f"must be {expected_model!r} for bridge alias {alias!r}")
+    if provider == CONTRACT.BRIDGE_HARNESS_KIND:
+        if CONTRACT.is_bridge_alias(alias):
+            expected_model = CONTRACT.bridge_model(alias)
+            if model != expected_model:
+                defect(
+                    defects,
+                    f"{attempt_path}.model",
+                    f"must be {expected_model!r} for bridge alias {alias!r}",
+                )
+        run_args = attempt.get("run_args")
+        if not isinstance(run_args, list) or not run_args:
+            defect(defects, f"{attempt_path}.run_args", "must be a non-empty array for opencode-bridge attempts")
+        if not (isinstance(attempt.get("run_readback"), str) and attempt.get("run_readback").strip()):
+            defect(
+                defects,
+                f"{attempt_path}.run_readback",
+                "must be a non-empty string for opencode-bridge attempts",
+            )
         bridge = attempt.get("bridge")
         if not isinstance(bridge, dict):
             defect(defects, f"{attempt_path}.bridge", "must be an object for opencode-bridge attempts")
         else:
             if bridge.get("provider") != CONTRACT.BRIDGE_PROVIDER_ID:
                 defect(defects, f"{attempt_path}.bridge.provider", f"must be {CONTRACT.BRIDGE_PROVIDER_ID!r}")
-            for key in ("model", "variant", "permission_profile", "run_dir"):
+            for key in ("model", "variant", "permission_profile", "run_dir", "pool_dir"):
                 require_string(defects, bridge.get(key), f"{attempt_path}.bridge.{key}")
 
 
 def validate_launch_attempt(defects: list[str], attempt: dict, attempt_path: str, *, role: str) -> None:
+    provider = attempt.get("provider") or attempt.get("harness_kind")
     require_string(defects, attempt.get("command"), f"{attempt_path}.command")
     rendered_command = require_string(defects, attempt.get("rendered_command"), f"{attempt_path}.rendered_command")
     if rendered_command and isinstance(attempt.get("command"), str) and rendered_command != attempt.get("command"):
         defect(defects, f"{attempt_path}.rendered_command", "must match command until runtime records executed_command")
     if attempt.get("route_policy_version") != ROUTE_POLICY_VERSION:
         defect(defects, f"{attempt_path}.route_policy_version", f"must be {ROUTE_POLICY_VERSION!r}")
+    command_binary = attempt.get("command_binary")
+    if provider == "generic-cli" and not (isinstance(command_binary, str) and command_binary.strip()):
+        defect(defects, f"{attempt_path}.command_binary", "must be a non-empty string for generic-cli attempts")
     telemetry_capability = require_object(
         defects, attempt.get("telemetry_capability"), f"{attempt_path}.telemetry_capability"
     )
@@ -724,11 +742,9 @@ def validate_launch_config_attempts(defects: list[str], config: dict, path: str,
         validate_launch_attempt_provider(defects, attempt, attempt_path, alias=alias)
         validate_launch_attempt(defects, attempt, attempt_path, role=role)
     selected_ladder = config.get("selected_ladder")
-    if (
-        isinstance(selected_ladder, list)
-        and aliases
-        and [item for item in selected_ladder if isinstance(item, str)] != aliases
-    ):
+    if selected_ladder is not None and not isinstance(selected_ladder, list):
+        defect(defects, f"{path}.selected_ladder", "must be a list")
+    elif isinstance(selected_ladder, list) and aliases and selected_ladder != aliases:
         defect(defects, f"{path}.selected_ladder", "must match launch attempt aliases exactly")
     return aliases
 

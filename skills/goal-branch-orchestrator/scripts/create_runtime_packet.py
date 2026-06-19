@@ -513,7 +513,9 @@ def configured_route_commands(selected_ladder: list[str], goal_config: dict) -> 
         model = model if isinstance(model, dict) else {}
         harness_name = model.get("harness")
         harness_name = harness_name if isinstance(harness_name, str) else ""
-        harness = harnesses.get(harness_name, {})
+        harness = harnesses.get(harness_name) if isinstance(harness_name, str) else {}
+        if not isinstance(harness, dict):
+            harness = {}
         command = harness.get("command", harness_name)
         args = harness.get("run_args") or harness.get("smoke_args") or []
         rendered = render_attempt_args(
@@ -2373,6 +2375,7 @@ def _nonempty_string(value: object) -> bool:
 def validate_launch_config_adapter(config: dict) -> None:
     attempts = config.get("attempts")
     defects: list[str] = []
+    supported_harness_kinds = set(CONTRACT.SUPPORTED_HARNESS_KINDS)
     if not isinstance(attempts, list) or not attempts:
         defects.append("launch-config attempts must be a non-empty array")
     else:
@@ -2381,8 +2384,8 @@ def validate_launch_config_adapter(config: dict) -> None:
             if not isinstance(attempt, dict):
                 defects.append(f"{path} must be an object")
                 continue
-            provider = attempt.get("harness_kind") or attempt.get("provider")
-            if provider not in {"codex", BRIDGE_HARNESS_KIND}:
+            provider = attempt.get("provider")
+            if not isinstance(provider, str) or provider not in supported_harness_kinds:
                 defects.append(f"{path}.provider must be a supported route adapter, got {provider!r}")
                 continue
             for key in ["alias", "model", "command", "rendered_command", "route_policy_version"]:
@@ -2397,8 +2400,6 @@ def validate_launch_config_adapter(config: dict) -> None:
             ):
                 defects.append(f"{path}.telemetry_capability.token_usage must describe token telemetry support")
             if provider == BRIDGE_HARNESS_KIND:
-                if not _nonempty_string(attempt.get("command_binary")):
-                    defects.append(f"{path}.command_binary is required for {provider} attempts")
                 run_args = attempt.get("run_args")
                 if not isinstance(run_args, list) or not run_args:
                     defects.append(f"{path}.run_args must be a non-empty array for {provider} attempts")
@@ -2415,6 +2416,8 @@ def validate_launch_config_adapter(config: dict) -> None:
                         defects.append(f"{path}.bridge.provider must be {BRIDGE_PROVIDER_ID!r} for {provider} attempts")
                     if not _nonempty_string(bridge.get("pool_dir")):
                         defects.append(f"{path}.bridge.pool_dir is required for {provider} attempts")
+            if provider == "generic-cli" and not _nonempty_string(attempt.get("command_binary")):
+                defects.append(f"{path}.command_binary is required for {provider} attempts")
     selected_ladder = config.get("selected_ladder")
     if selected_ladder is not None:
         aliases = (
@@ -2832,6 +2835,10 @@ def resolve_worker_routing(
     worker_allowed_routes = policy_allowed_routes(worker_policy)
     explicit_worker_routes = bool(normalized_worker_routes)
     manifest_route_class = manifest_work_item.get("route_class") if isinstance(manifest_work_item, dict) else None
+    if manifest_route_class == "custom" and not args.route_class:
+        raise SystemExit(
+            "manifest work items cannot declare route_class='custom'; use --route-class custom for an explicit override"
+        )
     route_class = normalize_route_class(
         args.route_class
         or manifest_route_class

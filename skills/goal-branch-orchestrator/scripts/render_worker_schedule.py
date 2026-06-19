@@ -116,7 +116,10 @@ def validate_work_items(branch: dict, branch_id: str) -> tuple[list[dict], int]:
     for index, item in enumerate(work_items):
         if not isinstance(item, dict):
             raise SystemExit(f"branch {branch_id} work_items[{index}] must be an object")
-        item_id = require_safe_label(str(item.get("id", "")), f"branch {branch_id} work_items[{index}].id")
+        raw_item_id = item.get("id", "")
+        if not isinstance(raw_item_id, str):
+            raise SystemExit(f"branch {branch_id} work_items[{index}].id must be a string")
+        item_id = require_safe_label(raw_item_id, f"branch {branch_id} work_items[{index}].id")
         if item_id in seen_ids:
             raise SystemExit(f"branch {branch_id} duplicate work item id: {item_id}")
         seen_ids.add(item_id)
@@ -173,9 +176,16 @@ def normalize_packet_ids(values: list[str], known: set[str], field: str) -> set[
     return result
 
 
+def _status_worker_role(worker_type: object) -> str:
+    role = worker_type if isinstance(worker_type, str) else "worker"
+    if role == "research":
+        role = "research-worker"
+    return role
+
+
 def worker_status_path(manifest_path: Path, item: dict) -> Path:
     packet_id = str(item["packet_id"])
-    if item.get("worker_type", "worker") == "research-worker":
+    if _status_worker_role(item.get("worker_type", "worker")) == "research-worker":
         return manifest_path.parent / "research" / packet_id / "research.json"
     return manifest_path.parent / "workers" / packet_id / "status.json"
 

@@ -154,7 +154,23 @@ def read_route_health(packet_dir: Path) -> dict[str, Any]:
     path = route_health_path(packet_dir)
     if path is None or not path.exists():
         return {"schema_version": 1, "routes": {}}
-    data = read_json(path)
+    try:
+        data = read_json(path)
+    except SystemExit as exc:
+        data = {
+            "schema_version": 1,
+            "routes": {},
+            "warnings": [
+                {
+                    "kind": "corrupt_route_health_ignored",
+                    "path": str(path),
+                    "message": str(exc),
+                }
+            ],
+        }
+        with contextlib.suppress(OSError):
+            write_json(path, data)
+        return data
     routes = data.get("routes")
     if not isinstance(routes, dict):
         data["routes"] = {}
@@ -205,7 +221,7 @@ def record_bundle_route_failure(packet_dir: Path, attempt: dict[str, Any]) -> No
     if not isinstance(failures, dict):
         failures = {}
         route["failures"] = failures
-    count = int(failures.get(OPENCODE_EMPTY_OUTPUT_SUBCLASS, 0) or 0) + 1
+    count = safe_counter_int(failures.get(OPENCODE_EMPTY_OUTPUT_SUBCLASS, 0)) + 1
     failures[OPENCODE_EMPTY_OUTPUT_SUBCLASS] = count
     if count >= ROUTE_DEGRADE_EMPTY_OUTPUT_THRESHOLD:
         route["degraded"] = True
@@ -452,6 +468,20 @@ def attempt_elapsed_ms(attempt: dict[str, Any]) -> int | None:
     return None
 
 
+def safe_counter_int(value: Any, *, default: int = 0) -> int:
+    if isinstance(value, bool):
+        return default
+    if isinstance(value, int):
+        return value if value >= 0 else default
+    if isinstance(value, str):
+        try:
+            parsed = int(value.strip())
+        except ValueError:
+            return default
+        return parsed if parsed >= 0 else default
+    return default
+
+
 def safe_json(data: str) -> dict[str, Any]:
     try:
         value = json.loads(data)
@@ -546,9 +576,11 @@ def _normalize_route_health(value: dict[str, Any] | None) -> dict[str, Any]:
             "transport_disconnect_count": 0,
             "capacity_exhausted": False,
         }
+    transport_disconnect_count = safe_counter_int(value.get("transport_disconnect_count", 0))
+    capacity_exhausted = value.get("capacity_exhausted", False)
     return {
-        "transport_disconnect_count": int(value.get("transport_disconnect_count", 0) or 0),
-        "capacity_exhausted": bool(value.get("capacity_exhausted", False)),
+        "transport_disconnect_count": transport_disconnect_count,
+        "capacity_exhausted": capacity_exhausted if isinstance(capacity_exhausted, bool) else False,
     }
 
 
@@ -676,7 +708,7 @@ def _attempt_stop_reason(attempt: dict[str, Any], attempt_state: str) -> str | N
         if timed_out is True:
             return "timeout"
     route_health = attempt.get("route_health")
-    if isinstance(route_health, dict) and int(route_health.get("transport_disconnect_count", 0) or 0) > 0:
+    if _normalize_route_health(route_health).get("transport_disconnect_count", 0) > 0:
         return "transport_disconnect"
     if attempt.get("failure_subclass") == "transport_disconnect":
         return "transport_disconnect"
@@ -873,11 +905,13 @@ def read_optional_json(path: Path) -> dict[str, Any]:
 
 
 def packet_next_action(output_status: object, terminal_state: object) -> str:
-    if output_status in {"pass", "mergeable"} and terminal_state == "pass":
+    safe_output_status = output_status if isinstance(output_status, str) else ""
+    safe_terminal_state = terminal_state if isinstance(terminal_state, str) else ""
+    if safe_output_status in {"pass", "mergeable"} and safe_terminal_state == "pass":
         return "validate_and_collect"
-    if output_status in {"blocked", "failed"} or terminal_state == "blocked":
+    if safe_output_status in {"blocked", "failed"} or safe_terminal_state == "blocked":
         return "close_blocked_or_create_repair"
-    if terminal_state in {"timeout", "fail-clean", "fail-dirty"}:
+    if safe_terminal_state in {"timeout", "fail-clean", "fail-dirty"}:
         return "inspect_packet_failure"
     return "inspect_packet_artifacts"
 
@@ -1290,10 +1324,14 @@ def record_generated_artifact_cleanup(packet_dir: Path, attempt: dict[str, Any],
     records = data.get("attempts") if isinstance(data.get("attempts"), list) else []
     records.append(cleanup)
     candidates_count = sum(
-        int(record.get("candidates_count", 0) or 0) for record in records if isinstance(record, dict)
+        safe_counter_int(record.get("candidates_count", 0)) for record in records if isinstance(record, dict)
     )
-    removed_count = sum(int(record.get("removed_count", 0) or 0) for record in records if isinstance(record, dict))
-    failed_count = sum(int(record.get("failed_count", 0) or 0) for record in records if isinstance(record, dict))
+    removed_count = sum(
+        safe_counter_int(record.get("removed_count", 0)) for record in records if isinstance(record, dict)
+    )
+    failed_count = sum(
+        safe_counter_int(record.get("failed_count", 0)) for record in records if isinstance(record, dict)
+    )
     aggregate = {
         "schema_version": 1,
         "status": _cleanup_status(candidates_count, failed_count, removed_count),

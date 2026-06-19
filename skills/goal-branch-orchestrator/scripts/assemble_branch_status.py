@@ -398,7 +398,8 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
         try:
             scheduler_data = read_json(scheduler_file)
             for event in scheduler_data.get("events", []):
-                if isinstance(event, dict) and event.get("event") == "refill":
+                event_name = event.get("event") if isinstance(event, dict) else None
+                if event_name == "refill":
                     seq = event.get("seq")
                     eligible = event.get("eligible_ids", [])
                     suffix = (
@@ -407,7 +408,7 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
                         else ""
                     )
                     refill_events.append(f"seq:{seq}:{suffix}" if isinstance(seq, int) else suffix)
-                if isinstance(event, dict) and event.get("event") in {"defer", "under_capacity", "blocked"}:
+                if isinstance(event_name, str) and event_name in {"defer", "under_capacity", "blocked"}:
                     ids: list[str] = []
                     event_id = event.get("id")
                     if isinstance(event_id, str):
@@ -419,9 +420,7 @@ def scheduler_rollup(manifest_path: Path, branch: dict, branch_id: str) -> tuple
                     reason_code = event.get("reason_code")
                     detail = reason if isinstance(reason, str) and reason.strip() else reason_code
                     if ids and isinstance(detail, str) and detail.strip():
-                        scheduler_serial_reasons.append(
-                            f"scheduler {event.get('event')} for {','.join(ids)}: {detail.strip()}"
-                        )
+                        scheduler_serial_reasons.append(f"scheduler {event_name} for {','.join(ids)}: {detail.strip()}")
         except (Exception, SystemExit) as exc:  # noqa: BLE001 - read_json raises SystemExit on non-dict
             defects.append(f"could not read scheduler refill events: {exc}")
     manifest_serial_reasons = (

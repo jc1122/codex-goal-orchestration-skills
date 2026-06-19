@@ -10,6 +10,7 @@ Pins the verified defects:
 """
 
 import json
+import argparse
 import subprocess
 import sys
 
@@ -73,6 +74,13 @@ def test_validate_path_list_rejects_porcelain_prefix():
     assert clean == []
 
 
+def test_attempt_failure_subclass_normalizes_negative_transport_disconnect_count():
+    subclass = rpr.attempt_failure_subclass({}, {"transport_disconnect_count": -3}, "fail-clean")
+    assert subclass is None
+    normalized = rpr._normalize_route_health({"transport_disconnect_count": -3})
+    assert normalized["transport_disconnect_count"] == 0
+
+
 # --- 2026-06-18 convergence pass 10: the git-mutation security gates are not evadable by global
 #     git options (git -C dir / git -c k=v) inserted between `git` and the subcommand ---
 def test_worker_command_gate_not_evaded_by_git_global_options():
@@ -111,6 +119,14 @@ def test_configured_route_commands_tolerates_unhashable_harness():
         ["ds-pro-max"], {"models": {"ds-pro-max": {"harness": ["x"], "model": "m"}}, "harnesses": {}}
     )
     assert isinstance(cmds, list)  # was TypeError: unhashable type
+
+
+def test_configured_route_commands_tolerates_non_dict_harness_entry():
+    cmds = crp.configured_route_commands(
+        ["ds-pro-max"],
+        {"models": {"ds-pro-max": {"harness": "bad-h"}}, "harnesses": {"bad-h": []}},
+    )
+    assert cmds == ["bad-h"]
 
 
 def test_configured_telemetry_attempts_rejects_unhashable_harness():
@@ -254,12 +270,397 @@ def test_assemble_read_helpers_fail_closed(tmp_path):
     assert len(blockers) == 2
 
 
+def test_scheduler_rollup_tolerates_malformed_event_name(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    branch = {
+        "id": "B01",
+        "work_items": [{"id": "W01", "packet_id": "B01-W01", "owned_paths": ["src/a.py"]}],
+    }
+    manifest_path.write_text(json.dumps({"branches": [branch]}, sort_keys=True), encoding="utf-8")
+    scheduler_path = tmp_path / asm.CONTRACT.worker_scheduler_path("B01")
+    scheduler_path.parent.mkdir(parents=True)
+    scheduler_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "scheduler_kind": "branch-worker-pool",
+                "scheduler_path": asm.CONTRACT.worker_scheduler_path("B01"),
+                "capacity": asm.CONTRACT.MAX_WORKER_PACKETS_PER_BRANCH,
+                "item_ids": ["B01-W01"],
+                "events": [
+                    {
+                        "seq": 1,
+                        "timestamp": "2026-06-18T00:00:00Z",
+                        "wall_clock_timestamp": "2026-06-18T00:00:00Z",
+                        "runtime_ref": "test",
+                        "event": [],
+                        "id": "B01-W01",
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+
+    rollup, defects = asm.scheduler_rollup(manifest_path, branch, "B01")
+
+    assert rollup["serial_reasons"] == []
+    assert any("$.worker_parallelism.scheduler_path.events[0].event" in defect for defect in defects), defects
+    assert not any("could not read scheduler refill events" in defect for defect in defects), defects
+
+
 # --- create_runtime_packet: load_json fails closed; dead telemetry_function removed ---
 def test_create_runtime_packet_load_json_fails_closed(tmp_path):
     bad = tmp_path / "job.manifest.json"
     bad.write_text("{ not json", encoding="utf-8")
     with pytest.raises(SystemExit):
         crp.load_json(bad)
+
+
+def test_validate_launch_config_adapter_rejects_non_string_provider():
+    config = {"attempts": [{"provider": ["codex"]}]}
+    with pytest.raises(SystemExit) as exc:
+        crp.validate_launch_config_adapter(config)
+    msg = str(exc.value)
+    assert "provider must be a supported route adapter" in msg
+    assert "['codex']" in msg
+
+
+def test_validate_launch_config_adapter_requires_provider_for_generic_cli():
+    config = {
+        "attempts": [
+            {
+                "provider": "generic-cli",
+                "alias": "generic-cli",
+                "model": "cli-model",
+                "command": "echo hello",
+                "rendered_command": "echo hello",
+                "command_binary": "echo",
+                "route_policy_version": "goal-route-policy-v2",
+                "timeout_seconds": 90,
+                "telemetry_capability": {"token_usage": "best_effort"},
+            }
+        ]
+    }
+    assert crp.validate_launch_config_adapter(config) is None
+
+
+def test_validate_launch_config_adapter_and_validator_disagree_without_provider():
+    config = {
+        "attempts": [
+            {
+                "harness_kind": "generic-cli",
+                "alias": "generic-cli",
+                "model": "cli-model",
+                "command": "echo hello",
+                "rendered_command": "echo hello",
+                "command_binary": "echo",
+                "route_policy_version": "goal-route-policy-v2",
+                "timeout_seconds": 90,
+                "telemetry_capability": {"token_usage": "best_effort"},
+            }
+        ]
+    }
+    with pytest.raises(SystemExit):
+        crp.validate_launch_config_adapter(config)
+    defects: list[str] = []
+    vbs.validate_launch_config_attempts(defects, config, "$.launch_config", role="worker")
+    assert any("provider" in d for d in defects), defects
+
+
+def test_validate_launch_config_adapter_rejects_generic_cli_without_command_binary():
+    config = {
+        "attempts": [
+            {
+                "provider": "generic-cli",
+                "alias": "generic-cli",
+                "model": "cli-model",
+                "command": "echo hello",
+                "rendered_command": "echo hello",
+                "route_policy_version": "goal-route-policy-v2",
+                "timeout_seconds": 90,
+                "telemetry_capability": {"token_usage": "best_effort"},
+            }
+        ]
+    }
+    with pytest.raises(SystemExit) as exc:
+        crp.validate_launch_config_adapter(config)
+    assert "command_binary is required for generic-cli attempts" in str(exc.value)
+
+
+def test_validate_launch_attempt_provider_accepts_generic_cli():
+    defects: list[str] = []
+    vbs.validate_launch_attempt_provider(
+        defects,
+        {
+            "provider": "generic-cli",
+            "alias": "generic-cli",
+            "model": "cli-model",
+        },
+        "$.launch_config.attempts[0]",
+        alias="generic-cli",
+    )
+    assert defects == []
+
+
+def test_validate_launch_config_attempts_rejects_generic_cli_without_command_binary():
+    defects: list[str] = []
+    vbs.validate_launch_config_attempts(
+        defects,
+        {
+            "attempts": [
+                {
+                    "provider": "generic-cli",
+                    "alias": "generic-cli",
+                    "model": "cli-model",
+                    "command": "echo hello",
+                    "rendered_command": "echo hello",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "sandbox": "read-only",
+                    "timeout_seconds": 90,
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "event_logs": ["events-generic-cli.log"],
+                }
+            ]
+        },
+        "$.launch_config",
+        role="worker",
+    )
+    assert any("command_binary" in defect for defect in defects), defects
+
+
+def test_validate_launch_config_attempts_rejects_opencode_bridge_without_bridge_run_fields():
+    defects: list[str] = []
+    vbs.validate_launch_config_attempts(
+        defects,
+        {
+            "attempts": [
+                {
+                    "provider": "opencode-bridge",
+                    "alias": "ds-pro-max",
+                    "model": "deepseek-v4-pro",
+                    "command": "echo hello",
+                    "rendered_command": "echo hello",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "sandbox": "workspace-write",
+                    "timeout_seconds": 90,
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "event_logs": ["events-opencode-bridge.log"],
+                    "bridge": {
+                        "provider": "deepseek",
+                        "model": "deepseek-v4-pro",
+                        "variant": "max",
+                        "permission_profile": "workspace-write",
+                        "run_dir": "bridge/run-01",
+                    },
+                }
+            ]
+        },
+        "$.launch_config",
+        role="worker",
+    )
+    assert any("run_args" in defect for defect in defects), defects
+    assert any("run_readback" in defect for defect in defects), defects
+    assert any("bridge.pool_dir" in defect for defect in defects), defects
+
+
+def test_validate_launch_config_attempts_rejects_non_contract_opencode_bridge_without_bridge_metadata():
+    defects: list[str] = []
+    vbs.validate_launch_config_attempts(
+        defects,
+        {
+            "attempts": [
+                {
+                    "provider": "opencode-bridge",
+                    "alias": "lite_agent",
+                    "model": "deepseek-v4-flash",
+                    "command": "echo hello",
+                    "rendered_command": "echo hello",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "sandbox": "workspace-write",
+                    "timeout_seconds": 90,
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "event_logs": ["events-opencode-bridge.log"],
+                    "bridge": {
+                        "provider": "deepseek",
+                        "model": "deepseek-v4-flash",
+                        "variant": "max",
+                        "permission_profile": "workspace-write",
+                        "run_dir": "bridge/run-01",
+                    },
+                }
+            ]
+        },
+        "$.launch_config",
+        role="worker",
+    )
+    assert any("run_args" in defect for defect in defects), defects
+    assert any("run_readback" in defect for defect in defects), defects
+    assert any("bridge.pool_dir" in defect for defect in defects), defects
+
+
+def test_validate_launch_config_attempts_accepts_generic_cli_with_command_binary():
+    defects: list[str] = []
+    aliases = vbs.validate_launch_config_attempts(
+        defects,
+        {
+            "attempts": [
+                {
+                    "provider": "generic-cli",
+                    "alias": "generic-cli",
+                    "model": "cli-model",
+                    "command": "echo hello",
+                    "rendered_command": "echo hello",
+                    "command_binary": "echo",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "sandbox": "read-only",
+                    "timeout_seconds": 90,
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "event_logs": ["events-generic-cli.log"],
+                }
+            ]
+        },
+        "$.launch_config",
+        role="worker",
+    )
+    assert defects == []
+    assert aliases == ["generic-cli"]
+
+
+def test_validate_launch_config_attempts_rejects_selected_ladder_with_non_string_extra():
+    defects: list[str] = []
+    vbs.validate_launch_config_attempts(
+        defects,
+        {
+            "attempts": [
+                {
+                    "provider": "codex",
+                    "alias": "codex-spark",
+                    "model": "gpt-5.3-codex-spark",
+                    "command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s read-only",
+                    "rendered_command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s read-only",
+                    "sandbox": "read-only",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "ignore_user_config": True,
+                    "ignore_rules": True,
+                    "timeout_seconds": 90,
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "event_logs": ["events-codex-spark.jsonl"],
+                }
+            ],
+            "selected_ladder": ["codex-spark", 1],
+        },
+        "$.launch_config",
+        role="worker",
+    )
+    assert any("selected_ladder" in defect and "must match launch attempt aliases" in defect for defect in defects), (
+        defects
+    )
+
+
+def test_validate_launch_config_attempts_rejects_non_list_selected_ladder():
+    defects: list[str] = []
+    vbs.validate_launch_config_attempts(
+        defects,
+        {
+            "attempts": [
+                {
+                    "provider": "codex",
+                    "alias": "codex-spark",
+                    "model": "gpt-5.3-codex-spark",
+                    "command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s read-only",
+                    "rendered_command": "codex exec --ephemeral -m gpt-5.3-codex-spark -s read-only",
+                    "route_policy_version": "goal-route-policy-v2",
+                    "sandbox": "read-only",
+                    "ignore_user_config": True,
+                    "ignore_rules": True,
+                    "timeout_seconds": 90,
+                    "telemetry_capability": {"token_usage": "best_effort", "source": "provider_or_harness_output"},
+                    "event_logs": ["events-codex-spark.jsonl"],
+                }
+            ],
+            "selected_ladder": "codex-spark",
+        },
+        "$.launch_config",
+        role="worker",
+    )
+    assert any("selected_ladder" in defect for defect in defects), defects
+
+
+def test_validate_launch_attempt_provider_preserves_codex_and_bridge_checks():
+    defects: list[str] = []
+    vbs.validate_launch_attempt_provider(
+        defects,
+        {"provider": "codex", "alias": "codex-spark", "model": "wrong-model"},
+        "$.launch_config.attempts[0]",
+        alias="codex-spark",
+    )
+    assert any("must be" in defect for defect in defects), defects
+
+
+def test_resolve_worker_routing_fails_closed_for_manifest_custom_route_class(tmp_path):
+    manifest = {
+        "branches": [
+            {
+                "id": "B01",
+                "work_items": [
+                    {"id": "W01", "packet_id": "B01-W01", "route_class": "custom", "owned_paths": ["src/main.py"]}
+                ],
+            }
+        ]
+    }
+    manifest_path = tmp_path / "job.manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    args = argparse.Namespace(
+        worker_route=[],
+        route_class=None,
+        allow_route_pruning=False,
+        selection_reason="",
+        model_catalog=None,
+    )
+    with pytest.raises(SystemExit):
+        crp.resolve_worker_routing(
+            args,
+            packet_id="B01-W01",
+            manifest_branch_id="B01",
+            manifest=None,
+            manifest_path=manifest_path,
+            telemetry_debug=False,
+            context_files=[manifest_path.as_posix()],
+        )
+
+
+def test_resolve_worker_routing_allows_manifest_custom_route_class_with_explicit_route_class(tmp_path):
+    manifest = {
+        "branches": [
+            {
+                "id": "B01",
+                "work_items": [
+                    {"id": "W01", "packet_id": "B01-W01", "route_class": "custom", "owned_paths": ["src/main.py"]}
+                ],
+            }
+        ]
+    }
+    manifest_path = tmp_path / "job.manifest.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    args = argparse.Namespace(
+        worker_route=[],
+        route_class="custom",
+        allow_route_pruning=False,
+        selection_reason="",
+        model_catalog=None,
+    )
+    routing = crp.resolve_worker_routing(
+        args,
+        packet_id="B01-W01",
+        manifest_branch_id="B01",
+        manifest=None,
+        manifest_path=manifest_path,
+        telemetry_debug=False,
+        context_files=[manifest_path.as_posix()],
+    )
+    assert routing.route_class == "custom"
 
 
 def test_dead_telemetry_function_removed():
@@ -369,6 +770,114 @@ def test_stale_reviewer_constants_removed():
     assert hasattr(crp, "CODEX_LEAN_EXEC_FLAGS_TEXT")
 
 
+def test_record_bundle_route_failure_tolerates_malformed_persisted_counter(tmp_path):
+    packet_dir = tmp_path / "workers" / "B01-W01"
+    packet_dir.mkdir(parents=True)
+    route_health_path = tmp_path / rpr.ROUTE_HEALTH_NAME
+    route_health_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "routes": {
+                    "codex-spark": {
+                        "failures": {rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS: ["bad-counter"]},
+                    }
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    attempt = {
+        "alias": "codex-spark",
+        "provider": "codex",
+        "model": "gpt-5.3-codex-spark",
+        "failure_subclass": rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS,
+    }
+
+    rpr.record_bundle_route_failure(packet_dir, attempt)
+
+    data = json.loads(route_health_path.read_text(encoding="utf-8"))
+    route = data["routes"]["codex-spark"]
+    assert route["failures"][rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS] == 1
+    assert route.get("degraded") is not True
+
+
+def test_record_bundle_route_failure_clamps_negative_persisted_counter(tmp_path):
+    packet_dir = tmp_path / "workers" / "B01-W01"
+    packet_dir.mkdir(parents=True)
+    route_health_path = tmp_path / rpr.ROUTE_HEALTH_NAME
+    route_health_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "routes": {
+                    "ds-pro-max": {
+                        "failures": {rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS: -100},
+                    }
+                },
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    attempt = {
+        "alias": "ds-pro-max",
+        "provider": "opencode-bridge",
+        "model": "deepseek-v4-pro",
+        "failure_subclass": rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS,
+    }
+
+    rpr.record_bundle_route_failure(packet_dir, attempt)
+    rpr.record_bundle_route_failure(packet_dir, attempt)
+
+    data = json.loads(route_health_path.read_text(encoding="utf-8"))
+    route = data["routes"]["ds-pro-max"]
+    assert route["failures"][rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS] == rpr.ROUTE_DEGRADE_EMPTY_OUTPUT_THRESHOLD
+    assert route["degraded"] is True
+    assert route["degraded_reason"] == rpr.OPENCODE_EMPTY_OUTPUT_SUBCLASS
+    assert route["degraded_after_count"] == rpr.ROUTE_DEGRADE_EMPTY_OUTPUT_THRESHOLD
+
+
+def test_record_generated_artifact_cleanup_tolerates_malformed_persisted_counts(tmp_path):
+    packet_dir = tmp_path
+    cleanup_path = packet_dir / rpr.GENERATED_CLEANUP_NAME
+    cleanup_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "attempts": [
+                    {
+                        "status": "pass",
+                        "candidates_count": ["bad"],
+                        "removed_count": {"bad": "counter"},
+                        "failed_count": True,
+                    }
+                ],
+            },
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    attempt: dict[str, object] = {}
+    cleanup = {
+        "status": "pass",
+        "generated_artifacts_only": True,
+        "candidates_count": 2,
+        "removed_count": "1",
+        "failed_count": "0",
+    }
+
+    rpr.record_generated_artifact_cleanup(packet_dir, attempt, cleanup)
+
+    data = json.loads(cleanup_path.read_text(encoding="utf-8"))
+    assert data["candidates_count"] == 2
+    assert data["removed_count"] == 1
+    assert data["failed_count"] == 0
+    assert data["status"] == "pass"
+    assert attempt["generated_artifact_cleanup_path"] == rpr.GENERATED_CLEANUP_NAME
+
+
 # --- 2026-06-18 convergence pass 2: the assembler's tolerant reader degrades a non-UTF-8 artifact
 #     to a blocker instead of escaping as a UnicodeDecodeError (read_object_or_blocker only caught
 #     SystemExit; read_json now fails closed on non-UTF-8 too) ---
@@ -389,6 +898,214 @@ def test_validate_worker_status_tolerates_unhashable_status():
     defects: list[str] = []
     vbs.validate_worker_status(defects, {"status": ["pass"], "packet_id": "p"}, "$.w")  # must not raise
     assert any("status" in d for d in defects), defects
+
+
+def test_packet_next_action_fail_closed_for_unhashable_status_and_terminal_state():
+    assert rpr.packet_next_action(["pass"], "pass") == "inspect_packet_artifacts"
+    assert rpr.packet_next_action("pass", ["pass"]) == "inspect_packet_artifacts"
+    assert rpr.packet_next_action({"status": "pass"}, {"terminal_state": "blocked"}) == "inspect_packet_artifacts"
+
+
+def test_write_packet_summary_fails_closed_with_unhashable_output_and_terminal_state(tmp_path):
+    output_name = "worker-output.json"
+    config = {
+        "packet_id": "B01-P01",
+        "role": "worker",
+        "worktree": str(tmp_path),
+        "output_name": output_name,
+        "attempts": [{}],
+    }
+    (tmp_path / output_name).write_text(json.dumps({"status": ["pass"]}), encoding="utf-8")
+    state = {"terminal_state": {"state": "pass"}, "events": []}
+    (tmp_path / rpr.state_artifact_name(config)).write_text(json.dumps(state), encoding="utf-8")
+    rpr.write_packet_summary(tmp_path, config)
+    summary = json.loads((tmp_path / "packet.summary.json").read_text(encoding="utf-8"))
+    assert summary["next_action"] == "inspect_packet_artifacts"
+    assert summary["output_status"] == ["pass"]
+    assert summary["terminal_state"] == {"state": "pass"}
+
+
+def test_write_packet_summary_fails_closed_with_malformed_route_health(tmp_path):
+    output_name = "worker-output.json"
+    config = {
+        "packet_id": "B01-P01",
+        "role": "worker",
+        "worktree": str(tmp_path),
+        "output_name": output_name,
+        "attempts": [{}],
+    }
+    (tmp_path / output_name).write_text(json.dumps({"status": "failed"}), encoding="utf-8")
+    state = {
+        "terminal_state": "fail-clean",
+        "events": [
+            {
+                "attempt_index": 0,
+                "state": "fail-clean",
+                "route_health": {"transport_disconnect_count": ["x"]},
+            }
+        ],
+    }
+    (tmp_path / rpr.state_artifact_name(config)).write_text(json.dumps(state), encoding="utf-8")
+
+    rpr.write_packet_summary(tmp_path, config)
+
+    summary = json.loads((tmp_path / "packet.summary.json").read_text(encoding="utf-8"))
+    assert summary["attempts"][0]["route_health"]["transport_disconnect_count"] == 0
+    assert summary["next_action"] == "close_blocked_or_create_repair"
+
+
+def test_run_packet_fails_closed_with_malformed_launch_route_health(tmp_path):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    subprocess.run(["git", "init"], cwd=worktree, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    packet_dir = tmp_path / "workers" / "B01-P01"
+    packet_dir.mkdir(parents=True)
+    telemetry_script = packet_dir / "telemetry.py"
+    telemetry_script.write_text(
+        "import argparse, json\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--packet-dir', required=True)\n"
+        "parser.add_argument('--attempt-json', action='append', default=[])\n"
+        "parser.add_argument('--packet-id')\n"
+        "parser.add_argument('--role')\n"
+        "parser.add_argument('--output-name')\n"
+        "parser.add_argument('--prompt-name')\n"
+        "args = parser.parse_args()\n"
+        "attempts = [json.loads(item) for item in args.attempt_json]\n"
+        "Path(args.packet_dir, 'telemetry.json').write_text(\n"
+        "    json.dumps({'schema_version': 1, 'attempts': attempts}, sort_keys=True), encoding='utf-8'\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    config = {
+        "schema_version": 1,
+        "packet_id": "B01-P01",
+        "role": "worker",
+        "branch_id": "B01",
+        "work_item_id": "P01",
+        "manifest_hash": "",
+        "manifest_epoch": "epoch-1",
+        "worktree_path": str(worktree),
+        "worktree": str(worktree),
+        "branch": "test-branch",
+        "route_id": "generic-cli",
+        "route_class": "implementation",
+        "selected_ladder": ["generic-cli"],
+        "selection_reason": "regression",
+        "sandbox": "read-only",
+        "evidence_summary": "runtime route health regression",
+        "output_name": "worker-output.json",
+        "schema_name": "worker.schema.json",
+        "telemetry_script": str(telemetry_script),
+        "terminal_message": "Worker attempts failed.",
+        "timeout_kill_after_seconds": 1,
+        "attempts": [
+            {
+                "provider": "generic-cli",
+                "alias": "generic-cli",
+                "model": "missing-cli",
+                "command_binary": "definitely-missing-goal-cli-binary",
+                "timeout_seconds": 1,
+                "route_health": {"transport_disconnect_count": ["x"]},
+            }
+        ],
+    }
+    (packet_dir / rpr.CONFIG_NAME).write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+    (packet_dir / "prompt.md").write_text("do work\n", encoding="utf-8")
+    (packet_dir / "worker.schema.json").write_text(json.dumps({"type": "object"}), encoding="utf-8")
+
+    rc = rpr.run_packet(packet_dir)
+
+    assert rc == 1
+    output = json.loads((packet_dir / "worker-output.json").read_text(encoding="utf-8"))
+    assert output["status"] == "blocked"
+    launcher = json.loads((packet_dir / "launcher-state.json").read_text(encoding="utf-8"))
+    assert launcher["terminal_state"] == "blocked"
+    assert launcher["events"][-1]["state"] == "blocked"
+    summary = json.loads((packet_dir / "packet.summary.json").read_text(encoding="utf-8"))
+    assert summary["next_action"] == "close_blocked_or_create_repair"
+    assert summary["attempts"][0]["route_health"]["transport_disconnect_count"] == 0
+
+
+def test_run_packet_fails_closed_with_malformed_persisted_bundle_route_health(tmp_path):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    subprocess.run(["git", "init"], cwd=worktree, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    packet_dir = tmp_path / "workers" / "B01-P01"
+    packet_dir.mkdir(parents=True)
+    telemetry_script = packet_dir / "telemetry.py"
+    telemetry_script.write_text(
+        "import argparse, json\n"
+        "from pathlib import Path\n"
+        "parser = argparse.ArgumentParser()\n"
+        "parser.add_argument('--packet-dir', required=True)\n"
+        "parser.add_argument('--attempt-json', action='append', default=[])\n"
+        "parser.add_argument('--packet-id')\n"
+        "parser.add_argument('--role')\n"
+        "parser.add_argument('--output-name')\n"
+        "parser.add_argument('--prompt-name')\n"
+        "args = parser.parse_args()\n"
+        "attempts = [json.loads(item) for item in args.attempt_json]\n"
+        "Path(args.packet_dir, 'telemetry.json').write_text(\n"
+        "    json.dumps({'schema_version': 1, 'attempts': attempts}, sort_keys=True), encoding='utf-8'\n"
+        ")\n",
+        encoding="utf-8",
+    )
+    config = {
+        "schema_version": 1,
+        "packet_id": "B01-P01",
+        "role": "worker",
+        "branch_id": "B01",
+        "work_item_id": "P01",
+        "manifest_hash": "",
+        "manifest_epoch": "epoch-1",
+        "worktree_path": str(worktree),
+        "worktree": str(worktree),
+        "branch": "test-branch",
+        "route_id": "generic-cli",
+        "route_class": "implementation",
+        "selected_ladder": ["generic-cli"],
+        "selection_reason": "regression",
+        "sandbox": "read-only",
+        "evidence_summary": "runtime persisted route health regression",
+        "output_name": "worker-output.json",
+        "schema_name": "worker.schema.json",
+        "telemetry_script": str(telemetry_script),
+        "terminal_message": "Worker attempts failed.",
+        "timeout_kill_after_seconds": 1,
+        "attempts": [
+            {
+                "provider": "generic-cli",
+                "alias": "generic-cli",
+                "model": "missing-cli",
+                "command_binary": "definitely-missing-goal-cli-binary",
+                "timeout_seconds": 1,
+            }
+        ],
+    }
+    (packet_dir / rpr.CONFIG_NAME).write_text(json.dumps(config, sort_keys=True), encoding="utf-8")
+    (packet_dir / "prompt.md").write_text("do work\n", encoding="utf-8")
+    (packet_dir / "worker.schema.json").write_text(json.dumps({"type": "object"}), encoding="utf-8")
+    (tmp_path / rpr.ROUTE_HEALTH_NAME).write_text("{ not json", encoding="utf-8")
+
+    rc = rpr.run_packet(packet_dir)
+
+    assert rc == 1
+    output = json.loads((packet_dir / "worker-output.json").read_text(encoding="utf-8"))
+    assert output["status"] == "blocked"
+    assert any("Worker attempts failed." in blocker for blocker in output["blockers"])
+    launcher = json.loads((packet_dir / "launcher-state.json").read_text(encoding="utf-8"))
+    assert launcher["terminal_state"] == "blocked"
+    assert launcher["events"][-1]["state"] == "blocked"
+    telemetry = json.loads((packet_dir / "telemetry.json").read_text(encoding="utf-8"))
+    assert telemetry["attempts"][0]["alias"] == "generic-cli"
+    summary = json.loads((packet_dir / "packet.summary.json").read_text(encoding="utf-8"))
+    assert summary["next_action"] == "close_blocked_or_create_repair"
+    assert summary["output_status"] == "blocked"
+    route_health = json.loads((tmp_path / rpr.ROUTE_HEALTH_NAME).read_text(encoding="utf-8"))
+    assert route_health["routes"] == {}
+    assert route_health["warnings"][0]["kind"] == "corrupt_route_health_ignored"
 
 
 # --- 2026-06-18 fresh-audit pass ---
@@ -441,6 +1158,41 @@ def _valid_research_branch():
 def test_validate_work_items_accepts_research_alias():
     validated, max_active = rws.validate_work_items(_valid_research_branch(), "B01")  # must not raise
     assert max_active == 1 and len(validated) == 1
+
+
+def test_completed_research_alias_uses_research_status_path(tmp_path):
+    branch = _valid_research_branch()
+    manifest_path = tmp_path / "job.manifest.json"
+    manifest_path.write_text(json.dumps({"branches": [{"id": "B01", **branch}]}, sort_keys=True), encoding="utf-8")
+    research_dir = tmp_path / "research" / "B01-W01"
+    research_dir.mkdir(parents=True)
+    (research_dir / "research.json").write_text(json.dumps({"status": "pass"}, sort_keys=True), encoding="utf-8")
+
+    work_items, _ = rws.validate_work_items(branch, "B01")
+
+    rws.validate_completed_worker_statuses(manifest_path, work_items, {"B01-W01"}, set())
+
+
+def test_validate_work_items_rejects_boolean_work_item_id():
+    branch = _valid_research_branch()
+    branch["work_items"][0]["id"] = True
+    branch["work_items"][0]["packet_id"] = "B01-True"
+    with pytest.raises(SystemExit) as exc:
+        rws.validate_work_items(branch, "B01")
+    assert "branch B01 work_items[0].id must be a string" in str(exc.value)
+
+
+def test_validate_completed_worker_statuses_rejects_non_string_worker_type_path(tmp_path):
+    manifest_path = tmp_path / "job.manifest.json"
+    manifest_path.write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        rws.validate_completed_worker_statuses(
+            manifest_path,
+            [{"packet_id": "B01-W01", "worker_type": ["research"]}],
+            {"B01-W01"},
+            set(),
+        )
+    assert "workers/B01-W01/status.json" in str(exc.value)
 
 
 def test_validate_work_items_fails_closed_on_non_string_worker_type():
