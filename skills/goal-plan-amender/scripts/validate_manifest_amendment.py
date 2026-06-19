@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 
 from amendment_lib import (
     add_lineage_stage,
@@ -20,6 +19,8 @@ from amendment_lib import (
     write_json,
     json_text,
 )
+
+INVALID_AMENDMENT_ARTIFACT_ID = "INVALID_AMENDMENT_ID"
 
 
 def main() -> int:
@@ -43,6 +44,7 @@ def main() -> int:
         infer_scheduler=not args.no_infer_scheduler,
         run_lint=True,
     )
+    validation["scheduler_inference_enabled"] = not args.no_infer_scheduler
     proposed_amendment_id = (
         validation.get("amendment_id")
         if isinstance(validation.get("amendment_id"), str) and validation.get("amendment_id").strip()
@@ -53,20 +55,14 @@ def main() -> int:
     try:
         amendment_id = ensure_amendment_id(proposed_amendment_id)
     except (ValueError, SystemExit):
-        # The proposal's amendment_id is malformed; validate_proposal already recorded the structured
-        # defect (status != "pass"). Emit that failed validation result instead of crashing and writing
-        # no artifact at all (the fail-closed convention requires a clean failed result, and a valid
-        # amendment_id is needed to build the lineage path below). ensure_amendment_id raises ValueError
-        # for an empty/non-string id and SystemExit (via require_safe_id) for a malformed non-empty id.
-        if args.output:
-            write_json(resolve_absolute_path(args.output, "--output", must_exist=False), validation)
-        if args.json or not args.output:
-            print(json.dumps(validation, indent=2, sort_keys=True))
-        else:
-            print(args.output)
-        return 0 if validation["status"] == "pass" else 1
-    lineage_path = amendment_lineage_path(manifest_path.parent, amendment_id)
-    lineage = load_lineage(lineage_path, amendment_id=amendment_id)
+        amendment_id = ""
+    artifact_amendment_id = amendment_id or INVALID_AMENDMENT_ARTIFACT_ID
+    if args.output:
+        output_path = resolve_absolute_path(args.output, "--output", must_exist=False)
+    else:
+        output_path = manifest_path.parent / "amendments" / f"{artifact_amendment_id}.validation.json"
+    lineage_path = amendment_lineage_path(manifest_path.parent, artifact_amendment_id)
+    lineage = load_lineage(lineage_path, amendment_id=artifact_amendment_id)
     parent_sha = latest_lineage_sha(lineage)
     proposal_rel = lineage_path_rel(manifest_path.parent, proposal_path)
     add_lineage_stage(
@@ -76,9 +72,7 @@ def main() -> int:
         sha256=validation.get("proposal_sha256", "sha256:"),
         parent_sha256=parent_sha,
     )
-    validation_path = (
-        Path(args.output) if args.output else (manifest_path.parent / "amendments" / f"{amendment_id}.validation.json")
-    )
+    validation_path = output_path
     validation_rel = lineage_path_rel(manifest_path.parent, validation_path)
     validation["lineage_path"] = lineage_path.as_posix()
     validation["lineage_stages"] = list(lineage.get("stages", [])) if isinstance(lineage.get("stages"), list) else []
@@ -90,11 +84,9 @@ def main() -> int:
         sha256=validation_sha256,
         parent_sha256=latest_lineage_sha(lineage),
     )
-    if args.output:
-        output_path = resolve_absolute_path(args.output, "--output", must_exist=False)
-        write_json(output_path, validation)
-        lineage["artifact"] = output_path.as_posix()
-        write_json(lineage_path, lineage)
+    write_json(validation_path, validation)
+    lineage["artifact"] = output_path.as_posix()
+    write_json(lineage_path, lineage)
     if args.json or not args.output:
         print(json.dumps(validation, indent=2, sort_keys=True))
     else:

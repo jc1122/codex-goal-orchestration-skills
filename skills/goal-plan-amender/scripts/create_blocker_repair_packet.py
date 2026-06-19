@@ -20,6 +20,7 @@ from amendment_lib import (
     lineage_path_rel,
     load_json_object,
     protected_ids,
+    require_scheduler_inference_enabled,
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
@@ -127,6 +128,30 @@ def blockers_from_status(status: dict) -> list[str]:
     return blockers
 
 
+def _pass_recovery_targets(branches: dict[str, dict], bundle_dir: Path) -> set[str]:
+    pass_recoveries: set[str] = set()
+    for branch in branches.values():
+        if not isinstance(branch, dict):
+            continue
+        status_path_value = branch.get("status_path")
+        if not isinstance(status_path_value, str) or relative_path_defect(status_path_value, "branch status_path"):
+            continue
+        status_path = bundle_dir / status_path_value
+        if not status_path.exists():
+            continue
+        try:
+            status = load_json_object(status_path)
+        except (Exception, SystemExit):  # noqa: BLE001 -- load_json_object fails closed via SystemExit
+            continue
+        if status.get("status") != "pass":
+            continue
+        for key in ("recovers_from", "supersedes"):
+            for target in _as_list(branch.get(key)):
+                if isinstance(target, str):
+                    pass_recoveries.add(target)
+    return pass_recoveries
+
+
 def extract_repair_paths(blockers: list[str], *, review_context: bool = False) -> tuple[list[str], list[str]]:
     owned_paths: list[str] = []
     verification_tests: list[str] = []
@@ -183,6 +208,35 @@ def _as_list(value: object) -> list:
     """A non-list `branches`/`obsolete_branches` (e.g. JSON null/scalar) must iterate as empty,
     not TypeError — `.get(k, [])` only defaults on an ABSENT key, not a present non-list value."""
     return value if isinstance(value, list) else []
+
+
+def _require_decision_branch_ids(value: object, path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array of branch ids")
+    result: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{path}[{index}] must be a non-empty string")
+        result.append(item)
+    return result
+
+
+def _require_terminal_status_map(value: object, terminal_ids: list[str], path: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise SystemExit(f"{path} must be an object")
+    expected = sorted(set(terminal_ids))
+    keys = sorted(key for key in value if isinstance(key, str))
+    if keys != expected:
+        raise SystemExit(f"{path} must include exactly terminal branch ids")
+    terminal_status: dict[str, str] = {}
+    for branch_id in expected:
+        status = value.get(branch_id)
+        if not isinstance(status, str):
+            raise SystemExit(f"{path}[{branch_id}] must be a status string")
+        if status not in CONTRACT.STATUSES:
+            raise SystemExit(f"{path}[{branch_id}] must be one of {list(CONTRACT.STATUSES)}")
+        terminal_status[branch_id] = status
+    return terminal_status
 
 
 def all_owned_paths(manifest: dict) -> dict[str, str]:
@@ -360,14 +414,7 @@ def generate_proposal(input_data: dict) -> dict:
     bundle_dir = manifest_path.parent
     branches = branch_map(manifest)
     existing_owned = all_owned_paths(manifest)
-    already_recovered = {
-        target
-        for branch in branches.values()
-        if isinstance(branch, dict)
-        for key in ("recovers_from", "supersedes")
-        for target in _as_list(branch.get(key))
-        if isinstance(target, str)
-    }
+    already_recovered = _pass_recovery_targets(branches, bundle_dir)
     operations = []
     terminal_ids = [item for item in _as_list(input_data.get("terminal_branch_ids")) if isinstance(item, str)]
     branch_offset = 0
@@ -560,29 +607,56 @@ def create_packet(args: argparse.Namespace) -> Path:
     packet_dir = amendments_dir / f"{amendment_id}.packet"
     if packet_dir.exists() and not args.replace:
         raise SystemExit(f"blocker repair packet already exists; pass --replace to recreate: {packet_dir}")
+
+    try:
+        decision_active = sorted(
+            _require_decision_branch_ids(decision.get("active_branch_ids"), "$.decision.active_branch_ids")
+        )
+        decision_terminal = sorted(
+            _require_decision_branch_ids(decision.get("terminal_branch_ids"), "$.decision.terminal_branch_ids")
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    decision_terminal_status = decision.get("terminal_branch_statuses")
+    if not isinstance(decision_terminal_status, dict):
+        raise SystemExit("amendment decision terminal_branch_statuses must be an object")
+    decision_status = _require_terminal_status_map(
+        decision_terminal_status, sorted(decision_terminal), "$.decision.terminal_branch_statuses"
+    )
+    use_decision_terminal_status = isinstance(decision.get("terminal_branch_statuses"), dict)
+    try:
+        infer_scheduler = require_scheduler_inference_enabled(decision)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    requested_active = args.active_branch if args.active_branch else decision_active
+    requested_terminal = args.terminal_branch if args.terminal_branch else decision_terminal
+    try:
+        active, terminal, terminal_status = protected_ids(
+            manifest_path,
+            manifest,
+            active_ids=requested_active,
+            terminal_ids=requested_terminal,
+            terminal_statuses=decision_status if use_decision_terminal_status else None,
+            infer_scheduler=infer_scheduler,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    terminal_status_map = _require_terminal_status_map(
+        terminal_status, sorted(terminal), "$.protected terminal_branch_statuses"
+    )
+    if sorted(active) != decision_active:
+        raise SystemExit("amendment decision active_branch_ids do not match packet protected active ids")
+    if sorted(terminal) != decision_terminal:
+        raise SystemExit("amendment decision terminal_branch_ids do not match packet protected terminal ids")
+    if decision_status != terminal_status_map:
+        raise SystemExit("amendment decision terminal_branch_statuses do not match packet protected terminal statuses")
+
     if packet_dir.exists():
         for child in sorted(packet_dir.iterdir(), reverse=True):
             if child.is_dir():
                 raise SystemExit(f"refusing to replace non-empty nested packet directory: {child}")
             child.unlink()
     packet_dir.mkdir(parents=True, exist_ok=True)
-
-    try:
-        active, terminal, terminal_status = protected_ids(
-            manifest_path,
-            manifest,
-            active_ids=args.active_branch,
-            terminal_ids=args.terminal_branch,
-            infer_scheduler=True,
-        )
-    except ValueError as exc:
-        raise SystemExit(str(exc)) from exc
-    decision_active = sorted(item for item in _as_list(decision.get("active_branch_ids")) if isinstance(item, str))
-    decision_terminal = sorted(item for item in _as_list(decision.get("terminal_branch_ids")) if isinstance(item, str))
-    if sorted(active) != decision_active:
-        raise SystemExit("amendment decision active_branch_ids do not match packet protected active ids")
-    if sorted(terminal) != decision_terminal:
-        raise SystemExit("amendment decision terminal_branch_ids do not match packet protected terminal ids")
 
     records: list[dict] = [
         source_record(manifest_path, "live manifest"),

@@ -6,6 +6,7 @@ recovers_from/supersedes target — the apply-operations validator does not reje
 """
 
 import json
+import pytest
 import sys
 
 from conftest import REPO, load_module
@@ -39,12 +40,38 @@ def test_blocker_repair_proposes_when_not_recovered(tmp_path):
 
 
 def test_blocker_repair_idempotent_when_already_recovered(tmp_path):
+    (tmp_path / "B2.status.json").write_text(json.dumps({"status": "pass"}), encoding="utf-8")
     out = _proposal(
         tmp_path,
         [
             {"id": "B1", "status_path": "B1.status.json", "owned_paths": ["src/a.py"]},
-            {"id": "B2", "recovers_from": ["B1"], "supersedes": ["B1"], "owned_paths": ["src/a.py"]},
+            {
+                "id": "B2",
+                "status_path": "B2.status.json",
+                "recovers_from": ["B1"],
+                "supersedes": ["B1"],
+                "owned_paths": ["src/a.py"],
+            },
         ],
     )
-    # pre-fix: a duplicate repair branch (second recovers_from/supersedes B1) was proposed.
+    # Existing idempotent behavior: a prior successful recovery suppresses duplicate repair operations.
     assert out["operations"] == []
+
+
+@pytest.mark.parametrize("status", ["failed", "blocked", "partial"])
+def test_blocker_repair_reproposes_when_recovery_is_non_pass(tmp_path, status):
+    (tmp_path / "B2.status.json").write_text(json.dumps({"status": status}), encoding="utf-8")
+    out = _proposal(
+        tmp_path,
+        [
+            {"id": "B1", "status_path": "B1.status.json", "owned_paths": ["src/a.py"]},
+            {
+                "id": "B2",
+                "status_path": "B2.status.json",
+                "recovers_from": ["B1"],
+                "supersedes": ["B1"],
+                "owned_paths": ["src/a.py"],
+            },
+        ],
+    )
+    assert len(out["operations"]) == 1

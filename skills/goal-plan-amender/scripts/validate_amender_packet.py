@@ -12,6 +12,7 @@ from amendment_lib import (
     amender_model_policy,
     amender_telemetry_attempts,
     ensure_amendment_id,
+    require_scheduler_inference_enabled,
     normalize_amender_ladder,
     resolve_absolute_path,
     sha256_file,
@@ -51,6 +52,39 @@ def require_string_list(defects: list[str], value: object, path: str, *, min_ite
     return result
 
 
+def require_sorted_string_list(defects: list[str], value: object, path: str, *, min_items: int = 0) -> list[str]:
+    return sorted(require_string_list(defects, value, path, min_items=min_items))
+
+
+def require_terminal_status_map(
+    defects: list[str], value: object, terminal_ids: list[str], path: str
+) -> dict[str, str]:
+    if not isinstance(value, dict):
+        defect(defects, path, "must be an object")
+        return {}
+    allowed_statuses = set(CONTRACT.STATUSES)
+    expected = sorted(set(terminal_ids))
+    keys = sorted(key for key in value if isinstance(key, str))
+    if keys != expected:
+        defect(defects, path, "must use exactly terminal_branch_ids as keys")
+        return {}
+    terminal_status: dict[str, str] = {}
+    for branch_id in expected:
+        status = value.get(branch_id)
+        if not isinstance(status, str):
+            defect(defects, f"{path}[{branch_id}]", "must be a status string")
+            continue
+        if status not in allowed_statuses:
+            defect(
+                defects,
+                f"{path}[{branch_id}]",
+                f"must be one of {sorted(allowed_statuses)}",
+            )
+            continue
+        terminal_status[branch_id] = status
+    return terminal_status
+
+
 def load_json_for_validation(defects: list[str], path: Path, label: str) -> dict:
     if not path.exists():
         defect(defects, label, f"does not exist: {path}")
@@ -75,6 +109,10 @@ def validate_decision(defects: list[str], decision: dict, *, amendment_id: str, 
         or decision.get("reason_code") not in CONTRACT.AMENDMENT_LAUNCH_REASON_CODES
     ):
         defect(defects, "$.decision.reason_code", f"must be one of {list(CONTRACT.AMENDMENT_LAUNCH_REASON_CODES)}")
+    try:
+        require_scheduler_inference_enabled(decision)
+    except ValueError as exc:
+        defect(defects, "$.decision.scheduler_inference_enabled", str(exc))
     require_string(defects, decision.get("reason"), "$.decision.reason")
     if decision.get("manifest") != manifest_path.as_posix():
         defect(defects, "$.decision.manifest", "must match --manifest")
@@ -128,6 +166,7 @@ def validate_input_files(
     manifest_path: Path,
     decision_path: Path,
     route: dict,
+    decision: dict | None = None,
 ) -> None:
     if data.get("schema_version") != 1:
         defect(defects, "$.input_files.schema_version", "must be 1")
@@ -141,6 +180,57 @@ def validate_input_files(
         defect(defects, "$.input_files.selected_ladder", "must match route.json")
     if data.get("selection_reason") != route.get("selection_reason"):
         defect(defects, "$.input_files.selection_reason", "must match route.json")
+    if decision is not None and isinstance(decision, dict):
+        decision_active = require_sorted_string_list(
+            defects, decision.get("active_branch_ids"), "$.decision.active_branch_ids"
+        )
+        decision_terminal = require_sorted_string_list(
+            defects, decision.get("terminal_branch_ids"), "$.decision.terminal_branch_ids"
+        )
+        overlap = sorted(set(decision_active) & set(decision_terminal))
+        if overlap:
+            defect(
+                defects,
+                "$.decision",
+                "active_branch_ids and terminal_branch_ids must be disjoint: " + ", ".join(overlap),
+            )
+        decision_terminal_status = decision.get("terminal_branch_statuses")
+        input_active = require_sorted_string_list(
+            defects, data.get("active_branch_ids"), "$.input_files.active_branch_ids"
+        )
+        input_terminal = require_sorted_string_list(
+            defects, data.get("terminal_branch_ids"), "$.input_files.terminal_branch_ids"
+        )
+        overlap = sorted(set(input_active) & set(input_terminal))
+        if overlap:
+            defect(
+                defects,
+                "$.input_files",
+                "active_branch_ids and terminal_branch_ids must be disjoint: " + ", ".join(overlap),
+            )
+        if input_active != decision_active:
+            defect(defects, "$.input_files.active_branch_ids", "must match launch decision active_branch_ids")
+        if input_terminal != decision_terminal:
+            defect(defects, "$.input_files.terminal_branch_ids", "must match launch decision terminal_branch_ids")
+        status_error_count = len(defects)
+        decision_status = require_terminal_status_map(
+            defects,
+            decision_terminal_status,
+            decision_terminal,
+            "$.decision.terminal_branch_statuses",
+        )
+        terminal_status = require_terminal_status_map(
+            defects,
+            data.get("terminal_branch_statuses"),
+            input_terminal,
+            "$.input_files.terminal_branch_statuses",
+        )
+        if len(defects) == status_error_count and decision_status != terminal_status:
+            defect(
+                defects,
+                "$.input_files.terminal_branch_statuses",
+                "must match launch decision terminal_branch_statuses",
+            )
     sources = data.get("source_files")
     if not isinstance(sources, list) or not sources:
         defect(defects, "$.input_files.source_files", "must be a non-empty array")
@@ -159,7 +249,28 @@ def validate_input_files(
             defect(defects, f"{item_path}.sha256", "does not match current source file")
 
 
-def _validate_telemetry_header(defects: list[str], telemetry: dict, *, amendment_id: str, proposal_name: str) -> None:
+def _validate_packet_local_artifact(defects: list[str], value: object, path: str, *, packet_dir: Path) -> None:
+    artifact = require_string(defects, value, path)
+    if not artifact:
+        return
+    artifact_path = Path(artifact)
+    if artifact_path.is_absolute() or ".." in artifact_path.parts:
+        defect(defects, path, "must be a packet-local relative path")
+        return
+    packet_root = packet_dir.resolve()
+    resolved = (packet_root / artifact_path).resolve()
+    try:
+        resolved.relative_to(packet_root)
+    except ValueError:
+        defect(defects, path, "must resolve inside packet_dir")
+        return
+    if not resolved.is_file():
+        defect(defects, path, f"artifact does not exist or is not a regular file: {artifact}")
+
+
+def _validate_telemetry_header(
+    defects: list[str], telemetry: dict, *, amendment_id: str, proposal_name: str, packet_dir: Path
+) -> None:
     if telemetry.get("schema_version") != 1:
         defect(defects, "$.telemetry.schema_version", "must be 1")
     if telemetry.get("packet_id") != amendment_id:
@@ -168,6 +279,12 @@ def _validate_telemetry_header(defects: list[str], telemetry: dict, *, amendment
         defect(defects, "$.telemetry.role", f"must be {CONTRACT.AMENDER_ROLE!r}")
     if telemetry.get("output_artifact") != f"../{proposal_name}":
         defect(defects, "$.telemetry.output_artifact", f"must be '../{proposal_name}'")
+    _validate_packet_local_artifact(
+        defects,
+        telemetry.get("prompt_artifact"),
+        "$.telemetry.prompt_artifact",
+        packet_dir=packet_dir,
+    )
 
 
 def _validate_telemetry_alias_allowlist(defects: list[str], attempts: list) -> None:
@@ -271,8 +388,15 @@ def validate_telemetry(
     proposal_name: str,
     manifest: dict,
     manifest_path: Path,
+    packet_dir: Path,
 ) -> None:
-    _validate_telemetry_header(defects, telemetry, amendment_id=amendment_id, proposal_name=proposal_name)
+    _validate_telemetry_header(
+        defects,
+        telemetry,
+        amendment_id=amendment_id,
+        proposal_name=proposal_name,
+        packet_dir=packet_dir,
+    )
     attempts = telemetry.get("attempts")
     selected = route.get("selected_ladder") if isinstance(route.get("selected_ladder"), list) else []
     if not isinstance(attempts, list):
@@ -320,6 +444,7 @@ def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path)
         manifest_path=manifest_path,
         decision_path=decision_path,
         route=route,
+        decision=decision,
     )
     validate_telemetry(
         defects,
@@ -329,6 +454,7 @@ def validate_packet(*, manifest_path: Path, amendment_id: str, packet_dir: Path)
         proposal_name=proposal_name,
         manifest=manifest,
         manifest_path=manifest_path,
+        packet_dir=packet_dir,
     )
     if proposal:
         if proposal.get("schema_version") != 1:

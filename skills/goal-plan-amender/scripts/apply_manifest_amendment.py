@@ -12,6 +12,7 @@ from pathlib import Path
 from amendment_lib import (
     CONTRACT,
     PREFLIGHT,
+    require_scheduler_inference_enabled,
     add_lineage_stage,
     amendment_lineage_path,
     enrich_brief_runtime_metadata,
@@ -32,6 +33,22 @@ from validate_amender_packet import validate_packet
 import contextlib
 
 
+def decision_boundary_inputs(decision: dict) -> tuple[list[str], list[str], dict[str, str] | None, bool]:
+    active_ids = decision.get("active_branch_ids")
+    terminal_ids = decision.get("terminal_branch_ids")
+    terminal_statuses = decision.get("terminal_branch_statuses")
+    try:
+        infer_scheduler = require_scheduler_inference_enabled(decision)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    return (
+        [str(item) for item in active_ids if isinstance(item, str)] if isinstance(active_ids, list) else [],
+        [str(item) for item in terminal_ids if isinstance(item, str)] if isinstance(terminal_ids, list) else [],
+        terminal_statuses if isinstance(terminal_statuses, dict) else None,
+        infer_scheduler,
+    )
+
+
 def atomic_write_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, delete=False) as handle:
@@ -46,7 +63,10 @@ def atomic_write_json(path: Path, data: object) -> None:
 def branch_prompt_paths(bundle_dir: Path, candidate: dict, branch_ids: set[str]) -> list[Path]:
     paths: list[Path] = []
     for branch in candidate.get("branches", []):
-        if not isinstance(branch, dict) or branch.get("id") not in branch_ids:
+        if not isinstance(branch, dict):
+            continue
+        branch_id = branch.get("id")
+        if not isinstance(branch_id, str) or branch_id not in branch_ids:
             continue
         prompt = branch.get("prompt")
         if not isinstance(prompt, str) or relative_path_defect(prompt, "prompt"):
@@ -88,7 +108,7 @@ def mark_preflight_report_initial_epoch(bundle_dir: Path, amendment_id: str, man
     report_path.write_text(text.rstrip() + "\n" + notice, encoding="utf-8")
 
 
-def require_launch_packet_validation(manifest_path: Path, proposal_path: Path, amendment_id: str) -> None:
+def require_launch_packet_validation(manifest_path: Path, proposal_path: Path, amendment_id: str) -> dict:
     amendments_dir = manifest_path.parent / "amendments"
     decision_path = amendments_dir / f"{amendment_id}.decision.json"
     packet_dir = amendments_dir / f"{amendment_id}.packet"
@@ -137,6 +157,7 @@ def require_launch_packet_validation(manifest_path: Path, proposal_path: Path, a
     for key in ["manifest_sha256", "proposal_sha256", "packet_dir", "decision", "route", "telemetry", "proposal"]:
         if packet_validation.get(key) != fresh_packet_validation.get(key):
             raise SystemExit(f"recorded amender packet validation is stale for {key}")
+    return decision
 
 
 def main() -> int:
@@ -166,18 +187,21 @@ def main() -> int:
     except ValueError as exc:  # non-string amendment_id in a hand-crafted "pass" validation artifact
         raise SystemExit(f"validation amendment_id is invalid: {exc}") from exc
     bundle_dir = manifest_path.parent
-    require_launch_packet_validation(manifest_path, proposal_path, amendment_id)
+    decision = require_launch_packet_validation(manifest_path, proposal_path, amendment_id)
+    (
+        active_ids,
+        terminal_ids,
+        terminal_statuses,
+        infer_scheduler,
+    ) = decision_boundary_inputs(decision)
 
-    active_ids = validation.get("active_branch_ids") if isinstance(validation.get("active_branch_ids"), list) else []
-    terminal_ids = (
-        validation.get("terminal_branch_ids") if isinstance(validation.get("terminal_branch_ids"), list) else []
-    )
     fresh_validation, candidate, normalized_brief = validate_proposal(
         manifest_path=manifest_path,
         proposal_path=proposal_path,
         active_branch_ids=[str(item) for item in active_ids],
         terminal_branch_ids=[str(item) for item in terminal_ids],
-        infer_scheduler=True,
+        terminal_branch_statuses=terminal_statuses,
+        infer_scheduler=infer_scheduler,
         run_lint=True,
     )
     if fresh_validation.get("status") != "pass" or candidate is None or normalized_brief is None:
@@ -274,6 +298,7 @@ def main() -> int:
             branch["prompt"]
             for branch in candidate.get("branches", [])
             if isinstance(branch, dict)
+            and isinstance(branch.get("id"), str)
             and branch.get("id") in regenerated_branch_ids
             and isinstance(branch.get("prompt"), str)
         ],

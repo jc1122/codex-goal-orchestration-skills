@@ -68,6 +68,7 @@ PROTECTED_BRANCH_KEYS = (
     "worker_contention_reason",
 )
 NONPASS_TERMINAL_STATUSES = {"partial", "blocked", "failed"}
+CONSERVATIVE_TERMINAL_STATUS = "blocked"
 RUNTIME_BRIEF_PRESERVED_KEYS = (
     "repo_status",
     "preflight_compatibility",
@@ -100,6 +101,15 @@ def load_json_object(path: Path) -> dict:
     if not isinstance(data, dict):
         raise SystemExit(f"expected JSON object at {path}")
     return data
+
+
+def require_scheduler_inference_enabled(decision: object, *, field_name: str = "scheduler_inference_enabled") -> bool:
+    if not isinstance(decision, dict):
+        raise ValueError(f"{field_name} must be a boolean")
+    value = decision.get(field_name)
+    if not isinstance(value, bool):
+        raise ValueError(f"{field_name} must be a boolean")
+    return value
 
 
 def goal_config_from_manifest(manifest: dict | None, manifest_path: Path | None = None) -> dict | None:
@@ -543,6 +553,47 @@ def branch_index(branches: list[dict], branch_id: str) -> int | None:
     return None
 
 
+def obsolete_branch_ids(manifest: dict) -> set[str]:
+    obsolete_entries = manifest.get("obsolete_branches")
+    if obsolete_entries is not None and not isinstance(obsolete_entries, list):
+        raise ValueError("manifest.obsolete_branches must be an array when present")
+    obsolete: set[str] = set()
+    for entry in obsolete_entries if obsolete_entries is not None else []:
+        if not isinstance(entry, dict):
+            continue
+        branch_id = entry.get("branch_id")
+        if not isinstance(branch_id, str):
+            branch_id = entry.get("id")
+        if isinstance(branch_id, str) and branch_id.strip():
+            obsolete.add(branch_id)
+    return obsolete
+
+
+def branch_obsolete_id_set(obsolete_entries: list[object] | None) -> set[str]:
+    ids: set[str] = set()
+    for entry in obsolete_entries or []:
+        if not isinstance(entry, dict):
+            continue
+        branch_id = entry.get("branch_id")
+        if not isinstance(branch_id, str):
+            branch_id = entry.get("id")
+        if isinstance(branch_id, str) and branch_id.strip():
+            ids.add(branch_id)
+    return ids
+
+
+def branch_id_set(branches: list[object] | None, obsolete_entries: list[object] | None = None) -> set[str]:
+    return branch_obsolete_id_set(obsolete_entries)
+
+
+def _branch_id_reuses_obsolete(branch_id: str, reserved_ids: set[str], *, exception: str | None = None) -> bool:
+    if not branch_id.strip():
+        return False
+    if branch_id == exception:
+        return False
+    return branch_id in reserved_ids
+
+
 def branch_brief_from_manifest(branch: dict) -> dict:
     result = copy.deepcopy(branch)
     worker_parallelism = result.get("worker_parallelism")
@@ -696,9 +747,15 @@ def normalize_candidate_manifest(manifest: dict, bundle_dir: Path | None = None)
 
 def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict[str, str]]:
     parallelization = manifest.get("parallelization", {})
-    scheduler_path = (
-        parallelization.get("scheduler_path") if isinstance(parallelization, dict) else CONTRACT.MAIN_SCHEDULER_PATH
-    )
+    if not isinstance(parallelization, dict):
+        if parallelization is None:
+            scheduler_path = CONTRACT.MAIN_SCHEDULER_PATH
+        else:
+            raise ValueError("manifest parallelization must be an object")
+    elif "scheduler_path" in parallelization:
+        scheduler_path = parallelization.get("scheduler_path")
+    else:
+        scheduler_path = CONTRACT.MAIN_SCHEDULER_PATH
     if not isinstance(scheduler_path, str) or relative_path_defect(scheduler_path, "scheduler_path"):
         raise ValueError("manifest scheduler_path is unsafe; refusing to infer protected branch state")
     ledger_path = manifest_path.parent / scheduler_path
@@ -713,6 +770,9 @@ def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict
     active: set[str] = set()
     finished_status: dict[str, str] = {}
     terminal: dict[str, str] = {}
+    manifest_branch_ids = set(branch_map(manifest).keys())
+    obsolete_ids = obsolete_branch_ids(manifest)
+    unknown_ids: set[str] = set()
     events = ledger.get("events", [])
     if not isinstance(events, list):
         raise ValueError(f"scheduler ledger events must be an array for protected branch inference: {ledger_path}")
@@ -720,9 +780,15 @@ def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict
         if not isinstance(event, dict) or not isinstance(event.get("id"), str):
             continue
         item_id = event["id"]
+        if item_id not in manifest_branch_ids:
+            if item_id in obsolete_ids:
+                continue
+            unknown_ids.add(item_id)
+            continue
         name = event.get("event")
         if name == "launch":
             active.add(item_id)
+            finished_status.pop(item_id, None)
             terminal.pop(item_id, None)
         elif (
             name == "finish"
@@ -734,6 +800,8 @@ def scheduler_state(manifest_path: Path, manifest: dict) -> tuple[set[str], dict
             active.discard(item_id)
             if item_id in finished_status:
                 terminal[item_id] = finished_status[item_id]
+    if unknown_ids:
+        raise ValueError("unknown scheduler/manifest branch ids: " + ", ".join(sorted(unknown_ids)))
     return active, terminal
 
 
@@ -754,6 +822,8 @@ def status_file_terminal_state(manifest_path: Path, manifest: dict) -> dict[str,
                 f"could not read terminal branch status artifact for protected branch inference: {path}: {exc}"
             ) from exc
         status = data.get("status")
+        if status is not None and not isinstance(status, str):
+            raise ValueError(f"invalid terminal status value in {path}: {status!r}")
         if status in CONTRACT.STATUSES:
             statuses[branch_id] = str(status)
     return statuses
@@ -765,23 +835,59 @@ def protected_ids(
     *,
     active_ids: list[str] | None = None,
     terminal_ids: list[str] | None = None,
+    terminal_statuses: dict[str, str] | None = None,
     infer_scheduler: bool = True,
 ) -> tuple[set[str], set[str], dict[str, str]]:
-    if not infer_scheduler:
-        raise ValueError("scheduler/status inference is mandatory for amendment protected branch ids")
     active = set(active_ids or [])
-    terminal_status: dict[str, str] = {branch_id: "terminal" for branch_id in (terminal_ids or [])}
-    inferred_active, inferred_terminal = scheduler_state(manifest_path, manifest)
-    active |= inferred_active
-    terminal_status.update(inferred_terminal)
-    status_terminal = status_file_terminal_state(manifest_path, manifest)
-    stale_active = sorted(active & set(status_terminal))
-    if stale_active:
+    terminal_request = list(dict.fromkeys(terminal_ids or []))
+    if terminal_statuses is None:
+        terminal_status: dict[str, str] = {branch_id: CONSERVATIVE_TERMINAL_STATUS for branch_id in terminal_request}
+    else:
+        if not isinstance(terminal_statuses, dict):
+            raise ValueError("terminal_statuses must be an object")
+        if terminal_request:
+            provided_ids = sorted(set(terminal_request))
+        else:
+            provided_ids = sorted(
+                branch_id for branch_id in terminal_statuses if isinstance(branch_id, str) and branch_id.strip()
+            )
+        keys = sorted(key for key in terminal_statuses if isinstance(key, str) and key.strip())
+        if keys != provided_ids:
+            raise ValueError("terminal_statuses must include exactly requested terminal branch ids")
+        terminal_status = {}
+        for branch_id in provided_ids:
+            status = terminal_statuses.get(branch_id)
+            if not isinstance(status, str):
+                raise ValueError(f"terminal_statuses[{branch_id}] must be a status string")
+            if status not in CONTRACT.STATUSES:
+                raise ValueError(f"terminal_statuses[{branch_id}] must be one of {list(CONTRACT.STATUSES)}")
+            terminal_status[branch_id] = status
+    manifest_branch_ids = set(branch_map(manifest).keys())
+    unknown_active = sorted(active - manifest_branch_ids)
+    unknown_terminal = sorted(set(terminal_status) - manifest_branch_ids)
+    if unknown_active:
         raise ValueError(
-            "branch status artifacts mark scheduler-active branch ids as terminal; "
-            f"refusing stale status overlap: {', '.join(stale_active)}"
+            "active_branch_ids contains ids not present in manifest branches: " + ", ".join(unknown_active)
         )
-    terminal_status.update(status_terminal)
+    if unknown_terminal:
+        raise ValueError(
+            "terminal_branch_ids contains ids not present in manifest branches: " + ", ".join(unknown_terminal)
+        )
+    if infer_scheduler:
+        inferred_active, inferred_terminal = scheduler_state(manifest_path, manifest)
+        active |= inferred_active
+        terminal_status.update(inferred_terminal)
+    if infer_scheduler:
+        status_terminal = status_file_terminal_state(manifest_path, manifest)
+        stale_active = sorted(active & set(status_terminal))
+        if stale_active:
+            raise ValueError(
+                "branch status artifacts mark scheduler-active branch ids as terminal; "
+                f"refusing stale status overlap: {', '.join(stale_active)}"
+            )
+        for branch_id, status in status_terminal.items():
+            if branch_id not in terminal_status:
+                terminal_status[branch_id] = status
     overlap = sorted(active & set(terminal_status))
     if overlap:
         raise ValueError(
@@ -869,6 +975,9 @@ def _apply_add_branch(ctx: OperationContext, operation: dict, path: str) -> None
     if not isinstance(branch_id, str):
         ctx.defects.append(f"{path}.branch.id must be a string")
         return
+    if _branch_id_reuses_obsolete(branch_id, branch_id_set(ctx.branches, ctx.obsolete_entries)):
+        ctx.defects.append(f"{path}.branch.id duplicates obsolete branch id: {branch_id}")
+        return
     if branch_index(ctx.branches, branch_id) is not None:
         ctx.defects.append(f"{path}.branch.id duplicates existing branch {branch_id}")
         return
@@ -886,6 +995,11 @@ def _apply_replace_unstarted_branch(
     replacement_id = branch.get("id")
     if not isinstance(replacement_id, str):
         ctx.defects.append(f"{path}.branch.id must be a string")
+        return
+    if _branch_id_reuses_obsolete(
+        replacement_id, branch_id_set(ctx.branches, ctx.obsolete_entries), exception=branch_id
+    ):
+        ctx.defects.append(f"{path}.branch.id duplicates obsolete branch id: {replacement_id}")
         return
     existing_index = branch_index(ctx.branches, replacement_id)
     if existing_index is not None and existing_index != target_index:
@@ -928,7 +1042,13 @@ def _apply_split_unstarted_branch(
         return
     replacement_ids = [branch.get("id") for branch in new_branches]
     defects_before = len(ctx.defects)
+    reserved_ids = branch_id_set(ctx.branches, ctx.obsolete_entries)
     for replacement_id in replacement_ids:
+        if not isinstance(replacement_id, str):
+            continue
+        if _branch_id_reuses_obsolete(replacement_id, reserved_ids, exception=branch_id):
+            ctx.defects.append(f"{path}.branches id duplicates obsolete branch id: {replacement_id}")
+            continue
         existing_index = branch_index(ctx.branches, str(replacement_id))
         if existing_index is not None and existing_index != target_index:
             ctx.defects.append(f"{path}.branches id duplicates existing branch {replacement_id}")
@@ -1179,6 +1299,7 @@ def validate_proposal(
     proposal_path: Path,
     active_branch_ids: list[str] | None = None,
     terminal_branch_ids: list[str] | None = None,
+    terminal_branch_statuses: dict[str, str] | None = None,
     infer_scheduler: bool = True,
     run_lint: bool = True,
 ) -> tuple[dict, dict | None, dict | None]:
@@ -1191,11 +1312,20 @@ def validate_proposal(
             manifest,
             active_ids=active_branch_ids,
             terminal_ids=terminal_branch_ids,
+            terminal_statuses=terminal_branch_statuses,
             infer_scheduler=infer_scheduler,
         )
     except ValueError as exc:
         active = set(active_branch_ids or [])
-        terminal_status = {branch_id: "terminal" for branch_id in (terminal_branch_ids or [])}
+        terminal_request = list(dict.fromkeys(terminal_branch_ids or []))
+        terminal_status = {}
+        for branch_id in terminal_request:
+            if isinstance(terminal_branch_statuses, dict):
+                status = terminal_branch_statuses.get(branch_id)
+                if isinstance(status, str) and status in CONTRACT.STATUSES:
+                    terminal_status[branch_id] = status
+                    continue
+            terminal_status[branch_id] = CONSERVATIVE_TERMINAL_STATUS
         terminal = set(terminal_status)
         defects.append(str(exc))
     protected = active | terminal

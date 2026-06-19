@@ -17,6 +17,7 @@ from amendment_lib import (
     load_json_object,
     normalize_amender_ladder,
     protected_ids,
+    require_scheduler_inference_enabled,
     relative_path_defect,
     resolve_absolute_path,
     sha256_file,
@@ -167,8 +168,15 @@ def launch_script(
     telemetry = telemetry_function(
         amendment_id, manifest, manifest_path, selected_ladder, telemetry_debug=telemetry_debug
     )
+    attempts = amender_telemetry_attempts(manifest, manifest_path, selected_ladder)
+    attempt_timeout_seconds = CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS
+    for attempt in attempts:
+        timeout = attempt.get("timeout_seconds")
+        if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0:
+            attempt_timeout_seconds = timeout
+            break
     attempt_lines: list[str] = []
-    for attempt in amender_telemetry_attempts(manifest, manifest_path, selected_ladder):
+    for attempt in attempts:
         alias = str(attempt.get("alias") or "")
         label = _attempt_label(attempt)
         kind = attempt.get("harness_kind") or attempt.get("provider")
@@ -215,7 +223,7 @@ git -C {CONTRACT.shell_quote(repo_root.as_posix())} rev-parse --show-toplevel >/
 
 packet_dir="$(pwd)"
 proposal_path="$packet_dir/../{amendment_id}.proposal.json"
-attempt_timeout_seconds={CONTRACT.AMENDER_ATTEMPT_TIMEOUT_SECONDS}
+attempt_timeout_seconds={attempt_timeout_seconds}
 timeout_kill_after_seconds={CONTRACT.TIMEOUT_KILL_AFTER_SECONDS}
 bridge_provider={CONTRACT.shell_quote(CONTRACT.BRIDGE_PROVIDER_ID)}
 bridge_pool_max_workers=4
@@ -629,37 +637,81 @@ def _prepare_packet_dir(amendments_dir: Path, amendment_id: str, *, replace: boo
     return packet_dir
 
 
+def _require_decision_branch_ids(value: object, path: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{path} must be an array of branch ids")
+    result: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item.strip():
+            raise ValueError(f"{path}[{index}] must be a non-empty string")
+        result.append(item)
+    return result
+
+
+def _require_terminal_status_map(value: object, terminal_ids: list[str], path: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise SystemExit(f"{path} must be an object")
+    expected = sorted(set(terminal_ids))
+    keys = sorted(key for key in value if isinstance(key, str))
+    if keys != expected:
+        raise SystemExit(f"{path} must include exactly active terminal ids")
+    terminal_status: dict[str, str] = {}
+    for branch_id in expected:
+        status = value.get(branch_id)
+        if not isinstance(status, str):
+            raise SystemExit(f"{path}[{branch_id}] must be a status string")
+        if status not in CONTRACT.STATUSES:
+            raise SystemExit(f"{path}[{branch_id}] must be one of {list(CONTRACT.STATUSES)}")
+        terminal_status[branch_id] = status
+    return terminal_status
+
+
 def _reconcile_protected_ids(
     args: argparse.Namespace, inputs: ResolvedInputs, decision: dict
 ) -> tuple[list[str], list[str], dict]:
     try:
-        active, terminal, terminal_status = protected_ids(
-            inputs.manifest_path,
-            inputs.manifest,
-            active_ids=args.active_branch,
-            terminal_ids=args.terminal_branch,
-            infer_scheduler=True,
+        decision_active = sorted(
+            _require_decision_branch_ids(decision.get("active_branch_ids"), "$.decision.active_branch_ids")
+        )
+        decision_terminal = sorted(
+            _require_decision_branch_ids(decision.get("terminal_branch_ids"), "$.decision.terminal_branch_ids")
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    raw_active = decision.get("active_branch_ids")
-    decision_active = sorted(
-        item for item in (raw_active if isinstance(raw_active, list) else []) if isinstance(item, str)
+    decision_terminal_status = _require_terminal_status_map(
+        decision.get("terminal_branch_statuses"), decision_terminal, "$.decision.terminal_branch_statuses"
     )
-    raw_terminal = decision.get("terminal_branch_ids")
-    decision_terminal = sorted(
-        item for item in (raw_terminal if isinstance(raw_terminal, list) else []) if isinstance(item, str)
-    )
+    use_decision_terminal_status = isinstance(decision.get("terminal_branch_statuses"), dict)
+    try:
+        infer_scheduler = require_scheduler_inference_enabled(decision)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    requested_active = args.active_branch if args.active_branch else decision_active
+    requested_terminal = args.terminal_branch if args.terminal_branch else decision_terminal
+    try:
+        active, terminal, terminal_status = protected_ids(
+            inputs.manifest_path,
+            inputs.manifest,
+            active_ids=requested_active,
+            terminal_ids=requested_terminal,
+            terminal_statuses=decision_terminal_status if use_decision_terminal_status else None,
+            infer_scheduler=infer_scheduler,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if sorted(active) != decision_active:
         raise SystemExit("amendment decision active_branch_ids do not match packet protected active ids")
     if sorted(terminal) != decision_terminal:
         raise SystemExit("amendment decision terminal_branch_ids do not match packet protected terminal ids")
-    decision_terminal_status = decision.get("terminal_branch_statuses")
-    if not isinstance(decision_terminal_status, dict) or {
-        branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)
-    } != {branch_id: decision_terminal_status.get(branch_id) for branch_id in decision_terminal}:
+    decision_terminal_status = _require_terminal_status_map(
+        decision.get("terminal_branch_statuses"), decision_terminal, "$.decision.terminal_branch_statuses"
+    )
+    terminal_status_map = _require_terminal_status_map(
+        terminal_status, sorted(terminal), "$.protected terminal_branch_statuses"
+    )
+    if terminal_status_map != decision_terminal_status:
         raise SystemExit("amendment decision terminal_branch_statuses do not match packet protected terminal statuses")
-    return active, terminal, terminal_status
+    return active, terminal, terminal_status_map
 
 
 def _collect_source_records(
@@ -784,8 +836,8 @@ def main() -> int:
     decision = _load_launch_decision(
         decision_path, amendment_id=inputs.amendment_id, manifest_path=inputs.manifest_path
     )
-    packet_dir = _prepare_packet_dir(amendments_dir, inputs.amendment_id, replace=args.replace)
     active, terminal, terminal_status = _reconcile_protected_ids(args, inputs, decision)
+    packet_dir = _prepare_packet_dir(amendments_dir, inputs.amendment_id, replace=args.replace)
     records = _collect_source_records(
         args,
         inputs,

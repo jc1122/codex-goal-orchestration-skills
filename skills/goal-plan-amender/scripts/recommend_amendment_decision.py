@@ -78,7 +78,9 @@ def branch_dependencies(branches: list[dict]) -> dict[str, list[str]]:
     return dependencies
 
 
-def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str], terminal_ids: list[str]) -> dict:
+def recommendation(
+    manifest_path: Path, manifest: dict, *, active_ids: list[str], terminal_ids: list[str], infer_scheduler: bool = True
+) -> dict:
     branches = branch_entries(manifest)
     branch_ids = [str(branch["id"]) for branch in branches]
     deps = branch_dependencies(branches)
@@ -88,12 +90,15 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
             manifest,
             active_ids=active_ids,
             terminal_ids=terminal_ids,
-            infer_scheduler=True,
+            infer_scheduler=infer_scheduler,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-    terminal_status.update(load_terminal_status_files(manifest_path, branches))
-    terminal |= set(terminal_status)
+    if infer_scheduler:
+        for branch_id, status in load_terminal_status_files(manifest_path, branches).items():
+            if branch_id not in terminal_status:
+                terminal_status[branch_id] = status
+        terminal |= set(terminal_status)
     unknown_active = sorted(active - set(branch_ids))
     unknown_terminal = sorted(terminal - set(branch_ids))
     if unknown_active or unknown_terminal:
@@ -147,6 +152,7 @@ def recommendation(manifest_path: Path, manifest: dict, *, active_ids: list[str]
         "decision": decision,
         "reason_code": reason_code,
         "reason": reason,
+        "scheduler_inference_enabled": infer_scheduler,
         "active_branch_ids": sorted(active),
         "terminal_branch_ids": sorted(terminal),
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
@@ -206,6 +212,7 @@ def write_decision(
         "manifest_sha256": sha256_file(manifest_path),
         "scheduler_path": scheduler_rel,
         "scheduler_event_seq": scheduler_event_seq,
+        "scheduler_inference_enabled": rec["scheduler_inference_enabled"],
         "active_branch_ids": rec["active_branch_ids"],
         "terminal_branch_ids": rec["terminal_branch_ids"],
         "terminal_branch_statuses": rec["terminal_branch_statuses"],
@@ -229,6 +236,7 @@ def main() -> int:
     parser.add_argument("--manifest", required=True)
     parser.add_argument("--terminal-branch", action="append", default=[])
     parser.add_argument("--active-branch", action="append", default=[])
+    parser.add_argument("--no-infer-scheduler", action="store_true")
     parser.add_argument("--amendment-id")
     parser.add_argument("--write-decision", action="store_true")
     parser.add_argument("--scheduler-event-seq", type=int)
@@ -238,7 +246,13 @@ def main() -> int:
 
     manifest_path = resolve_absolute_path(args.manifest, "--manifest", must_exist=True)
     manifest = load_json_object(manifest_path)
-    rec = recommendation(manifest_path, manifest, active_ids=args.active_branch, terminal_ids=args.terminal_branch)
+    rec = recommendation(
+        manifest_path,
+        manifest,
+        active_ids=args.active_branch,
+        terminal_ids=args.terminal_branch,
+        infer_scheduler=not args.no_infer_scheduler,
+    )
     decision_path = None
     if args.write_decision:
         if not args.amendment_id:

@@ -28,6 +28,7 @@ def main() -> int:
     parser.add_argument("--terminal-branch", action="append", default=[])
     parser.add_argument("--active-branch", action="append", default=[])
     parser.add_argument("--scheduler-event-seq", type=int)
+    parser.add_argument("--no-infer-scheduler", action="store_true")
     parser.add_argument("--replace", action="store_true")
     args = parser.parse_args()
 
@@ -53,7 +54,7 @@ def main() -> int:
             manifest,
             active_ids=args.active_branch,
             terminal_ids=args.terminal_branch,
-            infer_scheduler=True,
+            infer_scheduler=not args.no_infer_scheduler,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -91,6 +92,7 @@ def main() -> int:
         "manifest_sha256": sha256_file(manifest_path),
         "scheduler_path": scheduler_rel,
         "scheduler_event_seq": args.scheduler_event_seq,
+        "scheduler_inference_enabled": not args.no_infer_scheduler,
         "active_branch_ids": sorted(active),
         "terminal_branch_ids": sorted(terminal),
         "terminal_branch_statuses": {branch_id: terminal_status[branch_id] for branch_id in sorted(terminal_status)},
