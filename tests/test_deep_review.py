@@ -1921,9 +1921,9 @@ def test_lint_branches_validates_items_even_when_count_out_of_range(tmp_path):
     }
     lgb._lint_branches(defect, tmp_path, {"branches": [branch]}, [branch], ["B01"], set(), {"repo_is_git": False}, None)
     assert any("1 to 4 worker packets" in m for m in captured), "count defect missing"
-    assert any("escape.py" in m or "traversal" in m or "relative" in m.lower() for m in captured), (
-        "per-item path-safety defect missing -> D3 regressed (validation skipped on out-of-range count)"
-    )
+    assert any(
+        "escape.py" in m or "traversal" in m or "relative" in m.lower() for m in captured
+    ), "per-item path-safety defect missing -> D3 regressed (validation skipped on out-of-range count)"
 
 
 # D4: a brief whose normalization fails (e.g. non-list depends_on) must not also emit the spurious

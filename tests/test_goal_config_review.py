@@ -172,9 +172,9 @@ def test_documented_smoke_args_tokens_match_smoke_render_context():
 
 def test_contract_documents_bridge_doctor_smoke_status_ok_exemption():
     contract_text = (REPO / "skills/goal-config/references/configuration-contract.md").read_text(encoding="utf-8")
-    assert "Missing models, missing harness/binary, auth/API errors" in contract_text, (
-        "contract should still mark smoke failures as errors"
-    )
+    assert (
+        "Missing models, missing harness/binary, auth/API errors" in contract_text
+    ), "contract should still mark smoke failures as errors"
     assert "opencode-bridge" in contract_text
     assert 'zero-exit JSON smoke responses like `{"status": "ok"}`' in contract_text
 

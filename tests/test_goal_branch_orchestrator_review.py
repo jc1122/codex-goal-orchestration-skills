@@ -646,9 +646,9 @@ def test_validate_launch_config_attempts_rejects_selected_ladder_with_non_string
         "$.launch_config",
         role="worker",
     )
-    assert any("selected_ladder" in defect and "must match launch attempt aliases" in defect for defect in defects), (
-        defects
-    )
+    assert any(
+        "selected_ladder" in defect and "must match launch attempt aliases" in defect for defect in defects
+    ), defects
 
 
 def test_validate_launch_config_attempts_rejects_non_list_selected_ladder():
