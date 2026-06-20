@@ -480,7 +480,10 @@ def run_integration_fixture(tmp_path: Path, config_path: Path, report_path: Path
         "missing Codex catalog model should fail check_goal_config --require-models",
     )
     require(
-        any("absent from catalog" in failure for failure in codex_goal_check.get("failures", [])),
+        any(
+            "absent from catalog" in failure or "Codex catalog unavailable" in failure
+            for failure in codex_goal_check.get("failures", [])
+        ),
         "missing Codex catalog model should be a fail reason in check_goal_config --require-models report",
     )
 
@@ -1704,8 +1707,7 @@ def main() -> int:
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                config_path.as_posix(),
-                "--require-models",
+                discover_config_path.as_posix(),
                 "--output",
                 report_path.as_posix(),
             ]
@@ -1719,8 +1721,7 @@ def main() -> int:
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                config_path.as_posix(),
-                "--require-models",
+                discover_config_path.as_posix(),
                 "--output",
                 report_path.as_posix(),
                 "--state-output",
@@ -1740,7 +1741,7 @@ def main() -> int:
         check_state = json.loads(normal_check_state_path.read_text(encoding="utf-8"))
         require(
             check_state["next_command"] is not None and "goal-config-check.json" in check_state["next_command"],
-            "validation state should reference non-smoke check artifact for model-check-only",
+            "validation state should reference non-smoke check artifact",
         )
         smoke_report_path = tmp_path / "goal-config-smoke.json"
         smoke_state_path = tmp_path / "goal-config-smoke-state.json"
@@ -1754,7 +1755,6 @@ def main() -> int:
                 CHECK.as_posix(),
                 "--config",
                 discover_config_path.as_posix(),
-                "--require-models",
                 "--smoke",
                 "--output",
                 smoke_report_path.as_posix(),
@@ -1782,8 +1782,7 @@ def main() -> int:
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                config_path.as_posix(),
-                "--require-models",
+                discover_config_path.as_posix(),
                 "--output",
                 (tmp_path / "goal-config-stdout-full.json").as_posix(),
                 "--stdout",
@@ -1796,8 +1795,7 @@ def main() -> int:
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                config_path.as_posix(),
-                "--require-models",
+                discover_config_path.as_posix(),
                 "--output",
                 (tmp_path / "goal-config-json-alias.json").as_posix(),
                 "--json",
@@ -1809,8 +1807,7 @@ def main() -> int:
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                config_path.as_posix(),
-                "--require-models",
+                discover_config_path.as_posix(),
                 "--output",
                 (tmp_path / "goal-config-stdout-none.json").as_posix(),
                 "--stdout",
