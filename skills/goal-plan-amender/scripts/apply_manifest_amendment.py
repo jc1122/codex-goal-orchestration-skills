@@ -75,6 +75,30 @@ def branch_prompt_paths(bundle_dir: Path, candidate: dict, branch_ids: set[str])
     return paths
 
 
+def terminal_status_artifact_branch_ids(bundle_dir: Path, candidate: dict) -> set[str]:
+    branch_ids: set[str] = set()
+    for branch in candidate.get("branches", []):
+        if not isinstance(branch, dict):
+            continue
+        branch_id = branch.get("id")
+        status_path = branch.get("status_path")
+        if not isinstance(branch_id, str) or not isinstance(status_path, str):
+            continue
+        if relative_path_defect(status_path, "status_path"):
+            continue
+        path = bundle_dir / status_path
+        if not path.exists():
+            continue
+        try:
+            status_artifact = load_json_object(path)
+        except SystemExit:
+            branch_ids.add(branch_id)
+            continue
+        if status_artifact.get("status") in CONTRACT.STATUSES:
+            branch_ids.add(branch_id)
+    return branch_ids
+
+
 def restore_prompt_backups(backups: dict[Path, str | None]) -> None:
     for path, content in backups.items():
         if content is None:
@@ -230,7 +254,8 @@ def main() -> int:
     protected_branch_ids = set(
         str(item) for item in fresh_validation.get("protected_branch_ids", []) if isinstance(item, str)
     )
-    regenerated_branch_ids = set(prompt_regeneration_branch_ids(candidate, protected_branch_ids))
+    eligible_prompt_ids = set(prompt_regeneration_branch_ids(candidate, protected_branch_ids))
+    regenerated_branch_ids = eligible_prompt_ids - terminal_status_artifact_branch_ids(bundle_dir, candidate)
     prompt_backups = {
         path: path.read_text(encoding="utf-8") if path.exists() else None
         for path in branch_prompt_paths(bundle_dir, candidate, regenerated_branch_ids)

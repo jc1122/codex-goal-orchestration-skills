@@ -1077,6 +1077,127 @@ def test_apply_manifest_amendment_acceptance_skips_malformed_regenerated_branch_
     assert accepted["regenerated_prompts"] == ["branches/B01.prompt.md"]
 
 
+def test_apply_manifest_amendment_preserves_terminal_status_prompts_and_refreshes_future_prompts(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "job.manifest.json"
+    proposal_path = tmp_path / "amendments" / "A1.proposal.json"
+    validation_path = tmp_path / "amendments" / "A1.validation.json"
+    proposal_path.parent.mkdir()
+    original_manifest = {
+        "schema_version": 1,
+        "job_id": "J1",
+        "branches": [
+            {"id": "B01", "prompt": "branches/B01.prompt.md", "status_path": "branches/B01.status.json"},
+            {"id": "B02", "prompt": "branches/B02.prompt.md", "status_path": "branches/B02.status.json"},
+            {"id": "B03", "prompt": "branches/B03.prompt.md", "status_path": "branches/B03.status.json"},
+        ],
+    }
+    manifest_path.write_text(json.dumps(original_manifest), encoding="utf-8")
+    proposal_path.write_text(json.dumps({"amendment_id": "A1"}), encoding="utf-8")
+    validation_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "amendment_id": "A1",
+                "manifest": manifest_path.as_posix(),
+                "proposal": proposal_path.as_posix(),
+                "manifest_sha256_before": amendment_lib.sha256_file(manifest_path),
+                "proposal_sha256": amendment_lib.sha256_file(proposal_path),
+            }
+        ),
+        encoding="utf-8",
+    )
+    branches_dir = tmp_path / "branches"
+    branches_dir.mkdir()
+    (branches_dir / "B01.prompt.md").write_text("terminal B01 prompt", encoding="utf-8")
+    (branches_dir / "B02.prompt.md").write_text("terminal B02 prompt", encoding="utf-8")
+    (branches_dir / "B03.prompt.md").write_text("future B03 prompt", encoding="utf-8")
+    (branches_dir / "B01.status.json").write_text(
+        json.dumps({"branch_id": "B01", "status": "pass"}),
+        encoding="utf-8",
+    )
+    (branches_dir / "B02.status.json").write_text(
+        json.dumps({"branch_id": "B02", "status": "pass"}),
+        encoding="utf-8",
+    )
+    candidate = {
+        "schema_version": 1,
+        "job_id": "J1",
+        "branches": [
+            {"id": "B01", "prompt": "branches/B01.prompt.md", "status_path": "branches/B01.status.json"},
+            {"id": "B02", "prompt": "branches/B02.prompt.md", "status_path": "branches/B02.status.json"},
+            {"id": "B03", "prompt": "branches/B03.prompt.md", "status_path": "branches/B03.status.json"},
+            {"id": "B04", "prompt": "branches/B04.prompt.md", "status_path": "branches/B04.status.json"},
+        ],
+    }
+    candidate_sha = amendment_lib.canonical_sha256(candidate)
+
+    monkeypatch.setattr(
+        ama,
+        "require_launch_packet_validation",
+        lambda *_args, **_kwargs: {
+            "active_branch_ids": [],
+            "terminal_branch_ids": [],
+            "terminal_branch_statuses": {},
+            "scheduler_inference_enabled": False,
+        },
+    )
+    monkeypatch.setattr(
+        ama,
+        "validate_proposal",
+        lambda **_kwargs: (
+            {
+                "status": "pass",
+                "protected_branch_ids": [],
+                "manifest_sha256_before": amendment_lib.sha256_file(manifest_path),
+                "candidate_manifest_sha256": candidate_sha,
+                "proposal_sha256": amendment_lib.sha256_file(proposal_path),
+                "changed_branch_ids": ["B04"],
+            },
+            candidate,
+            {"branches": []},
+        ),
+    )
+    monkeypatch.setattr(ama, "load_lineage", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(ama, "latest_lineage_sha", lambda *_args, **_kwargs: "sha256:" + "0" * 64)
+    monkeypatch.setattr(ama, "add_lineage_stage", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ama, "prompt_regeneration_branch_ids", lambda *_args, **_kwargs: ["B01", "B02", "B03", "B04"])
+    monkeypatch.setattr(ama, "write_runtime_index", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(ama, "enrich_brief_runtime_metadata", lambda brief, *_args, **_kwargs: brief)
+
+    def fake_write_bundle_prompts(_brief, bundle_dir, *, branch_ids, write_main):
+        assert write_main is False
+        for branch_id in branch_ids:
+            (Path(bundle_dir) / "branches" / f"{branch_id}.prompt.md").write_text(
+                f"regenerated {branch_id}",
+                encoding="utf-8",
+            )
+
+    monkeypatch.setattr(ama.PREFLIGHT, "write_bundle_prompts", fake_write_bundle_prompts)
+    monkeypatch.setattr(ama.PREFLIGHT, "lint_bundle", lambda *_args, **_kwargs: {"status": "pass"})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "apply_manifest_amendment.py",
+            "--manifest",
+            str(manifest_path),
+            "--proposal",
+            str(proposal_path),
+            "--validation",
+            str(validation_path),
+        ],
+    )
+
+    assert ama.main() == 0
+    accepted = json.loads((tmp_path / "amendments" / "A1.accepted.json").read_text(encoding="utf-8"))
+    assert accepted["changed_branch_ids"] == ["B04"]
+    assert accepted["regenerated_prompts"] == ["branches/B03.prompt.md", "branches/B04.prompt.md"]
+    assert (branches_dir / "B01.prompt.md").read_text(encoding="utf-8") == "terminal B01 prompt"
+    assert (branches_dir / "B02.prompt.md").read_text(encoding="utf-8") == "terminal B02 prompt"
+    assert (branches_dir / "B03.prompt.md").read_text(encoding="utf-8") == "regenerated B03"
+    assert (branches_dir / "B04.prompt.md").read_text(encoding="utf-8") == "regenerated B04"
+
+
 def test_validate_packet_rejects_absolute_prompt_artifact(tmp_path):
     manifest_path, packet_dir, _proposal_path = _write_amender_packet_bundle(
         tmp_path,
