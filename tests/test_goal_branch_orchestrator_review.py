@@ -823,6 +823,23 @@ def test_reviewer_allowed_aliases_include_bridge_routes():
     assert "ds-flash-max" in vbs.REVIEWER_ALLOWED_ALIASES
 
 
+def test_reviewer_prompt_handles_read_only_sandbox_rerun_gaps():
+    prompt = crp.reviewer_prompt(
+        "B01-R01",
+        "feature/review",
+        "/tmp/worktree",
+        "review.schema.json",
+        [],
+        "packet-context.json",
+        '{"kind":"compact_reviewer_context"}',
+        False,
+    )
+
+    assert "Reviewer packets run in a read-only sandbox" in prompt
+    assert "do not list that sandbox-only failure in `verification_gaps`" in prompt
+    assert 'Never return `verdict: "mergeable"` with non-empty `verification_gaps`' in prompt
+
+
 # --- 2026-06-18 convergence pass: create_runtime_packet's tolerant readers catch the
 #     SystemExit that load_json raises (except Exception alone could not), so a malformed/non-dict
 #     runtime artifact degrades instead of crashing packet creation ---

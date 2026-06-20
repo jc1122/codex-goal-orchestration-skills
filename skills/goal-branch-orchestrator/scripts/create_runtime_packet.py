@@ -2044,6 +2044,10 @@ Read the packet-local `compact_reviewer_context` first. It lists the exact branc
 
 Determine the branch base ref from `compact_reviewer_context`. Before reporting merge readiness, run `git diff --check <base-ref>...HEAD` and record the command result. If the base ref is unavailable, report a verification gap instead of assuming merge readiness.
 
+Reviewer packets run in a read-only sandbox. If a rerun fails only because the sandbox cannot create temporary/cache files, and the same command has fresh passing evidence in the supplied `pre_review_gate`, worker status, or packet summary, do not list that sandbox-only failure in `verification_gaps`; record it in `residual_risks` instead. If equivalent fresh evidence is absent, list it in `verification_gaps` and do not return `verdict: "mergeable"`.
+
+Never return `verdict: "mergeable"` with non-empty `verification_gaps`; branch validators intentionally downgrade that artifact.
+
 Do not emit placeholder, draft, or example final-shaped JSON before inspection is complete. Return exactly one final JSON object matching `{schema_name}` only after command inspection and evidence review are finished. `commands_run` must contain exact command strings that were actually run.
 
 If your CLI harness does not write `{schema_name}` directly, print the final review object between these exact marker lines and do not print any other JSON object between them:
