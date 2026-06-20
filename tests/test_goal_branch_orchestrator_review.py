@@ -13,6 +13,7 @@ import json
 import argparse
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from conftest import REPO, load_module
@@ -526,6 +527,97 @@ def test_validate_launch_config_attempts_accepts_generic_cli_with_command_binary
     )
     assert defects == []
     assert aliases == ["generic-cli"]
+
+
+def test_opencode_bridge_supervisor_invocation_carries_route_prompt_and_validator(monkeypatch, tmp_path):
+    packet_dir = tmp_path / "reviewers" / "B01-R01"
+    packet_dir.mkdir(parents=True)
+    (packet_dir / "prompt.md").write_text("review prompt\n", encoding="utf-8")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    bridge_root = tmp_path / "bridge-root"
+    calls: list[dict] = []
+
+    def fake_run_bridge_command(**kwargs):
+        calls.append(kwargs)
+        subcommand = kwargs["subcommand"]
+        extra_args = kwargs["extra_args"]
+        if subcommand == "supervisor":
+            run_dir = Path(extra_args[extra_args.index("--run-dir") + 1])
+            run_dir.mkdir(parents=True, exist_ok=True)
+            route = {
+                "provider": extra_args[extra_args.index("--provider") + 1],
+                "model": extra_args[extra_args.index("--model") + 1],
+                "variant": extra_args[extra_args.index("--variant") + 1],
+            }
+            (run_dir / rpr.BRIDGE_JOB_ENVELOPE_NAME).write_text(
+                json.dumps({"status": "passed", "route": route, "assistant_text": "review ok"}),
+                encoding="utf-8",
+            )
+            (run_dir / rpr.BRIDGE_WORKER_STATUS_NAME).write_text(
+                json.dumps({"lifecycle": "completed"}),
+                encoding="utf-8",
+            )
+            (run_dir / rpr.BRIDGE_SUPERVISOR_VERDICT_NAME).write_text(
+                json.dumps({"status": "completed"}),
+                encoding="utf-8",
+            )
+        return {
+            "returncode": 0,
+            "elapsed_ms": 1,
+            "timed_out": False,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "command": subcommand,
+            "command_parts": [subcommand],
+        }
+
+    monkeypatch.setattr(rpr, "resolve_bridge_root", lambda: bridge_root)
+    monkeypatch.setattr(rpr, "_run_bridge_command", fake_run_bridge_command)
+
+    attempt = {
+        "alias": "ds-pro-max",
+        "provider": "opencode-bridge",
+        "model": "deepseek-v4-pro",
+        "variant": "max",
+        "timeout_seconds": 10,
+        "bridge": {
+            "provider": "deepseek",
+            "model": "deepseek-v4-pro",
+            "variant": "max",
+            "permission_profile": "read-only",
+            "run_dir": "bridge/ds-pro-max",
+            "pool_dir": "bridge/pool",
+            "pool_max_workers": 4,
+            "prompt_file": "prompt.md",
+            "supervisor": True,
+        },
+    }
+    config = {"role": "reviewer", "packet_id": "B01-R01", "timeout_kill_after_seconds": 1}
+
+    rc, _, _ = rpr.run_opencode_bridge_model(
+        attempt,
+        packet_dir=packet_dir,
+        config=config,
+        schema_name="review.schema.json",
+        output_name="review.json",
+        worktree=worktree.as_posix(),
+        label="ds-pro-max",
+    )
+
+    assert rc == 0
+    supervisor_call = next(call for call in calls if call["subcommand"] == "supervisor")
+    args = supervisor_call["extra_args"]
+    assert args[args.index("--retry-action") + 1] == "delegate"
+    assert args[args.index("--provider") + 1] == "deepseek"
+    assert args[args.index("--model") + 1] == "deepseek-v4-pro"
+    assert args[args.index("--variant") + 1] == "max"
+    assert args[args.index("--permission-profile") + 1] == "read-only"
+    assert Path(args[args.index("--prompt-file") + 1]).read_text(encoding="utf-8") == "review prompt\n"
+    assert Path(args[args.index("--validator") + 1]).exists()
+    assert "--follow-up-file" not in args
+    assert "--prompt-file" in attempt["executed_command"]
+    assert "--retry-action delegate" in attempt["executed_command"]
 
 
 def test_validate_launch_config_attempts_rejects_selected_ladder_with_non_string_extra():

@@ -1945,6 +1945,68 @@ def _run_bridge_command(
     )
 
 
+def write_bridge_supervisor_validator(path: Path) -> None:
+    """Write the small validator consumed by opencode-worker-bridge supervisor.
+
+    The supervisor calls this script before and between retry actions. It
+    should report pass/fail from bridge artifacts without importing this runner.
+    """
+    path.write_text(
+        """#!/usr/bin/env python3
+import argparse
+import json
+from pathlib import Path
+
+PASS = {"passed", "completed", "done", "success"}
+
+
+def read_json(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--report", required=True)
+    args = parser.parse_args()
+    run_dir = Path.cwd()
+    job = read_json(run_dir / "job_envelope.json")
+    worker_status = read_json(run_dir / "worker.status.json")
+    verdict = read_json(run_dir / "supervisor_verdict.json")
+    status = "unknown"
+    for source, key in ((job, "status"), (worker_status, "lifecycle"), (verdict, "status")):
+        value = source.get(key) if isinstance(source, dict) else None
+        if isinstance(value, str) and value.strip():
+            status = value.strip()
+            break
+    report = {
+        "passed": status.lower() in PASS,
+        "status": status,
+        "artifacts_present": {
+            "job_envelope": bool(job),
+            "worker_status": bool(worker_status),
+            "supervisor_verdict": bool(verdict),
+        },
+    }
+    report_path = Path(args.report)
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+""",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+
+
 def run_opencode_bridge_model(
     attempt: dict[str, Any],
     *,
@@ -2012,25 +2074,35 @@ def run_opencode_bridge_model(
     max_workers = int(spec.get("pool_max_workers") or BRIDGE_DEFAULT_POOL_MAX_WORKERS)
     worker_id = string_value(config, "packet_id") or label
     use_supervisor = bool(spec.get("supervisor"))
-
-    record_executed_command(
-        attempt,
-        [
-            "python3",
-            (bridge_root / "scripts" / "opencode_worker.py").as_posix(),
-            "supervisor" if use_supervisor else "delegate",
-            "--provider",
-            provider,
-            "--model",
-            model,
-            "--variant",
-            variant,
-            "--permission-profile",
-            profile,
-            "--run-dir",
-            run_dir.as_posix(),
-        ],
+    retry_action = str(
+        spec.get("retry_action")
+        or ("continue" if isinstance(spec.get("session_id"), str) and spec.get("session_id") else "delegate")
     )
+    try:
+        retry_limit = int(spec.get("retry_limit") or 1)
+    except (TypeError, ValueError):
+        retry_limit = 1
+    retry_limit = max(1, retry_limit)
+
+    recorded_command = [
+        "python3",
+        (bridge_root / "scripts" / "opencode_worker.py").as_posix(),
+        "supervisor" if use_supervisor else "delegate",
+        "--provider",
+        provider,
+        "--model",
+        model,
+        "--variant",
+        variant,
+        "--permission-profile",
+        profile,
+        "--prompt-file",
+        task_path.as_posix(),
+    ]
+    if use_supervisor:
+        recorded_command.extend(["--retry-action", retry_action])
+    recorded_command.extend(["--run-dir", run_dir.as_posix()])
+    record_executed_command(attempt, recorded_command)
 
     acquired = False
     last_execution: dict[str, Any] = {
@@ -2122,6 +2194,7 @@ def run_opencode_bridge_model(
 
         if use_supervisor:
             validator_path = run_dir / "validator.py"
+            write_bridge_supervisor_validator(validator_path)
             delegate_args = [
                 "--run-dir",
                 run_dir.as_posix(),
@@ -2130,12 +2203,28 @@ def run_opencode_bridge_model(
                 "--validator",
                 validator_path.as_posix(),
                 "--retry-action",
-                "continue",
+                retry_action,
                 "--retry-limit",
-                "1",
-                "--follow-up-file",
-                (run_dir / "follow-up.md").as_posix(),
+                str(retry_limit),
+                "--prompt-file",
+                task_path.as_posix(),
+                "--provider",
+                provider,
+                "--model",
+                model,
+                "--variant",
+                variant,
+                "--permission-profile",
+                profile,
+                "--timeout",
+                str(timeout_seconds),
             ]
+            session_id = spec.get("session_id")
+            if isinstance(session_id, str) and session_id.strip():
+                delegate_args.extend(["--session-id", session_id.strip()])
+            follow_up_file = spec.get("follow_up_file")
+            if isinstance(follow_up_file, str) and follow_up_file.strip():
+                delegate_args.extend(["--follow-up-file", (packet_dir / follow_up_file).as_posix()])
             delegate = _run_bridge_command(
                 bridge_root=bridge_root,
                 subcommand="supervisor",

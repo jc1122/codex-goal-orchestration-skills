@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "generated_from": {
-    "source_fingerprint": "sha256:af262fce1a1c9fa28e6b7761fec63ca9a430b9e3d8d9b6a9455cc36ecf960756"
+    "source_fingerprint": "sha256:e2db071fbcf688a444cbc6ae0b85b05ca4f15a635e8a37217f5b9889f55d282b"
   },
   "navigation_rules": [
     "Read this file before broad repository scans.",
@@ -40,6 +40,19 @@
       ]
     },
     {
+      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
+      "owner": "goal-branch-orchestrator",
+      "lines": 3641,
+      "approx_tokens": 34295,
+      "rule": "manifest/help/defects before source",
+      "top_functions": [
+        "2010:run_opencode_bridge_model:307l",
+        "1447:summarize_dirty_stop_salvage:131l",
+        "2709:extract_status_json:116l",
+        "3223:_run_worker_packet:100l"
+      ]
+    },
+    {
       "path": "skills/goal-preflight/scripts/lint_goal_bundle.py",
       "owner": "goal-preflight",
       "lines": 3020,
@@ -63,19 +76,6 @@
         "2434:compact_launch_config:139l",
         "1219:compact_worker_context:121l",
         "2808:resolve_worker_routing:115l"
-      ]
-    },
-    {
-      "path": "skills/goal-branch-orchestrator/scripts/runtime_packet_runner.py",
-      "owner": "goal-branch-orchestrator",
-      "lines": 3552,
-      "approx_tokens": 33506,
-      "rule": "manifest/help/defects before source",
-      "top_functions": [
-        "1948:run_opencode_bridge_model:280l",
-        "1447:summarize_dirty_stop_salvage:131l",
-        "2620:extract_status_json:116l",
-        "3134:_run_worker_packet:100l"
       ]
     }
   ],
