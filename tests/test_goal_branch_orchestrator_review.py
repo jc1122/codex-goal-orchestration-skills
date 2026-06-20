@@ -40,6 +40,26 @@ def test_worker_pass_defects_tolerates_non_list_finished_ids(tmp_path):
     assert isinstance(cprg.worker_pass_defects(tmp_path, {"work_items": []}, branch_status, "B01"), list)
 
 
+def test_runtime_packet_model_facing_path_schemas_avoid_advanced_regex():
+    status_schema = crp.status_schema(
+        "B01-W01",
+        "feature-branch",
+        "/tmp/worktree",
+        selected_ladder=["worker_primary"],
+        branch_id="B01",
+        work_item_id="W01",
+        manifest_hash="sha256:" + "0" * 64,
+        route_id="B01-W01:normal-code:worker_primary",
+    )
+    research_schema = crp.research_schema("B01-RW01", "feature-branch", "/tmp/worktree")
+
+    changed_files_item = status_schema["properties"]["changed_files"]["items"]
+    local_files_item = research_schema["properties"]["local_files_read"]["items"]
+
+    assert changed_files_item == {"type": "string", "minLength": 1}
+    assert local_files_item == {"type": "string", "minLength": 1}
+
+
 def test_packet_terminal_defects_degrades_malformed_launcher(tmp_path):
     # the read_json SystemExit is now caught at the call site -> conservative defect, not a crash
     pdir = tmp_path / "workers" / "P01"

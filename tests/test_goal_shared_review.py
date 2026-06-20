@@ -90,6 +90,197 @@ def test_reconcile_stale_active_branch_ids_tolerates_non_list():
     assert reconcile.stale_active_branch_ids({"active": 5}, []) == []  # was TypeError on non-list active
 
 
+def test_reconcile_live_branch_process_state_matches_worktree(tmp_path, monkeypatch):
+    worktree = tmp_path / "repo" / ".worktrees" / "B02"
+    bundle = tmp_path / "repo" / "orchestration" / "meta-run" / "bundle"
+    worktree.mkdir(parents=True)
+    bundle.mkdir(parents=True)
+    monkeypatch.setattr(
+        reconcile,
+        "process_cmdline_snapshot",
+        lambda: [
+            {
+                "pid": 123,
+                "command": f"codex exec -C {worktree} --add-dir {bundle} -",
+            }
+        ],
+    )
+
+    state = reconcile.live_branch_process_state(bundle_dir=bundle, branch_id="B02", worktree_path=worktree)
+
+    assert state["exists"] is True
+    assert state["pid"] == 123
+    assert state["match"] == "worktree_path"
+
+
+def test_reconcile_stale_active_branch_ids_skips_live_branch_process():
+    reports = [
+        {
+            "branch_id": "B02",
+            "status_path": {"exists": False},
+            "live_process": {"exists": True, "pid": 123},
+        }
+    ]
+
+    assert reconcile.stale_active_branch_ids({"active": ["B02"]}, reports) == []
+
+
+def test_reconcile_branch_next_commands_skip_live_missing_status(tmp_path):
+    bundle = tmp_path / "bundle"
+    audit = bundle / "audit"
+    audit.mkdir(parents=True)
+    (audit / "prompt-audit.json").write_text("{}", encoding="utf-8")
+    next_commands: list[str] = []
+
+    reconcile._append_branch_next_commands(
+        bundle_dir=bundle,
+        repo_root=tmp_path / "repo",
+        branch_id="B02",
+        manifest_path=bundle / "job.manifest.json",
+        status_path=bundle / "branches" / "B02.status.json",
+        worktree_path=tmp_path / "repo" / ".worktrees" / "B02",
+        branch_needs_reassemble=False,
+        dependency_failed_terminal=False,
+        dependencies_satisfied=True,
+        live_process={"exists": True, "pid": 123},
+        next_commands=next_commands,
+    )
+
+    assert next_commands == []
+
+
+def test_reconcile_branch_next_commands_skip_unsatisfied_dependencies(tmp_path):
+    bundle = tmp_path / "bundle"
+    audit = bundle / "audit"
+    audit.mkdir(parents=True)
+    (audit / "prompt-audit.json").write_text("{}", encoding="utf-8")
+    next_commands: list[str] = []
+
+    reconcile._append_branch_next_commands(
+        bundle_dir=bundle,
+        repo_root=tmp_path / "repo",
+        branch_id="B03",
+        manifest_path=bundle / "job.manifest.json",
+        status_path=bundle / "branches" / "B03.status.json",
+        worktree_path=tmp_path / "repo" / ".worktrees" / "B03",
+        branch_needs_reassemble=False,
+        dependency_failed_terminal=False,
+        dependencies_satisfied=False,
+        live_process={"exists": False},
+        next_commands=next_commands,
+    )
+
+    assert next_commands == []
+
+
+def test_reconcile_branch_dependencies_satisfied_requires_pass_status(tmp_path):
+    bundle = tmp_path / "bundle"
+    branches_dir = bundle / "branches"
+    branches_dir.mkdir(parents=True)
+    (branches_dir / "B01.status.json").write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+    manifest = {
+        "branches": [
+            {"id": "B01", "status_path": "branches/B01.status.json"},
+            {"id": "B02", "depends_on": ["B01"], "status_path": "branches/B02.status.json"},
+            {"id": "B03", "depends_on": ["B02"], "status_path": "branches/B03.status.json"},
+        ]
+    }
+
+    assert reconcile._branch_dependencies_satisfied(bundle, manifest, manifest["branches"][1]) is True
+    assert reconcile._branch_dependencies_satisfied(bundle, manifest, manifest["branches"][2]) is False
+
+
+def test_reconcile_worker_scheduler_flags_blocked_packet_with_pass_output(tmp_path):
+    bundle = tmp_path / "bundle"
+    packet_dir = bundle / "workers" / "B02-W01"
+    packet_dir.mkdir(parents=True)
+    (packet_dir / "status.json").write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+    scheduler = {"blocked": ["B02-W01"], "validation_defects": [], "validation_status": "pass"}
+    defects: list[str] = []
+
+    reconcile._append_worker_scheduler_contradictions(
+        bundle_dir=bundle,
+        scheduler=scheduler,
+        scheduler_defects=defects,
+    )
+
+    assert defects == ["$.scheduler: blocked worker has pass status artifact and needs scheduler repair: B02-W01"]
+
+
+def test_reconcile_main_next_commands_skip_live_branch_process(tmp_path):
+    bundle = tmp_path / "bundle"
+    next_commands: list[str] = []
+
+    reconcile._append_main_next_commands(
+        bundle_dir=bundle,
+        manifest_path=bundle / "job.manifest.json",
+        main_status_path=bundle / "main.status.json",
+        telemetry={"telemetry_count": 1, "summary_exists": False},
+        branch_reports=[{"branch_id": "B02", "live_process": {"exists": True, "pid": 123}}],
+        stale_or_unreconciled=[],
+        next_commands=next_commands,
+    )
+
+    assert next_commands == []
+
+
+def test_reconcile_main_next_commands_skip_missing_unlaunched_branch(tmp_path):
+    bundle = tmp_path / "bundle"
+    next_commands: list[str] = []
+
+    reconcile._append_main_next_commands(
+        bundle_dir=bundle,
+        manifest_path=bundle / "job.manifest.json",
+        main_status_path=bundle / "main.status.json",
+        telemetry={"telemetry_count": 1, "summary_exists": False},
+        branch_reports=[
+            {"branch_id": "B01", "status_path": {"exists": True}, "live_process": {"exists": False}},
+            {"branch_id": "B02", "status_path": {"exists": True}, "live_process": {"exists": False}},
+            {"branch_id": "B03", "status_path": {"exists": False}, "live_process": {"exists": False}},
+        ],
+        stale_or_unreconciled=[],
+        next_commands=next_commands,
+    )
+
+    assert next_commands == []
+
+
+def test_reconcile_main_next_commands_allow_dependency_failed_terminal_branch(tmp_path):
+    bundle = tmp_path / "bundle"
+    next_commands: list[str] = []
+
+    reconcile._append_main_next_commands(
+        bundle_dir=bundle,
+        manifest_path=bundle / "job.manifest.json",
+        main_status_path=bundle / "main.status.json",
+        telemetry={"telemetry_count": 0, "summary_exists": False},
+        branch_reports=[
+            {"branch_id": "B01", "status_path": {"exists": True}, "live_process": {"exists": False}},
+            {
+                "branch_id": "B02",
+                "status_path": {"exists": False},
+                "dependency_failed_terminal": True,
+                "live_process": {"exists": False},
+            },
+        ],
+        stale_or_unreconciled=[],
+        next_commands=next_commands,
+    )
+
+    assert any("assemble_main_status.py" in command for command in next_commands)
+
+
+def test_watchdog_instructions_do_not_close_reachable_live_work():
+    main_template = (REPO / "skills/goal-preflight/assets/main.prompt.template.md").read_text(encoding="utf-8")
+    runtime_rules = (REPO / "skills/goal-preflight/assets/runtime-rules.template.md").read_text(encoding="utf-8")
+    phase_manifest = (REPO / "skills/_goal_shared/scripts/runtime_phase_manifest.py").read_text(encoding="utf-8")
+
+    assert "Do not block, close, replace, or relaunch a branch while a matching native process" in main_template
+    assert "Do not block, close, replace, or relaunch a packet while a matching native process" in runtime_rules
+    assert "do not block, close, replace, or relaunch a branch while a matching native process" in phase_manifest
+    assert "do not block, close, replace, or relaunch a packet while a matching native process" in phase_manifest
+
+
 def test_runtime_lite_runner_verify_inputs_tolerates_non_list_source_files(tmp_path):
     ok, msg = rlr.verify_inputs_current({"base_dir": str(tmp_path)}, {"source_files": 5})
     assert ok is False

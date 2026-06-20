@@ -206,7 +206,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "watchdog",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-main-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope main --runtime-ref goal-main-orchestrator --init --record-ready",
-                "agent_does": "after orchestration_watchdog.main_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; close unreachable or stale active branches with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
+                "agent_does": "after orchestration_watchdog.main_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; do not block, close, replace, or relaunch a branch while a matching native process or launcher state is still live and reachable; close only unreachable or stale active branches with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
                 "pass": "active work completes normally or has terminal scheduler evidence before replacement launch",
             },
             {
@@ -264,7 +264,7 @@ PHASES: dict[str, dict[str, Any]] = {
             {
                 "id": "watchdog",
                 "run": "python3 $GOAL_SKILLS_ROOT/goal-branch-orchestrator/scripts/scheduler_tick.py --manifest /abs/bundle/job.manifest.json --scope worker --branch-id Bxx --runtime-ref goal-branch-orchestrator --record-ready",
-                "agent_does": "after orchestration_watchdog.branch_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; close unreachable or stale active worker/reviewer packets with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
+                "agent_does": "after orchestration_watchdog.branch_no_completion_wait_limit consecutive no-completion waits, inspect only native agent/process state; do not block, close, replace, or relaunch a packet while a matching native process or launcher state is still live and reachable; close only unreachable or stale active worker/reviewer packets with scheduler_tick.py --blocked/--close and --reason-code stale_active|native_agent_unreachable|timeout, then refill eligible capacity",
                 "pass": "active worker/reviewer work completes normally or has terminal scheduler evidence before replacement launch",
             },
             {

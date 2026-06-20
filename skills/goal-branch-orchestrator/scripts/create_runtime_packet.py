@@ -929,7 +929,6 @@ def status_schema(
     manifest_epoch: str = "current",
     route_id: str = "",
 ) -> dict:
-    repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
     nonempty_string = {"type": "string", "minLength": 1}
     selected_ladder_schema = (
         {
@@ -968,7 +967,7 @@ def status_schema(
             "selection_reason": nonempty_string,
             "changed_files": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path},
+                "items": nonempty_string,
             },
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "tests": {"type": "array", "items": nonempty_string},
@@ -1044,7 +1043,6 @@ def review_schema(
 
 
 def research_schema(packet_id: str, branch: str, worktree: str) -> dict:
-    repo_relative_path = r"^(?!/)(?!.*//)(?!.*\\)(?!.*(?:^|/)\.(?:/|$))(?!.*(?:^|/)\.\.(?:/|$))(?![ MADRCU?!]{1,2} ).+"
     url = r"^https?://[^ \t\r\n]+$"
     nonempty_string = {"type": "string", "minLength": 1}
     return {
@@ -1063,7 +1061,7 @@ def research_schema(packet_id: str, branch: str, worktree: str) -> dict:
             "tools_used": {"type": "array", "items": nonempty_string},
             "local_files_read": {
                 "type": "array",
-                "items": {"type": "string", "minLength": 1, "pattern": repo_relative_path},
+                "items": nonempty_string,
             },
             "commands_run": {"type": "array", "minItems": 1, "items": nonempty_string},
             "findings": {"type": "array", "minItems": 1, "items": nonempty_string},

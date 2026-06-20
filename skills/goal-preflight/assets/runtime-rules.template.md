@@ -19,7 +19,7 @@ Record ready, launch, finish, close, refill, defer, under_capacity, and blocked 
 
 Worker, research-worker, reviewer, and Lite packets must write same-packet `telemetry.json`. Worker/research/reviewer launchers also write `launcher-state.json`; consume terminal packet artifacts and scheduler events, not silence.
 
-Outside the watchdog exception below, wait for launchers and do not poll active worker/reviewer logs, process tables, or status files. If no worker/reviewer completes after `orchestration_watchdog.branch_no_completion_wait_limit` consecutive waits, inspect only native agent/process state, close unreachable or stale active packets with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
+Outside the watchdog exception below, wait for launchers and do not poll active worker/reviewer logs, process tables, or status files. If no worker/reviewer completes after `orchestration_watchdog.branch_no_completion_wait_limit` consecutive waits, inspect only native agent/process state. Do not block, close, replace, or relaunch a packet while a matching native process or launcher state is still live and reachable. Close only unreachable or stale active packets with `scheduler_tick.py --blocked/--close --reason-code stale_active|native_agent_unreachable|timeout`, then refill eligible capacity.
 
 ## Worker Model Routing
 

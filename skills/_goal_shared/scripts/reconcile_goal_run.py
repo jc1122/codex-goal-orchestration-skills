@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -743,6 +744,15 @@ def _branch_worker_scheduler(
             manifest_path=manifest_path,
             require_all_launched=status_value == "pass",
         )
+    _append_worker_scheduler_contradictions(
+        bundle_dir=bundle_dir,
+        scheduler=scheduler,
+        scheduler_defects=scheduler_defects,
+    )
+    if scheduler_defects:
+        scheduler["validation_defects"] = list(scheduler_defects)
+        scheduler["validation_status"] = "failed"
+        scheduler["status"] = "failed"
     if scheduler_defects:
         add_issue(
             stale_or_unreconciled,
@@ -755,6 +765,32 @@ def _branch_worker_scheduler(
     return scheduler
 
 
+def _worker_status_value(bundle_dir: Path, packet_id: str) -> str | None:
+    data, _error = read_json_or_none(bundle_dir / "workers" / packet_id / "status.json")
+    if isinstance(data, dict) and isinstance(data.get("status"), str):
+        return data["status"]
+    return None
+
+
+def _append_worker_scheduler_contradictions(
+    *,
+    bundle_dir: Path,
+    scheduler: dict[str, Any],
+    scheduler_defects: list[str],
+) -> None:
+    blocked = scheduler.get("blocked")
+    if not isinstance(blocked, list):
+        return
+    for packet_id in blocked:
+        if not isinstance(packet_id, str):
+            continue
+        worker_status = _worker_status_value(bundle_dir, packet_id)
+        if worker_status == "pass":
+            scheduler_defects.append(
+                f"$.scheduler: blocked worker has pass status artifact and needs scheduler repair: {packet_id}"
+            )
+
+
 def _append_branch_next_commands(
     *,
     bundle_dir: Path,
@@ -765,8 +801,11 @@ def _append_branch_next_commands(
     worktree_path: Path | None,
     branch_needs_reassemble: bool,
     dependency_failed_terminal: bool,
+    dependencies_satisfied: bool,
+    live_process: dict[str, Any],
     next_commands: list[str],
 ) -> None:
+    live_process_exists = live_process.get("exists") is True
     if branch_needs_reassemble and status_path.exists() and worktree_path is not None:
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'assemble_branch_status.py'} "
@@ -777,7 +816,7 @@ def _append_branch_next_commands(
             f"python3 {SKILLS_ROOT / 'goal-branch-orchestrator' / 'scripts' / 'validate_branch_status.py'} "
             f"--manifest {manifest_path.as_posix()} --status {status_path.as_posix()} --allow-archived-manifest-hashes"
         )
-    elif branch_id and not dependency_failed_terminal:
+    elif branch_id and not dependency_failed_terminal and dependencies_satisfied and not live_process_exists:
         canonical_audit_path = bundle_dir / "audit" / "prompt-audit.json"
         if canonical_audit_path.exists():
             repo_root_arg = repo_root.as_posix() if repo_root is not None else "<repo-root>"
@@ -803,6 +842,24 @@ def _branch_worker_summaries(bundle_dir: Path, branch: dict[str, Any]) -> list[d
                     packet_artifact_summary(bundle_dir, str(item["packet_id"]), str(item.get("worker_type", "worker")))
                 )
     return workers
+
+
+def _branch_dependencies_satisfied(bundle_dir: Path, manifest: dict[str, Any], branch: dict[str, Any]) -> bool:
+    dependencies = string_list(branch.get("depends_on"))
+    if not dependencies:
+        return True
+    branch_by_id = manifest_branches_by_id(branch_entries(manifest))
+    for dep_id in dependencies:
+        dependency = branch_by_id.get(dep_id)
+        status_path = bundle_path(
+            bundle_dir,
+            dependency.get("status_path") if isinstance(dependency, dict) else None,
+            f"branches/{dep_id}.status.json",
+        )
+        data, _error = read_json_or_none(status_path) if status_path.exists() else (None, None)
+        if not isinstance(data, dict) or data.get("status") != "pass":
+            return False
+    return True
 
 
 def branch_summary(
@@ -865,6 +922,11 @@ def branch_summary(
         stale_or_unreconciled=stale_or_unreconciled,
     )
 
+    live_process = live_branch_process_state(
+        bundle_dir=bundle_dir,
+        branch_id=branch_id,
+        worktree_path=paths.worktree_path,
+    )
     _append_branch_next_commands(
         bundle_dir=bundle_dir,
         repo_root=repo_root,
@@ -874,6 +936,8 @@ def branch_summary(
         worktree_path=paths.worktree_path,
         branch_needs_reassemble=branch_needs_reassemble,
         dependency_failed_terminal=dependency_failed_terminal,
+        dependencies_satisfied=_branch_dependencies_satisfied(bundle_dir, manifest, branch),
+        live_process=live_process,
         next_commands=next_commands,
     )
 
@@ -899,6 +963,7 @@ def branch_summary(
         "pre_review_gate_path": artifact_ref(bundle_dir, paths.pre_review_gate_path),
         "worktree_path": paths.worktree_path.as_posix() if paths.worktree_path else None,
         "worktree_exists": paths.worktree_path.exists() if paths.worktree_path else None,
+        "live_process": live_process,
         "reviewer_outputs": outputs,
         "dependency_failed_terminal": dependency_failed_terminal,
         "dependency_failed_event": dependency_failed_event,
@@ -1125,6 +1190,57 @@ def scheduler_recovery_closeout_commands(
     ]
 
 
+def process_cmdline_snapshot() -> list[dict[str, Any]]:
+    proc_root = Path("/proc")
+    if not proc_root.is_dir():
+        return []
+    current_pid = os.getpid()
+    rows: list[dict[str, Any]] = []
+    try:
+        proc_dirs = list(proc_root.iterdir())
+    except OSError:
+        return []
+    for proc_dir in proc_dirs:
+        if not proc_dir.name.isdigit():
+            continue
+        try:
+            pid = int(proc_dir.name)
+        except ValueError:
+            continue
+        if pid == current_pid:
+            continue
+        try:
+            raw = (proc_dir / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if not raw:
+            continue
+        command = raw.replace(b"\x00", b" ").decode("utf-8", errors="replace").strip()
+        if command:
+            rows.append({"pid": pid, "command": command})
+    return rows
+
+
+def live_branch_process_state(*, bundle_dir: Path, branch_id: str, worktree_path: Path | None) -> dict[str, Any]:
+    if worktree_path is None:
+        return {"exists": False, "match": None}
+    worktree_needle = worktree_path.as_posix()
+    bundle_needle = bundle_dir.as_posix()
+    for row in process_cmdline_snapshot():
+        command = str(row.get("command", ""))
+        if worktree_needle not in command:
+            continue
+        if "codex exec" not in command and "goal-" not in command and bundle_needle not in command:
+            continue
+        return {
+            "exists": True,
+            "pid": row.get("pid"),
+            "match": "worktree_path",
+            "command_excerpt": command[:240],
+        }
+    return {"exists": False, "match": None}
+
+
 def stale_active_branch_ids(main_scheduler: dict[str, Any], branch_reports: list[dict[str, Any]]) -> list[str]:
     branch_by_id = {
         str(branch.get("branch_id")): branch for branch in branch_reports if isinstance(branch.get("branch_id"), str)
@@ -1139,6 +1255,9 @@ def stale_active_branch_ids(main_scheduler: dict[str, Any], branch_reports: list
             continue
         status_path = branch.get("status_path") if isinstance(branch.get("status_path"), dict) else {}
         if status_path.get("exists") is True:
+            continue
+        live_process = branch.get("live_process") if isinstance(branch.get("live_process"), dict) else {}
+        if live_process.get("exists") is True:
             continue
         result.append(branch_id)
     return result
@@ -1366,9 +1485,20 @@ def _append_main_next_commands(
     manifest_path: Path,
     main_status_path: Path,
     telemetry: dict[str, Any],
+    branch_reports: list[dict[str, Any]],
     stale_or_unreconciled: list[dict[str, Any]],
     next_commands: list[str],
 ) -> None:
+    if any(
+        isinstance(branch.get("live_process"), dict) and branch["live_process"].get("exists") is True
+        for branch in branch_reports
+    ):
+        return
+    if any(
+        branch.get("status_path", {}).get("exists") is not True and branch.get("dependency_failed_terminal") is not True
+        for branch in branch_reports
+    ):
+        return
     if not main_status_path.exists():
         next_commands.append(
             f"python3 {SKILLS_ROOT / 'goal-main-orchestrator' / 'scripts' / 'assemble_main_status.py'} "
@@ -1760,6 +1890,7 @@ def build_report(manifest_path: Path, *, repo_root: Path | None) -> dict[str, An
         manifest_path=manifest_path,
         main_status_path=main_status_path,
         telemetry=scan.telemetry,
+        branch_reports=branch_reports,
         stale_or_unreconciled=stale_or_unreconciled,
         next_commands=next_commands,
     )

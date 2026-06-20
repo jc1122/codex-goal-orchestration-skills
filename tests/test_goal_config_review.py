@@ -176,7 +176,7 @@ def test_contract_documents_bridge_doctor_smoke_status_ok_exemption():
         "Missing models, missing harness/binary, auth/API errors" in contract_text
     ), "contract should still mark smoke failures as errors"
     assert "opencode-bridge" in contract_text
-    assert 'zero-exit JSON smoke responses like `{"status": "ok"}`' in contract_text
+    assert 'zero-exit JSON smoke responses like `{"status": "ok"}` or `{"passed": true}`' in contract_text
 
 
 def test_goal_config_skill_reflects_bridge_readiness_without_assistant_text_requirement():
@@ -186,6 +186,7 @@ def test_goal_config_skill_reflects_bridge_readiness_without_assistant_text_requ
     assert "missing assistant output" not in lowered
     assert "opencode-bridge" in lowered
     assert '"status": "ok"' in skill_text
+    assert '"passed": true' in skill_text
     assert "zero-exit json" in lowered
     assert "zero-exit" in lowered or "zero exit" in lowered
     assert "as blocked evidence" in lowered
@@ -1927,6 +1928,69 @@ def test_run_harness_smoke_allows_bridge_json_ok_without_expected_token(monkeypa
 
     assert result["status"] == "pass"
     assert not failures
+
+
+def test_run_harness_smoke_allows_bridge_doctor_passed_true_without_expected_token(monkeypatch):
+    def fake_command_result(command, *, timeout_seconds):
+        payload = json.dumps(
+            {
+                "kind": "goal-delegator-doctor-report",
+                "passed": True,
+                "readiness_scope": "offline_installed_surface",
+            }
+        )
+        return {
+            "returncode": 0,
+            "stdout": payload,
+            "stderr": "",
+            "elapsed_ms": 4,
+            "timed_out": False,
+        }
+
+    monkeypatch.setattr(cgc, "command_result", fake_command_result)
+
+    result, failures = cgc.run_harness_smoke(
+        "worker",
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"prompt": "TOKEN", "expect": "TOKEN", "timeout_seconds": 2},
+        harness={"kind": cgc.BRIDGE_HARNESS_KIND, "command": "python3", "smoke_args": ["{prompt}"]},
+    )
+
+    assert result["status"] == "pass"
+    assert not failures
+    assert result["contains_expected"] is False
+    assert result["provider_passed"] is True
+
+
+def test_run_harness_smoke_rejects_bridge_doctor_passed_false(monkeypatch):
+    def fake_command_result(command, *, timeout_seconds):
+        payload = json.dumps(
+            {
+                "kind": "goal-delegator-doctor-report",
+                "passed": False,
+                "readiness_scope": "offline_installed_surface",
+            }
+        )
+        return {
+            "returncode": 0,
+            "stdout": payload,
+            "stderr": "",
+            "elapsed_ms": 4,
+            "timed_out": False,
+        }
+
+    monkeypatch.setattr(cgc, "command_result", fake_command_result)
+
+    result, failures = cgc.run_harness_smoke(
+        "worker",
+        {"provider": "deepseek", "model": "deepseek-v4-flash"},
+        {"prompt": "TOKEN", "expect": "TOKEN", "timeout_seconds": 2},
+        harness={"kind": cgc.BRIDGE_HARNESS_KIND, "command": "python3", "smoke_args": ["{prompt}"]},
+    )
+
+    assert result["status"] == "failed"
+    assert any("passed=False" in failure for failure in failures)
+    assert any("expected text" in failure for failure in failures)
 
 
 def test_run_for_preflight_mode_rewrites_over_limit_aggressiveness_and_telemetry(tmp_path):

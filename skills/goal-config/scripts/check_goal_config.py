@@ -922,7 +922,22 @@ def run_harness_smoke(
             return False
         return False
 
+    def is_success_flag_success(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value == 1
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized:
+                return normalized in {"ok", "pass", "success", "passed", "1", "true"}
+            return False
+        return False
+
     provider_status = None
+    provider_passed = None
     provider_message = None
     provider_count = None
     provider_error: dict[str, Any] = {}
@@ -934,6 +949,11 @@ def run_harness_smoke(
             provider_error["status"] = provider_status
             if not is_provider_status_success(provider_status):
                 failures.append(f"{role} {kind} smoke response status={provider_status}")
+                provider_failed = True
+        if "passed" in error_payload:
+            provider_passed = error_payload.get("passed")
+            if not is_success_flag_success(provider_passed):
+                failures.append(f"{role} {kind} smoke response passed={provider_passed}")
                 provider_failed = True
         if "message" in error_payload:
             provider_message = error_payload.get("message")
@@ -951,7 +971,11 @@ def run_harness_smoke(
     if not contains_expected and not (
         kind == BRIDGE_HARNESS_KIND
         and isinstance(error_payload, dict)
-        and is_provider_status_success(error_payload.get("status"))
+        and (
+            is_provider_status_success(error_payload.get("status"))
+            or is_success_flag_success(error_payload.get("passed"))
+        )
+        and not provider_failed
         and result["returncode"] == 0
     ):
         failures.append(f"{role} {kind} smoke output did not contain expected text")
@@ -962,6 +986,7 @@ def run_harness_smoke(
         "timed_out": result["timed_out"],
         "elapsed_ms": result["elapsed_ms"],
         "provider_status": provider_status,
+        "provider_passed": provider_passed,
         "provider_message": provider_message,
         "provider_count": provider_count,
         **({"provider_error": provider_error} if provider_error else {}),

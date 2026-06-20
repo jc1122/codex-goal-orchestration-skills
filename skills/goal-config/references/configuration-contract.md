@@ -86,7 +86,7 @@ For `opencode-bridge` roles, `check_goal_config.py` must:
 - focus `response_excerpt` on the expected assistant smoke text when possible, so CLI boilerplate does not dominate scan output.
 
 Missing models, missing harness/binary, auth/API errors, timeout, or smoke mismatch is a failed check.
-For `opencode-bridge`, zero-exit JSON smoke responses like `{"status": "ok"}` are accepted for readiness probes, even when the expected text is not present in stdout/stderr.
+For `opencode-bridge`, zero-exit JSON smoke responses like `{"status": "ok"}` or `{"passed": true}` are accepted for readiness probes, even when the expected text is not present in stdout/stderr.
 When a harness emits JSON errors, the report should preserve actionable provider/status/message/count fields such as status `401` and message `AuthenticateToken authentication failed`. Full raw provider payloads are intentionally not retained.
 
 For `codex` roles, `--role-model ROLE:HARNESS:PROVIDER/MODEL` records `provider` separately but renders the provider-free `model` for the CLI invocation. Bare provider-implied forms such as `--role-model worker_codex_spark:codex:openai/gpt-5.3-codex-spark` are allowed. For `opencode-bridge` roles, the provider is always `deepseek`; use bare bridge model IDs such as `--role-model ROLE:opencode-bridge:deepseek-v4-flash` (or `deepseek-v4-pro`). Provider-qualified `deepseek/deepseek-v4-*` input is accepted and normalized, but nested OpenRouter IDs are not valid bridge routes.
