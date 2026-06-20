@@ -3,7 +3,6 @@
 import json
 import shlex
 import subprocess
-import shutil
 import sys
 from pathlib import Path
 
@@ -796,12 +795,18 @@ def test_preflight_compatibility_summary_rejects_non_string_check_mode_without_t
 
 
 def _copy_smoke_bundle(tmp_path: Path) -> Path:
-    source_bundle = (
-        REPO / "maintenance" / "reports" / "toyoptimization-20260531" / "bundles" / "toyoptimization-v044-smoke"
+    config_path, check_path = _write_goal_config_pair(tmp_path)
+    return cgb.create_bundle(
+        _minimal_goal_config_brief(),
+        REPO,
+        tmp_path / "bundle",
+        goal_config_inputs=cgb.GoalConfigInputs(
+            config=cgb.load_goal_config(config_path),
+            check=cgb.load_goal_config_check(check_path),
+            config_source=config_path,
+            check_source=check_path,
+        ),
     )
-    bundle = tmp_path / "bundle"
-    shutil.copytree(source_bundle, bundle)
-    return bundle
 
 
 def _run_bundle_lint(bundle: Path) -> subprocess.CompletedProcess[str]:
@@ -1354,11 +1359,7 @@ def test_render_readiness_blocks_wave_overrun_with_stale_lint_pass_artifacts(tmp
 
 
 def test_lint_manifest_reports_invalid_repo_status_types(tmp_path):
-    source_bundle = (
-        REPO / "maintenance" / "reports" / "toyoptimization-20260531" / "bundles" / "toyoptimization-v044-smoke"
-    )
-    bundle = tmp_path / "bundle"
-    shutil.copytree(source_bundle, bundle)
+    bundle = _copy_smoke_bundle(tmp_path)
     manifest_path = bundle / "job.manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["repo_status"] = {"repo_is_git": "yes", "base_ref_status": []}
@@ -1374,11 +1375,7 @@ def test_lint_manifest_reports_invalid_repo_status_types(tmp_path):
 
 
 def test_lint_manifest_missing_repo_status_reports_critical_defect(tmp_path):
-    source_bundle = (
-        REPO / "maintenance" / "reports" / "toyoptimization-20260531" / "bundles" / "toyoptimization-v044-smoke"
-    )
-    bundle = tmp_path / "bundle"
-    shutil.copytree(source_bundle, bundle)
+    bundle = _copy_smoke_bundle(tmp_path)
     manifest_path = bundle / "job.manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest.pop("repo_status", None)
@@ -1394,11 +1391,7 @@ def test_lint_manifest_missing_repo_status_reports_critical_defect(tmp_path):
 
 
 def test_lint_manifest_reports_missing_repo_status_fields(tmp_path):
-    source_bundle = (
-        REPO / "maintenance" / "reports" / "toyoptimization-20260531" / "bundles" / "toyoptimization-v044-smoke"
-    )
-    bundle = tmp_path / "bundle"
-    shutil.copytree(source_bundle, bundle)
+    bundle = _copy_smoke_bundle(tmp_path)
     manifest_path = bundle / "job.manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["repo_status"] = {}
@@ -1479,11 +1472,7 @@ def test_lint_work_item_cross_checks_rejects_non_string_depends_on_member(tmp_pa
 
 
 def test_lint_tolerates_unhashable_work_item_depends_on_in_bundle_lint(tmp_path):
-    source_bundle = (
-        REPO / "maintenance" / "reports" / "toyoptimization-20260531" / "bundles" / "toyoptimization-v044-smoke"
-    )
-    bundle = tmp_path / "bundle"
-    shutil.copytree(source_bundle, bundle)
+    bundle = _copy_smoke_bundle(tmp_path)
     manifest_path = bundle / "job.manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["branches"][0]["work_items"][0]["depends_on"] = [{"bad": 1}]

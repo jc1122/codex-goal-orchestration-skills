@@ -1144,13 +1144,20 @@ def main() -> int:
             deepseek_provider_config["models"]["demanding_agent"]["harness"] == "opencode-bridge",
             "bridge provider override must keep the opencode-bridge harness",
         )
+        write_fake_echo_smoke_script(discover_smoke_script)
+        deepseek_provider_offline_config_path = tmp_path / "goal.config.deepseek-provider-offline.json"
+        build_offline_smoke_config(
+            deepseek_provider_offline_config_path,
+            deepseek_provider_config_path,
+            smoke_script=discover_smoke_script,
+        )
         deepseek_provider_report_path = tmp_path / "goal-config-deepseek-provider-check.json"
         check_summary = run(
             [
                 sys.executable,
                 CHECK.as_posix(),
                 "--config",
-                deepseek_provider_config_path.as_posix(),
+                deepseek_provider_offline_config_path.as_posix(),
                 "--output",
                 deepseek_provider_report_path.as_posix(),
             ]
@@ -1175,7 +1182,6 @@ def main() -> int:
         # parsing, --discover-provider, and DB-backed token_telemetry availability --
         # asserted behavior of the removed direct-opencode machinery, so they no
         # longer have a subject.)
-        write_fake_echo_smoke_script(discover_smoke_script)
         build_offline_smoke_config(
             discover_config_path,
             config_path,

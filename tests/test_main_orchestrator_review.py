@@ -374,11 +374,20 @@ def test_checked_prompt_files_tolerates_non_list_branches(tmp_path):
 
 
 # --- D1: debug trace builder skips an unreadable debug.events.jsonl instead of crashing ---
-def test_iter_debug_trace_skips_unreadable_event_file(tmp_path):
+def test_iter_debug_trace_skips_unreadable_event_file(tmp_path, monkeypatch):
     worker_dir = tmp_path / "workers" / "B01-W01"
     worker_dir.mkdir(parents=True)
-    broken = worker_dir / stl.DEBUG_EVENTS_FILENAME
-    broken.symlink_to(tmp_path / "does-not-exist.jsonl")  # broken symlink: exists()->glob, read->error
+    unreadable = worker_dir / stl.DEBUG_EVENTS_FILENAME
+    unreadable.write_text("{}", encoding="utf-8")
+
+    original_read_text = Path.read_text
+
+    def fail_debug_event_read(path: Path, *args, **kwargs):
+        if path == unreadable:
+            raise OSError("not readable")
+        return original_read_text(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", fail_debug_event_read)
     events = stl.iter_debug_event_trace_events(tmp_path)  # must not raise
     assert any(e.get("event_type") == "trace_defect" for e in events)
 
