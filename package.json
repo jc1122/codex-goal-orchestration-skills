@@ -62,6 +62,6 @@
     "node": ">=18"
   },
   "devDependencies": {
-    "pyright": "1.1.391"
+    "pyright": "1.1.410"
   }
 }
